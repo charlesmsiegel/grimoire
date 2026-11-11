@@ -1,6 +1,7 @@
 // 109's library pages' pure modules under Node's own test runner: the source page's drafts (what a structured save
 // sends, and how a draft is held over a newer head), what its sheet shows and how two revisions compare, and which
-// entries Characters and lore lists, counts and in what order. Run by test_library_pages.py.
+// entries Characters and lore lists, counts and in what order, and the person's tags, pins and saved filters
+// over them (several tags as AND, a saved filter kept and opened again). Run by test_library_pages.py.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -436,4 +437,125 @@ test("scenarios, lorebooks and records with no editor are compared too", () => {
     { field: "Stored field runs", before: "1", after: "2", stored: true },
   ]);
   assert.deepEqual(diffRevisions("other", null, {}), []);
+});
+
+// -- tags, pins and saved filters (pages/sources/shelf.js; docs/SHELF.md) ------------------------------------
+const { PINNED, askedTags, bulkSummary, chatMarks, emptyShelf, filterOf, filterQuery, hasTags, indexShelf, knownTags, marksOf, parseTags,
+  pinnedChats, problemText, sameFilter, suggestName, tagChips, tagsParam, toggleTag, worthSaving } =
+  await import("../../src/grimoire/app/static/pages/sources/shelf.js");
+
+const MARKS = indexShelf({
+  entries: [
+    { ref: "world:harbor/character/mara", tags: ["crew", "noir"], pinned: true, etag: "sha256:a" },
+    { ref: "card:anya/character/anya", tags: ["crew"], pinned: false, etag: "sha256:b" },
+    { ref: "world:harbor/location/quay", tags: ["noir"], pinned: true, etag: "sha256:c" },
+    { ref: "world:gone/character/nobody", tags: ["crew", "lost"], pinned: true, etag: "sha256:d" },  // no longer listed
+  ],
+  chats: [{ chat: "campaign:c1#chat/main", pinned: true, etag: "sha256:e" }, { chat: "campaign:c2#chat/main", pinned: false, etag: "sha256:f" }],
+  filters: [{ id: "f-1", name: "Crew", role: "character", shelf: "", source: null, tags: ["crew"], query: "", sort: "", etag: "sha256:g" }],
+  problems: [], limits: { tag_chars: 40 },
+});
+const refsOf = (found) => found.map((entry) => entry.ref).sort();
+
+test("marks are found by an entry's exact ref, and an entry with none has no tags, no pin and no etag", () => {
+  assert.deepEqual(marksOf(MARKS, "world:harbor/character/mara"), { tags: ["crew", "noir"], pinned: true, etag: "sha256:a" });
+  assert.deepEqual(marksOf(MARKS, "world:realm/item/ledger"), { tags: [], pinned: false, etag: null });
+  assert.deepEqual(marksOf(MARKS, "Mara"), { tags: [], pinned: false, etag: null }, "never by a name");
+  assert.deepEqual(marksOf(null, "world:harbor/character/mara"), { tags: [], pinned: false, etag: null }, "an app without a shelf");
+  assert.equal(chatMarks(MARKS, "campaign:c1#chat/main").pinned, true);
+  assert.equal(chatMarks(MARKS, "campaign:c9#chat/main").etag, null);
+  assert.deepEqual([...pinnedChats(MARKS)], ["campaign:c1#chat/main"]);
+  assert.deepEqual([...pinnedChats(null)], []);
+  assert.deepEqual(indexShelf(undefined), emptyShelf());
+});
+
+test("several tags combine with AND, beside the shelf and the role", () => {
+  assert.deepEqual(refsOf(filterEntries(SHELF, { tags: ["crew"], marks: MARKS })), ["card:anya/character/anya", "world:harbor/character/mara"]);
+  assert.deepEqual(refsOf(filterEntries(SHELF, { tags: ["crew", "noir"], marks: MARKS })), ["world:harbor/character/mara"]);
+  assert.deepEqual(refsOf(filterEntries(SHELF, { tags: ["noir"], role: "world", marks: MARKS })), ["world:harbor/location/quay"]);
+  assert.deepEqual(filterEntries(SHELF, { tags: ["crew", "lost"], marks: MARKS }), [], "marks about an entry that is not listed list nothing");
+  assert.deepEqual(filterEntries(SHELF, { tags: ["crew"], shelf: "world:realm", marks: MARKS }), []);
+  assert.equal(filterEntries(SHELF, { tags: [], marks: MARKS }).length, 6, "no tag is every entry");
+  assert.deepEqual(filterEntries(SHELF, { tags: ["crew"], marks: null }), [], "without a shelf nothing carries a tag");
+  assert.equal(hasTags(MARKS, "world:harbor/character/mara", ["noir", "crew"]), true);
+  assert.equal(hasTags(MARKS, "world:harbor/character/mara", ["Noir"]), false, "tags are compared as the app spells them");
+});
+
+test("the Pinned shelf holds the pinned entries that are listed, and is offered only where pins are kept", () => {
+  assert.deepEqual(refsOf(filterEntries(SHELF, { shelf: PINNED, marks: MARKS })), ["world:harbor/character/mara", "world:harbor/location/quay"]);
+  assert.deepEqual(refsOf(filterEntries(SHELF, { shelf: PINNED, role: "character", tags: ["crew"], marks: MARKS })), ["world:harbor/character/mara"]);
+  assert.deepEqual(filterEntries(SHELF, { shelf: PINNED, marks: null }), []);
+  assert.deepEqual(shelvesOf(SOURCES, SHELF, MARKS).slice(0, 3), [
+    { id: "", label: "Everything", count: 6 }, { id: PINNED, label: "Pinned", count: 2 }, { id: CARDS, label: "Imported cards", count: 2 }]);
+  assert.ok(!shelvesOf(SOURCES, SHELF).some((shelf) => shelf.id === PINNED));
+  assert.equal(shelvesOf(SOURCES, SHELF, emptyShelf())[1].count, 0, "kept, and none yet");
+});
+
+test("the tag chips are the tags the entries in view carry, with counts, and every chosen tag", () => {
+  assert.deepEqual(tagChips(MARKS, SHELF), [{ tag: "crew", count: 2, chosen: false }, { tag: "noir", count: 2, chosen: false }]);
+  assert.deepEqual(tagChips(MARKS, filterEntries(SHELF, { role: "character" }), ["noir", "lost"]),
+    [{ tag: "crew", count: 2, chosen: false }, { tag: "lost", count: 0, chosen: true }, { tag: "noir", count: 1, chosen: true }]);
+  assert.deepEqual(tagChips(null, SHELF), []);
+  assert.deepEqual(knownTags(MARKS), ["crew", "lost", "noir"], "a tag editor offers every tag on the shelf");
+});
+
+test("tags are typed and linked with commas between them", () => {
+  assert.deepEqual(parseTags(" crew ,  Slow   burn,, CREW,noir "), ["crew", "Slow burn", "noir"]);
+  assert.deepEqual(parseTags(""), []);
+  assert.deepEqual(askedTags(null), []);
+  assert.deepEqual(askedTags(tagsParam(["crew", "Slow burn"])), ["crew", "Slow burn"]);
+  assert.equal(tagsParam([]), "");
+  assert.deepEqual(toggleTag(["crew"], "noir"), ["crew", "noir"]);
+  assert.deepEqual(toggleTag(["crew", "noir"], "crew"), ["noir"]);
+});
+
+test("a saved filter keeps a view and opens the same view again", () => {
+  const view = { role: "character", shelf: "world:harbor", source: "world:harbor", tags: ["noir", "crew"], query: " mara ", sort: "name" };
+  const kept = filterOf(view);
+  assert.deepEqual(kept, { role: "character", shelf: "", source: "world:harbor", tags: ["crew", "noir"], query: "mara", sort: "name" });
+  // what the app answers for it opens the address the view came from
+  const saved = { id: "f-2", name: "Harbor crew", etag: "sha256:h", ...kept };
+  assert.deepEqual(filterQuery(saved), { role: "character", q: "mara", source: "world:harbor", shelf: "", tags: "crew,noir", sort: "name" });
+  assert.equal(sameFilter(saved, view), true, "the view it was saved from is that filter");
+  assert.equal(sameFilter(saved, { ...view, tags: ["crew", "noir"] }), true, "tags in any order");
+  assert.equal(sameFilter(saved, { ...view, tags: ["crew"] }), false);
+  assert.equal(sameFilter(saved, { ...view, sort: "" }), false);
+  // a shelf that is not a source is kept as the shelf
+  assert.deepEqual(filterQuery(filterOf({ shelf: PINNED, role: "lore" })), { role: "lore", q: "", source: "", shelf: PINNED, tags: "", sort: "" });
+  assert.equal(sameFilter(MARKS.filters[0], { role: "character", tags: ["crew"] }), true);
+  // counting a saved filter is filtering by what it keeps
+  assert.deepEqual(refsOf(filterEntries(SHELF, { role: saved.role, shelf: saved.source || saved.shelf, tags: saved.tags, marks: MARKS })),
+    ["world:harbor/character/mara"]);
+});
+
+test("only a view that narrows the library is worth saving, and it is offered a name", () => {
+  assert.equal(worthSaving({}), false);
+  assert.equal(worthSaving({ sort: "name" }), false, "an order alone is not a filter");
+  for (const view of [{ role: "lore" }, { shelf: "cards" }, { source: "world:harbor" }, { tags: ["crew"] }, { query: "mara" }]) assert.equal(worthSaving(view), true);
+  assert.equal(suggestName({ tags: ["noir", "crew"], role: "character" }, "Characters"), "crew + noir characters");
+  assert.equal(suggestName({ query: "mara" }, ""), '"mara"');
+  assert.equal(suggestName({ shelf: "cards" }, ""), "");
+  assert.ok(suggestName({ tags: ["x".repeat(40), "y".repeat(40)] }, "Characters").length <= 60);
+});
+
+test("a bulk action says how many entries it changed and which it could not", () => {
+  assert.equal(bulkSummary("Pinned", 3, []), "Pinned 3 entries.");
+  assert.equal(bulkSummary("Pinned", 1, []), "Pinned 1 entry.");
+  assert.equal(bulkSummary("Changed the tags of", 2, [{ name: "Mara", reason: "changed" }]),
+    "Changed the tags of 2 entries. 1 was not changed: Mara (changed).");
+  assert.equal(bulkSummary("Pinned", 0, [{ name: "Mara", reason: "changed" }, { name: "card:x/character/x", reason: "no_entry" }]),
+    "Pinned 0 entries. 2 were not changed: Mara (changed), card:x/character/x (no_entry).");
+});
+
+test("shelf files that could not be read are said, with their paths and reasons", () => {
+  assert.equal(problemText(MARKS), "");
+  assert.equal(problemText(null), "");
+  const one = { ...emptyShelf(), problems: [{ path: "config/shelf/entries/ab.json", reason: "malformed", detail: "cut short" }] };
+  assert.equal(problemText(one), "One file of your tags and pins could not be read and is left as it is: config/shelf/entries/ab.json (malformed). "
+    + "What it says is not shown until the file is mended or removed.");
+  const many = { ...emptyShelf(), problems: [1, 2, 3, 4, 5].map((n) => ({ path: "config/shelf/chats/" + n + ".json", reason: "unsupported_format" })) };
+  assert.ok(problemText(many).startsWith("5 files of your tags and pins could not be read and are left as they are: config/shelf/chats/1.json (unsupported_format)"));
+  assert.ok(problemText(many).includes(" and 2 more."));
+  assert.equal(problemText({ ...emptyShelf(), failed: { reason: "shelf_unreadable" } }),
+    "Your tags and pins could not be read (shelf_unreadable), so none are shown.");
 });

@@ -107,7 +107,11 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   assert.equal(pressed("All").getAttribute("aria-pressed"), "true");
   assert.equal(pressed("Campaign").getAttribute("aria-pressed"), "true");
   assert.equal(pressed("Recent").getAttribute("aria-pressed"), "true");
-  assert.ok(!byText(main, "button", "Longest").length && !byText(main, "button", "Pinned").length && !byText(main, "button", "Needs you").length);
+  assert.ok(!byText(main, "button", "Longest").length && !byText(main, "button", "Needs you").length);
+  // pins are kept (docs/SHELF.md): the Pinned filter is offered, and every row has its own Pin toggle, unpressed
+  assert.equal(byText(main, "button", "Pinned").length, 1, "the Pinned filter");
+  assert.equal(main.querySelectorAll("button.chats-pin").length, rows().length);
+  assert.ok(main.querySelectorAll("button.chats-pin").every((node) => node.getAttribute("aria-pressed") === "false" && node.textContent === "Pin"));
   const heads = () => main.querySelectorAll("button.chats-head");
   assert.equal(main.querySelector("div.chats-status").textContent, total + " chats in " + heads().length + " groups");
   assert.ok(byText(main, "button", "Not in a campaign").length, "a chat outside any campaign has its own group");

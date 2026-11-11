@@ -2,7 +2,10 @@
 // counts, shelves, search, the grid and the table, a new source and a new entry made in their dialogs), then a
 // character sheet and an entry sheet by their tabs: two same-named characters listed apart, a portrayal derived
 // from one Mara with an override and an explicit clear, an edit that goes stale and is kept as a draft, then saved
-// over the new head, the exact revision attached to a chat, and an older version compared and restored.
+// over the new head, the exact revision attached to a chat, and an older version compared and restored. Then the
+// person's own notes (docs/SHELF.md): tagging and pinning an entry from its tile and from its sheet, Select mode
+// with a bulk tag and a bulk pin that names the entry it could not change, tag chips that narrow together, a
+// filter saved, opened, renamed and deleted, and a chat pinned into the "Pinned" group of Chats.
 // Run by test_library_pages.py, which serves a synthetic library and passes GRIMOIRE_APP (base URL),
 // GRIMOIRE_TOKEN and GRIMOIRE_CHAT (the card chat); the shell's "/static/..." imports map onto the packaged files.
 import assert from "node:assert/strict";
@@ -111,7 +114,11 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   const counts = group(page, "Which entries").querySelectorAll("button").map((node) => Number(node.textContent.split(" ").pop()));
   assert.equal(counts.slice(1).reduce((sum, n) => sum + n, 0), counts[0]);
   // nothing of the design that the app cannot do yet is on the page
-  for (const absent of ["Select", "Save this filter", "Add cover", "Pinned"]) assert.equal(byText(page, "button", absent).length, 0, absent);
+  for (const absent of ["Save this filter", "Add cover", "Move", "Delete"]) assert.equal(byText(page, "button", absent).length, 0, absent);
+  // nothing is tagged, pinned or saved yet, and the page says so with real counts
+  assert.equal(page.querySelector("div.sources-tagrow"), null, "no tag is in use, so there are no chips");
+  assert.equal(byText(page.querySelector("nav.sources-shelves"), "a", "Pinned")[0].textContent, "Pinned0");
+  assert.ok(byText(page.querySelector("nav.sources-saved"), "p", "None yet.").length);
 
   // characters: three entries named Mara, each its own exact ref, each said to share its name
   page = await go("#/sources?role=character", library, "the characters");
@@ -186,7 +193,7 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   assert.equal(tiles(page).length, 0);
   const rows = page.querySelector("table.g-table").querySelector("tbody").querySelectorAll("tr");
   assert.ok(rows.some((row) => row.querySelector("a.sources-name").getAttribute("title") === LORE));
-  assert.deepEqual(page.querySelectorAll("th").map((node) => node.textContent), ["Picture", "Name", "Kind", "Source", "Version", "Chats", "Last played", "Chat"]);
+  assert.deepEqual(page.querySelectorAll("th").map((node) => node.textContent), ["Picture", "Name", "Kind", "Tags", "Source", "Version", "Chats", "Last played", "Actions"]);
   assert.ok(rows.every((row) => row.querySelectorAll("td")[2].textContent === "Lorebook"));
 
   // a new source, made in its dialog; a refusal is shown there and nothing is lost
@@ -415,5 +422,245 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   page = await press(ask, "Restore as version 3", entry, "the restored lorebook");
   assert.equal(body.querySelector("h1").textContent, lore.payload.name);
   assert.ok(page.querySelector("div.source-meta").textContent.includes("version 3"));
+  await until(idle(body), 15000, "the page to settle");
+
+  // -- tags, pins and saved filters: the person's own notes about entries (docs/SHELF.md) ----------------------
+  const now = () => main.children[0];
+  const drawn = (what, check) => until(() => check(now()) && now(), 15000, what);  // drawn again in place: no new page
+  const tileOf = (root, ref) => tiles(root).find((tile) => refOf(tile) === ref);
+  const tagsOn = (root, ref) => tileOf(root, ref).querySelector("button.sources-tagsbtn");
+  const pinOn = (root, ref) => tileOf(root, ref).querySelector("button.sources-pin");
+  const chipOf = (root, tag) => root.querySelectorAll("button.g-chip").find((node) => node.getAttribute("data-tag") === tag);
+  const shelfLink = (label) => byText(now().querySelector("nav.sources-shelves"), "a", label)[0];
+  const saved = () => now().querySelector("nav.sources-saved");
+  const bar = () => now().querySelector("div.sources-bar");
+  const barCount = () => bar().querySelector("span.sources-bar-count").textContent;
+  const barNote = () => bar().querySelector("span.sources-bar-note").textContent;
+  const dialogs = () => body.querySelectorAll("dialog");
+  const before = await call("sources.read", { ref: MARA });
+
+  // tag one character from its tile: a refused name is said in the dialog, and what was typed stays
+  page = await go("#/sources?role=character", library, "the characters, to tag them");
+  assert.equal(tagsOn(page, MARA).textContent, "Add tags");
+  tagsOn(page, MARA).focus();
+  tagsOn(page, MARA).click();
+  let tagging = await dialog("the tag editor");
+  assert.ok(tagging.textContent.includes("they never change the entry or its versions"));
+  type(tagging.querySelector("input"), "x".repeat(41));
+  byText(tagging, "button", "Save tags")[0].click();
+  await until(() => alerts(tagging).some((node) => node.textContent.includes("invalid_tag")), 15000, "the refused tag");
+  assert.equal(tagging.querySelector("input").value, "x".repeat(41));
+  type(tagging.querySelector("input"), " crew ,  Slow  burn, CREW");
+  byText(tagging, "button", "Save tags")[0].click();
+  page = await drawn("the tags on the tile", (root) => tileOf(root, MARA) && tagsOn(root, MARA).textContent === "crew, Slow burn");
+  assert.equal(dialogs().length, 0);
+  assert.equal(document.activeElement, tagsOn(page, MARA), "focus is back on the control that opened the editor");
+  assert.equal(chipOf(page, "crew").textContent, "crew1");
+  assert.equal(chipOf(page, "Slow burn").getAttribute("aria-pressed"), "false");
+  // the tags are notes beside the entry: no new version, and the entry's own record is as it was
+  const after = await call("sources.read", { ref: MARA });
+  assert.deepEqual([after.revisions, after.etag, after.manifest_etag], [before.revisions, before.etag, before.manifest_etag]);
+
+  // pin it from its tile: the toggle is pressed, the Pinned shelf counts it, and focus stays on the toggle
+  assert.equal(pinOn(page, MARA).getAttribute("aria-pressed"), "false");
+  pinOn(page, MARA).focus();
+  pinOn(page, MARA).click();
+  page = await drawn("the pin", (root) => tileOf(root, MARA) && pinOn(root, MARA).getAttribute("aria-pressed") === "true");
+  assert.equal(pinOn(page, MARA).textContent, "Pinned");
+  assert.equal(pinOn(page, MARA).getAttribute("aria-label"), "Pin Mara Vell");
+  assert.equal(document.activeElement, pinOn(page, MARA));
+  assert.equal(shelfLink("Pinned").textContent, "Pinned1");
+  await until(idle(body), 15000, "the page to settle");
+
+  // Select mode: a tile is a toggle with a ring, and the bar counts what is selected
+  const selectButton = byText(page, "button", "Select")[0];
+  assert.equal(selectButton.getAttribute("aria-pressed"), "false");
+  selectButton.click();
+  await drawn("Select mode", (root) => root.querySelector("div.sources-bar"));
+  assert.equal(selectButton.textContent, "Done selecting");
+  assert.equal(selectButton.getAttribute("aria-pressed"), "true");
+  assert.equal(barCount(), "0 selected");
+  assert.ok(byText(bar(), "button", "Pin")[0].disabled && byText(bar(), "button", "Tag…")[0].disabled);
+  // the library cannot move, bind in bulk or delete entries, so the bar does not offer to
+  for (const absent of ["Move", "Lorebook", "Delete"]) assert.equal(byText(bar(), "button", absent).length, 0, absent);
+  const pick = (ref) => tileOf(now(), ref).querySelector("a.g-tile");
+  assert.equal(pick(MARA).getAttribute("role"), "button");
+  assert.equal(pick(MARA).getAttribute("aria-pressed"), "false");
+  assert.equal(tileOf(now(), MARA).querySelector("button"), null, "a tile's own controls wait while selecting");
+  const hash = window.location.hash;
+  pick(MARA).click();
+  assert.equal(pick(MARA).getAttribute("aria-pressed"), "true");
+  assert.ok(tileOf(now(), MARA).className.split(" ").includes("sources-picked"), "a selected tile has its ring");
+  assert.equal(window.location.hash, hash, "a tile does not open while selecting");
+  assert.equal(barCount(), "1 selected");
+  pick(MARA).click();
+  assert.equal(barCount(), "0 selected");
+  byText(bar(), "button", "Select all shown")[0].click();
+  const shownNow = tiles(now()).length;
+  await until(() => barCount() === shownNow + " selected", 15000, "everything shown selected");
+  assert.ok(tiles(now()).every((tile) => tile.querySelector("a.g-tile").getAttribute("aria-pressed") === "true"));
+
+  // a bulk tag: each selected entry gets the tag and keeps its others
+  byText(bar(), "button", "Tag…")[0].click();
+  tagging = await dialog("the bulk tag dialog");
+  assert.equal(tagging.getAttribute("aria-label"), "Tag " + shownNow + " entries");
+  byText(tagging, "button", "Apply to " + shownNow + " entries")[0].click();
+  await until(() => alerts(tagging).some((node) => node.textContent.includes("Name at least one tag")), 15000, "nothing named");
+  type(tagging.querySelectorAll("input")[0], "harbor");
+  byText(tagging, "button", "Apply to " + shownNow + " entries")[0].click();
+  await until(() => bar() && barNote() === "Changed the tags of " + shownNow + " entries.", 15000, "the bulk tag");
+  assert.equal(barCount(), "0 selected");
+  let kept = await call("shelf.read", {});
+  assert.equal(kept.entries.length, shownNow);
+  assert.deepEqual(kept.entries.find((item) => item.ref === MARA).tags, ["crew", "harbor", "Slow burn"]);
+  assert.ok(kept.entries.every((item) => item.tags.includes("harbor")));
+
+  // a bulk pin says which entry it could not change (it was tagged elsewhere meanwhile), and leaves it selected
+  byText(bar(), "button", "Select all shown")[0].click();
+  await until(() => barCount() === shownNow + " selected", 15000, "everything selected again");
+  const behind = kept.entries.find((item) => item.ref !== MARA);
+  await call("shelf.edit_tags", { ref: behind.ref, add: ["elsewhere"], expected: behind.etag });
+  byText(bar(), "button", "Pin")[0].click();
+  await until(() => bar() && barNote().startsWith("Pinned " + (shownNow - 1) + " entries. 1 was not changed:"), 15000, "the bulk pin");
+  assert.ok(barNote().endsWith("(changed)."), barNote());
+  assert.equal(barCount(), "1 selected");
+  assert.ok(alerts(body).some((node) => node.textContent.includes("1 was not changed")), "what was refused is announced");
+  assert.equal(pick(behind.ref).getAttribute("aria-pressed"), "true");
+  await until(idle(body), 15000, "the page to settle");
+  byText(bar(), "button", "Pin")[0].click();  // the page has read its marks again: now it goes through
+  await until(() => bar() && barNote() === "Pinned 1 entry.", 15000, "the pin that was refused");
+  kept = await call("shelf.read", {});
+  assert.ok(kept.entries.every((item) => item.pinned) && kept.entries.find((item) => item.ref === behind.ref).tags.includes("elsewhere"));
+  selectButton.click();
+  await drawn("the end of Select mode", (root) => !root.querySelector("div.sources-bar"));
+  assert.equal(selectButton.textContent, "Select");
+  assert.equal(pick(MARA).getAttribute("role"), null);
+
+  // the tag chips count what is in view, and several narrow together (AND)
+  page = now();
+  assert.equal(chipOf(page, "harbor").textContent, "harbor" + shownNow);
+  page = await step(main, () => chipOf(page, "crew").click(), library, "the crew");
+  assert.ok(window.location.hash.includes("tags=crew") && window.location.hash.includes("role=character"));
+  assert.deepEqual(tiles(page).map(refOf), [MARA]);
+  assert.equal(chipOf(page, "crew").getAttribute("aria-pressed"), "true");
+  assert.equal(pressed(group(page, "Which entries")), "Characters 1", "the roles count what the tags leave");
+  page = await step(main, () => chipOf(page, "elsewhere").click(), library, "crew and elsewhere");
+  assert.ok(window.location.hash.includes("tags=" + encodeURIComponent("crew,elsewhere")));
+  assert.equal(tiles(page).length, 0);
+  assert.ok(byText(page, "p", "Nothing here carries all of those tags.").length);
+  page = await step(main, () => chipOf(page, "elsewhere").click(), library, "the crew alone again");
+
+  // save this view as a filter: it is listed with its count, and is the one in view
+  byText(page, "button", "Save this filter")[0].click();
+  let naming = await dialog("the save dialog");
+  assert.equal(naming.querySelector("input").value, "crew characters");
+  type(naming.querySelector("input"), "The crew");
+  byText(naming, "button", "Save filter")[0].click();
+  page = await drawn("the saved filter", (root) => byText(root.querySelector("nav.sources-saved"), "a", "The crew").length);
+  const crew = () => byText(saved(), "a", "The crew")[0];
+  assert.equal(crew().textContent, "The crew1");
+  assert.equal(crew().getAttribute("aria-current"), "page");
+  assert.equal(byText(page, "button", "Save this filter").length, 0, "this view is saved already");
+  // a second filter of the same name is refused in its dialog
+  page = await go("#/sources?shelf=pinned", library, "the pinned shelf");
+  assert.equal(tiles(page).length, shownNow, "every character was pinned");
+  assert.equal(page.querySelector("nav.sources-shelves").querySelector("a[aria-current]").textContent, "Pinned" + shownNow);
+  byText(page, "button", "Save this filter")[0].click();
+  naming = await dialog("the second save dialog");
+  type(naming.querySelector("input"), "the CREW");
+  byText(naming, "button", "Save filter")[0].click();
+  await until(() => alerts(naming).some((node) => node.textContent.includes("filter_name_taken")), 15000, "the name that is taken");
+  byText(naming, "button", "Cancel")[0].click();
+  // unpinning an entry on the Pinned shelf takes it off the shelf, in place
+  pinOn(page, behind.ref).click();
+  page = await drawn("one fewer pinned", (root) => tiles(root).length === shownNow - 1);
+  assert.equal(tileOf(page, behind.ref), undefined);
+  assert.equal(shelfLink("Pinned").textContent, "Pinned" + (shownNow - 1));
+  await until(idle(body), 15000, "the page to settle");
+  // from there the saved filter opens its own view: its role, its tags and nothing of this one
+  page = await step(main, () => crew().click(), library, "the saved filter's view");
+  assert.ok(window.location.hash.includes("role=character") && window.location.hash.includes("tags=crew") && !window.location.hash.includes("shelf="));
+  assert.deepEqual(tiles(page).map(refOf), [MARA]);
+  // the list shows the tags in their own column
+  page = await step(main, () => byText(group(page, "View"), "button", "List")[0].click(), library, "the crew as a list");
+  const cells = page.querySelector("table.g-table").querySelector("tbody").querySelector("tr").querySelectorAll("td");
+  assert.equal(cells[3].querySelector("button.sources-tagsbtn").textContent, "crew, harbor, Slow burn");
+  assert.equal(cells.at(-1).querySelector("button.sources-pin").getAttribute("aria-pressed"), "true");
+  // rename it, then delete it after one confirmation that names it
+  byText(saved(), "button", "Edit")[0].click();
+  let editing = await dialog("the saved filter's dialog");
+  type(editing.querySelector("input"), "Crew only");
+  byText(editing, "button", "Rename")[0].click();
+  await drawn("the renamed filter", (root) => byText(root.querySelector("nav.sources-saved"), "a", "Crew only").length);
+  assert.equal(byText(saved(), "a", "The crew").length, 0);
+  byText(saved(), "button", "Edit")[0].click();
+  editing = await dialog("the saved filter's dialog again");
+  byText(editing, "button", "Delete")[0].click();
+  const sure = await until(() => dialogs().length === 2 && dialogs()[1], 15000, "the confirmation");
+  assert.ok(sure.textContent.includes('Delete the saved filter "Crew only"? No entry, tag or pin is changed.'));
+  byText(sure, "button", "Delete filter")[0].click();
+  await drawn("no saved filter", (root) => byText(root.querySelector("nav.sources-saved"), "p", "None yet.").length);
+  assert.equal(dialogs().length, 0);
+  assert.deepEqual((await call("shelf.read", {})).filters, []);
+
+  // the sheet shows the same tags as pills and the same pin; they belong to the entry, whatever version shows
+  const marks = (root) => root.querySelector("span.source-marks");
+  const pills = (root) => marks(root).querySelectorAll("a.source-tag").map((node) => node.textContent);
+  page = await go(at(MARA), entry, "Mara's sheet");
+  assert.deepEqual(pills(page), ["crew", "harbor", "Slow burn"]);
+  assert.equal(marks(page).querySelector("a.source-tag").getAttribute("href"), "#/sources?tags=crew");
+  const sheetPin = () => marks(now()).querySelector("button.source-pin");
+  assert.equal(sheetPin().getAttribute("aria-pressed"), "true");
+  sheetPin().click();
+  await until(() => sheetPin().getAttribute("aria-pressed") === "false" && sheetPin().textContent === "Pin", 15000, "unpinned from the sheet");
+  await until(idle(body), 15000, "the page to settle");
+  byText(marks(now()), "button", "Edit tags")[0].click();
+  tagging = await dialog("the sheet's tag editor");
+  assert.ok(byText(tagging, "button", "elsewhere").length, "the tags already in use are offered");
+  type(tagging.querySelector("input"), "crew");
+  byText(tagging, "button", "Save tags")[0].click();
+  await until(() => pills(now()).join() === "crew", 15000, "the sheet's tags");
+  page = await go(at(LORE + "@r1"), entry, "an older version of the lorebook");
+  assert.deepEqual(pills(page), []);
+  byText(marks(page), "button", "Add tags")[0].click();
+  tagging = await dialog("the older version's tag editor");
+  type(tagging.querySelector("input"), "old lore");
+  byText(tagging, "button", "Save tags")[0].click();
+  await until(() => pills(now()).join() === "old lore", 15000, "the lorebook's tag");
+  page = await go(at(LORE), entry, "the lorebook's current version");
+  assert.deepEqual(pills(page), ["old lore"], "a tag is the entry's, not one version's");
+  assert.deepEqual((await call("sources.read", { ref: LORE })).revisions, ["r1", "r2", "r3"], "tagging wrote no version");
+
+  // -- pinned chats ------------------------------------------------------------------------------------------
+  const chatList = (root) => root.querySelector("ul.chats-rows");
+  const chatPins = () => now().querySelectorAll("button.chats-pin");
+  const linkBeside = (button) => button.parentNode.querySelector("a.chats-row").getAttribute("href");
+  const pinOf = (ref) => chatPins().find((button) => linkBeside(button) === "#/chat/" + encodeURIComponent(ref));
+  const heads = () => now().querySelectorAll("button.chats-head").map((node) => node.querySelector("span.g-title").textContent);
+  const etags = async () => Object.fromEntries((await call("sources.chats", {})).chats.map((item) => [item.chat, item.etag]));
+  const chatsBefore = await etags();
+  page = await go("#/chats", chatList, "the chats");
+  const everyChat = chatPins().length;
+  assert.ok(everyChat >= 2 && chatPins().every((button) => button.getAttribute("aria-pressed") === "false" && button.textContent === "Pin"));
+  assert.ok(!heads().includes("Pinned"));
+  assert.ok(byText(group(page, "Which chats"), "button", "Pinned").length, "the Pinned filter is offered");
+  pinOf(CHAT).focus();
+  pinOf(CHAT).click();
+  await until(() => heads()[0] === "Pinned" && pinOf(CHAT).getAttribute("aria-pressed") === "true", 15000, "the pinned chat");
+  assert.equal(pinOf(CHAT).textContent, "Pinned");
+  assert.equal(document.activeElement, pinOf(CHAT), "focus follows the chat into its new group");
+  assert.equal(linkBeside(chatPins()[0]), "#/chat/" + encodeURIComponent(CHAT), "the pinned chat is lifted to the top");
+  assert.equal(chatPins().length, everyChat, "and is listed once");
+  assert.ok(now().querySelector("div.chats-status").textContent.startsWith(everyChat + " chats in "));
+  assert.deepEqual(await etags(), chatsBefore, "pinning a chat does not touch the chat");
+  await until(idle(body), 15000, "the page to settle");
+  // Pinned alone, from its segment: the filter is in the address
+  page = await step(main, () => byText(group(now(), "Which chats"), "button", "Pinned")[0].click(), chatList, "the pinned chats");
+  assert.equal(window.location.hash, "#/chats?filter=pinned");
+  assert.equal(chatPins().length, 1);
+  assert.deepEqual(heads(), ["Pinned"]);
+  pinOf(CHAT).click();
+  await until(() => byText(now(), "p", "No chat is pinned yet.").length, 15000, "nothing pinned");
+  assert.deepEqual((await call("shelf.read", {})).chats, []);
   await until(idle(body), 15000, "the page to settle");
 });

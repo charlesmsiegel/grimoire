@@ -3,9 +3,14 @@
 // #/chats?filter=character&source=<SourceRef>), so a deep link and Back both land on the same list; how they are
 // searched, grouped and sorted is kept for the tab. The list's logic is model.js. Every value shown comes from
 // the library and is set as text.
+//
+// Where the app keeps pins (docs/SHELF.md), each row has a Pin toggle, the pinned chats are lifted into a
+// "Pinned" group at the top, and "Pinned" (#/chats?filter=pinned) lists them alone. A pin is the person's note
+// beside the chat: it changes nothing of the chat itself.
 
-import { FILTERS, GROUPS, SORTS, chatFaces, chatMeta, chatTitle, countLabel, groupChats, oneOf, plural, searchChats,
-  shownRows, sortChats, viewOf, when } from "./model.js";
+import { FILTERS, GROUPS, PINNED, PINNED_FILTER, SORTS, chatFaces, chatMeta, chatTitle, countLabel, groupChats, oneOf, pinnedOnly,
+  plural, searchChats, shownRows, sortChats, viewOf, when } from "./model.js";
+import { chatMarks, pinnedChats, problemText, readShelf } from "../sources/shelf.js";
 
 const MAX_LIST = 1000;  // the most one list request returns
 
@@ -18,7 +23,8 @@ export async function mount(root, ctx) {
   ctx.setCrumb("Play");
   if (ctx.has("sync")) ctx.setActions(syncButton(ctx));
 
-  const { filter, source } = viewOf(ctx.query);
+  const pins = ctx.has("shelf.read");
+  const { filter, source } = viewOf(ctx.query, { pins });
   const address = (changes) => {
     const query = { filter, source, ...changes };
     if (query.filter === "all") { delete query.filter; delete query.source; }
@@ -29,6 +35,7 @@ export async function mount(root, ctx) {
   const state = { q: kept.q.get(), group: oneOf(GROUPS, kept.group.get()), sort: oneOf(SORTS, kept.sort.get()),
     collapsed: new Set(), expanded: new Set() };
   let chats = null;  // not read yet
+  let shelf = null;  // the pins, where the app keeps them
 
   const search = ui.search("Search chats", { value: state.q, placeholder: "Search chats by title, campaign or character",
     oninput: (text) => { state.q = text; kept.q.set(text); render(); } });
@@ -38,7 +45,7 @@ export async function mount(root, ctx) {
     ctx.registered("start") && ctx.has("play.start") ? ui.buttonLink("New chat", "start", [], undefined, { kind: "primary" }) : null);
 
   const options = (pairs) => pairs.map(([value, label]) => ({ value, label }));
-  const which = ui.segments("Which chats", options(FILTERS), { value: filter,
+  const which = ui.segments("Which chats", options(pins ? [...FILTERS, PINNED_FILTER] : FILTERS), { value: filter,
     onchange: (value) => ctx.navigate(address({ filter: value, source: undefined })) });
   const grouping = ui.segments("Group by", options(GROUPS), { value: state.group,
     onchange: (value) => { state.group = value; kept.group.set(value); render(); } });
@@ -49,15 +56,17 @@ export async function mount(root, ctx) {
     el("span", { class: "chats-label", "aria-hidden": "true" }, "Group by"), grouping.node,
     el("span", { class: "chats-label", "aria-hidden": "true" }, "Sort"), sorting.node);
   const status = el("div", { class: "chats-status", role: "status" });
+  const unread = el("div", { class: "chats-unread" });  // pins that could not be read are said, not hidden
   const results = el("div", { class: "chats-results" });
-  root.append(el("div", { class: "chats-page" }, top, controls, picker, status, results));
+  root.append(el("div", { class: "chats-page" }, top, controls, picker, unread, status, results));
 
   // Every chat is read once (newest activity first, as far as one list request goes): it is the list itself,
   // the rail's count, and the characters and scenarios the picker offers.
-  const every = await ctx.api("chats", { filter: "recent", limit: MAX_LIST });
+  const [every, marks] = await Promise.all([ctx.api("chats", { filter: "recent", limit: MAX_LIST }), readShelf(ctx)]);
+  shelf = marks;
   const capped = every.chats.length >= MAX_LIST;  // there may be more than one request lists: the count is not known
   if (!capped) ctx.setCount("chats", { value: every.chats.length, label: plural(every.chats.length, "chat", "chats") });
-  if (filter === "all") {
+  if (filter === "all" || filter === PINNED) {
     chats = every.chats;
   } else {
     const choices = [{ value: "", label: "Choose a " + filter }];
@@ -72,23 +81,47 @@ export async function mount(root, ctx) {
   }
   render();
 
+  // Pin or unpin one chat at the etag this page read, then read the pins again and draw the list again, with
+  // focus back on that chat's toggle wherever its row now stands.
+  async function pin(chat) {
+    const held = chatMarks(shelf, chat.chat);
+    try {
+      await ctx.api("shelf.pin_chat", { chat: chat.chat, pinned: !held.pinned, expected: held.etag });
+    } catch (error) {
+      if (error.reason !== "changed") throw error;
+      ctx.notify("This chat's pin changed since this page read it, so nothing was written. It is shown as it is now.", { bad: true });
+    }
+    const fresh = await readShelf(ctx);
+    if (fresh) shelf = fresh;
+    render();
+    const again = results.querySelectorAll("button.chats-pin").find((node) => node.getAttribute("data-focus-key") === "chats:pin:" + chat.chat);
+    if (again) again.focus();
+  }
+
   function render() {
     if (chats === null) return;  // typed in before the list arrived: it is searched when it does
-    const found = sortChats(searchChats(chats, state.q), state.sort);
-    const groups = groupChats(found, state.group);
+    const pinned = pinnedChats(shelf);
+    const listed = filter === PINNED ? pinnedOnly(chats, pinned) : chats;
+    const found = sortChats(searchChats(listed, state.q), state.sort);
+    const groups = groupChats(found, state.group, shelf ? pinned : null);
     const now = Date.now();
-    status.textContent = !chats.length ? ""
-      : countLabel(found.length, groups.length, state.group) + (capped && filter === "all" ? ", the " + MAX_LIST + " played last" : "");
-    const none = chats.length ? "No chats match. Start one, or clear the search."
-      : filter === "all" ? "No chats yet. Start one, or sync with your other device."
-        : source ? "No chats here." : "Choose a " + filter + " to see its chats.";
-    results.replaceChildren(...(found.length ? groups.map((group) => groupCard(ctx, group, state, now)) : [ui.empty(none)]));
+    const said = problemText(shelf);
+    unread.replaceChildren(...(said ? [ui.notice(said, { kind: "bad" })] : []));
+    status.textContent = !listed.length ? ""
+      : countLabel(found.length, groups.length, state.group) + (!capped ? "" : filter === "all" ? ", the " + MAX_LIST + " played last"
+        : filter === PINNED ? ", among the " + MAX_LIST + " played last" : "");
+    const none = listed.length ? "No chats match. Start one, or clear the search."
+      : filter === PINNED ? "No chat is pinned yet. Pin one from its row under All to keep it here."
+        : filter === "all" ? "No chats yet. Start one, or sync with your other device."
+          : source ? "No chats here." : "Choose a " + filter + " to see its chats.";
+    const row = { shelf, pin: shelf && !shelf.failed && ctx.has("shelf.pin_chat") ? pin : null };
+    results.replaceChildren(...(found.length ? groups.map((group) => groupCard(ctx, group, state, now, row)) : [ui.empty(none)]));
   }
 }
 
 // One group as a card: a head strip that shows or hides it, its first rows, and "Show N more" for the rest.
 // Showing, hiding and showing more change the card in place, so focus stays where the person is.
-function groupCard(ctx, group, state, now) {
+function groupCard(ctx, group, state, now, row) {
   const { ui } = ctx;
   const { el } = ui;
   const list = el("ul", { class: "chats-rows" });
@@ -105,11 +138,11 @@ function groupCard(ctx, group, state, now) {
     toggle.textContent = open ? "Hide" : "Show";
   }
   const { rows, more } = shownRows(group.chats, state.group, state.expanded.has(group.key));
-  list.append(...rows.map((chat) => el("li", {}, chatItem(ctx, chat, now))));
+  list.append(...rows.map((chat) => chatItem(ctx, chat, now, row)));
   if (more) {
     const rest = el("button", { type: "button", class: "chats-more", onclick: () => {
       state.expanded.add(group.key);
-      const added = group.chats.slice(rows.length).map((chat) => el("li", {}, chatItem(ctx, chat, now)));
+      const added = group.chats.slice(rows.length).map((chat) => chatItem(ctx, chat, now, row));
       list.append(...added);
       rest.remove();
       const first = added[0].querySelector("a");
@@ -122,19 +155,29 @@ function groupCard(ctx, group, state, now) {
 }
 
 // One chat as a row of a group: who is in it, its title and any problem, where it is, and when it was last
-// played. The whole row is one link, by the chat's exact ref. (The chat's last line belongs between the title
-// and the meta line once the list carries one.)
-function chatItem(ctx, chat, now) {
+// played. The row is one link, by the chat's exact ref, with the chat's Pin toggle beside it where the app
+// keeps pins. (The chat's last line belongs between the title and the meta line once the list carries one.)
+function chatItem(ctx, chat, now, row = {}) {
   const { ui } = ctx;
   const { el } = ui;
   const played = when(chat.last_activity, now);
-  return el("a", { class: "chats-row", href: ctx.href("chat", [chat.chat]) },
+  const link = el("a", { class: "chats-row", href: ctx.href("chat", [chat.chat]) },
     el("span", { class: "chats-faces" }, ui.avatars(chatFaces(chat), { size: 30 })),
     el("span", { class: "chats-text" },
       el("span", { class: "chats-titleline" }, el("span", { class: "g-title g-clip" }, chatTitle(chat)),
         chat.problem ? ui.pill(chat.problem, { kind: "bad" }) : null),
       el("span", { class: "chats-meta g-clip" }, chatMeta(chat))),
     played ? el("time", { class: "chats-when", datetime: chat.last_activity }, played) : null);
+  let toggle = null;
+  if (row.pin) {
+    const pinned = chatMarks(row.shelf, chat.chat).pinned;
+    toggle = ui.button(pinned ? "Pinned" : "Pin", () => ctx.act(() => row.pin(chat)), { size: "small" });
+    toggle.classList.add("chats-pin");
+    toggle.setAttribute("aria-pressed", String(pinned));
+    toggle.setAttribute("aria-label", "Pin " + chatTitle(chat));
+    toggle.setAttribute("data-focus-key", "chats:pin:" + chat.chat);
+  }
+  return el("li", { class: "chats-item" }, link, toggle);
 }
 
 // One chat as a row of a plain list (ui.list): its label (or what it was started from), where it is, who is in

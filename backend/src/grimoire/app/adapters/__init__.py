@@ -8,4 +8,8 @@ from . import campaign, imports, inbox, media, play, providers, shell, sources
 #: Every adapter the app serves, in name order.
 ADAPTERS = tuple(module.ADAPTER for module in (campaign, imports, inbox, media, play, providers, shell, sources))
 
+from . import shelf  # noqa: E402 -- tags, pins and saved filters (docs/SHELF.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, shelf.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]

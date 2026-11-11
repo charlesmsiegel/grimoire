@@ -18,8 +18,8 @@ backend/src/grimoire/app/
                                .png, .webp or .woff2 files; nothing else under static/ is served)
   adapter.py                   the adapter contract: Adapter, AdapterContext
   adapters/<name>.py           one sprint's ops: sources 109, imports 110, play 111, providers 112,
-                               campaign 113, media 114, shell 108; and inbox, what waits on the person
-                               (INBOX.md)
+                               campaign 113, media 114, shell 108; inbox, what waits on the person
+                               ([INBOX](INBOX.md)); and shelf, tags, pins and saved filters ([SHELF](SHELF.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -157,10 +157,10 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 |---|---|---|
 | `home`, `setup` | 108 | |
 | `inbox` | 108 | `?item=<item id>` (the item to open on, as `inbox.list` names it) |
-| `chats` | 111 | `?filter=character\|scenario&source=<SourceRef>` |
+| `chats` | 111 | `?filter=character\|scenario&source=<SourceRef>`, `?filter=pinned` |
 | `chat` | 111 | `/<ChatRef>` |
 | `start` | 111 | `?source=<SourceRef>` |
-| `sources` | 109 | `?role=character\|persona\|scenario\|lore\|world&source=<source>&q=<text>` |
+| `sources` | 109 | `?role=character\|persona\|scenario\|lore\|world&source=<source>&shelf=cards\|pinned&tags=<tag>,<tag>&q=<text>` |
 | `source` | 109 | `/<SourceRef>?tab=art\|edit\|revisions\|raw` |
 | `import` | 110 | |
 | `providers` | 112 | |

@@ -7,19 +7,28 @@ export const GROUP_ROWS = 5;   // rows a group shows before "Show N more"
 export const FLAT_ROWS = 30;   // rows the ungrouped list shows before "Show N more"
 
 export const FILTERS = [["all", "All"], ["character", "By character"], ["scenario", "By scenario"]];
+// The filter of the chats the person pinned (docs/SHELF.md): offered only where the app keeps pins.
+export const PINNED = "pinned";
+export const PINNED_FILTER = [PINNED, "Pinned"];
 export const GROUPS = [["campaign", "Campaign"], ["character", "Character"], ["none", "None"]];
 // "Longest" needs a turn count, which the list does not carry yet: add ["longest", "Longest"] here and a
 // branch in sortChats when it does.
 export const SORTS = [["recent", "Recent"], ["name", "A–Z"]];
 
-const NO_CAMPAIGN = "Not in a campaign", NO_CHARACTER = "No character", EVERY = "All chats";
+const NO_CAMPAIGN = "Not in a campaign", NO_CHARACTER = "No character", EVERY = "All chats", PINNED_GROUP = "Pinned";
 
-// The view an address asks for: `?filter=character&source=<SourceRef>`. "recent" (the old default) and
-// anything unknown are every chat; a source only counts with the filter it belongs to.
-export function viewOf(query) {
+// The view an address asks for: `?filter=character&source=<SourceRef>` or `?filter=pinned`. "recent" (the old
+// default) and anything unknown are every chat; a source only counts with the filter it belongs to. `pins` says
+// whether the app keeps pins: without them "pinned" is every chat too.
+export function viewOf(query, { pins = false } = {}) {
   const asked = query.get("filter");
-  const filter = asked === "character" || asked === "scenario" ? asked : "all";
-  return { filter, source: filter === "all" ? null : query.get("source") || null };
+  const filter = asked === "character" || asked === "scenario" || (asked === PINNED && pins) ? asked : "all";
+  return { filter, source: filter === "character" || filter === "scenario" ? query.get("source") || null : null };
+}
+
+// The chats among `chats` that are pinned: `pinned` is a Set of exact chat refs.
+export function pinnedOnly(chats, pinned) {
+  return chats.filter((chat) => pinned.has(chat.chat));
 }
 
 // A choice kept between visits (a draft), or the first one when it names nothing the page offers.
@@ -114,14 +123,19 @@ function groupOf(chat, group) {
 // The list as groups, [{key, label, chats}], each group where its first chat stands in the list, so the sort
 // orders the groups too. "campaign" groups by the campaign a chat belongs to, "character" by the first
 // character it is with, and "none" is one group of everything. No chats is no groups.
-export function groupChats(chats, group) {
+//
+// With `pinned` (a Set of exact chat refs), the pinned chats are lifted out of their groups into one "Pinned"
+// group that comes first, in the order the list has them; a group left with no chat is not shown.
+export function groupChats(chats, group, pinned = null) {
   const groups = new Map();
+  const lifted = [];
   for (const chat of chats) {
+    if (pinned && pinned.has(chat.chat)) { lifted.push(chat); continue; }
     const { key, label } = groupOf(chat, group);
     if (!groups.has(key)) groups.set(key, { key, label, chats: [] });
     groups.get(key).chats.push(chat);
   }
-  return [...groups.values()];
+  return [...(lifted.length ? [{ key: PINNED, label: PINNED_GROUP, chats: lifted }] : []), ...groups.values()];
 }
 
 // The rows of a group that show: the first few, or all of them once it is expanded, and how many more wait.

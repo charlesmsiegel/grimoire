@@ -49,7 +49,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - a file name with no room left for `.json` (IDs used as file names are limited to 123 characters);
   - a source ID deeper than 26 segments.
 - **Reserved names for later families**, which the loader skips silently:
-  - at the root: `authority`, `config`, `assets`, `secrets`, and `kept` (never a folder: it is the authorization namespace of kept versions, so no record root may alias it);
+  - at the root: `authority`, `config` (the person's tags, pins and saved filters live under `config/shelf/`, written by `grimoire.shelfstore` and never read by this store: [SHELF](SHELF.md)), `assets`, `secrets`, and `kept` (never a folder: it is the authorization namespace of kept versions, so no record root may alias it);
   - inside a campaign: `scenes`, `events`, `evidence`, `holdings`.
 
   `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups). `turns/` (035) likewise, only through `campaign_turns` (see played turns). `holdings/` (023) is skipped by `load()` and read only by `campaign_holdings` and `read(HoldingsRef)` (see counted holdings). `transcripts/` (036) is skipped by `load()` and read only by `chat_transcript`, `campaign_transcripts` and `read(TranscriptRef)` (see chat transcripts).

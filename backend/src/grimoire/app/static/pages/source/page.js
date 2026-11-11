@@ -16,6 +16,7 @@ import { askedTab, chatsOn, count, diffRevisions, kindLabel, loreBound, loreEntr
   versionOf } from "./sheet.js";
 import { draftsOf, editTab, rawTab, staleDrafts, unsaved } from "./editors.js";
 import { attachPanel, deriveForm, portrayalTools } from "./actions.js";
+import { headerMarks } from "./marks.js";
 
 const STATES = {
   inherited: "inherited from the base",
@@ -84,7 +85,7 @@ export async function mount(root, ctx) {
   const tabs = tabsFor(read, { art: character && ctx.has("media.art") });
   const tab = askedTab(ctx.query.get("tab"), tabs);
   const address = (which, extra = {}) => ctx.href("source", [asked], { tab: which === "sheet" ? undefined : which, ...extra });
-  const page = { read, pinned, name, art, artError, address, tab, titleOf };
+  const page = { read, pinned, name, art, artError, address, tab, titleOf, marks: await headerMarks(ctx, read) };
 
   const attach = read.actions.attach === null && ctx.has("sources.attach") && ctx.has("sources.chats") ? attachPanel(ctx, read, pinned) : null;
   const parts = [character ? characterHeader(ctx, page, attach) : entryHeader(ctx, page, attach)];
@@ -194,7 +195,7 @@ function characterHeader(ctx, page, attach) {
   const face = art ? el("a", { class: "source-portrait", href: address("art"), "aria-label": "Pictures of " + name }, picture)
     : el("span", { class: "source-portrait" }, picture);
   return el("section", { class: "source-header", "aria-label": name }, face,
-    el("div", { class: "source-header-text g-stack" }, el("div", { class: "g-row source-pills" }, ...pills(ctx, read)),
+    el("div", { class: "source-header-text g-stack" }, el("div", { class: "g-row source-pills" }, ...pills(ctx, read), page.marks),
       el("h2", { class: "g-hero-title" }, name), ...identity(ctx, page)),
     headerActions(ctx, page, attach));
 }
@@ -203,7 +204,7 @@ function entryHeader(ctx, page, attach) {
   const { ui } = ctx;
   const { el } = ui;
   const { read, name } = page;
-  const marks = pills(ctx, read).slice(1).filter(Boolean);
+  const marks = [...pills(ctx, read).slice(1), page.marks].filter(Boolean);
   return el("section", { class: "source-entry-header g-stack", "aria-label": name },
     ui.cover({ key: read.entity, tall: true }, el("div", { class: "g-stack source-cover-text" },
       el("div", { class: "g-eyebrow source-cover-kind" }, kindLabel(read.kind)), el("h2", { class: "g-hero-title" }, name))),

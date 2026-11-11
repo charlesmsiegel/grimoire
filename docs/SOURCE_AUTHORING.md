@@ -139,7 +139,9 @@ on, under the text API's writer lock, as the owner's trusted handle, with the re
   tiles (everything else) or as a table (`view=list`), 48 at a time. Its address holds what is in view:
   `role=character|scenario|lore|world` (`persona` is the characters; `world` is locations, items and every other
   kind), `q=` a search over names and refs, `source=` one source's shelf or `shelf=cards` every imported card's,
-  `sort=recent|name|played` and `limit=`. Each role and shelf shows how many entries it holds. Same-named entries are
+  `sort=recent|name|played` and `limit=`. Where the app keeps the person's tags, pins and saved filters, the page
+  also shows tag chips (`tags=`), a Pinned shelf (`shelf=pinned`), saved filters and Select mode with its bulk
+  Pin and Tag, and an entry's sheet shows its tags and pin: see [SHELF](SHELF.md#in-the-app). Each role and shelf shows how many entries it holds. Same-named entries are
   separate tiles, each saying how many others share its name. A character or scenario has a Chat link to Start Chat.
   How often and how lately an entry was played is counted from the `chats` op, and is shown and sorted by only when
   that list is whole. New entry, New source and a shelf's Rename each open a dialog; a refusal is shown in it.

@@ -4,15 +4,21 @@
 //
 //   #/sources?role=character|scenario|lore|world   which kind of entry ("persona" is the characters)
 //            &q=<text>                             a search over names and refs
-//            &source=<source> | &shelf=cards       one shelf: one source, or every imported card
+//            &source=<source> | &shelf=cards|pinned  one shelf: one source, every imported card, or every pinned entry
+//            &tags=<tag>,<tag>                     only entries that carry every one of these tags
 //            &sort=recent|name|played              the order (by play only when the chats list is whole)
 //            &view=list                            a table instead of the grid
 //            &limit=<n>                            how many are shown (48, then "Show more")
 //
-// Which entries a role and a shelf leave, their counts and their order are ./catalog.js.
+// Which entries a role, a shelf and tags leave, their counts and their order are ./catalog.js. Tags, pins and
+// saved filters are the person's own notes about entries (docs/SHELF.md): ./shelf.js reads them and ./marks.js
+// draws them (the tag chips, the saved filters, Select mode and its bar). Nothing of them is shown where the
+// app does not serve the shelf ops.
 
 import { CARDS, PAGE, ROLES, askedRole, askedSort, canChat, count, countRoles, filterEntries, kindLabel, metaLine, onShelf, playsOf,
   shelvesOf, sortEntries, sortsFor, when } from "./catalog.js";
+import { PINNED, askedTags, filterOf, marksOf, problemText, readShelf, tagsParam } from "./shelf.js";
+import { bulkBar, entryMarks, pickButton, savedFilters, selection, tagRow } from "./marks.js";
 
 // What a new entry can be: its kind, and the structured field its first revision needs besides a name.
 const NEW_KINDS = [["character", "Character"], ["location", "Location"], ["item", "Item"], ["scenario", "Scenario"],
@@ -31,12 +37,14 @@ export async function mount(root, ctx) {
   const { role, persona } = askedRole(ctx.query.get("role"));
   const query = ctx.query.get("q") || "";
   const only = ctx.query.get("source") || "";
-  const shelf = only || (ctx.query.get("shelf") === CARDS ? CARDS : "");
+  const named = ctx.query.get("shelf");
+  const shelf = only || (named === CARDS ? CARDS : named === PINNED && ctx.has("shelf.read") ? PINNED : "");
+  const tags = ctx.has("shelf.read") ? askedTags(ctx.query.get("tags")) : [];
   const list = ctx.query.get("view") === "list";
   const asked = Number.parseInt(ctx.query.get("limit") || "", 10);
   const limit = Number.isInteger(asked) && asked >= 1 ? Math.min(asked, MAX_LIST) : PAGE;
   const address = (changes) => {
-    const next = { role: persona ? "persona" : role, q: query, source: only, shelf: shelf === CARDS ? CARDS : "",
+    const next = { role: persona ? "persona" : role, q: query, source: only, shelf: only ? "" : shelf, tags: tagsParam(tags),
       sort: ctx.query.get("sort") || "", view: list ? "list" : "", limit: limit === PAGE ? "" : limit, ...changes };
     for (const key of Object.keys(next)) if (next[key] === "" || next[key] === undefined || next[key] === null) delete next[key];
     return ctx.href("sources", [], next);
@@ -44,21 +52,29 @@ export async function mount(root, ctx) {
 
   const args = { limit: MAX_LIST };
   if (query) args.query = query;
-  const [catalog, chats] = await Promise.all([ctx.api("sources.catalog", args), ctx.has("chats")
-    ? ctx.api("chats", { limit: MAX_CHATS }).catch((error) => { if (error.reason === "left") throw error; return null; }) : null]);
+  const [catalog, chats, read] = await Promise.all([ctx.api("sources.catalog", args), ctx.has("chats")
+    ? ctx.api("chats", { limit: MAX_CHATS }).catch((error) => { if (error.reason === "left") throw error; return null; }) : null,
+  readShelf(ctx)]);
   const sources = catalog.sources;
   const titles = new Map(sources.map((source) => [source.source, source.title || source.source]));
   const plays = playsOf(chats && chats.chats, MAX_CHATS);
   const sort = askedSort(ctx.query.get("sort"), plays);
   const chosen = only ? sources.find((source) => source.source === only) : null;
   const total = sources.reduce((sum, source) => sum + source.entities, 0);
-  const onThisShelf = catalog.entries.filter((entry) => onShelf(entry, shelf));
-  const counts = countRoles(onThisShelf);
-  const found = sortEntries(filterEntries(catalog.entries, { role, shelf }), sort, plays);
-  const shown = found.slice(0, limit);
-  const view = { ctx, address, titles, plays, portrait: portraits(ctx), chat: ctx.registered("start") };
+  // what the person is looking at, as a saved filter would keep it
+  const current = filterOf({ role, shelf: only ? "" : shelf, source: only, tags, query, sort: ctx.query.get("sort") || "" });
+  const view = { ctx, address, titles, plays, portrait: portraits(ctx), chat: ctx.registered("start"), shelf: read, tags, query,
+    catalog, current, roleLabel: role ? (ROLES.find(([value]) => value === role) || ROLES[0])[1] : "", shown: [], picks: null, refresh: null };
+  view.picks = selection(view, () => draw());
+  // After a tag or a pin is written the shelf is read again and everything under the search row is drawn again,
+  // with focus put back on the control that was used (found by its data-focus-key).
+  view.refresh = async () => {
+    const fresh = await readShelf(ctx);
+    if (fresh) view.shelf = fresh;
+    draw();
+  };
 
-  // row 1: search, Import, New entry
+  // row 1: search, Select, Import, New entry
   const search = ui.search("Search names and refs", { value: query, placeholder: "Search " + count(total, "entry", "entries") + " by name or ref" });
   search.setAttribute("name", "q");
   search.setAttribute("data-focus-key", "sources-search");
@@ -67,49 +83,82 @@ export async function mount(root, ctx) {
     event.preventDefault();
     ctx.navigate(address({ q: search.value.trim(), limit: "" }));
   });
-  const top = el("div", { class: "g-row sources-top" }, form,
+  const selecting = view.picks.available ? focusKey(ui.button("Select", () => view.picks.toggleMode()), "sources-select") : null;
+  const top = el("div", { class: "g-row sources-top" }, form, selecting,
     ctx.registered("import") ? ui.buttonLink("Import", "import") : null,
     ctx.has("sources.create") ? focusKey(ui.button("New entry", () => newEntry(ctx, sources, chosen), { kind: "primary" }), "sources-new") : null);
-
-  // row 2: the roles with their counts, the order and the view
-  const roles = ui.segments("Which entries", ROLES.map(([value, label]) => ({ value, label: label + " " + counts[value] })),
-    { value: role, onchange: (value) => ctx.navigate(address({ role: value, limit: "" })) });
-  const sorts = sortsFor(plays);
-  const order = sorts.length > 1 ? ui.segments("Sort", sorts, { value: sort, onchange: (value) => ctx.navigate(address({ sort: value })) }) : null;
-  const views = ui.segments("View", [{ value: "grid", label: "Grid" }, { value: "list", label: "List" }],
-    { value: list ? "list" : "grid", onchange: (value) => ctx.navigate(address({ view: value === "list" ? "list" : "" })) });
-  const controls = el("div", { class: "g-row sources-controls" }, roles.node, el("div", { class: "g-row sources-order" },
-    order ? el("span", { class: "g-muted", "aria-hidden": "true" }, "Sort") : null, order ? order.node : null, views.node));
-
-  const notes = [];
-  if (persona) notes.push(el("p", { class: "g-muted sources-note" }, "Any character can be your persona. You choose it from the chat you play."));
-  for (const reason of catalog.excluded || []) notes.push(ui.notice(describeExcluded(reason), { kind: "bad" }));
-  if (catalog.truncated) {
-    notes.push(ui.notice("Only the first " + catalog.entries.length + " of " + catalog.total + " entries are listed and counted here. Search to narrow them."));
-  }
-  if (only) notes.push(chosen ? sourceHead(ctx, chosen, sources, address) : el("div", {}, ui.notice("No source " + only + " is in this library.", { kind: "bad" }),
-    ui.actions(el("a", { class: "g-button", href: address({ source: "", limit: "" }) }, "Show every source"))));
-
-  // the shelves beside the results
-  const shelves = el("nav", { class: "sources-shelves", "aria-label": "Shelves" }, ui.eyebrow("Shelves"),
-    shelvesOf(sources, catalog.entries).map((item) => {
-      const link = el("a", { class: "sources-shelf", title: item.id && item.id !== CARDS ? item.id : undefined,
-        href: address({ source: item.id === CARDS ? "" : item.id, shelf: item.id === CARDS ? CARDS : "", limit: "" }) },
-      el("span", { class: "g-clip" }, item.label), el("span", { class: "g-muted" }, String(item.count)));
-      if (item.id === shelf) link.setAttribute("aria-current", "page");
-      return link;
-    }),
-    ctx.has("sources.create_source") ? focusKey(ui.button("New source", () => newSource(ctx, address), { kind: "dashed", size: "small" }), "sources-new-source") : null);
-
-  const results = el("div", { class: "sources-results g-stack" });
-  results.append(el("div", { class: "g-muted sources-count", role: "status" }, summary(found.length, shown.length, query)));
-  if (!found.length) results.append(el("p", { class: "g-muted" }, query ? "Nothing matches " + JSON.stringify(query) + "." : "Nothing here yet."));
-  else results.append(list ? table(view, shown) : el("div", { class: "g-tiles g-dense sources-grid" }, shown.map((entry) => tile(view, entry))));
-  if (found.length > shown.length) {
-    results.append(el("a", { class: "g-button sources-more", href: address({ limit: Math.min(limit + PAGE, MAX_LIST) }) }, "Show more"));
-  }
+  const live = el("div", { class: "sources-live" });
   root.classList.add("sources-page");
-  root.append(top, controls, ...notes, el("div", { class: "sources-body" }, shelves, results));
+  root.append(top, live);
+  draw();
+
+  function draw() {
+    const marks = view.shelf && !view.shelf.failed ? view.shelf : null;  // a shelf that could not be read shows nothing of itself
+    const held = document.activeElement && live.contains(document.activeElement) ? document.activeElement.getAttribute("data-focus-key") : null;
+    if (selecting) {
+      selecting.textContent = view.picks.on ? "Done selecting" : "Select";
+      selecting.setAttribute("aria-pressed", String(view.picks.on));
+    }
+    const onThisShelf = catalog.entries.filter((entry) => onShelf(entry, shelf, marks));
+    const counts = countRoles(filterEntries(onThisShelf, { tags, marks }));
+    const found = sortEntries(filterEntries(catalog.entries, { role, shelf, tags, marks }), sort, plays);
+    const shown = found.slice(0, limit);
+    view.shown = shown;
+
+    // row 2: the roles with their counts, the order and the view
+    const roles = ui.segments("Which entries", ROLES.map(([value, label]) => ({ value, label: label + " " + counts[value] })),
+      { value: role, onchange: (value) => ctx.navigate(address({ role: value, limit: "" })) });
+    const sorts = sortsFor(plays);
+    const order = sorts.length > 1 ? ui.segments("Sort", sorts, { value: sort, onchange: (value) => ctx.navigate(address({ sort: value })) }) : null;
+    const views = ui.segments("View", [{ value: "grid", label: "Grid" }, { value: "list", label: "List" }],
+      { value: list ? "list" : "grid", onchange: (value) => ctx.navigate(address({ view: value === "list" ? "list" : "" })) });
+    const controls = el("div", { class: "g-row sources-controls" }, roles.node, el("div", { class: "g-row sources-order" },
+      order ? el("span", { class: "g-muted", "aria-hidden": "true" }, "Sort") : null, order ? order.node : null, views.node));
+
+    // row 3: the tags in use on this shelf and role, and the way to keep this view
+    const chips = marks ? tagRow(view, filterEntries(onThisShelf, { role })) : null;
+
+    const notes = [];
+    if (persona) notes.push(el("p", { class: "g-muted sources-note" }, "Any character can be your persona. You choose it from the chat you play."));
+    const unread = problemText(view.shelf);
+    if (unread) notes.push(ui.notice(unread, { kind: "bad" }));
+    for (const reason of catalog.excluded || []) notes.push(ui.notice(describeExcluded(reason), { kind: "bad" }));
+    if (catalog.truncated) {
+      notes.push(ui.notice("Only the first " + catalog.entries.length + " of " + catalog.total + " entries are listed and counted here. Search to narrow them."));
+    }
+    if (only) notes.push(chosen ? sourceHead(ctx, chosen, sources, address) : el("div", {}, ui.notice("No source " + only + " is in this library.", { kind: "bad" }),
+      ui.actions(el("a", { class: "g-button", href: address({ source: "", limit: "" }) }, "Show every source"))));
+
+    // the shelves, and the saved filters under them, beside the results
+    const shelves = el("nav", { class: "sources-shelves", "aria-label": "Shelves" }, ui.eyebrow("Shelves"),
+      shelvesOf(sources, catalog.entries, marks).map((item) => {
+        const special = item.id === CARDS || item.id === PINNED;
+        const link = el("a", { class: "sources-shelf", title: item.id && !special ? item.id : undefined,
+          href: address({ source: special ? "" : item.id, shelf: special ? item.id : "", limit: "" }) },
+        el("span", { class: "g-clip" }, item.label), el("span", { class: "g-muted" }, String(item.count)));
+        if (item.id === shelf) link.setAttribute("aria-current", "page");
+        return link;
+      }),
+      ctx.has("sources.create_source") ? focusKey(ui.button("New source", () => newSource(ctx, address), { kind: "dashed", size: "small" }), "sources-new-source") : null);
+    const side = el("div", { class: "sources-side" }, shelves, marks ? savedFilters(view) : null);
+
+    const results = el("div", { class: "sources-results g-stack" });
+    results.append(el("div", { class: "g-muted sources-count", role: "status" }, summary(found.length, shown.length, query)));
+    if (!found.length) {
+      results.append(el("p", { class: "g-muted" }, query ? "Nothing matches " + JSON.stringify(query) + "."
+        : tags.length ? "Nothing here carries " + (tags.length === 1 ? "that tag." : "all of those tags.")
+          : shelf === PINNED ? "Nothing is pinned yet. Pin an entry from its tile to keep it here." : "Nothing here yet."));
+    } else results.append(list ? table(view, shown) : el("div", { class: "g-tiles g-dense sources-grid" }, shown.map((entry) => tile(view, entry))));
+    if (found.length > shown.length) {
+      results.append(el("a", { class: "g-button sources-more", href: address({ limit: Math.min(limit + PAGE, MAX_LIST) }) }, "Show more"));
+    }
+    live.replaceChildren(...[controls, chips, ...notes, el("div", { class: "sources-body" }, side, results),
+      view.picks.on ? bulkBar(view) : null].filter(Boolean));
+    if (held) {
+      const again = live.querySelectorAll("[data-focus-key]").find((node) => node.getAttribute("data-focus-key") === held);
+      if (again) again.focus();
+    }
+  }
 }
 
 function focusKey(node, key) { node.setAttribute("data-focus-key", key); return node; }
@@ -203,7 +252,13 @@ function tile(view, entry) {
   }
   link.title = entry.ref;
   if (!entry.name) link.classList.add("sources-unnamed");
-  return el("div", { class: "sources-tile" }, link, ...facts(view, entry), chatLink(view, entry));
+  const node = el("div", { class: "sources-tile" }, link, ...facts(view, entry));
+  if (view.picks.on) view.picks.asPick(node, link, entry);
+  else {
+    const acts = [chatLink(view, entry), entryMarks(view, entry, { tags: false })].filter(Boolean);
+    node.append(...[entryMarks(view, entry, { pin: false }), acts.length ? el("div", { class: "g-row sources-acts" }, acts) : null].filter(Boolean));
+  }
+  return node;
 }
 
 // The same entries as a table.
@@ -211,25 +266,29 @@ function table(view, entries) {
   const { ctx, titles, plays, address } = view;
   const { ui } = ctx;
   const { el } = ui;
-  const head = ["", "Name", "Kind", "Source", "Version", ...(plays ? ["Chats", "Last played"] : []), ""];
+  const marked = Boolean(view.shelf) && !view.shelf.failed;
+  const head = ["", "Name", "Kind", ...(marked ? ["Tags"] : []), "Source", "Version", ...(plays ? ["Chats", "Last played"] : []), ""];
   const rows = entries.map((entry) => {
     const name = entry.name || entry.ref;
     const play = plays ? plays.get(entry.ref) : null;
     const link = el("a", { class: "sources-name" + (entry.name ? "" : " g-ref"), href: ctx.href("source", [entry.ref]), title: entry.ref }, name);
-    return el("tr", {},
-      el("td", {}, ui.avatar(name, { size: 30, key: entry.ref, picture: entry.kind === "character" && !entry.problem ? view.portrait(entry.ref) : undefined })),
+    return el("tr", { class: view.picks.on && view.picks.has(entry.ref) ? "sources-picked-row" : undefined },
+      el("td", {}, view.picks.on ? pickButton(view, entry) : ui.avatar(name, { size: 30, key: entry.ref,
+        picture: entry.kind === "character" && !entry.problem ? view.portrait(entry.ref) : undefined })),
       el("td", {}, el("div", { class: "g-stack sources-cell" }, link, entry.derived ? el("span", { class: "g-muted" }, "a portrayal") : null, ...facts(view, entry))),
       el("td", { class: "g-muted sources-nowrap" }, kindLabel(entry.kind)),
+      marked ? el("td", { class: "sources-tagcell" }, view.picks.on ? el("span", { class: "sources-tags" }, marksOf(view.shelf, entry.ref).tags.join(", "))
+        : entryMarks(view, entry, { pin: false })) : null,
       el("td", {}, el("a", { class: "g-link sources-source", href: address({ source: entry.source, shelf: "", limit: "" }), title: entry.source },
         titles.get(entry.source) || entry.source)),
       el("td", { class: "g-mono g-muted", title: entry.head || undefined }, entry.head ? String(entry.revisions) : "none"),
       plays ? el("td", {}, play ? String(play.count) : "0") : null,
       plays ? el("td", { class: "g-muted sources-nowrap" }, play ? when(play.last) : "") : null,
-      el("td", {}, chatLink(view, entry)));
+      el("td", { class: view.picks.on ? undefined : "sources-acts-cell" }, view.picks.on ? null : el("div", { class: "g-row sources-rowacts" }, entryMarks(view, entry, { tags: false }), chatLink(view, entry))));
   });
-  return ui.card({ kind: "flush" }, el("div", { class: "sources-table" }, el("table", { class: "g-table" },
-    el("thead", {}, el("tr", {}, head.map((text, index) => el("th", { scope: "col" },
-      text || el("span", { class: "sources-hidden" }, index ? "Chat" : "Picture"))))),
+  return ui.card({ kind: "flush" }, el("div", { class: "sources-table" }, el("table", { class: "g-table" + (marked ? " sources-marked" : "") },
+    el("thead", {}, el("tr", {}, head.map((text, index) => el("th", { scope: "col", class: index === head.length - 1 && !view.picks.on ? "sources-acts-cell" : undefined },
+      text || el("span", { class: "sources-hidden" }, index ? "Actions" : view.picks.on ? "Select" : "Picture"))))),
     el("tbody", {}, rows))));
 }
 

@@ -17,9 +17,16 @@
 .chats-head:hover .chats-toggle { color: var(--g-fg); }
 
 .chats-rows { list-style: none; margin: 0; padding: 0; }
-.chats-row { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-top: 1px solid var(--g-line);
+.chats-item { display: flex; align-items: center; border-top: 1px solid var(--g-line); }
+.chats-item:hover { background: var(--g-raised); }
+.chats-row { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 10px 16px;
   color: inherit; text-decoration: none; }
-.chats-row:hover { background: var(--g-raised); color: inherit; }
+.chats-row:hover { color: inherit; }
+.chats-pin { flex: none; margin-right: 16px; padding: 3px 10px; border-radius: 6px; background: transparent; color: var(--g-muted);
+  border-color: var(--g-muted); }
+.chats-pin[aria-pressed="true"] { border-color: var(--g-accent); color: var(--g-accent); }
+.chats-unread:empty { display: none; }
+.chats-unread .g-notice { margin: 0; }
 .chats-row:focus-visible { outline-offset: -3px; }
 .chats-faces { flex: none; width: 74px; display: flex; }
 .chats-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -34,4 +41,5 @@
 @media (max-width: 720px) {
   .chats-faces { width: auto; }
   .chats-row { gap: 10px; padding: 10px 12px; }
+  .chats-pin { margin-right: 12px; }
 }

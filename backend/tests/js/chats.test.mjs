@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { FILTERS, FLAT_ROWS, GROUPS, GROUP_ROWS, SORTS, chatCharacters, chatFaces, chatMeta, chatTitle, chatWhere, countLabel,
-  groupChats, listNames, oneOf, plural, searchChats, shownRows, sortChats, viewOf, when }
+import { FILTERS, FLAT_ROWS, GROUPS, GROUP_ROWS, PINNED, PINNED_FILTER, SORTS, chatCharacters, chatFaces, chatMeta, chatTitle, chatWhere, countLabel,
+  groupChats, listNames, oneOf, pinnedOnly, plural, searchChats, shownRows, sortChats, viewOf, when }
   from "../../src/grimoire/app/static/pages/chats/model.js";
 import { greeting } from "../../src/grimoire/app/static/pages/home/page.js";
 
@@ -67,6 +67,13 @@ test("the address names which chats are listed", () => {
   assert.deepEqual(view("filter=scenario&source=card:pier/scenario/pier"), { filter: "scenario", source: "card:pier/scenario/pier" });
   // what the page offers: no filter, grouping or sort that needs data the list does not carry
   assert.deepEqual(FILTERS.map(([name]) => name), ["all", "character", "scenario"]);
+  // the pinned chats are a filter only where the app keeps pins; without them the address is every chat
+  assert.deepEqual(PINNED_FILTER, ["pinned", "Pinned"]);
+  assert.deepEqual(view("filter=pinned"), { filter: "all", source: null });
+  const kept = (text) => viewOf(new URLSearchParams(text), { pins: true });
+  assert.deepEqual(kept("filter=pinned&source=card:x/character/x"), { filter: PINNED, source: null }, "pinned chats are of no one source");
+  assert.deepEqual(kept("filter=character&source=card:x/character/x"), { filter: "character", source: "card:x/character/x" });
+  assert.deepEqual(kept(""), { filter: "all", source: null });
   assert.deepEqual(GROUPS.map(([, label]) => label), ["Campaign", "Character", "None"]);
   assert.deepEqual(SORTS.map(([, label]) => label), ["Recent", "A–Z"]);
   assert.equal(oneOf(GROUPS, "character"), "character");
@@ -125,6 +132,33 @@ test("grouping by campaign, by character, or not at all", () => {
     assert.deepEqual(groupChats(ALL, group).flatMap((item) => ids(item.chats)).sort(), ids(ALL));
     assert.equal(new Set(groupChats(ALL, group).map((item) => item.key)).size, groupChats(ALL, group).length);
   }
+});
+
+test("pinned chats are lifted into a Pinned group at the top, each listed once", () => {
+  const pinned = new Set([watch.chat, ledger.chat, "campaigns/gone/chats/gone"]);  // a pin on a chat that is not listed lists nothing
+  const recent = sortChats(ALL, "recent");
+  const byCampaign = groupChats(recent, "campaign", pinned);
+  assert.deepEqual(byCampaign.map((group) => [group.key, group.label, ids(group.chats)]), [
+    ["pinned", "Pinned", ["c2", "c3"]],            // in the list's own order: the one played last first
+    ["campaign:harbor", "Harbor", ["c1"]],         // the pinned chat left its campaign's group
+    ["", "Not in a campaign", ["c4", "c5"]],
+  ]);
+  assert.equal(byCampaign.flatMap((group) => group.chats).length, ALL.length, "no chat is listed twice or lost");
+  // a group whose every chat is pinned is not shown empty
+  assert.deepEqual(groupChats([tide, watch], "campaign", new Set([tide.chat, watch.chat])).map((group) => group.label), ["Pinned"]);
+  // ungrouped, the pinned chats still come first
+  assert.deepEqual(groupChats(recent, "none", pinned).map((group) => [group.label, ids(group.chats)]),
+    [["Pinned", ["c2", "c3"]], ["All chats", ["c1", "c4", "c5"]]]);
+  // nothing pinned, or no pins kept: the groups are as they were
+  assert.deepEqual(groupChats(recent, "campaign", new Set()), groupChats(recent, "campaign"));
+  assert.deepEqual(groupChats(recent, "campaign", null), groupChats(recent, "campaign"));
+  assert.equal(countLabel(ALL.length, byCampaign.length, "campaign"), "5 chats in 3 groups");
+  // the Pinned filter: those chats alone, searched and sorted like any list
+  assert.deepEqual(ids(pinnedOnly(ALL, pinned)), ["c2", "c3"]);
+  assert.deepEqual(pinnedOnly(ALL, new Set()), []);
+  assert.deepEqual(groupChats(sortChats(pinnedOnly(ALL, pinned), "name"), "character", pinned).map((group) => [group.label, ids(group.chats)]),
+    [["Pinned", ["c3", "c2"]]]);
+  assert.deepEqual(shownRows(byCampaign[0].chats, "campaign", false), { rows: [ledger, watch], more: 0 });
 });
 
 test("a group shows five rows, the ungrouped list thirty, then the rest on request", () => {

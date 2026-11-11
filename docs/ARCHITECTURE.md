@@ -83,6 +83,7 @@ A campaign actor moves to a newer revision of its own entity only through a fiel
     holdings/<kind>/                  # counted stacks per holder instance (023, see HOLDINGS.md)
     images/, placements/              # the campaign's own image objects and placements (018)
   assets/blobs/                       # content-addressed image bytes (018)
+  config/shelf/                       # the person's tags, pins and saved filters (SHELF.md); not synced yet
   .txn/, .conflicts/, .sync/          # writer journal, preserved conflict versions, device-local sync state
 ```
 

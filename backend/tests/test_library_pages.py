@@ -183,3 +183,9 @@ def test_the_library_pages_end_to_end(tmp_path):
         assert lore["revisions"] == ["r1", "r2", "r3"] and lore["payload"]["name"] == "Harbor lore"
         renamed = AppApi(device.api).call("sources.read", {"ref": "card:mara-vell/lorebook/mara-vell-lore@r2"})
         assert renamed["payload"]["name"] == "Mara's lore, renamed"
+        # the tags and pins the pages wrote are on the shelf, by exact ref; the saved filter and the chat's pin are gone
+        shelf = AppApi(device.api).call("shelf.read", {})
+        marks = {item["ref"]: (item["tags"], item["pinned"]) for item in shelf["entries"]}
+        assert marks[MARA] == (["crew"], False) and marks["card:mara-vell/lorebook/mara-vell-lore"] == (["old lore"], False)
+        assert sum(1 for _tags, pinned in marks.values() if pinned) == len(marks) - 3  # Mara, the lorebook, one unpinned
+        assert (shelf["filters"], shelf["chats"], shelf["problems"]) == ([], [], [])

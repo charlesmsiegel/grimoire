@@ -5,6 +5,8 @@
 // How often and how lately an entry was played is not in the catalog: it is counted from the `chats` op's list,
 // and only when that list is whole (see playsOf). Without it nothing here invents a count or an order by play.
 
+import { PINNED, hasTags, marksOf } from "./shelf.js";
+
 export const ROLES = [["", "Everything"], ["character", "Characters"], ["scenario", "Scenarios"], ["lore", "Lore"],
   ["world", "World entries"]];
 const ROLE_OF_KIND = { character: "character", scenario: "scenario", lorebook: "lore" };
@@ -32,19 +34,23 @@ export function kindLabel(kind) {
 
 export function count(n, one, many) { return n + " " + (n === 1 ? one : many); }
 
-// Whether an entry stands on a shelf: "" is everything, CARDS every imported card, anything else one source.
-export function onShelf(entry, shelf) {
+// Whether an entry stands on a shelf: "" is everything, CARDS every imported card, PINNED every entry the person
+// pinned (by `marks`, the shelf of ./shelf.js), anything else one source.
+export function onShelf(entry, shelf, marks) {
   if (!shelf) return true;
   if (shelf === CARDS) return String(entry.source).startsWith("card:");
+  if (shelf === PINNED) return marksOf(marks, entry.ref).pinned;
   return entry.source === shelf;
 }
 
 // The shelves: Everything, Imported cards (when there are any), then one for each source that is not a card's, the
-// worlds first, each with how many of `entries` stand on it.
-export function shelvesOf(sources, entries) {
+// worlds first, each with how many of `entries` stand on it. With `marks` (the app keeps pins), Pinned comes
+// second, counting the listed entries that are pinned.
+export function shelvesOf(sources, entries, marks) {
   const per = new Map();
   for (const entry of entries) per.set(entry.source, (per.get(entry.source) || 0) + 1);
   const shelves = [{ id: "", label: "Everything", count: entries.length }];
+  if (marks) shelves.push({ id: PINNED, label: "Pinned", count: entries.filter((entry) => marksOf(marks, entry.ref).pinned).length });
   const cards = sources.filter((source) => source.namespace === "card");
   if (cards.length) shelves.push({ id: CARDS, label: "Imported cards", count: cards.reduce((sum, source) => sum + (per.get(source.source) || 0), 0) });
   const rest = sources.filter((source) => source.namespace !== "card")
@@ -60,9 +66,9 @@ export function countRoles(entries) {
   return counts;
 }
 
-// The entries a shelf and a role leave.
-export function filterEntries(entries, { role = "", shelf = "" } = {}) {
-  return entries.filter((entry) => onShelf(entry, shelf) && (!role || roleOf(entry) === role));
+// The entries a shelf, a role and tags leave: an entry must carry every one of `tags`.
+export function filterEntries(entries, { role = "", shelf = "", tags = [], marks = null } = {}) {
+  return entries.filter((entry) => onShelf(entry, shelf, marks) && (!role || roleOf(entry) === role) && hasTags(marks, entry.ref, tags));
 }
 
 // How often and how lately each entry is in a chat, from the `chats` op's list: Map(ref -> { count, last }). The
