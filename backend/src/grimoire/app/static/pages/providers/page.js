@@ -1,9 +1,11 @@
 // Models and costs (112): the model the table plays with, the calls a turn may make, what each chat's calls
 // used and this device's recent call timings (docs/INFERENCE_UI.md).
 // Everything shown comes from the app's own ops; library and provider text is only ever set as text.
-// The page sends nothing to a provider: "Check" is checked by the app without a call, and "Save" only writes
-// the app's settings file at the revision this page read. A provider's key is only ever named by its
-// environment variable: the page never asks for the key, shows it or keeps it.
+// "Check" is checked by the app without a call, and "Save" only writes the app's settings file at the revision
+// this page read. Exactly one control sends anything to a provider: "Send a test call", which says so, sends one
+// small request to the saved model when pressed, and is never pressed by the page itself. A provider's key is
+// only ever named by its environment variable: the page never asks for the key, shows it or keeps it.
+// A cost is an estimate from the prices the person saved with the model, never a bill, and is said to be one.
 
 /** Chats listed at first, and the most the text API lists (044's MAX_LIMIT). */
 const CHATS_PAGE = 100, CHATS_MAX = 1000;
@@ -26,6 +28,8 @@ const PRESETS = {
   openrouter: { provider_id: "openrouter", base_url: "https://openrouter.ai/api/v1", key_env: "OPENROUTER_API_KEY" },
   local: { provider_id: "ollama", base_url: "http://127.0.0.1:11434/v1", key_env: "" },
 };
+// The Model card's price fields and the settings they are saved as.
+const PRICE_FIELDS = [["pricePrompt", "price_prompt"], ["priceReply", "price_reply"], ["priceCached", "price_cached"]];
 const PRESET_LABELS = [{ value: "openrouter", label: "OpenRouter" }, { value: "local", label: "Local (Ollama)" },
   { value: "custom", label: "Custom" }];
 
@@ -54,12 +58,64 @@ function unmetered(totals) {
   return parts.join(", ");
 }
 
+// One attempt's cost in a sentence: an estimate, a floor, or unknown and why. Never a bare 0 for the unknown.
 function cost(item) {
-  return item.cost_state === "unpriced" ? "unknown: no prices are set" : String(item.cost);
+  if (item.cost_state === "unpriced") {
+    return item.unpriced_attempts ? "unknown: no price is set for this model" : "unknown: no prices are set";
+  }
+  return (item.cost_lower_bound ? "at least " : "about ") + item.cost;
+}
+
+// The Cost tile. Three states: no prices yet ("Set prices to see it"), an estimate from the person's prices, and
+// a lower bound, which is always said to be one. Calls that all went to a model with no price are unknown.
+function costTile(total, prices) {
+  if (total.cost_state === "unpriced") {
+    if (!prices || !prices.set) return { value: "Set prices to see it", note: "Enter both prices in the Model card" };
+    return { value: "Unknown", note: "No price is set for the model these calls used" };
+  }
+  const why = [];
+  if (total.unpriced_attempts) why.push(plural(total.unpriced_attempts, "attempt") + " on a model with no price left out");
+  if (total.cost_lower_bound && !why.length) why.push("some usage was not reported");
+  if (total.cost_state === "estimated") why.push("token counts not the provider's own");
+  return { value: (total.cost_lower_bound ? "at least " : "") + total.cost,
+    note: ["Estimate from your prices", ...why].join("; ") };
+}
+
+const TEST_REASONS = {
+  auth: "the provider refused the key", account_limit: "the provider says the account is out of credit or over its limit",
+  rate_limit: "the provider is rate limiting", bad_request: "the provider refused the request",
+  server_error: "the provider had an error", network: "the endpoint could not be reached",
+  tls: "the endpoint's certificate could not be trusted", timeout: "the provider took too long",
+  peer_not_loopback: "the endpoint is not on this computer", bad_response: "the answer could not be read",
+  truncated: "the answer was cut off", provider_error: "the provider reported an error",
+  missing_key: "the key variable is not set where the app runs", bad_key: "the key variable does not hold a usable key",
+};
+
+// The result of a test call as one line: the model that answered, how long it took and the tokens it used, or the
+// failure with the provider's own reason. Provider text is only ever set as text.
+function testLine(result) {
+  const tokens = (name) => result.tokens.unreported[name] ? "unreported" : String(result.tokens.sums[name]);
+  const seconds = result.seconds.toFixed(2) + " s";
+  if (result.ok) {
+    const parts = [`Answered by ${result.model || result.route} in ${seconds}`,
+      `${tokens("input_tokens")} prompt and ${tokens("output_tokens")} reply tokens`];
+    if (result.attempts.length > 1) parts.push(plural(result.attempts.length, "attempt"));
+    if (result.cost_state !== "unpriced") parts.push(`${result.cost_lower_bound ? "at least" : "about"} ${result.cost} at your prices`);
+    if (result.status === "incomplete") parts.push("cut short by the test's small reply limit");
+    return { good: true, text: parts.join(" · ") + "." };
+  }
+  if (result.status === "timeout") {
+    return { good: false, text: `No answer within ${result.limit_seconds} seconds, so the test call was given up on.`
+      + (result.sent ? " A hosted model may still bill what it began." : "") };
+  }
+  const why = TEST_REASONS[result.reason] || (result.reason ? String(result.reason).replaceAll("_", " ") : "it did not finish");
+  const said = [result.http_status ? "HTTP " + result.http_status : null, result.code, result.detail].filter(Boolean).join(": ");
+  return { good: false, text: `The test call failed after ${seconds}: ${why}.` + (said ? " The provider said: " + said : "")
+    + (result.sent ? "" : " Nothing was sent.") };
 }
 
 /** The ops this page calls: ``chats`` is the text API's, the rest Sprint 112's adapter's (``providers.<op>``). */
-const OWN = new Set(["models", "check_models", "save_models", "usage", "diagnostics"]);
+const OWN = new Set(["models", "check_models", "save_models", "usage", "diagnostics", "test_call"]);
 
 /** The shell's page entry (docs/APP_SHELL.md): ``ctx.api(op, args)`` posts one op and rejects with
  * ``error.reason``; once the page is left it rejects with ``left`` and nothing more is drawn. */
@@ -72,7 +128,9 @@ export async function mount(root, ctx) {
   ctx.styles("page.css");
   // a chat can be named in the address (#/providers?chat=<ChatRef>), so one past the list's end is reachable too
   const named = ctx.query && ctx.query.get ? ctx.query.get("chat") : null;
-  const state = { models: null, chat: named || null, asked: 0, limit: CHATS_PAGE, skip: 0 };
+  // ``test``: the last test call's line, kept while the settings it tested are the ones shown; ``testing`` while
+  // one is on its way (the button is off and the line says so, for as long as the request really takes)
+  const state = { models: null, chat: named || null, asked: 0, limit: CHATS_PAGE, skip: 0, test: null, testing: false };
   let form = null;  // the Model card's controls, read by Check and Save
 
   const fill = (node, ...children) => {
@@ -114,9 +172,45 @@ export async function mount(root, ctx) {
       lines = [generation.problem ? generation.problem.message : "Generation is off.",
         "Chats work, but nothing answers until a model is saved below."];
     }
+    const test = shown.test_call;
+    const offered = Boolean(test && test.available);
+    // why no test can be sent matters only while a model answers: with none, the lines above already say why
+    if (test && !test.available && generation.available && test.reason) lines.push("No test call: " + test.reason + ".");
+    const result = state.testing ? el("div", { class: "g-muted providers-test-line" }, "Sending one test call…")
+      : state.test ? el("div", { class: "providers-test-line " + (state.test.good ? "providers-test-good" : "providers-problem") }, state.test.text)
+      : null;
+    const noteId = "providers-test-note";
     fill(status, el("span", { class: "g-dot providers-dot " + (generation.available ? "g-good" : "g-bad"), "aria-hidden": "true" }),
-      el("div", { class: "g-grow" }, el("div", { class: "g-heading" }, head),
-        lines.map((line, index) => el("div", { class: !generation.available && index === 0 ? "providers-problem" : "g-muted" }, line))));
+      el("div", { class: "g-grow providers-status-text" }, el("div", { class: "g-heading" }, head),
+        lines.map((line, index) => el("div", { class: !generation.available && index === 0 ? "providers-problem" : "g-muted" }, line)),
+        el("div", { class: "providers-test-result", role: "status", "aria-live": "polite" }, result)),
+      offered ? el("div", { class: "providers-test" },
+        el("button", { type: "button", class: "g-button", disabled: state.testing, "aria-describedby": noteId,
+          "data-focus-key": "providers:test", onclick: testCall }, state.testing ? "Calling…" : "Send a test call"),
+        el("div", { id: noteId, class: "g-muted providers-test-note" }, generation.local === true
+          ? "Sends one small request to the saved model on this computer."
+          : "Sends one small request to the saved model. A hosted model may bill it.")) : null);
+  }
+
+  // One call, only when the button is pressed. It tests the settings as saved (the revision this page read), so
+  // an unsaved edit in the form is not what answers.
+  async function testCall() {
+    if (state.testing) return;
+    state.testing = true; state.test = null;
+    statusCard();
+    let line;
+    try { line = testLine(await api("test_call", { expected: state.models.etag })); } catch (error) {
+      if (error.reason === "left") return;
+      line = { good: false, text: error.reason === "changed"
+        ? "The settings changed since this page read them, so nothing was sent. They are shown again."
+        : "No test call was sent: " + error.message };
+      if (error.reason === "changed") { try { await load(); } catch (_error) { /* the old settings stay shown */ } }
+    }
+    state.testing = false; state.test = line;
+    statusCard();
+    const again = status.querySelector("button");
+    if (again) again.focus();
+    diagnosticsCard();  // the call is among this device's recent calls now
   }
 
   // -- the Model card -----------------------------------------------------------------------------------------
@@ -131,6 +225,8 @@ export async function mount(root, ctx) {
     };
     const key = text(form.key);
     if (key) settings.key_env = key;
+    // a price goes as the text typed (the app reads it as a decimal, never a float); an empty field is left out
+    for (const [field, name] of PRICE_FIELDS) { const price = text(form[field]); if (price) settings[name] = price; }
     const kept = state.models && state.models.settings;
     if (kept && kept.max_tokens_field) settings.max_tokens_field = kept.max_tokens_field;
     return settings;
@@ -172,12 +268,20 @@ export async function mount(root, ctx) {
         { min: 1, max: shown.bounds.max_output_tokens }),
       attempts: control("Attempts per call", { value: String(settings.attempts || 1), required: true, name: "attempts", type: "number",
         hint: "Every attempt may be billed." }, { min: 1, max: shown.bounds.attempts }),
+      pricePrompt: control("Price per million prompt tokens", { value: settings.price_prompt || "", name: "price_prompt", placeholder: "e.g. 3" },
+        { inputmode: "decimal", spellcheck: "false" }),
+      priceReply: control("Price per million reply tokens", { value: settings.price_reply || "", name: "price_reply", placeholder: "e.g. 15" },
+        { inputmode: "decimal", spellcheck: "false" }),
+      priceCached: control("Price per million cached prompt tokens", { value: settings.price_cached || "", name: "price_cached",
+        hint: "Optional. Left empty, cached prompt tokens are charged at the prompt price. Prices are for the model named above, "
+          + "in the currency your provider bills in; costs shown here are estimates from them, never a bill." },
+        { inputmode: "decimal", spellcheck: "false" }),
       director: el("input", { type: "checkbox", "data-focus-key": "providers:director" }),
       check: el("div", { class: "providers-check", "aria-live": "polite" }),
     };
     form.director.checked = settings.director > 0;
     form.key.input.classList.add("g-mono");
-    for (const name of ["provider", "name", "url", "key", "fallbacks", "tokens", "attempts"]) {
+    for (const name of ["provider", "name", "url", "key", "fallbacks", "tokens", "attempts", "pricePrompt", "priceReply", "priceCached"]) {
       form[name].input.setAttribute("data-focus-key", "providers:" + name);
     }
     form.presets = ui.segments("Preset", PRESET_LABELS, { onchange: (value) => {
@@ -197,7 +301,9 @@ export async function mount(root, ctx) {
       el("h2", { class: "g-heading" }, "Model"),
       el("div", {}, form.presets.node),
       el("div", { class: "providers-fields" }, form.provider.node, form.name.node, wide(form.url), wide(form.key),
-        wide(form.fallbacks), form.tokens.node, form.attempts.node),
+        wide(form.fallbacks), form.tokens.node, form.attempts.node,
+        el("div", { class: "providers-prices providers-wide" }, form.pricePrompt.node, form.priceReply.node),
+        wide(form.priceCached)),
       el("label", { class: "providers-toggle" }, form.director,
         el("span", {}, "Allow a director reply when asked (an optional, billed call)")),
       readOnly ? el("p", { class: "g-muted" }, "Read only: the app was started without a settings file (serve --model FILE).") : null,
@@ -288,10 +394,12 @@ export async function mount(root, ctx) {
     }
     if (asked !== state.asked) return;
     const total = result.total;
+    const prices = result.prices || (state.models && state.models.prices);
+    const spent = costTile(total, prices);
     const tiles = el("div", { class: "providers-tiles" },
       TOKEN_NAMES.map(([name]) => { const shown = count(total, name); return tile(TILE_NAMES[name], shown.value, shown.note); }),
       tile("Attempts", String(total.attempts)),
-      total.cost_state === "unpriced" ? tile("Cost", "Unknown", "No prices are set") : tile("Cost", String(total.cost)),
+      tile("Cost", spent.value, spent.note),
       total.unmetered_calls ? tile("Calls with no usage booked", String(total.unmetered_calls), unmetered(total), true) : null);
     const turns = result.turns.filter((turn) => turn.calls.length).reverse().map(turnView);
     // the totals cover every turn; the turns themselves come a window at a time, newest first
@@ -304,6 +412,9 @@ export async function mount(root, ctx) {
         result.skip + result.listed < result.of ? ui.button("Earlier turns", move(result.skip + result.listed), { size: "small" }) : null,
         result.skip > 0 ? ui.button("Later turns", move(result.skip - TURNS_PAGE), { size: "small" }) : null));
     fill(usageBody, tiles,
+      prices && prices.set ? el("p", { class: "g-muted providers-estimate" },
+        `Costs are estimates: the tokens each recorded call used, at the prices set now for ${prices.route}. `
+        + "Changing a price changes them for past calls too. What your provider bills is what counts.") : null,
       result.problems.length ? ui.notice("Some turns cannot be read; their calls are not counted.", { kind: "bad" }) : null,
       paging,
       turns.length ? ui.card({ kind: "flush" }, el("div", { class: "providers-turns" }, turns))
@@ -349,15 +460,16 @@ export async function mount(root, ctx) {
     }
     const ms = (seconds) => (seconds * 1000).toFixed(0) + " ms";
     const items = result.traces.slice(0, 20).map((trace) => el("div", { class: "providers-trace" },
-      el("div", { class: "g-row g-between" }, el("span", { class: "providers-stage-name" }, trace.operation),
+      el("div", { class: "g-row g-between" }, el("span", { class: "providers-stage-name" }, trace.operation === "test_call" ? "Test call" : trace.operation),
         el("span", { class: "g-muted" }, trace.status + ", " + ms(trace.seconds))),
       trace.calls.map((role) => el("div", { class: "g-muted" },
         `${STAGE_NAMES[role.stage] || role.stage} (${role.actor || "scene"}): ${plural(role.attempts, "attempt")}, `
-        + (role.provider_seconds === null ? `provider time ${role.latency}` : `provider ${ms(role.provider_seconds)} (${role.latency})`)))));
+        + (role.provider_seconds === null ? `provider time ${role.latency}` : `provider ${ms(role.provider_seconds)} (${role.latency})`)
+        + (role.cost_state && role.cost_state !== "unpriced" ? `, cost ${cost(role)}` : "")))));
     fill(diagnostics,
       el("div", { class: "g-row g-between" }, el("h2", { class: "g-heading" }, "Recent calls on this device"),
         ui.button("Refresh", diagnosticsCard, { size: "small" })),
-      el("p", { class: "g-muted" }, "Timings of this app's play calls since it started, kept in memory only. Speakers are numbered, never named."),
+      el("p", { class: "g-muted" }, "Timings of this app's play calls and test calls since it started, kept in memory only. Speakers are numbered, never named."),
       result.available ? null : el("p", {}, "Not available: " + result.reason),
       items.length ? el("div", { class: "providers-stages" }, items) : ui.empty("Nothing played since the app started."));
   }
@@ -365,6 +477,7 @@ export async function mount(root, ctx) {
   // -- reading, checking and saving ---------------------------------------------------------------------------
   async function load() {
     state.models = await api("models", {});
+    state.test = null;  // a test's line is about the settings it tested
     statusCard(); modelCard(); stagesCard(); missingSection();
     for (const node of [status, model, stages]) node.hidden = false;
   }
@@ -380,7 +493,9 @@ export async function mount(root, ctx) {
   async function save() {
     try {
       state.models = await api("save_models", { settings: draft(), expected: state.models.etag });
-      statusCard(); modelCard(); stagesCard();
+      state.test = null;
+      statusCard(); modelCard(); stagesCard(); missingSection();
+      if (state.chat) usage();  // the costs follow the prices just saved
       if (ctx.refreshLibrary) ctx.refreshLibrary().catch(() => {});
       say(state.models.generation.available ? "Saved. The next turn plays by these settings." : "Saved, but generation is off: " + state.models.generation.problem.message,
         !state.models.generation.available);

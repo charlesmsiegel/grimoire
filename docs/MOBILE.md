@@ -91,7 +91,8 @@ Any OpenAI-compatible endpoint works: `https`, or plain `http` on loopback for a
 device (which needs no key, so leave `key_env` out). The key is read from the environment, never from the
 file or the library. `max_output_tokens` (default 1024) caps each reply. `director` (default 1) is how many
 director replies a turn may make, for a scene with no character who can answer. `max_tokens_field` is
-`max_tokens` or `max_completion_tokens`.
+`max_tokens` or `max_completion_tokens`. `price_prompt`, `price_reply` and `price_cached` are optional prices per
+million tokens, written as decimal text ([INFERENCE_UI](INFERENCE_UI.md#prices-and-costs)).
 
 The app's **Models and costs** page (`#/providers`, [INFERENCE_UI](INFERENCE_UI.md)) writes this file too: a
 `--model` file that does not exist yet, or cannot be used, starts the app without a model, and the page says why
