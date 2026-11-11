@@ -64,7 +64,7 @@ function saveDialog(view) {
 function countSaved(view, saved, into) {
   const of = (catalog) => {
     if (!catalog || catalog.truncated) return;
-    into.textContent = String(filterEntries(catalog.entries, { role: saved.role, shelf: saved.source || saved.shelf, tags: saved.tags, marks: view.shelf }).length);
+    into.textContent = String(filterEntries(catalog.entries, { role: saved.role, shelf: saved.source ? "" : saved.shelf, source: saved.source, tags: saved.tags, marks: view.shelf }).length);
   };
   if ((saved.query || "") === (view.query || "")) { of(view.catalog); return; }
   if (!view.searches) view.searches = new Map();

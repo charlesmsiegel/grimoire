@@ -74,9 +74,9 @@ class BeyondSlots:
     """The ops and slot rules of this module, mixed into ``MediaSyncApi`` (which supplies the library)."""
 
     # -- what a slot's name must point at ----------------------------------------------------------------
-    def _lore_entries(self, subject: SourceRef) -> list[str | None] | None:
-        """The picture slot of each entry of a lorebook's head revision, in order; ``None`` when ``subject``
-        is not a readable lorebook."""
+    def _lore_book(self, subject: SourceRef) -> tuple[str | None, list[str | None]] | None:
+        """A lorebook's head revision and the picture slot of each of its entries, in order; ``None`` when
+        ``subject`` is not a readable lorebook."""
         try:
             found = self.store.check_definition(subject)  # type: ignore[attr-defined]
         except (StoreError, OSError, ValueError):
@@ -85,7 +85,14 @@ class BeyondSlots:
             return None
         payload = found.envelope.payload
         entries = payload.get("entries") if isinstance(payload, Mapping) else None
-        return [entry_slot(entry) for entry in entries] if isinstance(entries, (list, tuple)) else []
+        slots = [entry_slot(entry) for entry in entries] if isinstance(entries, (list, tuple)) else []
+        return found.ref.revision, slots
+
+    def _lore_entries(self, subject: SourceRef) -> list[str | None] | None:
+        """The picture slot of each entry of a lorebook's head revision, in order; ``None`` when ``subject``
+        is not a readable lorebook."""
+        book = self._lore_book(subject)
+        return None if book is None else book[1]
 
     def _line(self, chat: ChatRef) -> tuple[dict[str, bool], frozenset[str]] | None:
         """The turns on the chat's line of play, each with whether it holds a post, and the turns a fork choice
@@ -168,7 +175,9 @@ class BeyondSlots:
 
     def _entries(self, args: Mapping[str, object]) -> dict:
         """A lorebook's entries, each with the slot its picture goes in and what shows there; the lorebook's
-        art (for the picker); and the entry pictures no entry of the head reads as any more (``orphans``)."""
+        art (for the picker); and the entry pictures no entry of the head reads as any more (``orphans``).
+        ``revision`` is the head these entries are of: ``index`` counts in that revision, so a page showing
+        another revision's entries must not pair them by index."""
         text = args.get("subject")
         try:
             subject = subject_ref(text)  # type: ignore[arg-type]
@@ -177,9 +186,10 @@ class BeyondSlots:
         if not isinstance(subject, SourceRef):
             raise ApiRefused("invalid_field", "subject must be a lorebook: an unpinned definition")
         with self.store.read_pass():  # type: ignore[attr-defined]
-            slots = self._lore_entries(subject)
-            if slots is None:
+            book = self._lore_book(subject)
+            if book is None:
                 raise ApiRefused("not_a_lorebook", f"{subject} is not a readable lorebook")
+            revision, slots = book
             art = self._art_of(subject)  # type: ignore[attr-defined]
         shown = {slot["slot"]: slot for slot in art["slots"]}
         etags = {entry["slot"]: entry.get("etag") for entry in art["own"]}
@@ -190,7 +200,7 @@ class BeyondSlots:
                    for index, slot in enumerate(slots)]
         orphans = [state(slot) for slot in sorted(set(shown) | set(etags))
                    if slot.startswith(ENTRY) and slot not in slots and state(slot)["state"] != "hidden"]
-        return {"subject": str(subject), "entries": entries, "orphans": orphans, "art": art}
+        return {"subject": str(subject), "revision": revision, "entries": entries, "orphans": orphans, "art": art}
 
     def _offered(self, chat: ChatRef) -> list[dict]:
         """The backdrops of the scenarios this chat is played from: pictures the chat may take as its own."""

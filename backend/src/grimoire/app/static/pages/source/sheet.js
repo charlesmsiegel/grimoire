@@ -23,10 +23,22 @@ export function kindLabel(kind) {
   return KINDS[text] || (text ? text[0].toUpperCase() + text.slice(1) : "Entry");
 }
 
-// A revision's place among its entity's revisions, counted from 1 (the first written is version 1); null for a
-// revision that is not one of them.
+// An entity's revisions in the order they were written. The app names a new revision r<n>, one past the highest
+// number in use, so the number is the order; the list the app answers is sorted as text, which puts r10 before
+// r2. A name that is not r<n> counts as 0, as the app counts it, and comes first, by name.
+function revisionNumber(revision) {
+  const match = /^r([0-9]+)$/.exec(String(revision));
+  return match ? Number(match[1]) : 0;
+}
+
+export function orderRevisions(revisions) {
+  return [...(revisions || [])].sort((a, b) => revisionNumber(a) - revisionNumber(b) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+// A revision's place among its entity's revisions in the order they were written, counted from 1; null for a
+// revision that is not one of them. A save's new revision is always the last, so it is `nextVersion`.
 export function versionOf(revisions, revision) {
-  const at = (revisions || []).indexOf(revision);
+  const at = orderRevisions(revisions).indexOf(revision);
   return at < 0 ? null : at + 1;
 }
 

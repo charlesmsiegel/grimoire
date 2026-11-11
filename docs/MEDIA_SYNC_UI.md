@@ -40,7 +40,7 @@ Refusals are the text API's `ApiRefused` (`reason`, `status`). A refused op writ
 | `media.upload` | `scope`, `media` (base64), `note`, `origin`; optionally `subject`, `slot`, `expected`, `crop`, `focus` | `image`, and `art` when placed |
 | `media.place` | `subject`, `slot`, `mode`, `image` (set, adjust), `crop`, `focus`, `expected` | the subject's `art` as it now reads |
 | `media.shown` | `subjects` (at most 200), `slot` (default `cover`) | `shown`: that one slot of each subject, with its `etag` |
-| `media.entries` | `subject` (a lorebook) | `entries` (each with its picture's `slot` and what shows there), `orphans`, `art` |
+| `media.entries` | `subject` (a lorebook) | `revision` (the lorebook's head, which `entries` are numbered in), `entries` (each with its `index`, its picture's `slot` and what shows there), `orphans`, `art`. A page showing another revision's entries pairs none by index: the sheet shows no entry pictures and offers to draw itself again |
 | `media.chat` | `chat` | `backdrop`, `posts`, `orphans`, `offered`, and the campaign's `art` |
 | `media.backdrop_from` | `chat`, `image` (one of `offered`), `expected`, `crop`, `focus` | the campaign's `art` as it now reads |
 

@@ -12,7 +12,7 @@
 // edit writes a new revision: nothing here changes or deletes an old one.
 
 import { FAMILIES, modelOf, unsafeNumbers } from "./drafts.js";
-import { askedTab, chatsOn, count, diffRevisions, kindLabel, loreBound, loreEntries, metaParts, nextVersion, opensWith, tabsFor,
+import { askedTab, chatsOn, count, diffRevisions, kindLabel, loreBound, loreEntries, metaParts, nextVersion, opensWith, orderRevisions, tabsFor,
   versionOf } from "./sheet.js";
 import { draftsOf, editTab, rawTab, staleDrafts, unsaved } from "./editors.js";
 import { attachPanel, deriveForm, portrayalTools } from "./actions.js";
@@ -343,7 +343,8 @@ function written(ctx, read) {
   if (read.family === "lorebook") {
     const entries = loreEntries(read);
     // each entry's own picture, on the current version (pages/art/covers.js): a slot beside it, filled once read
-    const pictured = read.is_head ? lorePictures(ctx, { subject: read.entity, source: read.source, name: read.name || read.ref }) : null;
+    const pictured = read.is_head ? lorePictures(ctx, { subject: read.entity, source: read.source, name: read.name || read.ref,
+      revision: read.revision, reload: () => ctx.navigate(window.location.hash) }) : null;
     nodes.push(labelled(el, "Entries", entries.length ? el("div", { class: "g-stack" }, entries.map((entry, index) =>
       ui.card({}, el("div", { class: "source-lore-row" }, pictured ? pictured.slot(index, entry.keys.join(", ") || "entry " + (index + 1)) : null,
         el("div", { class: "g-stack source-lore" },
@@ -448,7 +449,7 @@ async function revisionsTab(ctx, page) {
   const { ui } = ctx;
   const { el } = ui;
   const { read, address, name, titleOf } = page;
-  const revisions = read.revisions;
+  const revisions = orderRevisions(read.revisions);  // as written: the app's own list is sorted as text (r10 before r2)
   const asked = ctx.query.get("rev");
   const before = revisions.at(-2);
   const chosen = revisions.includes(asked) ? asked : !read.is_head ? read.revision : before || read.head;

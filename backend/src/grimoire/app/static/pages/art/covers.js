@@ -332,8 +332,10 @@ export function pictureRow(ctx, { subject, name, prefix, noun, art, onchange }) 
 // A lorebook's entry pictures (media.entries): `slot(index, label)` is the 72px place beside entry `index` of
 // the current version, filled once the lorebook's pictures are read; `note` says how many pictures no entry
 // reads as any more (the entry was edited or removed), with the way to them. Null where the app does not
-// serve media.entries.
-export function lorePictures(ctx, { subject, source, name }) {
+// serve media.entries. `revision` is the lorebook revision whose entries the page shows: the app numbers entries
+// in the lorebook's head, so when the head has moved on (another tab, a sync) no picture is paired with an entry
+// here; the slots stay empty and the note offers `reload`, which draws the page again.
+export function lorePictures(ctx, { subject, source, name, revision, reload }) {
   if (!ctx.has("media.entries")) return null;
   const { el } = ctx.ui;
   linkStyles();
@@ -341,6 +343,13 @@ export function lorePictures(ctx, { subject, source, name }) {
   const note = el("p", { class: "g-muted art-orphans", hidden: true });
   let answer = null;
   const draw = (focus) => {
+    if (revision && answer.revision !== revision) {  // the entries shown are not the ones these pictures are of
+      for (const holder of holders.values()) holder.node.replaceChildren();
+      note.hidden = false;
+      note.replaceChildren("This lorebook has changed since this page was drawn, so its entry pictures are not shown. ",
+        reload ? ctx.ui.button("Show it as it is now", reload, { size: "small" }) : null);
+      return;
+    }
     for (const [index, holder] of holders) {
       const entry = answer.entries[index];
       if (!entry || !entry.slot) { holder.node.replaceChildren(); continue; }

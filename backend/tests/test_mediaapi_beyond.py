@@ -223,7 +223,11 @@ def test_an_entry_picture_follows_its_entry_through_a_reorder_and_is_orphaned_by
         read = app("sources.read", ref=LORE)
         app("sources.save", ref=read["entity"], head=read["head"], etag=read["etag"], expected=read["manifest_etag"],
             fields={"entries": [{"index": 1}, {"index": 0}]})
-        swapped = app("media.entries", subject=LORE)["entries"]
+        after = app("media.entries", subject=LORE)
+        # the entries are numbered in the lorebook's head, which the answer names: a page showing another
+        # revision's entries pairs none of them by index
+        assert first["revision"] and after["revision"] != first["revision"]
+        swapped = after["entries"]
         assert [(entry["slot"] == lighthouse, entry["picture"]["state"]) for entry in swapped] == \
             [(False, "empty"), (True, "shown")]
         assert swapped[1]["picture"]["image"] == image and swapped[1]["picture"]["etag"]

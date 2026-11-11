@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 import { changesOf, draftParts, fieldsOf, modelOf, rebase, rebaseRaw, stale, unsafeNumbers } from
   "../../src/grimoire/app/static/pages/source/drafts.js";
-import { askedTab, chatsOn, diffRevisions, loreBound, loreEntries, metaParts, nextVersion, opensWith, tabsFor, versionOf } from
+import { askedTab, chatsOn, diffRevisions, loreBound, loreEntries, metaParts, nextVersion, opensWith, orderRevisions, tabsFor, versionOf } from
   "../../src/grimoire/app/static/pages/source/sheet.js";
 import { CARDS, askedRole, askedSort, canChat, countRoles, filterEntries, kindLabel as catalogKind, metaLine, playsOf, roleOf, shelvesOf,
   sortEntries, sortsFor, when } from "../../src/grimoire/app/static/pages/sources/catalog.js";
@@ -265,9 +265,9 @@ test("the shelves are everything, the imported cards and each other source, worl
   assert.deepEqual(shelvesOf(SOURCES, SHELF), [
     { id: "", label: "Everything", count: 6 },
     { id: CARDS, label: "Imported cards", count: 2 },
-    { id: "world:harbor", label: "Harbor", count: 3 },
-    { id: "world:realm", label: "world:realm", count: 1 },
-    { id: "import:run", label: "Receipts", count: 0 },
+    { id: "world:harbor", label: "Harbor", count: 3, source: true },
+    { id: "world:realm", label: "world:realm", count: 1, source: true },
+    { id: "import:run", label: "Receipts", count: 0, source: true },
   ]);
   // no imported card, no shelf of them
   assert.deepEqual(shelvesOf(SOURCES.slice(1), []).map((shelf) => shelf.id), ["", "world:harbor", "world:realm", "import:run"]);
@@ -277,9 +277,20 @@ test("a shelf and a role each narrow the entries, and together leave only what b
   const refs = (found) => found.map((entry) => entry.ref);
   assert.equal(filterEntries(SHELF).length, 6);
   assert.deepEqual(refs(filterEntries(SHELF, { shelf: CARDS })), ["card:anya/character/anya", "card:anya/lorebook/anya-lore"]);
-  assert.deepEqual(refs(filterEntries(SHELF, { shelf: "world:harbor", role: "character" })), ["world:harbor/character/mara"]);
+  assert.deepEqual(refs(filterEntries(SHELF, { source: "world:harbor", role: "character" })), ["world:harbor/character/mara"]);
   assert.deepEqual(refs(filterEntries(SHELF, { role: "world" })), ["world:harbor/location/quay", "world:realm/item/ledger"]);
-  assert.deepEqual(filterEntries(SHELF, { shelf: "world:nowhere" }), []);
+  assert.deepEqual(filterEntries(SHELF, { source: "world:nowhere" }), []);
+  // a source's shelf and a built-in shelf are told apart by which is asked for, never by the id's spelling: a
+  // source named "cards" or "pinned" lists its own entries, and is a source's shelf among the shelves
+  const named = [{ ref: "cards/character/ace", source: "cards", kind: "character", name: "Ace" },
+    { ref: "pinned/item/tack", source: "pinned", kind: "item", name: "Tack" }, ...SHELF];
+  assert.deepEqual(refs(filterEntries(named, { source: "cards" })), ["cards/character/ace"]);
+  assert.deepEqual(refs(filterEntries(named, { source: "pinned" })), ["pinned/item/tack"]);
+  assert.deepEqual(refs(filterEntries(named, { shelf: CARDS })), ["card:anya/character/anya", "card:anya/lorebook/anya-lore"]);
+  assert.deepEqual(filterEntries(named, { shelf: "world:harbor" }), [], "a source is never asked for as a built-in shelf");
+  const both = shelvesOf([...SOURCES, { source: "cards", title: "Cards", namespace: "cards" }], named);
+  assert.deepEqual(both.filter((shelf) => shelf.id === CARDS).map((shelf) => [shelf.label, Boolean(shelf.source), shelf.count]),
+    [["Imported cards", false, 2], ["Cards", true, 1]]);
 });
 
 const CHATS = [
@@ -366,6 +377,17 @@ test("a version is a revision's place among its entity's revisions, and a save w
   assert.equal(versionOf(revisions, "r3"), 3);
   assert.equal(versionOf(revisions, "r9"), null);
   assert.equal(nextVersion({ revisions }), 4);
+  // the app lists revisions sorted as text, r10 before r2: versions follow the order they were written
+  const many = ["r1", "r10", "r11", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"];
+  assert.deepEqual(orderRevisions(many), ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11"]);
+  assert.deepEqual(many.map((revision) => versionOf(many, revision)), [1, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(versionOf(many, "r11"), many.length, "the newest revision is the last version");
+  assert.equal(nextVersion({ revisions: many }), 12);
+  // a save names its revision one past the highest number, so it is always the version nextVersion said
+  assert.equal(versionOf([...many, "r12"].sort(), "r12"), nextVersion({ revisions: many }));
+  // a name that is not r<n> comes first, by name; a gap in the numbers leaves no gap in the versions
+  assert.deepEqual(orderRevisions(["r7", "v1-bb", "r3", "v1-aa"]), ["v1-aa", "v1-bb", "r3", "r7"]);
+  assert.equal(versionOf(["r3", "r7", "v1-aa"], "r7"), 3);
 });
 
 test("the line under a sheet's name is made of what the answer holds, and nothing else", () => {
@@ -474,7 +496,7 @@ test("several tags combine with AND, beside the shelf and the role", () => {
   assert.deepEqual(refsOf(filterEntries(SHELF, { tags: ["crew", "noir"], marks: MARKS })), ["world:harbor/character/mara"]);
   assert.deepEqual(refsOf(filterEntries(SHELF, { tags: ["noir"], role: "world", marks: MARKS })), ["world:harbor/location/quay"]);
   assert.deepEqual(filterEntries(SHELF, { tags: ["crew", "lost"], marks: MARKS }), [], "marks about an entry that is not listed list nothing");
-  assert.deepEqual(filterEntries(SHELF, { tags: ["crew"], shelf: "world:realm", marks: MARKS }), []);
+  assert.deepEqual(filterEntries(SHELF, { tags: ["crew"], source: "world:realm", marks: MARKS }), []);
   assert.equal(filterEntries(SHELF, { tags: [], marks: MARKS }).length, 6, "no tag is every entry");
   assert.deepEqual(filterEntries(SHELF, { tags: ["crew"], marks: null }), [], "without a shelf nothing carries a tag");
   assert.equal(hasTags(MARKS, "world:harbor/character/mara", ["noir", "crew"]), true);
@@ -524,7 +546,7 @@ test("a saved filter keeps a view and opens the same view again", () => {
   assert.deepEqual(filterQuery(filterOf({ shelf: PINNED, role: "lore" })), { role: "lore", q: "", source: "", shelf: PINNED, tags: "", sort: "" });
   assert.equal(sameFilter(MARKS.filters[0], { role: "character", tags: ["crew"] }), true);
   // counting a saved filter is filtering by what it keeps
-  assert.deepEqual(refsOf(filterEntries(SHELF, { role: saved.role, shelf: saved.source || saved.shelf, tags: saved.tags, marks: MARKS })),
+  assert.deepEqual(refsOf(filterEntries(SHELF, { role: saved.role, shelf: saved.source ? "" : saved.shelf, source: saved.source, tags: saved.tags, marks: MARKS })),
     ["world:harbor/character/mara"]);
 });
 

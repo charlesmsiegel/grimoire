@@ -39,13 +39,14 @@ export async function mount(root, ctx) {
   const query = ctx.query.get("q") || "";
   const only = ctx.query.get("source") || "";
   const named = ctx.query.get("shelf");
-  const shelf = only || (named === CARDS ? CARDS : named === PINNED && ctx.has("shelf.read") ? PINNED : "");
+  // a built-in shelf, unless one source's is asked for (the two are kept apart: a source may be named "cards")
+  const shelf = only ? "" : named === CARDS ? CARDS : named === PINNED && ctx.has("shelf.read") ? PINNED : "";
   const tags = ctx.has("shelf.read") ? askedTags(ctx.query.get("tags")) : [];
   const list = ctx.query.get("view") === "list";
   const asked = Number.parseInt(ctx.query.get("limit") || "", 10);
   const limit = Number.isInteger(asked) && asked >= 1 ? Math.min(asked, MAX_LIST) : PAGE;
   const address = (changes) => {
-    const next = { role: persona ? "persona" : role, q: query, source: only, shelf: only ? "" : shelf, tags: tagsParam(tags),
+    const next = { role: persona ? "persona" : role, q: query, source: only, shelf, tags: tagsParam(tags),
       sort: ctx.query.get("sort") || "", view: list ? "list" : "", limit: limit === PAGE ? "" : limit, ...changes };
     for (const key of Object.keys(next)) if (next[key] === "" || next[key] === undefined || next[key] === null) delete next[key];
     return ctx.href("sources", [], next);
@@ -71,7 +72,7 @@ export async function mount(root, ctx) {
   const chosen = only ? sources.find((source) => source.source === only) : null;
   const total = sources.reduce((sum, source) => sum + source.entities, 0);
   // what the person is looking at, as a saved filter would keep it
-  const current = filterOf({ role, shelf: only ? "" : shelf, source: only, tags, query, sort: ctx.query.get("sort") || "" });
+  const current = filterOf({ role, shelf, source: only, tags, query, sort: ctx.query.get("sort") || "" });
   const view = { ctx, address, titles, plays, portrait: portraits(ctx), chat: ctx.registered("start"), shelf: read, tags, query,
     catalog, current, roleLabel: role ? (ROLES.find(([value]) => value === role) || ROLES[0])[1] : "", shown: [], picks: null, refresh: null };
   view.picks = selection(view, () => draw());
@@ -114,9 +115,9 @@ export async function mount(root, ctx) {
       selecting.textContent = view.picks.on ? "Done selecting" : "Select";
       selecting.setAttribute("aria-pressed", String(view.picks.on));
     }
-    const onThisShelf = listed.entries.filter((entry) => onShelf(entry, shelf, marks));
+    const onThisShelf = listed.entries.filter((entry) => onShelf(entry, shelf, marks, only));
     const counts = countRoles(filterEntries(onThisShelf, { tags, marks }));
-    const found = sortEntries(filterEntries(listed.entries, { role, shelf, tags, marks }), sort, plays);
+    const found = sortEntries(filterEntries(listed.entries, { role, shelf, source: only, tags, marks }), sort, plays);
     const shown = found.slice(0, limit);
     view.shown = shown;
 
@@ -149,11 +150,11 @@ export async function mount(root, ctx) {
     // the shelves, and the saved filters under them, beside the results
     const shelves = el("nav", { class: "sources-shelves", "aria-label": "Shelves" }, ui.eyebrow("Shelves"),
       shelvesOf(sources, catalog.entries, marks).map((item) => {
-        const special = item.id === CARDS || item.id === PINNED;
+        const special = !item.source;  // a built-in shelf; a source's is its own id, whatever that spells
         const link = el("a", { class: "sources-shelf", title: item.id && !special ? item.id : undefined,
           href: address({ source: special ? "" : item.id, shelf: special ? item.id : "", limit: "" }) },
         el("span", { class: "g-clip" }, item.label), el("span", { class: "g-muted" }, String(item.count)));
-        if (item.id === shelf) link.setAttribute("aria-current", "page");
+        if (item.source ? item.id === only : !only && item.id === shelf) link.setAttribute("aria-current", "page");
         return link;
       }),
       ctx.has("sources.create_source") ? focusKey(ui.button("New source", () => newSource(ctx, address), { kind: "dashed", size: "small" }), "sources-new-source") : null);
