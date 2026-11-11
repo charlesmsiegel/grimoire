@@ -1,7 +1,7 @@
 // 114's Art and Sync pages end to end in fakedom, against a real app server over a synthetic library: add a
 // picture straight into a character's portrait slot through the picture picker, re-frame it, see it listed in
-// the gallery with where it is used, then
-// name this device and pair it from the Sync page, which says what sync cannot do and lists nothing in conflict.
+// the gallery with where it is used, then name this device and pair it from the Devices and sync page, which says
+// what sync cannot do and lists nothing in conflict.
 // Run by test_media_pages.py, which passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_SCOPE and GRIMOIRE_SUBJECT.
 import assert from "node:assert/strict";
 import { register } from "node:module";
@@ -115,29 +115,37 @@ test("a picture added to a portrait, then this device named and paired", { skip:
   assert.ok(byText(pictures, "span", "Mara at the harbor").length);
   assert.ok(byText(labelled("Who uses these pictures"), "a", "Mara Vell").length);
 
-  // Sync: what it cannot do is said plainly, and nothing is in conflict
+  // Devices and sync: what it cannot do is said plainly, and nothing is in conflict
   window.location.hash = "#/sync";
-  const conflicts = await until(() => section(main, "Conflicts"), 15000, "the Sync page");
+  const region = (label) => main.querySelector(`section[aria-label="${label}"]`);
+  const conflicts = await until(() => region("Conflicts"), 15000, "the Devices and sync page");
   assert.ok(conflicts.textContent.includes("Nothing is in conflict."));
+  assert.ok(region("Forks").textContent.includes("No chat is waiting on a choice."));
   assert.ok(main.textContent.includes("not encrypted"));
-  assert.ok(byText(section(main, "Not in this app yet"), "strong", "Unpairing is not available yet").length);
+  assert.ok(byText(region("Not in this app yet"), "strong", "Unpairing is not available yet").length);
+  assert.equal(byText(main, "button", "Pair a device").length, 0, "a device with no name cannot pair yet");
 
-  // name this device, then pair it: the key is shown once
-  const device = section(main, "This device");
+  // name this device in its card, then pair from the dashed card: the form opens, and the key is shown once
+  const device = region("This device");
+  assert.ok(device.classList.contains("sync-device") && device.textContent.includes("Not named yet"));
   type(device.querySelector("input"), "desk-e2e");
   byText(device, "button", "Name it")[0].click();
   await until(() => {
-    const now = section(main, "This device");
-    return now && now.textContent.includes("Named desk-e2e");
+    const now = region("This device");
+    return now && now.querySelector("div.sync-name") && now.querySelector("div.sync-name").textContent === "desk-e2e";
   }, 15000, "the named device");
-  const pairing = byText(section(main, "Devices"), "details", "Pair a device")[0];
+  const open = byText(region("Devices"), "button", "Pair a device")[0];
+  const pairing = region("Pair a device");
+  assert.ok(pairing.hidden && open.getAttribute("aria-expanded") === "false", "the pairing form waits behind its card");
+  open.click();
+  assert.ok(!pairing.hidden && open.getAttribute("aria-expanded") === "true");
   type(pairing.querySelector("input"), "phone");
   byText(pairing, "button", "Pair")[0].click();
-  const key = await until(() => section(main, "Type this key on phone"), 15000, "the new key");
+  const key = await until(() => region("Pairing key"), 15000, "the new key");
+  assert.ok(key.textContent.includes("Type this key on phone"));
   assert.match(key.textContent, /[0-9a-f]{64}/);
-  // the key is shown as soon as the pairing answers; the list of devices follows when the page reloads
-  await until(() => {
-    const peers = section(main, "Devices");
-    return peers && peers.textContent.includes("phone") && peers.textContent.includes("It dials this device.");
-  }, 15000, "the paired device listed");
+  // the key is shown as soon as the pairing answers; the paired device's card follows when the page reloads
+  const peer = await until(() => main.querySelector('section.sync-device[aria-label="phone"]'), 15000, "the paired device's card");
+  assert.ok(peer.textContent.includes("Paired") && peer.textContent.includes("It dials this device."));
+  assert.equal(peer.querySelector("button"), null, "a device this one does not dial has no Sync now");
 });

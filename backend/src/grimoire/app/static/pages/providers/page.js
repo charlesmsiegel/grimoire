@@ -1,70 +1,61 @@
-// Sprint 112: model settings, optional calls, usage and diagnostics (docs/INFERENCE_UI.md).
-// Everything shown comes from the app's own ops; library and provider text is only ever set as textContent.
+// Models and costs (112): the model the table plays with, the calls a turn may make, what each chat's calls
+// used and this device's recent call timings (docs/INFERENCE_UI.md).
+// Everything shown comes from the app's own ops; library and provider text is only ever set as text.
 // The page sends nothing to a provider: "Check" is checked by the app without a call, and "Save" only writes
-// the app's settings file at the revision this page read.
-"use strict";
+// the app's settings file at the revision this page read. A provider's key is only ever named by its
+// environment variable: the page never asks for the key, shows it or keeps it.
 
 /** Chats listed at first, and the most the text API lists (044's MAX_LIMIT). */
 const CHATS_PAGE = 100, CHATS_MAX = 1000;
 /** Turns listed at a time in one chat's usage (the totals always cover every turn). */
 const TURNS_PAGE = 200;
 
-const TOKEN_NAMES = [["input_tokens", "prompt"], ["output_tokens", "completion"], ["cache_read_tokens", "cached"],
+const TOKEN_NAMES = [["input_tokens", "prompt"], ["output_tokens", "reply"], ["cache_read_tokens", "cached"],
   ["reasoning_tokens", "reasoning"]];
+const TILE_NAMES = { input_tokens: "Prompt tokens", output_tokens: "Reply tokens", cache_read_tokens: "Cached",
+  reasoning_tokens: "Reasoning tokens" };
 const STAGE_NAMES = {
   npc_generation: "NPC replies", director_generation: "Director replies", decision: "NPC decisions",
   labelling: "Action labelling", planning: "NPC planning", epistemic_inference: "Perception inference",
   recall: "Model recall", graph_lookup: "Model graph lookup", critique: "Critique",
 };
 
-function el(tag, attrs, ...children) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs || {})) {
-    if (value === null || value === undefined || value === false) continue;
-    if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
-    else if (key === "class") node.className = value;
-    else if (value === true) node.setAttribute(key, "");
-    else node.setAttribute(key, String(value));
-  }
-  for (const child of children.flat(Infinity)) {
-    if (child === null || child === undefined || child === false) continue;
-    node.append(typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child);
-  }
-  return node;
-}
+// What a preset fills in. A preset names where calls go and which variable holds the key; the model is the
+// person's own choice and is never filled in. "custom" is whatever the form holds that is neither.
+const PRESETS = {
+  openrouter: { provider_id: "openrouter", base_url: "https://openrouter.ai/api/v1", key_env: "OPENROUTER_API_KEY" },
+  local: { provider_id: "ollama", base_url: "http://127.0.0.1:11434/v1", key_env: "" },
+};
+const PRESET_LABELS = [{ value: "openrouter", label: "OpenRouter" }, { value: "local", label: "Local (Ollama)" },
+  { value: "custom", label: "Custom" }];
 
-// replaceChildren with the empty slots (null, false) left out: the DOM would write them as text
-function fill(node, ...children) {
-  node.replaceChildren(...children.flat(Infinity).filter((child) => child !== null && child !== undefined && child !== false));
-}
+// Features the page itself now offers, so the app's list of what is missing no longer applies to them.
+const OFFERED = new Set(["presets"]);
 
+const plural = (count, one, many) => count + " " + (count === 1 ? one : many || one + "s");
+
+// A sum is a lower bound while any of its counts went unreported, or a call was issued with no attempt booked:
+// say so, never show a bare number (not even 0).
 function count(totals, name) {
-  // a sum is a lower bound while any of its counts went unreported, or a call was issued with no attempt
-  // booked: say so, never show a bare number (not even 0)
   const sum = totals.sums[name], missing = totals.unreported[name];
   const unknown = (totals.unmetered_calls || 0) - (totals.not_issued_calls || 0);
-  if (missing === 0 && unknown <= 0) return String(sum);
-  if (totals.attempts === 0 || missing === totals.attempts) return "unknown";
-  const why = [missing ? `${missing} unreported` : null, unknown > 0 ? `${unknown} call(s) unrecorded` : null];
-  return `at least ${sum} (${why.filter(Boolean).join(", ")})`;
+  if (missing === 0 && unknown <= 0) return { value: String(sum) };
+  if (totals.attempts === 0 || missing === totals.attempts) return { value: "Unknown", note: "Not reported by the provider" };
+  const why = [missing ? `${missing} unreported` : null, unknown > 0 ? `${plural(unknown, "call")} unrecorded` : null];
+  return { value: `at least ${sum}`, note: why.filter(Boolean).join(", ") };
 }
 
+// 004 counts every planned call with no attempt booked; the ones never issued used nothing.
 function unmetered(totals) {
-  // 004 counts every planned call with no attempt booked; the ones never issued used nothing
   const unsent = totals.not_issued_calls, rest = totals.unmetered_calls - unsent;
   const parts = [];
   if (unsent) parts.push(`${unsent} never sent`);
   if (rest) parts.push(`${rest} with what they used unknown`);
-  return `${totals.unmetered_calls}: ${parts.join(", ")}`;
+  return parts.join(", ");
 }
 
 function cost(item) {
   return item.cost_state === "unpriced" ? "unknown: no prices are set" : String(item.cost);
-}
-
-function field(id, label, input, hint) {
-  return el("div", { class: "g-field" }, el("label", { for: id }, label), input,
-    hint ? el("div", { class: "g-muted", id: id + "-hint" }, hint) : null);
 }
 
 /** The ops this page calls: ``chats`` is the text API's, the rest Sprint 112's adapter's (``providers.<op>``). */
@@ -73,196 +64,323 @@ const OWN = new Set(["models", "check_models", "save_models", "usage", "diagnost
 /** The shell's page entry (docs/APP_SHELL.md): ``ctx.api(op, args)`` posts one op and rejects with
  * ``error.reason``; once the page is left it rejects with ``left`` and nothing more is drawn. */
 export async function mount(root, ctx) {
+  const { ui } = ctx;
+  const { el } = ui;
   const api = (op, args) => ctx.api(OWN.has(op) ? "providers." + op : op, args);
   ctx.setTitle("Models and costs");
-  if (ctx.styles) ctx.styles("page.css");
+  ctx.layout("page");
+  ctx.styles("page.css");
   // a chat can be named in the address (#/providers?chat=<ChatRef>), so one past the list's end is reachable too
   const named = ctx.query && ctx.query.get ? ctx.query.get("chat") : null;
-  const state = { models: null, check: null, chat: named || null, asked: 0, limit: CHATS_PAGE, skip: 0 };
-  const live = el("div", { class: "providers-live", role: "status", "aria-live": "polite" });
-  const sections = {
-    model: el("section", { "aria-labelledby": "inf-model" }),
-    stages: el("section", { "aria-labelledby": "inf-stages" }),
-    usage: el("section", { "aria-labelledby": "inf-usage" }),
-    diagnostics: el("section", { "aria-labelledby": "inf-diag" }),
-    missing: el("section", { "aria-labelledby": "inf-missing" }),
-  };
-  fill(root, live, ...Object.values(sections));
-  const say = (text, bad) => { live.textContent = text; live.classList.toggle("g-bad", Boolean(bad)); };
+  const state = { models: null, chat: named || null, asked: 0, limit: CHATS_PAGE, skip: 0 };
+  let form = null;  // the Model card's controls, read by Check and Save
 
+  const fill = (node, ...children) => {
+    node.replaceChildren(...children.flat(Infinity).filter((child) => child !== null && child !== undefined && child !== false));
+    return node;
+  };
+  const live = el("div", { class: "providers-live", role: "status", "aria-live": "polite" });
+  const say = (text, bad) => {
+    live.textContent = text;
+    live.className = "providers-live" + (text ? " g-notice " + (bad ? "g-bad" : "g-soft") : "");
+  };
+  const status = el("section", { class: "g-card providers-status", "aria-label": "Model status", hidden: true });
+  const model = el("section", { class: "g-card providers-card", "aria-label": "Model", hidden: true });
+  const stages = el("section", { class: "g-card providers-card", "aria-label": "Calls a turn may make", hidden: true });
+  const usageSection = el("section", { class: "g-stack providers-usage", "aria-label": "Usage by chat" });
+  const usageBody = el("div", { class: "g-stack" });
+  const diagnostics = el("section", { class: "g-card providers-card", "aria-label": "Recent calls on this device" });
+  const missing = el("section", { class: "providers-missing", "aria-label": "Not available yet" });
+  root.replaceChildren(el("div", { class: "g-stack g-loose" }, status, live,
+    el("div", { class: "providers-columns" }, model, stages), usageSection, diagnostics, missing));
+
+  // -- the status card ----------------------------------------------------------------------------------------
+  function statusCard() {
+    const shown = state.models, settings = shown.settings || {}, generation = shown.generation;
+    let head, lines;
+    if (generation.available) {
+      head = "Generating with " + (settings.model || generation.routes[0] || "the model the app was started with");
+      if (generation.local === true) lines = ["A local endpoint on this computer: no provider bills its calls."];
+      else if (generation.local === false) {
+        lines = ["A hosted endpoint: every attempt may be billed by its provider."
+          + (settings.key_env ? " The key is read from " + settings.key_env + " where the app runs." : "")];
+      } else lines = ["The app was started with this model. Nothing here configures it."];
+      if (generation.routes.length) {
+        lines.push("Calls go to " + generation.routes[0]
+          + (generation.routes.length > 1 ? ", then on a retry to " + generation.routes.slice(1).join(", then ") : "") + ".");
+      }
+    } else {
+      head = "No model is set up";
+      lines = [generation.problem ? generation.problem.message : "Generation is off.",
+        "Chats work, but nothing answers until a model is saved below."];
+    }
+    fill(status, el("span", { class: "g-dot providers-dot " + (generation.available ? "g-good" : "g-bad"), "aria-hidden": "true" }),
+      el("div", { class: "g-grow" }, el("div", { class: "g-heading" }, head),
+        lines.map((line, index) => el("div", { class: !generation.available && index === 0 ? "providers-problem" : "g-muted" }, line))));
+  }
+
+  // -- the Model card -----------------------------------------------------------------------------------------
   function draft() {
-    const value = (id) => root.querySelector("#" + id).value.trim();
-    const number = (id) => Number.parseInt(value(id), 10);
-    const fallbacks = value("inf-fallbacks").split(/[\s,]+/).filter(Boolean);
+    const text = (field) => field.value.trim();
+    const number = (field) => Number.parseInt(text(field), 10);
     const settings = {
-      provider_id: value("inf-provider"), base_url: value("inf-url"), model: value("inf-name"),
-      fallbacks, max_output_tokens: number("inf-tokens"), attempts: number("inf-attempts"),
-      director: root.querySelector("#inf-director").checked ? 1 : 0,
+      provider_id: text(form.provider), base_url: text(form.url), model: text(form.name),
+      fallbacks: text(form.fallbacks).split(/[\s,]+/).filter(Boolean),
+      max_output_tokens: number(form.tokens), attempts: number(form.attempts),
+      director: form.director.checked ? 1 : 0,
     };
-    const key = value("inf-key");
+    const key = text(form.key);
     if (key) settings.key_env = key;
     const kept = state.models && state.models.settings;
     if (kept && kept.max_tokens_field) settings.max_tokens_field = kept.max_tokens_field;
     return settings;
   }
 
-  function problems(list) {
-    if (!list || !list.length) return null;
-    return el("ul", { class: "g-bad" }, list.map((item) => el("li", {}, item.message)));
+  // Which preset the form holds now: the one whose provider, endpoint and key variable it matches, else Custom.
+  function presetOf() {
+    const now = { provider_id: form.provider.value.trim(), base_url: form.url.value.trim(), key_env: form.key.value.trim() };
+    const found = Object.entries(PRESETS).find(([, preset]) => Object.keys(preset).every((key) => preset[key] === now[key]));
+    return found ? found[0] : "custom";
   }
 
-  function modelSection() {
-    const shown = state.models, settings = shown.settings || {}, generation = shown.generation;
-    const status = generation.available
-      ? el("p", {}, `Generating with ${generation.routes[0]}` + (generation.local ? " (on this computer)." : " (hosted)."))
-      : el("p", { class: "g-bad" }, generation.problem ? generation.problem.message : "Generation is off.");
+  function problems(list) {
+    if (!list || !list.length) return null;
+    return el("ul", { class: "providers-problems" }, list.map((item) => el("li", {}, item.message)));
+  }
+
+  function modelCard() {
+    const shown = state.models, settings = shown.settings || {};
     const readOnly = !shown.file.configured;
     const keyState = settings.key_env ? (settings.key_set ? "set where the app runs" : "not set where the app runs") : "";
-    const form = el("form", { onsubmit: (event) => { event.preventDefault(); save(); } },
-      field("inf-provider", "Provider name", el("input", { class: "g-input", id: "inf-provider", value: settings.provider_id || "local", required: true, autocomplete: "off" })),
-      field("inf-url", "Endpoint address", el("input", { class: "g-input", id: "inf-url", type: "url", value: settings.base_url || "", required: true, autocomplete: "off", "aria-describedby": "inf-url-hint" }),
-        "An OpenAI-compatible endpoint: https, or http on this computer only."),
-      field("inf-name", "Model", el("input", { class: "g-input", id: "inf-name", value: settings.model || "", required: true, autocomplete: "off" })),
-      field("inf-fallbacks", "Fallback models", el("input", { class: "g-input", id: "inf-fallbacks", value: (settings.fallbacks || []).join(", "), autocomplete: "off", "aria-describedby": "inf-fallbacks-hint" }),
-        `Up to ${shown.bounds.fallbacks}, on the same endpoint. Each is tried only by a retry, so set more than one attempt.`),
-      field("inf-key", "Key variable", el("input", { class: "g-input", id: "inf-key", value: settings.key_env || "", autocomplete: "off", spellcheck: "false", "aria-describedby": "inf-key-hint" }),
-        "The name of the environment variable holding the key, such as OPENROUTER_API_KEY. Never the key. " +
-        "Leave empty for a local model with no key." + (keyState ? ` Now: ${keyState}.` : "")),
-      field("inf-tokens", "Most tokens per reply", el("input", { class: "g-input", id: "inf-tokens", type: "number", min: 1, max: shown.bounds.max_output_tokens, value: settings.max_output_tokens || 1024, required: true })),
-      field("inf-attempts", "Attempts per call", el("input", { class: "g-input", id: "inf-attempts", type: "number", min: 1, max: shown.bounds.attempts, value: settings.attempts || 1, required: true, "aria-describedby": "inf-attempts-hint" }),
-        "Every attempt may be billed."),
-      el("div", { class: "g-field" }, el("label", {}, el("input", { id: "inf-director", type: "checkbox", checked: settings.director > 0 }),
-        " Allow a director reply when asked (an optional, billed call)")),
-      el("div", { class: "g-actions" },
-        el("button", { type: "button", class: "g-button", onclick: check }, "Check"),
-        el("button", { type: "submit", class: "g-button g-primary", disabled: readOnly }, "Save")),
+    const control = (label, options, attrs = {}) => {
+      const made = ui.field(label, options);
+      for (const [key, value] of Object.entries(attrs)) made.input.setAttribute(key, String(value));
+      if (options.hint) made.node.append(made.node.children[1]);  // the hint reads under its input
+      return made;
+    };
+    form = {
+      provider: control("Provider name", { value: settings.provider_id || "local", required: true, name: "provider" }),
+      name: control("Model", { value: settings.model || "", required: true, name: "model" }),
+      url: control("Endpoint address", { value: settings.base_url || "", required: true, name: "endpoint", type: "url",
+        hint: "OpenAI-compatible: https, or http on this computer only." }),
+      key: control("Key variable", { value: settings.key_env || "", name: "key",
+        hint: "The name of the environment variable, such as OPENROUTER_API_KEY, never the key itself. "
+          + "Leave empty for a local model with no key." + (keyState ? ` Now: ${keyState}.` : "") }, { spellcheck: "false" }),
+      fallbacks: control("Fallback models", { value: (settings.fallbacks || []).join(", "), name: "fallbacks",
+        hint: `Up to ${shown.bounds.fallbacks}, on the same endpoint. Each is tried only by a retry, so set more than one attempt.` }),
+      tokens: control("Most tokens per reply", { value: String(settings.max_output_tokens || 1024), required: true, name: "tokens", type: "number" },
+        { min: 1, max: shown.bounds.max_output_tokens }),
+      attempts: control("Attempts per call", { value: String(settings.attempts || 1), required: true, name: "attempts", type: "number",
+        hint: "Every attempt may be billed." }, { min: 1, max: shown.bounds.attempts }),
+      director: el("input", { type: "checkbox", "data-focus-key": "providers:director" }),
+      check: el("div", { class: "providers-check", "aria-live": "polite" }),
+    };
+    form.director.checked = settings.director > 0;
+    form.key.input.classList.add("g-mono");
+    for (const name of ["provider", "name", "url", "key", "fallbacks", "tokens", "attempts"]) {
+      form[name].input.setAttribute("data-focus-key", "providers:" + name);
+    }
+    form.presets = ui.segments("Preset", PRESET_LABELS, { onchange: (value) => {
+      const preset = PRESETS[value];
+      if (!preset) return;  // Custom keeps what the form holds
+      form.provider.value = preset.provider_id;
+      form.url.value = preset.base_url;
+      form.key.value = preset.key_env;
+      fill(form.check);
+      if (!form.name.value.trim()) form.name.input.focus();
+    } });
+    form.presets.set(presetOf());
+    // typing in a field a preset filled moves the choice to whichever preset the form now matches
+    for (const name of ["provider", "url", "key"]) form[name].input.addEventListener("input", () => form.presets.set(presetOf()));
+    const wide = (field) => { field.node.classList.add("providers-wide"); return field.node; };
+    const node = el("form", { class: "g-stack providers-form", onsubmit: (event) => { event.preventDefault(); save(); } },
+      el("h2", { class: "g-heading" }, "Model"),
+      el("div", {}, form.presets.node),
+      el("div", { class: "providers-fields" }, form.provider.node, form.name.node, wide(form.url), wide(form.key),
+        wide(form.fallbacks), form.tokens.node, form.attempts.node),
+      el("label", { class: "providers-toggle" }, form.director,
+        el("span", {}, "Allow a director reply when asked (an optional, billed call)")),
       readOnly ? el("p", { class: "g-muted" }, "Read only: the app was started without a settings file (serve --model FILE).") : null,
-      el("div", { id: "inf-check", "aria-live": "polite" }));
-    fill(sections.model, el("h2", { id: "inf-model" }, "Model"), status, form);
+      form.check,
+      el("div", { class: "providers-save" },
+        el("button", { type: "button", class: "g-button", onclick: check }, "Check"),
+        el("button", { type: "submit", class: "g-button g-primary", disabled: readOnly }, "Save")));
+    fill(model, node);
   }
 
   function checkView(result) {
-    if (!result.ok) return el("div", {}, el("p", { class: "g-bad" }, "These settings cannot be used:"), problems(result.problems));
-    return el("div", {},
-      el("p", {}, "Usable. Nothing was sent to the provider. Calls would go to:"),
+    if (!result.ok) {
+      return el("div", { class: "g-notice g-bad providers-result" }, el("div", {}, el("strong", {}, "These settings cannot be used:"), problems(result.problems)));
+    }
+    return el("div", { class: "g-notice g-soft providers-result" }, el("div", {},
+      el("strong", {}, "Usable. Nothing was sent to the provider."), el("div", {}, "Calls would go to:"),
       el("ul", {}, result.routes.map((route, index) => el("li", {}, (index ? "then " : "") + route))),
-      el("p", {}, result.local ? "This endpoint is on this computer." : "This endpoint is hosted: its calls may be billed."),
-      problems(result.problems));
+      el("div", {}, result.local ? "This endpoint is on this computer." : "This endpoint is hosted: its calls may be billed."),
+      problems(result.problems)));
   }
 
-  function stagesSection() {
-    const rows = state.models.stages.map((stage) => el("tr", {},
-      el("th", { scope: "row" }, STAGE_NAMES[stage.stage] || stage.stage),
-      el("td", {}, stage.kind === "baseline" ? "Always" : stage.available ? (stage.enabled ? "On" : "Off") : "Not available"),
-      el("td", {}, stage.note)));
+  // -- the calls a turn may make ------------------------------------------------------------------------------
+  function stagesCard() {
+    const rows = state.models.stages.map((stage) => {
+      const on = stage.kind === "baseline" || (stage.available && stage.enabled);
+      const label = stage.kind === "baseline" ? "Always" : stage.available ? (stage.enabled ? "On" : "Off") : "Not available";
+      return el("div", { class: "providers-stage" },
+        el("span", { class: "providers-stage-name" }, STAGE_NAMES[stage.stage] || stage.stage),
+        el("span", { class: "providers-stage-state" + (on ? " providers-on" : "") }, label),
+        el("span", { class: "g-muted providers-stage-why" }, stage.note));
+    });
     const limits = state.models.limits;
-    fill(sections.stages, el("h2", { id: "inf-stages" }, "Model calls a turn may make"),
+    fill(stages, el("h2", { class: "g-heading" }, "Calls a turn may make"),
       el("p", { class: "g-muted" }, "Every NPC who speaks gets its own call. Every other call is optional, off unless switched on, and capped per turn."),
-      el("div", { class: "providers-scroll" }, el("table", {}, el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "Call"), el("th", { scope: "col" }, "State"), el("th", { scope: "col" }, "Why"))), el("tbody", {}, rows))),
-      limits ? el("p", {}, `At most ${limits.attempts_per_call} attempt(s) per call and ${limits.max_output_tokens} tokens per reply` +
-        (limits.director_calls_per_turn ? "; one director reply per turn." : "; no director reply.")) : null);
+      el("div", { class: "providers-stages" }, rows),
+      limits ? el("p", { class: "g-muted" }, `At most ${plural(limits.attempts_per_call, "attempt")} per call and ${limits.max_output_tokens} tokens per reply`
+        + (limits.director_calls_per_turn ? "; one director reply per turn." : "; no director reply.")) : null);
   }
 
   function missingSection() {
-    fill(sections.missing, el("h2", { id: "inf-missing" }, "Not available yet"),
-      el("ul", {}, state.models.unavailable.map((item) => el("li", {}, el("strong", {}, item.feature.replaceAll("_", " ")), ": ", item.reason))));
+    const items = state.models.unavailable.filter((item) => !OFFERED.has(item.feature));
+    if (!items.length) { fill(missing); return; }
+    fill(missing, el("details", {}, el("summary", {}, "Not available yet"),
+      el("ul", { class: "providers-missing-list" }, items.map((item) => el("li", {},
+        el("strong", {}, item.feature.replaceAll("_", " ")), ": ", item.reason)))));
   }
 
+  // -- usage by chat ------------------------------------------------------------------------------------------
   async function chatsSection() {
     let listed;
-    try { listed = await api("chats", { limit: state.limit }); } catch (error) { listed = { chats: [], error }; }
+    try { listed = await api("chats", { limit: state.limit }); } catch (error) {
+      if (error.reason === "left") return;
+      listed = { chats: [], error };
+    }
     const known = new Set(listed.chats.map((entry) => entry.chat));
-    const picker = el("select", { id: "inf-chat", class: "g-input", onchange: (event) => { state.chat = event.target.value || null; state.skip = 0; usage(); } },
+    const picker = el("select", { class: "g-input providers-chat", "aria-label": "Chat", "data-focus-key": "providers:chat",
+      onchange: (event) => { state.chat = event.target.value || null; state.skip = 0; usage(); } },
       el("option", { value: "" }, "Choose a chat"),
       // the chosen chat stays choosable even when it is past the list's end (its exact ref is shown)
       state.chat && !known.has(state.chat) ? el("option", { value: state.chat, selected: true }, state.chat) : null,
       listed.chats.map((entry) => el("option", { value: entry.chat, selected: entry.chat === state.chat }, entry.label || entry.chat)));
     // a full list may have more behind it: ask for a longer one, up to the API's largest
     const more = !listed.error && listed.chats.length >= state.limit && state.limit < CHATS_MAX
-      ? el("button", { type: "button", class: "g-button", onclick: () => { state.limit = Math.min(state.limit * 4, CHATS_MAX); chatsSection(); } }, "Show more chats")
+      ? ui.button("Show more chats", () => { state.limit = Math.min(state.limit * 4, CHATS_MAX); chatsSection(); }, { size: "small" })
       : null;
-    fill(sections.usage, el("h2", { id: "inf-usage" }, "Usage by chat"),
-      listed.error ? el("p", { class: "g-bad" }, "The chats cannot be listed: " + listed.error.message) : null,
-      field("inf-chat", "Chat", picker), more, el("div", { id: "inf-usage-body" }));
-    if (state.chat) usage();
+    fill(usageSection,
+      el("div", { class: "g-row g-between" }, el("h2", { class: "g-heading" }, "Usage by chat"),
+        el("div", { class: "g-row" }, more, picker)),
+      listed.error ? ui.notice("The chats cannot be listed: " + listed.error.message, { kind: "bad" }) : null,
+      usageBody);
+    if (state.chat) usage(); else fill(usageBody, ui.empty("Choose a chat to see what its model calls used."));
+  }
+
+  function tile(label, value, note, bad) {
+    return el("div", { class: "providers-tile" + (bad ? " providers-bad" : "") }, el("div", { class: "g-muted providers-tile-label" }, label),
+      el("div", { class: "providers-tile-value" }, value), note ? el("div", { class: "g-muted providers-tile-note" }, note) : null);
   }
 
   async function usage() {
     // only the newest request draws: an answer for a chat no longer chosen is dropped
-    const body = root.querySelector("#inf-usage-body"), asked = ++state.asked, chat = state.chat;
-    if (!chat) { fill(body); return; }
-    fill(body, el("p", {}, "Reading this chat's usage…"));
+    const asked = ++state.asked, chat = state.chat;
+    if (!chat) { fill(usageBody, ui.empty("Choose a chat to see what its model calls used.")); return; }
+    fill(usageBody, el("p", { class: "g-muted" }, "Reading this chat's usage…"));
     let result;
     try { result = await api("usage", { chat, limit: TURNS_PAGE, skip: state.skip }); } catch (error) {
-      if (asked === state.asked) fill(body, el("p", { class: "g-bad" }, error.message));
+      if (asked === state.asked && error.reason !== "left") fill(usageBody, ui.notice(error.message, { kind: "bad" }));
       return;
     }
     if (asked !== state.asked) return;
     const total = result.total;
-    const summary = el("dl", { class: "providers-totals" },
-      TOKEN_NAMES.map(([name, label]) => [el("dt", {}, label + " tokens"), el("dd", {}, count(total, name))]),
-      el("dt", {}, "Attempts"), el("dd", {}, String(total.attempts)),
-      el("dt", {}, "Cost"), el("dd", {}, cost(total)),
-      total.unmetered_calls ? [el("dt", {}, "Calls with no usage booked"), el("dd", { class: "g-bad" }, unmetered(total))] : null);
-    const turns = result.turns.filter((turn) => turn.calls.length).reverse().map((turn) => el("details", {},
-      el("summary", {}, `Turn ${turn.number}` + (turn.set_aside ? " (set aside at a fork)" : "") + `: ${turn.calls.filter((c) => c.stage).length} call(s)`),
-      el("ul", {}, turn.calls.map(callView))));
+    const tiles = el("div", { class: "providers-tiles" },
+      TOKEN_NAMES.map(([name]) => { const shown = count(total, name); return tile(TILE_NAMES[name], shown.value, shown.note); }),
+      tile("Attempts", String(total.attempts)),
+      total.cost_state === "unpriced" ? tile("Cost", "Unknown", "No prices are set") : tile("Cost", String(total.cost)),
+      total.unmetered_calls ? tile("Calls with no usage booked", String(total.unmetered_calls), unmetered(total), true) : null);
+    const turns = result.turns.filter((turn) => turn.calls.length).reverse().map(turnView);
     // the totals cover every turn; the turns themselves come a window at a time, newest first
     const whole = result.listed === result.of;
     const first = result.of - result.skip - result.listed + 1, last = result.of - result.skip;
     const move = (skip) => () => { state.skip = Math.max(skip, 0); usage(); };
-    const paging = whole ? null : el("div", { class: "g-actions" },
-      el("p", { class: "g-muted" }, result.listed ? `Turns ${first} to ${last} of ${result.of}, newest first. The totals above cover all of them.` : `No turns here: this chat has ${result.of}.`),
-      result.skip + result.listed < result.of ? el("button", { type: "button", class: "g-button", onclick: move(result.skip + result.listed) }, "Earlier turns") : null,
-      result.skip > 0 ? el("button", { type: "button", class: "g-button", onclick: move(result.skip - TURNS_PAGE) }, "Later turns") : null);
-    fill(body, summary,
-      result.problems.length ? el("p", { class: "g-bad" }, "Some turns cannot be read; their calls are not counted.") : null,
+    const paging = whole ? null : el("div", { class: "g-row g-between" },
+      el("span", { class: "g-muted" }, result.listed ? `Turns ${first} to ${last} of ${result.of}, newest first. The totals above cover all of them.` : `No turns here: this chat has ${result.of}.`),
+      el("div", { class: "g-row" },
+        result.skip + result.listed < result.of ? ui.button("Earlier turns", move(result.skip + result.listed), { size: "small" }) : null,
+        result.skip > 0 ? ui.button("Later turns", move(result.skip - TURNS_PAGE), { size: "small" }) : null));
+    fill(usageBody, tiles,
+      result.problems.length ? ui.notice("Some turns cannot be read; their calls are not counted.", { kind: "bad" }) : null,
       paging,
-      turns.length ? el("div", {}, turns) : el("p", {}, whole ? "No model calls in this chat yet." : "No model calls in these turns."));
+      turns.length ? ui.card({ kind: "flush" }, el("div", { class: "providers-turns" }, turns))
+        : ui.empty(whole ? "No model calls in this chat yet." : "No model calls in these turns."));
   }
+
+  // One turn: its number and a line saying what it called; opening it lists every call and attempt.
+  function turnView(turn) {
+    const made = turn.calls.filter((call) => call.stage);
+    const groups = new Map();
+    for (const call of made) {
+      const name = STAGE_NAMES[call.stage] || call.stage;
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(speaker(call));
+    }
+    const detail = [plural(made.length, "call"), ...[...groups].map(([name, who]) => name + ": " + [...new Set(who)].join(", "))].join(" · ");
+    return el("details", { class: "providers-turn" },
+      el("summary", {}, el("span", { class: "providers-turn-title" }, "Turn " + turn.number),
+        el("span", { class: "g-muted g-grow" }, detail), turn.set_aside ? ui.pill("Set aside at a fork") : null),
+      el("ul", { class: "providers-calls" }, turn.calls.map(callView)));
+  }
+
+  const speaker = (call) => call.actor === null ? "Director" : (call.name || "an earlier cast member");
 
   function callView(call) {
-    if (!call.stage) return el("li", {}, `Take ${call.take}: skipped ${call.declined.length} optional call(s) the settings did not allow.`);
-    const who = call.actor === null ? "Director" : (call.name || "an earlier cast member");
+    if (!call.stage) return el("li", {}, `Take ${call.take}: skipped ${plural(call.declined.length, "optional call")} the settings did not allow.`);
     const where = call.label ? `labelling ${call.label}` : `take ${call.take} (${call.state})`;
-    return el("li", {}, el("strong", {}, `${STAGE_NAMES[call.stage] || call.stage}: ${who}`), ` ${where}, ${call.status}` + (call.reason ? ` (${call.reason})` : ""),
+    return el("li", {}, el("strong", {}, `${STAGE_NAMES[call.stage] || call.stage}: ${speaker(call)}`), ` ${where}, ${call.status}` + (call.reason ? ` (${call.reason})` : ""),
       call.attempts.length ? el("ol", {}, call.attempts.map((attempt) => el("li", {},
-        `${attempt.outcome} via ${attempt.route || "an unknown route"}, ${attempt.measurement.replaceAll("_", " ")}: ` +
-        TOKEN_NAMES.map(([name, label]) => `${label} ${attempt.tokens[name] === null ? "unreported" : attempt.tokens[name]}`).join(", ") +
-        `; cost ${cost(attempt)}`)))
-        : call.status === "not_issued" ? el("p", {}, "Never sent, so it used nothing.")
-        : el("p", { class: "g-bad" }, "No attempt was recorded: what it used is unknown."));
+        `${attempt.outcome} via ${attempt.route || "an unknown route"}, ${attempt.measurement.replaceAll("_", " ")}: `
+        + TOKEN_NAMES.map(([name, label]) => `${label} ${attempt.tokens[name] === null ? "unreported" : attempt.tokens[name]}`).join(", ")
+        + `; cost ${cost(attempt)}`)))
+        : call.status === "not_issued" ? el("div", { class: "g-muted" }, "Never sent, so it used nothing.")
+        : el("div", { class: "providers-problem" }, "No attempt was recorded: what it used is unknown."));
   }
 
-  async function diagnosticsSection() {
+  // -- this device's recent calls -----------------------------------------------------------------------------
+  async function diagnosticsCard() {
     let result;
-    try { result = await api("diagnostics", {}); } catch (error) { result = { available: false, reason: error.message, traces: [] }; }
-    const refresh = el("button", { type: "button", class: "g-button", onclick: diagnosticsSection }, "Refresh");
-    const items = result.traces.slice(0, 20).map((trace) => el("li", {},
-      `${trace.operation}: ${trace.status}, ${(trace.seconds * 1000).toFixed(0)} ms`,
-      trace.calls.length ? el("ul", {}, trace.calls.map((role) => el("li", {},
-        `${STAGE_NAMES[role.stage] || role.stage} (${role.actor || "scene"}): ${role.attempts} attempt(s), ` +
-        (role.provider_seconds === null ? `provider time ${role.latency}` : `provider ${(role.provider_seconds * 1000).toFixed(0)} ms (${role.latency})`)))) : null));
-    fill(sections.diagnostics, el("h2", { id: "inf-diag" }, "Recent calls on this device"),
+    try { result = await api("diagnostics", {}); } catch (error) {
+      if (error.reason === "left") return;
+      result = { available: false, reason: error.message, traces: [] };
+    }
+    const ms = (seconds) => (seconds * 1000).toFixed(0) + " ms";
+    const items = result.traces.slice(0, 20).map((trace) => el("div", { class: "providers-trace" },
+      el("div", { class: "g-row g-between" }, el("span", { class: "providers-stage-name" }, trace.operation),
+        el("span", { class: "g-muted" }, trace.status + ", " + ms(trace.seconds))),
+      trace.calls.map((role) => el("div", { class: "g-muted" },
+        `${STAGE_NAMES[role.stage] || role.stage} (${role.actor || "scene"}): ${plural(role.attempts, "attempt")}, `
+        + (role.provider_seconds === null ? `provider time ${role.latency}` : `provider ${ms(role.provider_seconds)} (${role.latency})`)))));
+    fill(diagnostics,
+      el("div", { class: "g-row g-between" }, el("h2", { class: "g-heading" }, "Recent calls on this device"),
+        ui.button("Refresh", diagnosticsCard, { size: "small" })),
       el("p", { class: "g-muted" }, "Timings of this app's play calls since it started, kept in memory only. Speakers are numbered, never named."),
-      result.available ? null : el("p", {}, "Not available: " + result.reason), refresh,
-      items.length ? el("ol", {}, items) : el("p", {}, "Nothing played since the app started."));
+      result.available ? null : el("p", {}, "Not available: " + result.reason),
+      items.length ? el("div", { class: "providers-stages" }, items) : ui.empty("Nothing played since the app started."));
   }
 
+  // -- reading, checking and saving ---------------------------------------------------------------------------
   async function load() {
     state.models = await api("models", {});
-    modelSection(); stagesSection(); missingSection();
+    statusCard(); modelCard(); stagesCard(); missingSection();
+    for (const node of [status, model, stages]) node.hidden = false;
   }
 
   async function check() {
-    try { state.check = await api("check_models", { settings: draft() }); fill(root.querySelector("#inf-check"), checkView(state.check)); say(state.check.ok ? "Checked: nothing was sent." : "These settings cannot be used.", !state.check.ok); }
-    catch (error) { say(error.message, true); }
+    try {
+      const result = await api("check_models", { settings: draft() });
+      fill(form.check, checkView(result));
+      say(result.ok ? "Checked: nothing was sent." : "These settings cannot be used.", !result.ok);
+    } catch (error) { if (error.reason !== "left") say(error.message, true); }
   }
 
   async function save() {
     try {
       state.models = await api("save_models", { settings: draft(), expected: state.models.etag });
-      state.check = null; modelSection(); stagesSection();
+      statusCard(); modelCard(); stagesCard();
       if (ctx.refreshLibrary) ctx.refreshLibrary().catch(() => {});
       say(state.models.generation.available ? "Saved. The next turn plays by these settings." : "Saved, but generation is off: " + state.models.generation.problem.message,
         !state.models.generation.available);
@@ -273,6 +391,9 @@ export async function mount(root, ctx) {
     }
   }
 
-  try { await load(); } catch (error) { say("The settings cannot be read: " + error.message, true); }
-  await Promise.all([chatsSection(), diagnosticsSection()]);
+  try { await load(); } catch (error) {
+    if (error.reason === "left") return;
+    say("The settings cannot be read: " + error.message, true);
+  }
+  await Promise.all([chatsSection(), diagnosticsCard()]);
 }

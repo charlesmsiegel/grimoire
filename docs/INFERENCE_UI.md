@@ -107,17 +107,31 @@ real provider on the real clock; `synthetic`, `partial` or `unreported` otherwis
 
 ## The page
 
-`grimoire/app/static/pages/providers/` is the page: `page.json` and `page.js`, which exports the shell's
-`mount(root, ctx)` and calls `providers.<op>` and the text API's `chats` through `ctx.api`. It
-has five sections: **Model** (the settings form, **Check** and **Save**), **Model calls a turn may make**,
-**Usage by chat** (the 100 most recent chats, **Show more chats** for up to 1,000; `#/providers?chat=<ChatRef>` opens one chat's usage directly; a chat's turns come 200 at a time, newest first, with **Earlier turns** and **Later turns**), **Recent calls on this device** and **Not available yet**. Every library and provider text is
-set as text, never markup. `backend/tests/test_app_inference_page.py` runs the page in Node over a fake DOM and
-fake ops (skipped where Node is not installed); `backend/tests/test_app_inference_shell.py` serves it through
-the shell, from `serve --model FILE` as a process too.
+`grimoire/app/static/pages/providers/` is the page: `page.json`, `page.css` and `page.js`, which exports the
+shell's `mount(root, ctx)` and calls `providers.<op>` and the text API's `chats` through `ctx.api`. From the top:
+
+- A **status card**: "Generating with *model*" or "No model is set up" with the app's reason, whether the endpoint
+  is on this computer (no provider bills it) or hosted (every attempt may be billed, with the key's variable
+  named), and the routes calls go to.
+- **Model**: the settings form with **Check** and **Save**. The presets (**OpenRouter**, **Local (Ollama)**,
+  **Custom**) fill the provider name, the endpoint address and the key variable in the form and nothing else:
+  the model is the person's to name, and a preset saves nothing until **Save**. The form holds no field for a
+  key, only for the name of its environment variable.
+- **Calls a turn may make**: each stage with its state and its reason.
+- **Usage by chat**: the 100 most recent chats (**Show more chats** for up to 1,000;
+  `#/providers?chat=<ChatRef>` opens one chat's usage directly), a tile for each total (a lower bound is always
+  said to be one, and the cost is unknown while no prices are set) and the chat's turns, 200 at a time, newest
+  first, with **Earlier turns** and **Later turns**. Opening a turn lists its calls and attempts.
+- **Recent calls on this device** and, folded away, **Not available yet**.
+
+Every library and provider text is set as text, never markup. `backend/tests/test_app_inference_page.py` runs the
+page in Node over a stand-in DOM and fake ops (skipped where Node is not installed);
+`backend/tests/test_app_inference_shell.py` serves it through the shell, from `serve --model FILE` as a process too.
 
 ## Not available yet
 
-Each is listed on the page with its reason (`unavailable` in `models`):
+Each is listed on the page with its reason (`unavailable` in `models`; the page leaves out `presets`, since it
+fills its form from its own):
 
 - **A connection test.** 013's adapter sends only a turn's planned calls, and 004 has no job-scoped ledger to bill
   a call outside a turn, so a test request would be an unbilled, unplanned call. **Check** validates a draft and
@@ -129,4 +143,4 @@ Each is listed on the page with its reason (`unavailable` in `models`):
 - **Prompt and context preview, prompt history.** No V2 service previews a brief or keeps a prompt: briefs are
   built for a call and never stored (013's privacy rule). When one exists it must show only what the table's
   player may read: never another NPC's private evidence.
-- **Provider presets.**
+- **Provider presets** kept by the app. The page's own presets only fill its form.

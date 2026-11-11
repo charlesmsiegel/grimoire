@@ -123,8 +123,8 @@ conflict). A definition's placements are a source's files, so a definition slot 
 
 - The app shell serves every op as `media.<op>` (`media.devices` for `sync.devices`, `media.sync` for `sync.run`,
   and so on), through one `MediaSyncApi` per open library, so a pairing made on one request is listed on the next.
-  The Art page (`#/art`, a scope's gallery or one subject's slots) and the Sync page (`#/sync`, devices, conflicts
-  and forks) use only those ops, and hide an action whose op the app does not serve. Art is not in the rail: it is
+  The Art page (`#/art`, a scope's gallery or one subject's slots) and the Devices and sync page (`#/sync`) use
+  only those ops, and hide an action whose op the app does not serve. Art is not in the rail: it is
   opened by its address (`?scope=`, `&subject=`) or from the command palette.
 - A slot's picture is chosen and framed in the **picture picker**, a modal any page may open
   (`static/pages/art/picker.js`, `openPicker(ctx, {subject, slot, target, aspect, use, art})`, resolving to the
@@ -134,7 +134,12 @@ conflict). A definition's placements are a source's files, so a definition slot 
   "Use the inherited picture" show only where `modes` allows them. Its zoom (100 to 200 percent) is stored as the
   placement's `crop`, a centred box; exact crop and focus numbers can be typed instead. The preview and the Art
   page's slot cards show that zoom; other screens do not apply a crop yet.
-- The Sync page keeps this device's version of a conflict only while one other version stands, as the text API
+- The Devices and sync page shows a card for this device, one for each other device (how it is reached, its
+  `last` sync, **Sync now** when this device dials it) and **Pair a device**, which opens the pairing form. A sync
+  reads "Syncing…" until its request answers, then a notice says what was exchanged, or what went wrong with
+  **Try again**. Under the cards, each conflict and each fork is a card with the same choices and confirmations.
+  The app keeps no log of past syncs, so the page lists none.
+- The Devices and sync page keeps this device's version of a conflict only while one other version stands, as the text API
   does; with several, it keeps one of theirs and lists this device's as not kept, or it is kept on the other device.
 - Expression slots (`expr.<outfit>.<name>`) are placed by name; there is no expression editor yet.
 - `media.gallery` lists at most 1000 pictures of one scope per call, from the start.

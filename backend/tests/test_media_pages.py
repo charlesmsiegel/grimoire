@@ -147,4 +147,4 @@ def test_the_sync_page_shows_every_version_of_a_three_device_conflict_and_loses_
     result = subprocess.run([NODE, "--test", "--test-reporter=tap", str(TESTS / "sync_conflicts.mjs")],
                             capture_output=True, text=True, timeout=120, check=False)
     assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
-    assert "# pass 1" in result.stdout
+    assert "# pass 2" in result.stdout
