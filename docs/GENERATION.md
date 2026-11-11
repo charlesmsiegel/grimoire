@@ -46,7 +46,7 @@ What is read, by payload shape (any other revision derives nothing):
 
 | Revision | Reader | Examples | Anchors |
 |---|---|---|---|
-| 037 card character (`card.format` `chara_card_v3`) | built in | `card.texts.example-messages` | the `personality` section (or `card.unsectioned.personality`), the description |
+| 037 card character (`card.format` `chara_card_v3` or `chara_card_v2`) | built in | `card.texts.example-messages` | the `personality` section (or `card.unsectioned.personality`), the description |
 | 026 V1 card portrayal (`extras.v1`) | `import_v1.v1_voice_texts` | the verbatim card's `data.mes_example` | its `data.personality`, the description |
 | 026 V1 persona (`persona_md`), or a V1 card that does not parse | `import_v1.v1_voice_texts` | none | the description |
 
@@ -58,7 +58,7 @@ A card's system prompt, post-history instructions, scenario, greetings and creat
 - **Caps** are 014's: at most 32 anchors and 32 examples, anchors of 400 and examples of 600 characters. A longer item is cut after its last whole sentence that fits (else at a space, else hard) and noted `truncated`; a blank item is skipped (`blank`), a repeat (`duplicate`) and one past the count cap (`over_cap`).
 - **Speak anyway.** With no example and no anchor, the description's opening sentences (up to 400 characters) are one `register` anchor, `description-0`, noted `description_fallback`. Only a revision with no usable text at all (no example turn of its own, no personality, no description) has no profile: `no_voice_text`.
 - **Derived layers.** A layer with no voice of its own inherits its base's as above, with one exception: when the base's voice was *derived* and a layer between it and the leaf authors or clears `personality`, or replaces or clears the description, that voice describes text the leaf no longer has. The leaf then derives its own from its effective personality and description and the base's examples. A hand-authored base voice is inherited unchanged, and a layer that authors or clears `voice-evidence` still stops the walk.
-- **Export.** For a V3 card (037, or a V1 card whose spec is `chara_card_v3`), `imported` is an `ImportedVoiceSource` holding the exact `mes_example` and the card's extensions (`card_version` is the V1 card's `LegacyId`; `anchor_text` is empty). Extensions 014 cannot freeze are left out (`extensions_not_carried`); the verbatim card still holds them.
+- **Export.** For a V3 card (037, or a V1 card whose spec is `chara_card_v3`; a V2 card keeps none), `imported` is an `ImportedVoiceSource` holding the exact `mes_example` and the card's extensions (`card_version` is the V1 card's `LegacyId`; `anchor_text` is empty). Extensions 014 cannot freeze are left out (`extensions_not_carried`); the verbatim card still holds them.
 - **Screening is unchanged.** Derived examples carry no `reveals`; 014's marker denylist still omits any anchor or example that states a secret the speaker has not learned.
 
 Not yet: a V1 record's `voice_anchor.md` (the world actor's or a campaign's own) is not read: 026 lists it as `actor_sidecar` ([IMPORT_V1](IMPORT_V1.md#known-limits)). The character's own name spelled otherwise is not recognised as a label of theirs, so that turn is dropped.

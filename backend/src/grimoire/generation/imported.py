@@ -33,6 +33,8 @@ from grimoire.voice import (
 )
 
 CARD_FORMAT = "chara_card_v3"
+#: The card formats whose character record carries voice texts; only ``CARD_FORMAT`` is kept for export.
+CARD_TEXT_FORMATS = (CARD_FORMAT, "chara_card_v2")
 #: What ``{{user}}`` becomes in an example line: the line is addressed to whoever the speaker talks to.
 USER_STAND_IN = "you"
 #: Why an imported revision has no profile at all.
@@ -159,15 +161,16 @@ def imported_source(fmt: object, card_version: LegacyId | None, examples: str,
 
 
 def card_voice_texts(definition: EntityDefinition) -> VoiceTexts | None:
-    """The voice texts of a 037 card character (``card.format`` ``chara_card_v3``); ``None`` otherwise."""
+    """The voice texts of a 037 card character (``card.format`` ``chara_card_v3`` or ``chara_card_v2``);
+    ``None`` otherwise. Only a V3 card's fields are also kept as 014's ``ImportedVoiceSource``."""
     extras = definition.extras
     card = extras.get("card")
-    if not (isinstance(card, Mapping) and card.get("format") == CARD_FORMAT):
+    if not (isinstance(card, Mapping) and card.get("format") in CARD_TEXT_FORMATS):
         return None
     examples = text_of(_mapping(card.get("texts")).get("example-messages"))
     personality = (text_of(_mapping(extras.get("sections")).get("personality"))
                    or text_of(_mapping(card.get("unsectioned")).get("personality")))
-    imported, notes = imported_source(CARD_FORMAT, None, examples, card.get("extensions"))
+    imported, notes = imported_source(card.get("format"), None, examples, card.get("extensions"))
     return VoiceTexts(examples, personality, definition.description, imported, notes, _speaker(card))
 
 

@@ -20,8 +20,33 @@
 .import-drop-actions .g-button { background: var(--g-bg); }
 .import-found-name { margin: 6px 0 2px; font: 600 28px/1.1 var(--g-serif); overflow-wrap: anywhere; }
 .import-path { font: 12px/1.4 var(--g-mono); color: var(--g-muted); word-break: break-all; }
-.import-extra { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
-.import-extra-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.import-refusal { margin: 8px 0 2px; }
+.import-refusal-why { margin: 0 0 6px; font-size: 13px; overflow-wrap: anywhere; }
+/* what was found: the card (its picture beside what it says of itself) and its lorebooks, side by side */
+.import-found { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.import-found-card { flex: 1 1 300px; display: flex; gap: 18px; min-width: 0; }
+.import-found-text { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.import-found-text .import-found-name { margin: 2px 0; }
+.import-portrait { flex: none; width: 108px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.import-portrait-img { display: block; width: 108px; height: 144px; border: 1px solid var(--g-line); border-radius: 10px;
+  object-fit: cover; background: var(--g-raised); }
+.import-portrait-add { width: 108px; height: 144px; padding: 8px; border: 1.5px dashed var(--g-muted); border-radius: 10px;
+  background: transparent; color: var(--g-muted); font: inherit; font-size: 13px; cursor: pointer; }
+.import-portrait-add:hover { border-color: var(--g-accent); color: var(--g-accent); }
+.import-portrait-note { font-size: 12px; text-align: center; overflow-wrap: anywhere; }
+.import-lorebooks { flex: 1 1 300px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.import-book-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; }
+.import-lorebooks .g-heading { margin: 0; }
+.import-book-count { font-size: 13px; }
+.import-books { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.import-book { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 12px; border: 1px solid var(--g-line);
+  border-radius: 10px; background: var(--g-bg); }
+.import-book-text { flex: 1 1 140px; min-width: 0; display: flex; flex-direction: column; }
+.import-book-name { font-weight: 600; overflow-wrap: anywhere; }
+.import-book-detail { font-size: 13px; }
+.import-book-none, .import-book-help { margin: 0; }
+.import-book-help { font-size: 13px; }
+.import-book-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .import-next { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .import-next-end { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .import-check { display: flex; gap: 8px; align-items: center; margin: 4px 0; cursor: pointer; }

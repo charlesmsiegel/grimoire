@@ -102,11 +102,20 @@ test("from no library to an open one, and on to a first chat", { skip: !base }, 
   assert.ok(byText(main, "div", "Write a premise first.").length && window.location.hash === "#/setup?step=card");
 
   // a file that is no card is refused, and nothing is offered to write
-  const file = main.querySelector('input[type="file"]');
+  let file = main.querySelector('input[type="file"]');
+  assert.equal(file.getAttribute("accept"), ".png,image/png,.json,application/json", "a PNG card or a card JSON");
   file.files = [new File(["not a card"], "notes.json")];
   file.dispatchEvent({ type: "change" });
   await until(() => body.querySelectorAll("div.g-bad").length && idle(main), 15000, "the refusal of a file that is no card");
   assert.equal(byText(main, "button", "Add this card").length, 0);
+  // a PNG card goes through the same preview: its picture is one of the files it would write. Rejected, nothing is
+  file.files = [new File([Buffer.from(process.env.GRIMOIRE_CARD_PNG, "base64")], "mara.png")];
+  file.dispatchEvent({ type: "change" });
+  await until(() => byText(main, "button", "Add this card: write").at(-1), 15000, "the PNG card's preview");
+  assert.ok(byText(main, "h3", "mara.png").length);
+  assert.ok(byText(main, "details.setup-file", "assets/blobs/").length, "the PNG itself is the portrait it would write");
+  byText(main, "button", "Reject")[0].click();
+  file = await until(() => !byText(main, "button", "Add this card").length && main.querySelector('input[type="file"]'), 15000, "the drop zone again");
   // the card is previewed: every file it would write, and nothing written until it is approved
   file.files = [new File([process.env.GRIMOIRE_CARD], "mara.json")];
   file.dispatchEvent({ type: "change" });

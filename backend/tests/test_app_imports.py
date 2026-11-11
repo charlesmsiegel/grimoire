@@ -25,6 +25,7 @@ from grimoire.app.server import STATIC
 from grimoire.changesets import encode as encode_changeset
 from grimoire.changesetstore import ChangeSetLibrary
 from grimoire.textapi import ApiRefused
+from png_fixtures import png, png_card
 from review_fixtures import secured
 from store_helpers import owner_handle
 from test_reviewapi import files_of
@@ -118,6 +119,8 @@ def test_the_import_page_finds_a_card_and_says_every_review_state(app, tmp_path)
     _api, device, folder = app
     card = tmp_path / "mara.json"
     card.write_text(json.dumps(V3), encoding="utf-8")
+    (tmp_path / "mara.png").write_bytes(png_card(V3))
+    (tmp_path / "picture.png").write_bytes(png())
     before = files_of(folder)
     server = AppServer(device.api)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -127,7 +130,8 @@ def test_the_import_page_finds_a_card_and_says_every_review_state(app, tmp_path)
         result = subprocess.run([shutil.which("node"), "--test", "--test-reporter=tap", str(JS / "import_card.e2e.mjs")],
                                 capture_output=True, text=True, timeout=180, check=False,
                                 env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": server.token,
-                                     "GRIMOIRE_CARD": str(card)})
+                                     "GRIMOIRE_CARD": str(card), "GRIMOIRE_CARD_PNG": str(tmp_path / "mara.png"),
+                                     "GRIMOIRE_PNG": str(tmp_path / "picture.png")})
     finally:
         server.close()
         thread.join(10)

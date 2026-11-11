@@ -50,7 +50,7 @@ from dataclasses import dataclass
 
 from grimoire.images.model import expression_slot, slot_role
 
-from .model import CCV3, Asset, LorebookCard, Loss, ParsedCard
+from .model import CHARACTER_FORMATS, Asset, LorebookCard, Loss, ParsedCard
 from .records import slugify
 
 #: the one outfit a card's emotion sprites belong to: a V3 card has no outfits
@@ -89,7 +89,7 @@ class ArtPiece:
 
 def asset_path(card: ParsedCard, index: int) -> str:
     """The card field path of asset ``index`` (``data.assets[3]``), as losses name it."""
-    return f"{'data.assets' if card.format == CCV3 else 'assets'}[{index}]"
+    return f"{'data.assets' if card.format in CHARACTER_FORMATS else 'assets'}[{index}]"
 
 
 def _picture(asset: Asset, portrait: bytes | None) -> tuple[bytes | None, str | None]:

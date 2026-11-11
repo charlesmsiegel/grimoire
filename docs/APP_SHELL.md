@@ -235,7 +235,7 @@ Library setup is a `hidden` page: the rail does not list it, the shell opens it 
 steps, **Library folder · First card · Who you play · Begin** (`#/setup?step=card|persona|begin`; the last three
 only once a library is open). A new library goes on to the second step. Each of those steps uses the library's own
 ops, and is a link to the page that does the same where the app does not serve them: **First card** previews a
-Character Card V3 JSON file with `imports.card_preview`, lists every file it would write and writes them only on
+PNG card or a card JSON file with `imports.card_preview`, lists every file it would write and writes them only on
 `imports.proposal_apply` with the digest shown (a portrait, a separate lorebook and a scenario card stay on Import),
 or takes a one-line premise, or a card the library already has; **Who you play** makes a character with
 `sources.create` in the source `local:mine` (made the first time with `sources.create_source`), or takes a

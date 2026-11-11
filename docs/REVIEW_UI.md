@@ -16,8 +16,8 @@ api.call("proposal.apply", {"proposal": "p-…", "digest": "sha256:…"})
 `ReviewRefused` (an `ApiRefused`): `reason` is the domain service's own reason code (`refused`, with the
 error's kind in `details`, when the service gives none), `status` is 404 for a missing proposal, scan,
 review, chat, actor (`missing_actor`) or V1 folder (`no_source`), 400 for arguments or an input file that
-cannot be read as asked (`invalid_field`, `too_large`, `unsupported_format`, `invalid_portrait`,
-`unsupported_schema`, `not_a_v1_library`, `unsafe_paths` and the like), 409 for everything the library's
+cannot be read as asked (`invalid_field`, `too_large`, `unsupported_format`, `invalid_png`, `no_embedded_card`,
+`invalid_portrait`, `unsupported_schema`, `not_a_v1_library`, `unsafe_paths` and the like), 409 for everything the library's
 state refuses, and `details` carries the paths or fields involved (for example `{path, reason}` rows of a
 stale write). Calls are serialized. Bytes travel as base64.
 
@@ -49,7 +49,8 @@ previewed again. A restart drops them all. V1 scans and rebase reviews are held 
 | op | arguments | what it does |
 | --- | --- | --- |
 | `review.capabilities` | | the ops, formats and size limits, and what is unavailable and which milestone it waits on |
-| `card.preview` | `card`, `portrait?`, `lorebook?`, `origin?`, `target?`, `as_scenario?`, `replace_edits?` | 037's plan of a Character Card V3 JSON, scenario card or V3 lorebook: destination, losses, collisions, suggestions, missing art |
+| `card.inspect` | `card`, `as_scenario?` | 037's `card_facts`: what the file says of itself (container, format, what it becomes, name, whether the file is its own portrait, the embedded lorebook's name and entry count). Reads no library and proposes nothing |
+| `card.preview` | `card`, `portrait?`, `lorebook?`, `origin?`, `target?`, `as_scenario?`, `replace_edits?`, `embedded_lorebook?` | 037's plan of a card file: destination, losses, collisions, suggestions, missing art. `embedded_lorebook: false` leaves the card's own lorebook out |
 | `history.scan` | `export` | 036's read-only scan of a SillyTavern JSONL export: speakers, counts, losses |
 | `history.preview` | `export`, `speakers {id: source ref}`, `lorebooks?`, `label?`, `name?` | 036's plan. The report counts the staged files by kind (`staged`) and lists any accepted event, wrap-up, played turn or actor knowledge among them (`accepted_events`, `turns`, `memories`): imported text is transcript only, so these are empty |
 | `v1.scan` | `source`, `archive_id` | 011's read-only inventory of a 0.2.1 library: worlds, campaigns, identities, art, losses, findings, and the proposed selection |
@@ -60,6 +61,12 @@ previewed again. A restart drops them all. V1 scans and rebase reviews are held 
 | `rebase.review` | `actor`, `target?` | 042's field-by-field review |
 | `rebase.preview` | `review`, `decisions {field: take or keep}` | 042's change for those decisions (`undecided` until every needed field has one) |
 | `proposal.get`, `proposal.apply`, `proposal.reject` | `proposal` (and `digest`) | as above |
+
+A card file (`card`) is a Character Card V3 or V2 JSON, a scenario card or a V3 lorebook of at most 2 MiB, or a
+PNG card of at most 32 MiB carrying one of those in a `ccv3` or `chara` text chunk ([CARDS](CARDS.md#png-cards)).
+The PNG is read strictly and is the card's portrait unless a `portrait` is sent with it; a damaged one is
+`invalid_png`, a picture with no card `no_embedded_card`, each with what was wrong in `details.detail`.
+`review.capabilities` gives both limits (`max_bytes`, `png_max_bytes`).
 
 The V1 library is only ever read: 011 and 026 refuse a source inside the V2 library or its home folder
 (`unsafe_paths`), a folder that is no 0.2.1 library (`not_a_v1_library`), and a library that changed after
@@ -88,9 +95,14 @@ The Import page (`static/pages/import/`, route `import`, Library menu) lists the
 top, the chosen one kept in the address as `?tab=`: Character card (`card`), Chat history (`history`), V1 library
 (`v1`), Change set (`changeset`) and Source update (`rebase`: a chat's characters following a newer revision of
 their source). A kind shows only when the app serves every op its form calls and `imports.capabilities` lists it.
-A card or a chat export is dropped on a drop zone or chosen as a file; the card zone takes only JSON documents,
-the formats the app reads. Once a card is read the page shows what the file says of itself (its format and
-name) with an optional portrait, an optional separate lorebook and "Import as a scenario", then previews. Each
+A card or a chat export is dropped on a drop zone or chosen as a file; the card zone takes PNG cards and JSON
+documents. The page sends the card to `imports.card_inspect` and shows what was found: the name, the format, what
+it becomes, and for a PNG card the picture itself (an `img` showing a `blob:` URL made from the dropped file,
+let go when the form starts over or the page is left) with "Portrait: the PNG itself"; a JSON card offers "Add a
+portrait" instead. A **Lorebooks** list beside it names the lorebook the card embeds, with its entry count, as
+"embedded in the card"; Remove leaves it out of the import (`embedded_lorebook: false`) and it can be put back,
+and one separate lorebook file can be added and removed. A character card offers "Import as a scenario". A file
+the app refuses is shown as what it is, with the app's reason, and offers no preview. Each
 kind previews into the shared review: a summary, every file on the left with its action and size, the selected
 file's sha256 and its diff or text on the right, and a footer with the digest. "Approve and write N files" asks
 first, naming how many files, and sends the digest back; Reject discards the proposal. Once decided, the footer
@@ -98,12 +110,13 @@ says the outcome and offers "Import another" and "Open the library". A stale or 
 was written and to preview again; a proposal the server no longer holds (an approval whose answer was lost, or an
 app restart) says to check the library first, since it may have been written. The "What this app cannot import
 yet" list comes from `imports.capabilities`.
-Files are sent as base64 in one request, which the app server caps at 48 MiB, so one card or history file is
-limited to about 34 MiB.
+Files are sent as base64 in one request, which the app server caps at 48 MiB, so one history file is limited to
+about 34 MiB; a card file has the limits above. First run's "First card" step takes the same card files through
+the same `imports.card_preview`.
 
 ## Not available yet
 
-PNG and CHARX cards, Character Card V1/V2 and SillyTavern world info (037 later milestones); remote card art;
+CHARX cards, Character Card V1 and SillyTavern world info (037 later milestones); remote card art;
 choosing link suggestions; stored change-set proposals (043 milestone 3: a change set is reviewed from its
 document); rebasing a pinned scenario or lorebook (042 later milestone); V1 campaign sprites and voice
 anchors (026 later milestones).

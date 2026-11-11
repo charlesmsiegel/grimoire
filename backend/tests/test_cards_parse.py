@@ -50,7 +50,9 @@ def test_unknown_fields_are_kept_and_wrong_types_are_reported_not_coerced():
 
 
 @pytest.mark.parametrize("document, detail", [
-    ({"spec": "chara_card_v2", "data": {"name": "x"}}, "chara_card_v2"),
+    ({"spec": "chara_card_v2", "data": {"name": "x"}}, "chara_card_v2_version"),  # no spec_version
+    ({"spec": "chara_card_v2", "spec_version": "3.0", "data": {"name": "x"}}, "chara_card_v2_version"),
+    ({"spec": "chara_card_v3", "spec_version": "2.0", "data": {"name": "x"}}, "chara_card_v3_version"),
     ({"name": "x", "first_mes": "hi"}, "chara_card_v1"),
     ({"entries": {}}, "sillytavern_world_info"),
     ({"hello": "world"}, "unknown"),
@@ -59,6 +61,25 @@ def test_other_formats_are_unsupported_and_named(document, detail):
     with pytest.raises(CardError) as caught:
         parse_card(document)
     assert (caught.value.reason, caught.value.detail) == ("unsupported_format", detail)
+
+
+def test_a_character_card_v2_is_read_as_the_same_fields_under_its_own_format():
+    v2 = {"spec": "chara_card_v2", "spec_version": "2.0",
+          "data": {key: value for key, value in V3["data"].items() if key not in ("assets", "group_only_greetings")}}
+    parsed, newer = parse_card(v2), parse_card(V3)
+    assert (parsed.format, parsed.spec_version, parsed.name) == ("chara_card_v2", "2.0", "Mara Vell")
+    for field in ("description", "personality", "scenario", "example_messages", "system_prompt",
+                  "post_history_instructions", "tags", "authorship", "extensions"):
+        assert getattr(parsed, field) == getattr(newer, field), field
+    assert [greeting.greeting_id for greeting in parsed.greetings] == ["first", "alt-1"]
+    assert parsed.lorebook == newer.lorebook and parsed.assets == () and parsed.losses == ()
+    # as a scenario too, and a wrong type is a loss at the same path a V3 card reports
+    assert parse_card(v2, as_scenario=True).format == "chara_card_v2"
+    v2["data"]["tags"] = ["ok", 3]
+    assert Loss("data.tags[1]", "wrong_type") in parse_card(v2).losses
+    with pytest.raises(CardError) as caught:
+        parse_card({"spec": "chara_card_v2", "spec_version": "2.0", "data": {"name": " "}})
+    assert caught.value.reason == "invalid_card"
 
 
 @pytest.mark.parametrize("document", [

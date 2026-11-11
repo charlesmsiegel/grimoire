@@ -29,7 +29,9 @@ from datetime import datetime, timezone
 from grimoire.archaeologystore import MAX_EXPORT_BYTES, StImporter, scan_st_export
 from grimoire.archaeologystore import ImportRefused as StRefused
 from grimoire.cards import CardError
-from grimoire.cardstore import MAX_CARD_BYTES, CardImporter, ImportDenied
+from grimoire.cardstore import (
+    MAX_CARD_BYTES, MAX_CARD_PNG_BYTES, PNG_SIGNATURE, CardImporter, ImportDenied, card_facts,
+)
 from grimoire.changesets import ChangeSetError
 from grimoire.changesets import decode as decode_changeset
 from grimoire.changesetstore import ChangeSetLibrary
@@ -67,6 +69,7 @@ BAD_REQUEST = frozenset({
     "invalid_field", "too_large", "invalid_json", "invalid_card", "unsupported_format", "invalid_options",
     "invalid_target", "not_a_card_source", "not_a_v1_library", "unsafe_paths", "unknown_speaker", "role_kind",
     "invalid_selection", "unstorable", "unstorable_id", "invalid_portrait", "unsupported_schema", "invalid_message",
+    "invalid_png", "no_embedded_card",
 })
 
 
@@ -217,7 +220,7 @@ class ReviewApi:
         self._lock = threading.RLock()
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "review.capabilities": self._capabilities,
-            "card.preview": self._card_preview,
+            "card.inspect": self._card_inspect, "card.preview": self._card_preview,
             "history.scan": self._history_scan, "history.preview": self._history_preview,
             "v1.scan": self._v1_scan, "v1.preview": self._v1_preview, "v1.receipts": self._v1_receipts,
             "rebase.candidates": self._rebase_candidates, "rebase.review": self._rebase_review,
@@ -246,16 +249,18 @@ class ReviewApi:
         return {
             "ops": list(self._ops),
             "imports": {
-                "card": {"formats": ["chara_card_v3 (JSON)", "grimoire.scenario-card/1", "lorebook_v3"],
-                         "max_bytes": MAX_CARD_BYTES, "portrait_max_bytes": MAX_PORTRAIT_BYTES},
+                "card": {"formats": ["chara_card_v3", "chara_card_v2", "grimoire.scenario-card/1", "lorebook_v3"],
+                         "containers": ["JSON document", "PNG card (a ccv3 or chara text chunk)"],
+                         "max_bytes": MAX_CARD_BYTES, "png_max_bytes": MAX_CARD_PNG_BYTES,
+                         "portrait_max_bytes": MAX_PORTRAIT_BYTES},
                 "history": {"formats": ["SillyTavern chat export (JSONL)"], "max_bytes": MAX_EXPORT_BYTES},
                 "v1": {"formats": ["Grimoire 0.2.1 library folder, read only"]},
             },
             "unavailable": [
-                {"feature": "png_and_charx_cards", "blocked_by": "037 later milestone",
-                 "detail": "PNG and CHARX card containers are refused unsupported_format"},
-                {"feature": "card_v1_v2_and_world_info", "blocked_by": "037 later milestone",
-                 "detail": "Character Card V1/V2 and SillyTavern world info are refused unsupported_format"},
+                {"feature": "charx_cards", "blocked_by": "037 later milestone",
+                 "detail": "CHARX card archives are refused unsupported_format"},
+                {"feature": "card_v1_and_world_info", "blocked_by": "037 later milestone",
+                 "detail": "Character Card V1 and SillyTavern world info are refused unsupported_format"},
                 {"feature": "remote_card_art", "blocked_by": "037 (nothing is fetched)",
                  "detail": "remote pictures stay unresolved slots"},
                 {"feature": "choose_link_suggestions", "blocked_by": "037 later milestone",
@@ -337,17 +342,38 @@ class ReviewApi:
         return {"proposal": proposal.proposal_id, "kind": proposal.kind, "state": "rejected"}
 
     # -- 037: cards -----------------------------------------------------------------------------
+    def _card_file(self, args: Mapping[str, object], key: str = "card") -> bytes:
+        """A card file: a JSON document of at most ``MAX_CARD_BYTES``, or a PNG card of at most
+        ``MAX_CARD_PNG_BYTES`` (the picture is the portrait; the card inside it has the JSON limit)."""
+        data = _bytes(args, key, MAX_CARD_PNG_BYTES)
+        assert data is not None
+        if len(data) > MAX_CARD_BYTES and not data.startswith(PNG_SIGNATURE):
+            raise ReviewRefused("too_large", f"{key} is larger than {MAX_CARD_BYTES} bytes")
+        return data
+
+    def _card_inspect(self, args: Mapping[str, object]) -> dict:
+        """What a card file says of itself (037's ``card_facts``): reads no library and proposes nothing."""
+        card = self._card_file(args)
+        as_scenario = _field(args, "as_scenario", bool, required=False, default=False)
+        try:
+            return jsonable(card_facts(card, as_scenario=as_scenario))  # type: ignore[return-value]
+        except CardError as error:
+            raise ReviewRefused(error.reason, str(error), details={"detail": getattr(error, "detail", "")}) \
+                from None
+
     def _card_preview(self, args: Mapping[str, object]) -> dict:
-        card = _bytes(args, "card", MAX_CARD_BYTES)
+        card = self._card_file(args)
         portrait = _bytes(args, "portrait", MAX_PORTRAIT_BYTES, required=False)
         lorebook = _bytes(args, "lorebook", MAX_CARD_BYTES, required=False)
         origin = _text(args, "origin", required=False)
         target = _text(args, "target", required=False, limit=256)
         as_scenario = _field(args, "as_scenario", bool, required=False, default=False)
         replace_edits = _field(args, "replace_edits", bool, required=False, default=False)
+        embedded_lorebook = _field(args, "embedded_lorebook", bool, required=False, default=True)
         try:
             planned = self.cards.plan(card, origin=origin, target=target, portrait=portrait, lorebook=lorebook,  # type: ignore[arg-type]
-                                      as_scenario=as_scenario, replace_edits=replace_edits)
+                                      as_scenario=as_scenario, replace_edits=replace_edits,
+                                      embedded_lorebook=embedded_lorebook)
         except CardError as error:
             raise ReviewRefused(error.reason, str(error), details={"detail": getattr(error, "detail", "")}) \
                 from None

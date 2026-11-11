@@ -1,7 +1,8 @@
 """Read a decoded card document into typed values (Sprint 037). Pure: the bytes are decoded elsewhere.
 
-``parse_card(document, as_scenario=False)`` accepts a Character Card V3 object, a V3 standalone
-lorebook (``lorebook_v3``) or a Grimoire scenario document (``grimoire.scenario-card/1``). It is
+``parse_card(document, as_scenario=False)`` accepts a Character Card V3 object, a Character Card V2
+object (the same fields under ``spec`` ``chara_card_v2``), a V3 standalone lorebook (``lorebook_v3``) or a
+Grimoire scenario document (``grimoire.scenario-card/1``). It is
 lenient where a card is merely messy and strict where identity or meaning would be guessed:
 
 - a known field of the wrong type is left out and reported as a ``Loss`` (it survives in the
@@ -9,7 +10,7 @@ lenient where a card is merely messy and strict where identity or meaning would 
 - unknown fields are kept verbatim in ``extras``;
 - a missing or blank name or title, or a scenario with neither premise nor opening, is
   ``CardError("invalid_card")``;
-- every other format, including Character Card V2, is ``CardError("unsupported_format")``: this
+- every other format, including Character Card V1, is ``CardError("unsupported_format")``: this
   slice never claims compatibility it does not have.
 
 Error messages and losses name field paths only, never card text.
@@ -21,7 +22,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
 from .model import (
-    CCV3, LOREBOOK_V3, MAX_KEPT_DEPTH, MAX_NAME, SCENARIO_DOC, Asset, Authorship, CardError, CastRef,
+    CCV2, CCV3, LOREBOOK_V3, MAX_KEPT_DEPTH, MAX_NAME, SCENARIO_DOC, Asset, Authorship, CardError, CastRef,
     CharacterCard, Greeting, LoreEntry, Lorebook, LorebookCard, Loss, ParsedCard, ScenarioCard, key_path,
 )
 
@@ -319,11 +320,14 @@ def _extras(top: Mapping, data: Mapping | None, top_known: frozenset[str], data_
     return MappingProxyType(extras)
 
 
-def _v3(document: Mapping, as_scenario: bool) -> CharacterCard | ScenarioCard:
+def _character(document: Mapping, as_scenario: bool, spec: str = CCV3) -> CharacterCard | ScenarioCard:
+    """A Character Card V3, or a V2 card: the same ``data`` fields under ``spec_version`` ``2.x``. A V2
+    card is read with V3's field set, so a V3 field it carries anyway is read as V3 reads it."""
     version = document.get("spec_version")
-    if type(version) is not str or not version.startswith("3."):
-        raise CardError("this Character Card V3 spec_version is not supported", "unsupported_format",
-                        "chara_card_v3_version")
+    major = "3" if spec == CCV3 else "2"
+    if type(version) is not str or not version.startswith(major + "."):
+        raise CardError(f"this Character Card V{major} spec_version is not supported", "unsupported_format",
+                        f"{spec}_version")
     data = _object(document.get("data"), "data")
     reader = _Reader()
     name = _require_name(data.get("name"), "data.name")
@@ -344,7 +348,7 @@ def _v3(document: Mapping, as_scenario: bool) -> CharacterCard | ScenarioCard:
     greetings = _greetings(data, "data", reader)
     if not as_scenario:
         return CharacterCard(
-            format=CCV3, spec_version=version, name=name, description=description, personality=personality,
+            format=spec, spec_version=version, name=name, description=description, personality=personality,
             scenario=scenario, example_messages=examples, greetings=greetings, system_prompt=system,
             post_history_instructions=post, nickname=nickname, losses=tuple(reader.losses), **common)
     premise, texts = scenario, {}
@@ -370,7 +374,7 @@ def _v3(document: Mapping, as_scenario: bool) -> CharacterCard | ScenarioCard:
                      for greeting in greetings)
     if not premise.strip() and not openings:
         raise CardError("a scenario needs a premise or an opening", "invalid_card", "data.scenario")
-    return ScenarioCard(format=CCV3, title=name, premise=premise, openings=openings, instructions=system,
+    return ScenarioCard(format=spec, title=name, premise=premise, openings=openings, instructions=system,
                         texts=MappingProxyType(texts), losses=tuple(reader.losses), paths=MappingProxyType(paths),
                         **common)
 
@@ -457,8 +461,8 @@ def detect(document: Mapping) -> str:
         return CCV3
     if spec == LOREBOOK_V3:
         return LOREBOOK_V3
-    if spec == "chara_card_v2":
-        raise CardError("Character Card V2 import is a later milestone", "unsupported_format", "chara_card_v2")
+    if spec == CCV2:
+        return CCV2
     if spec is None and document.get("format") == SCENARIO_DOC:
         return SCENARIO_DOC
     if spec is None and "name" in document and ("first_mes" in document or "char_persona" in document):
@@ -474,10 +478,10 @@ def parse_card(document: Mapping, *, as_scenario: bool = False) -> ParsedCard:
     if not isinstance(document, Mapping):
         raise CardError("a card is a JSON object", "invalid_card", "")
     found = detect(document)
-    if found == CCV3:
-        return _v3(document, as_scenario)
+    if found in (CCV3, CCV2):
+        return _character(document, as_scenario, found)
     if as_scenario:
-        raise CardError("only a Character Card V3 can be imported as a scenario", "invalid_card", "spec")
+        raise CardError("only a character card can be imported as a scenario", "invalid_card", "spec")
     if found == LOREBOOK_V3:
         return _lorebook_doc(document)
     return _scenario_doc(document)

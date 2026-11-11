@@ -2,9 +2,9 @@
 
 **Status:** first slice of [Character Card Ingestion](roadmap/sprints/character-card-ingestion.md) (Sprint 037, Wave 4). It is implemented as:
 - `grimoire.cards`: pure parsing of an already-decoded card document, mapping to record payloads, role classification and name-mention link suggestions;
-- `grimoire.cardstore`: a store-backed importer (`CardImporter`) that stages one import in a single guarded batch over [the native store](STORAGE.md) and [018's image batch](IMAGES.md).
+- `grimoire.cardstore`: a store-backed importer (`CardImporter`) that stages one import in a single guarded batch over [the native store](STORAGE.md) and [018's image batch](IMAGES.md), with the reader of PNG cards (`cardstore.png`) and `card_facts`, which says what a card file is before anything is planned.
 
-There is **no UI, no PNG or CHARX reader, no V2 card support and no network**. Nothing is fetched and no model is called. A green test suite proves this contract with synthetic cards written for the tests; it is not a playable app. 026's world importer is not needed and not used.
+There is **no CHARX reader, no V1 card support and no network** (the app's Import page is [REVIEW_UI](REVIEW_UI.md)). Nothing is fetched and no model is called. A green test suite proves this contract with synthetic cards written for the tests; it is not a playable app. 026's world importer is not needed and not used.
 
 ## What a card becomes
 
@@ -13,6 +13,8 @@ A card is interchange data, not native storage. An import creates (or updates) o
 | Input | Records in the card source (`grimoire.record/1`, top-level `schema`) |
 |---|---|
 | Character Card V3 (`spec: chara_card_v3`, `spec_version: 3.x`) | `character/<slug>` (`grimoire.entity/0`), plus `lorebook/<slug>-lore` (`grimoire.lorebook/1`) when it embeds a `character_book` |
+| Character Card V2 (`spec: chara_card_v2`, `spec_version: 2.x`) | the same as a V3 card: V2's `data` is read with V3's field set, and the record's `card.format` says `chara_card_v2` |
+| A PNG card: any of the above as base64 JSON in a `tEXt` chunk keyed `ccv3` or `chara` ([below](#png-cards)) | what its embedded document becomes, with the PNG itself as the portrait |
 | The same card with `as_scenario=True` | `scenario/<slug>` (`grimoire.scenario/1`): never a fake `Agent` character |
 | Grimoire scenario document (`format: grimoire.scenario-card/1`) | `scenario/<slug>`, plus its lorebook |
 | V3 standalone lorebook (`spec: lorebook_v3`) | `lorebook/<slug>` |
@@ -20,6 +22,15 @@ A card is interchange data, not native storage. An import creates (or updates) o
 | Every import | `card-import/import` (`grimoire.card-import/1`), see [The import record](#the-import-record) |
 
 The manifest declares every head. A portrait (`portrait=` bytes) becomes one 018 image object in the card source and a `set` placement in slot **`avatar`** of the imported character or scenario. Its provenance names the card's sha256, format and origin label.
+
+### PNG cards
+
+A PNG card is a picture that carries its card. `cardstore.png.read_png_card` finds the card document in a `tEXt` chunk whose keyword is `ccv3` (Card V3) or `chara` (the older key, usually a V2 card), compared without case; `ccv3` is preferred when both are there. The chunk's text is base64 of the card's JSON. Pixels are never decoded.
+
+- **The whole file is checked before a card is read out of it:** the signature; a first `IHDR` chunk of 13 bytes with a width and a height, and no second one; every chunk's four-letter type, its length against what is left of the file, and its CRC; picture data (`IDAT`); an empty `IEND`; and nothing after it. A file over 32 MiB (038's cap on one picture) or of more than 65,536 chunks is refused before it is walked.
+- **Refusals** (`CardError`, nothing staged): `invalid_png` with `detail` `signature`, `truncated`, `header`, `chunk_type`, `crc`, `no_image_data`, `no_end`, `trailing_data`, `too_many_chunks`, `text` (a text chunk with no keyword), `duplicate_card` (two different cards under one keyword) or `base64`; `no_embedded_card` for a sound picture with no `ccv3` or `chara` `tEXt` chunk (a card in a `zTXt` or `iTXt` chunk is not read); `too_large` for the file or for an embedded card over the 2 MiB a card may be. The embedded document is then read as any card file is, so `invalid_json`, `invalid_card` and `unsupported_format` mean what they mean for a JSON file.
+- **The card is its embedded document.** The import record's `original` is the decoded JSON, byte for byte, so a PNG card and the same document as a JSON file are the same card (`same_bytes`), and importing the JSON with that PNG as its `portrait` is the same import. The record also keeps `container`: `{format: "png", keyword, sha256, size}` of the PNG file.
+- **The PNG is the portrait**, placed exactly as a `portrait=` upload is (the whole file as one blob, text chunk included, in slot `avatar`, with the same provenance), unless the caller gives a `portrait` of its own. A PNG whose document is a lorebook has no portrait.
 
 ### Card art (038)
 
@@ -75,12 +86,14 @@ There is no `accepted_event` role, and `ImportReport.accepted_events` is always 
 ```python
 importer = CardImporter(store, worker_handle, owner="human:owner")
 planned = importer.plan(card_bytes, origin="mara.json", portrait=png_bytes, lorebook=None,
-                        target=None, as_scenario=False, replace_edits=False)
+                        target=None, as_scenario=False, replace_edits=False, embedded_lorebook=True)
 planned.report      # status, destination, roles, losses, collisions, suggestions, cast, paths, grant scopes
 planned.preview()   # {logical path: exact bytes}: what a human approves
 planned.commit(approvals)  # {path: approval id}
 ```
 
+- `card_facts(card_bytes, as_scenario=False)` reads no library: it decodes the file as `plan` would and names its container (`png` with its chunk keyword, or `json`), format, what it becomes, its name, whether the file is also the card's picture, how many fields would not be carried over, and the embedded lorebook (the name its record would have and its entry count). It refuses what `plan` refuses before reading the library.
+- **The embedded lorebook can be left out.** `embedded_lorebook=False` imports a character or scenario without the lorebook its card embeds: no lorebook record is written, the character's `card.lorebook` (or the scenario's `lorebook`) is absent, and nothing inside the left-out book is reported as a loss. The choice is part of the import's identity (`options.embedded_lorebook: false` in the import record, and in its digest), so the same card with and without its lorebook are different imports; one that keeps the lorebook is stored exactly as before this option existed. Updating an earlier import of the card this way keeps the lorebook record it wrote (`kept`), no longer named by the character. A lorebook card refuses the option (`invalid_options`).
 - `plan` reads the library and writes nothing. It asks the handle to **`propose`** every staged path with its exact bytes; any refusal raises `ImportDenied` (`denied` lists `(path, reason)`), and nothing is staged.
 - `commit` goes through 010's guarded writer. An untrusted handle needs a covering `apply` grant **and** an approval bound to the payload digest of every path. Approvals for other bytes, or for only some paths, write nothing. A commit happens once.
 - The grants an import needs are reported as `grant_scopes`: `sources/card/<slug>/_source`, and `assets/blobs` when a new picture blob is written.
@@ -124,7 +137,8 @@ The importer allocates no actor and writes nothing under `campaigns/`. Starting 
 - `kept_entities` and `kept`: entities this card no longer has, with the revision an import last wrote;
 - `avatars`: for each imported subject, the last picture an import placed in its `avatar` slot (an image ref, or `unresolved`), carried by every import so a later one can tell its own picture from a hand-chosen one;
 - `art` (038): the same for every other slot, per subject (`slot` to an image ref or `unresolved`). A slot the card no longer fills keeps its placement and its entry, so it is still the card's own if the asset comes back;
-- `format`, `origin` (the caller's label, such as a file name), `imported_at`, `imported_by`, `options`, `digest` (of all inputs and options);
+- `format`, `origin` (the caller's label, such as a file name), `imported_at`, `imported_by`, `options` (`as_scenario`, and `embedded_lorebook: false` only when the card's lorebook was left out), `digest` (of all inputs and options);
+- `container`, only for a PNG card: the PNG file's sha256 and size and the text chunk keyword the card was under;
 - `entities` (role to `kind/id`: `main`, `lorebook`, `lorebook_file`), `records` (the pinned revisions that make up this import) and `losses`.
 
 ## Reported, not refused
@@ -137,7 +151,8 @@ The importer allocates no actor and writes nothing under `campaigns/`. Starting 
 
 ## Refused before anything is staged (`CardError.reason`)
 
-- `unsupported_format`, with `detail`: `png`, `charx` (zip), `chara_card_v2`, `chara_card_v1`, `sillytavern_world_info`, `unknown`, and `chara_card_v3_version` for a V3 `spec` whose `spec_version` is not `3.x`.
+- `unsupported_format`, with `detail`: `charx` (zip), `chara_card_v1`, `sillytavern_world_info`, `unknown`, `chara_card_v3_version` for a V3 `spec` whose `spec_version` is not `3.x`, `chara_card_v2_version` for a V2 `spec` whose `spec_version` is not `2.x`, and `png` for a picture given as the separate lorebook file.
+- `invalid_png` and `no_embedded_card` for a PNG card ([above](#png-cards)).
 - `invalid_json` (not strict UTF-8 JSON: a byte-order mark, lone surrogates, duplicate keys, non-finite numbers, integers over 4,300 digits, nesting deeper than 100), `invalid_card` (not an object; a missing or blank name or title; a scenario with neither premise nor opening; wrong top-level shapes), `too_large` (a card or lorebook file over 2 MiB, or a record the store would refuse as too large), `invalid_options`, `invalid_target`, `not_a_card_source` (also for a target that exists but is excluded or unreadable).
 - 018's `InvalidImage` for a portrait that is not a supported picture; `portrait_unstorable` (`detail` `portrait`, or `assets[<n>]` for an asset's picture) when the library's shared blob store holds a differently spelled copy of the picture's file name, which no other target avoids, or when the destination's image record for it cannot be read. An asset whose bytes are not a supported picture is not refused: its slot is `unresolved`. A damaged stored copy of a picture's exact bytes is repaired by any import that carries that picture, a rerun with the same inputs included (the repair is one of the staged paths). A slot holding a placement this version cannot replace (`unsupported_format`) is `invalid_target`.
 
@@ -147,4 +162,4 @@ Error messages never echo card text.
 
 The preview reads the whole library for its collisions, suggestions and cast statuses, like other adapters today: it does not yet filter them by what the handle may `inspect`.
 
-PNG `tEXt`/CHARX containers, Character Card V1/V2, SillyTavern world info, fetching remote assets, reading pictures packaged in a PNG or CHARX file, outfits other than `default`, the lore settings 031 does not read ([below](#lore-in-play-031)), choosing a suggestion and any UI. 035 opens a chat from a card's first greeting or a scenario's first opening ([SCENES](SCENES.md)).
+CHARX containers, cards in a PNG's `zTXt` or `iTXt` chunk, Character Card V1, SillyTavern world info, fetching remote assets, reading pictures packaged in a CHARX file, outfits other than `default`, the lore settings 031 does not read ([below](#lore-in-play-031)), choosing a suggestion and any UI. 035 opens a chat from a card's first greeting or a scenario's first opening ([SCENES](SCENES.md)).

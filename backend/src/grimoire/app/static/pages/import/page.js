@@ -8,19 +8,19 @@
 //
 // The page is three parts: the kinds across the top (the address keeps the chosen one, `?tab=`), that kind's
 // form (`stage`), and what the form found or proposes (`out`), which ends in the shared review. A kind is added
-// by a row in KINDS and a form in FORMS.
+// by a row in KINDS and a form in FORMS. The card form lives in card.js.
 //
 // Every value shown comes from a library, card or export and is only ever set as text, never as markup.
 
+import { cardForm } from "./card.js";
+
 const MAX_FILE = 34 * 1024 * 1024;  // the app takes a request of 48 MiB, base64 included
-const CARD_ACCEPT = ".json,application/json";  // the card formats the app reads today are all JSON documents
-const PORTRAIT_ACCEPT = "image/png,image/jpeg,image/webp";
 const HISTORY_ACCEPT = ".jsonl,application/jsonl,text/plain";
 
 // each kind: its key (the `tab` of the address), its name, a line about it, and every op its form calls. A kind
 // is shown only when the app serves all of them
 const KINDS = [
-  ["card", "Character card", "A Card V3 JSON, scenario card or lorebook", ["imports.card_preview"]],
+  ["card", "Character card", "A PNG card, a card JSON, a scenario card or a lorebook", ["imports.card_inspect", "imports.card_preview"]],
   ["history", "Chat history", "A SillyTavern chat export", ["imports.history_scan", "imports.history_preview"]],
   ["v1", "V1 library", "Migrate a Grimoire 0.2.1 library", ["imports.v1_scan", "imports.v1_preview", "imports.v1_receipts"]],
   ["changeset", "Change set", "Review a proposed set of edits", ["imports.changeset_review"]],
@@ -28,7 +28,6 @@ const KINDS = [
 ];
 
 const ACTIONS = { create: "New file", replace: "Replaces a file", unchanged: "Unchanged", write: "Written" };
-const CARD_FORMATS = { chara_card_v3: "Character Card V3", lorebook_v3: "Lorebook V3", "grimoire.scenario-card/1": "Scenario card" };
 // what a review is called at each state, and what its footer says once it is decided
 const STATES = { open: "Review before anything is written", applied: "Written", rejected: "Rejected", ended: "Not written",
   unknown: "Check whether this was written" };
@@ -46,18 +45,6 @@ function base64(bytes) {
   let text = "";
   for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(text);
-}
-
-// What a card file says of itself, read here only to show it: its format and its name. The preview is what
-// decides how it is imported.
-function cardFacts(bytes) {
-  let doc;
-  try { doc = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch (error) { return { readable: false }; }
-  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return { readable: false };
-  const spec = typeof doc.spec === "string" ? doc.spec : typeof doc.format === "string" ? doc.format : null;
-  const data = doc.data && typeof doc.data === "object" ? doc.data : doc;
-  const name = [data.name, doc.title, doc.name].find((value) => typeof value === "string" && value.trim());
-  return { readable: true, spec, name: name || null };
 }
 
 function shown(value) {
@@ -102,7 +89,15 @@ export async function mount(root, ctx) {
   // the foot of a form or a step: what happens next, said once, and the one button that does it
   const next = (note, label, work) => el("div", { class: "import-next" }, el("span", { class: "g-muted" }, note),
     ui.button(label, () => ctx.act(work), { kind: "primary" }));
+  // pictures shown from a dropped file itself: blob: URLs (the one image source the page's policy allows), made
+  // from the file's bytes and let go when the form starts over or the page is left
+  const held = new Set();
+  const pictures = {
+    of(bytes, type) { const url = URL.createObjectURL(new Blob([bytes], { type })); held.add(url); return url; },
+    clear() { for (const url of held) URL.revokeObjectURL(url); held.clear(); },
+  };
   const startOver = () => {
+    pictures.clear();
     show();
     stage.replaceChildren(...present(FORMS[tab]()));
     ctx.scrollTo(0);
@@ -212,71 +207,15 @@ export async function mount(root, ctx) {
     });
     return zone;
   }
-  // An optional extra file beside the main one: a dashed button until one is chosen, then its name and Remove.
-  function extraFile(label, accept, hint) {
-    let file = null;
-    const input = el("input", { type: "file", accept, hidden: true, "aria-label": label });
-    const node = el("div", { class: "import-extra" });
-    const render = () => node.replaceChildren(...present(input, file
-      ? [el("span", { class: "import-extra-name" }, el("strong", {}, label), el("span", { class: "g-mono" }, file.name || "chosen file")),
-        ui.button("Remove", () => { file = null; render(); }, { kind: "linklike", size: "small" })]
-      : [ui.button(label + " (optional)", () => input.click(), { kind: "dashed", size: "small" }),
-        hint ? el("span", { class: "g-muted" }, hint) : null]));
-    input.addEventListener("change", () => { file = (input.files && input.files[0]) || null; input.value = ""; render(); });
-    render();
-    return { node, get file() { return file; } };
-  }
   const check = (label) => {
     const input = el("input", { type: "checkbox" });
     return { input, node: el("label", { class: "import-check" }, input, label) };
   };
 
   // -- one form per kind -------------------------------------------------------------------------------------
-  function cardForm() {
-    const limit = capabilities.imports && capabilities.imports.card && capabilities.imports.card.max_bytes;
-    async function found(file) {
-      const bytes = await bytesOf(file);
-      if (limit && bytes.length > limit) {
-        throw Object.assign(new Error((file.name || "The card") + " is larger than a card may be (" + sizeOf(limit) + ")"), { reason: "too_large" });
-      }
-      const read = cardFacts(bytes);
-      const portrait = extraFile("Add a portrait", PORTRAIT_ACCEPT, "Without it the card's pictures are reported missing.");
-      const lorebook = extraFile("Add a lorebook file", CARD_ACCEPT, "A separate V3 lorebook to import with the card.");
-      const scenario = check("Import as a scenario");
-      async function preview() {
-        const args = { card: base64(bytes), origin: file.name, as_scenario: scenario.input.checked };
-        if (portrait.file) args.portrait = base64(await bytesOf(portrait.file));
-        if (lorebook.file) args.lorebook = base64(await bytesOf(lorebook.file));
-        const proposal = await ctx.api("imports.card_preview", args);
-        const r = proposal.report;
-        const name = read.name || r.source;
-        show(review(proposal, {
-          title: r.status === "new" ? name + " becomes a new " + r.kind : name + ": " + r.kind + ", " + r.status,
-          summary: facts([["Status", r.status], ["Destination", r.source], ["Format", CARD_FORMATS[r.format] || r.format], ["Becomes", r.kind]]),
-          notes: present(rows("Not carried over", r.losses), rows("Collisions", r.collisions),
-            r.suggestions ? el("details", { class: "import-rows" }, el("summary", {}, "Name suggestions (shown, never linked)"),
-              facts(Object.entries(r.suggestions))) : null),
-        }));
-      }
-      show();
-      stage.replaceChildren(el("div", { class: "g-stack" },
-        ui.card({ tag: "section", label: "What was found" },
-          ui.eyebrow(read.readable ? (CARD_FORMATS[read.spec] || "A JSON document") : "Not read here", { accent: true }),
-          el("h2", { class: "import-found-name" }, read.name || file.name || "Card"),
-          el("div", { class: "import-path" }, file.name || ""),
-          facts([["Format", read.readable ? (CARD_FORMATS[read.spec] || read.spec || "It names no format: the preview says whether it can be imported")
-            : "This is not a JSON document: the preview says whether it can be imported"], ["Size", sizeOf(bytes.length)]]),
-          portrait.node, lorebook.node,
-          el("div", {}, ui.button("Use a different file", startOver, { kind: "linklike" }))),
-        el("div", { class: "import-next" }, scenario.node, el("span", { class: "import-next-end" },
-          el("span", { class: "g-muted" }, "Nothing is written until you approve the preview."),
-          ui.button("Preview import", () => ctx.act(preview), { kind: "primary" })))));
-      const go = [...stage.querySelectorAll("button")].find((node) => node.textContent === "Preview import");
-      if (go) go.focus();
-    }
-    return [dropZone({ title: "Drop a card here", label: "Card file", accept: CARD_ACCEPT, onfile: found,
-      hint: "A Character Card V3 JSON, a scenario card or a V3 lorebook. Nothing is written until you approve the preview." })];
-  }
+  // the card form is its own module (card.js): it shares this page's pieces
+  const cardFormOf = () => cardForm({ ctx, ui, el, capabilities, stage, show, review, facts, rows, present, dropZone, startOver,
+    bytesOf, base64, sizeOf, pictures });
 
   function historyForm() {
     async function scanIt(file) {
@@ -421,7 +360,7 @@ export async function mount(root, ctx) {
       next("Every write is previewed first, file by file.", "Find updates", candidates))];
   }
 
-  const FORMS = { card: cardForm, history: historyForm, v1: v1Form, changeset: changesetForm, rebase: rebaseForm };
+  const FORMS = { card: cardFormOf, history: historyForm, v1: v1Form, changeset: changesetForm, rebase: rebaseForm };
 
   const kinds = el("nav", { class: "import-kinds", "aria-label": "What to import or review" }, usable.map(([key, label, about]) =>
     el("a", { class: "import-kind", href: ctx.href("import", [], { tab: key }), "aria-current": key === tab ? "page" : null },
@@ -432,4 +371,5 @@ export async function mount(root, ctx) {
     capabilities.unavailable && capabilities.unavailable.length ? el("details", { class: "import-rows import-later" },
       el("summary", {}, "What this app cannot import yet"),
       el("ul", {}, capabilities.unavailable.map((row) => el("li", {}, row.detail, el("span", { class: "g-muted" }, " · waits on " + row.blocked_by))))) : null));
+  return () => pictures.clear();
 }

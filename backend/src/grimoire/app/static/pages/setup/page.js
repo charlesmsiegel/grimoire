@@ -1,9 +1,10 @@
 // Library setup (108): the first-run workflow, in four steps. Before a library is open, step 1 makes one, or
 // opens one, at a place the person types; the app refuses any place inside, around or beside a V1 library before
 // anything is written. Once one is open, step 1 says which library it is and how to open it next time, and the
-// other steps lead to a first chat with the library's own operations: add a first card (the import's reviewed
-// write), name who you play (a character of your own), and begin. A step whose operations this app does not
-// serve is shown as a link to the page that does it. Every value shown is only ever set as text.
+// other steps lead to a first chat with the library's own operations: add a first card (a PNG card or a card JSON,
+// through the import's reviewed write), name who you play (a character of your own), and begin. A step whose
+// operations this app does not serve is shown as a link to the page that does it. Every value shown is only ever
+// set as text.
 
 import { kindOf, shortlist, sourceLabel, unpinned } from "../start/page.js";
 
@@ -261,7 +262,7 @@ async function firstCard(view) {
   const choose = (ref) => { kept.card.set(ref); go("persona"); };
   const imports = ctx.has("imports.card_preview") && ctx.has("imports.proposal_apply");
   body.append(intro(ctx, "Who do you want to meet first?", imports
-    ? "Add a character card: a Character Card V3 JSON file. Every file it would write is shown before anything is written."
+    ? "Add a character card: a PNG card with its data embedded, or a card JSON file. Every file it would write is shown before anything is written."
     : "Pick a card this library already has, or start from a premise."));
 
   if (found.cards.length) {
@@ -284,7 +285,7 @@ async function firstCard(view) {
   else if (ctx.registered("import")) body.append(elsewhere(view, "This app adds a card on its Import page.", "import", "Open Import"));
 
   function dropZone() {
-    const input = el("input", { type: "file", accept: ".json,application/json", hidden: true, "aria-label": "Card file" });
+    const input = el("input", { type: "file", accept: ".png,image/png,.json,application/json", hidden: true, "aria-label": "Card file" });
     input.addEventListener("change", () => { const file = input.files[0]; if (file) ctx.act(() => preview(file)); });
     const drop = box(ui, "setup-drop", { kind: "dashed" }, el("span", { class: "setup-drop-title" }, "Drop a card here"),
       ui.actions(ui.button("Choose a file", () => input.click())), input,

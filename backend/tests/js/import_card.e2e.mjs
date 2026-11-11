@@ -1,8 +1,9 @@
 // The Import page's card flow and every state of its review, in fakedom against a real app server: the kinds
-// across the top, a card chosen or dropped on the drop zone, what was found, the preview's file list and the
-// selected file, then Reject, a proposal the server no longer holds, an approval gone stale, and a file that is
-// no card. Run by test_app_imports.py, which serves a synthetic library and passes GRIMOIRE_APP, GRIMOIRE_TOKEN
-// and GRIMOIRE_CARD (a file holding a synthetic Character Card V3).
+// across the top, a card chosen or dropped on the drop zone, what was found (its lorebooks, and for a PNG card its
+// own picture), the preview's file list and the selected file, then Reject, a proposal the server no longer holds,
+// an approval gone stale, and files that are no card. Run by test_app_imports.py, which serves a synthetic library
+// and passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CARD (a file holding a synthetic Character Card V3),
+// GRIMOIRE_CARD_PNG (the same card as a synthetic PNG card) and GRIMOIRE_PNG (a synthetic picture with no card).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { register } from "node:module";
@@ -24,6 +25,13 @@ const base = process.env.GRIMOIRE_APP;
 
 function fileOf(name, bytes) {
   return { name, size: bytes.length, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) };
+}
+
+// The value shown beside a label in a list of facts.
+function fact(root, label) {
+  const term = root.querySelectorAll("dt").find((node) => node.textContent === label);
+  const siblings = term.parentNode.childNodes;
+  return siblings[siblings.indexOf(term) + 1].textContent;
 }
 
 // An op called beside the page, as another tab or device would.
@@ -61,8 +69,8 @@ test("a card is found, previewed and decided, and every review state says what h
     .map((node) => node.querySelector("span").textContent), ["Character card"]);
   const zone = () => main.querySelector("div.import-drop");
   const chooser = () => zone().querySelector("input");
-  assert.equal(chooser().getAttribute("accept"), ".json,application/json", "only the formats the app reads");
-  assert.ok(!main.textContent.includes("PNG card") && !main.textContent.includes("folder of them"), "nothing the app cannot import is offered");
+  assert.equal(chooser().getAttribute("accept"), ".png,image/png,.json,application/json", "only the formats the app reads");
+  assert.ok(zone().textContent.includes("A PNG card with its data embedded"), "the drop zone says what it takes");
   assert.ok(byText(zone(), "button", "Choose a file").length);
   assert.equal(main.querySelector("section.import-review"), null);
 
@@ -90,15 +98,56 @@ test("a card is found, previewed and decided, and every review state says what h
   assert.equal(name.textContent, "Mara Vell");
   const found = main.querySelectorAll("section").find((node) => node.getAttribute("aria-label") === "What was found");
   assert.ok(found.textContent.includes("mara.json") && found.textContent.includes("Character Card V3"));
-  assert.ok(byText(found, "button", "Add a portrait (optional)").length && byText(found, "button", "Add a lorebook file (optional)").length);
+  assert.ok(byText(found, "div.g-eyebrow", "JSON document").length);
+  assert.ok(byText(found, "button", "Add a portrait (optional)").length, "a JSON card has no picture of its own");
+  assert.equal(found.querySelector("img"), null);
   assert.ok(byText(main, "label", "Import as a scenario").length);
   assert.equal(zone(), null, "the drop zone gives way to what was found");
 
-  // the review: a summary, each file with what it does and its size, the selected file's text, and the digest
+  // the lorebook the card embeds is its own item in the Lorebooks list: named, counted, and removable
+  const lorebooks = () => main.querySelectorAll("section").find((node) => node.getAttribute("aria-label") === "Lorebooks");
+  const books = () => lorebooks().querySelectorAll("li.import-book");
+  assert.equal(books().length, 1);
+  assert.ok(books()[0].textContent.includes("Harbor lore") && books()[0].textContent.includes("2 entries"));
+  assert.equal(books()[0].querySelector("span.g-pill").textContent, "embedded in the card");
+  assert.ok(lorebooks().textContent.includes("1 attached"));
+  assert.ok(byText(lorebooks(), "button", "Add a lorebook file").length);
+  byText(books()[0], "button", "Remove")[0].click();
+  assert.equal(books().length, 0);
+  assert.ok(lorebooks().textContent.includes("No lorebook attached. The card imports on its own."));
   let review = await preview();
+  assert.ok(review.querySelectorAll("button.import-file").length > 1);
+  assert.ok(!review.querySelectorAll("button.import-file").some((node) => node.textContent.includes("/lorebook/")),
+    "a card previewed without its lorebook writes no lorebook");
+  assert.equal(fact(review, "Lorebooks"), "None");
+  byText(review, "button", "Reject")[0].click();
+  await outcome("Rejected: nothing was written");
+  await again();
+
+  // removed by mistake, it can be put back; a separate lorebook file is listed beside it and can be removed too
+  choose(fileOf("mara.json", card));
+  await until(() => main.querySelector("h2.import-found-name"), 15000, "what was found again");
+  byText(books()[0], "button", "Remove")[0].click();
+  byText(lorebooks(), "button", "Put back the card's own lorebook")[0].click();
+  assert.equal(books().length, 1);
+  const bookChooser = lorebooks().querySelectorAll("input").find((node) => node.getAttribute("aria-label") === "Lorebook file");
+  const gazetteer = new TextEncoder().encode(JSON.stringify({ spec: "lorebook_v3", data: { name: "Synthetic gazetteer", entries: [] } }));
+  bookChooser.files = [fileOf("gazetteer.json", gazetteer)];
+  bookChooser.dispatchEvent({ type: "change" });
+  await until(() => books().length === 2, 15000, "the lorebook file listed");
+  assert.ok(books()[1].textContent.includes("gazetteer.json") && books()[1].textContent.includes("from a file"));
+  assert.ok(!byText(lorebooks(), "button", "Add a lorebook file").length, "one separate lorebook file at a time");
+  byText(books()[1], "button", "Remove")[0].click();
+  assert.equal(books().length, 1);
+
+  // the review: a summary, each file with what it does and its size, the selected file's text, and the digest
+  review = await preview();
   assert.equal(state(), "Review before anything is written");
   assert.equal(review.querySelector("h2").textContent, "Mara Vell becomes a new character");
   assert.ok(review.querySelectorAll("dt").find((node) => node.textContent === "Destination"));
+  assert.equal(fact(review, "Lorebooks"),
+    "Harbor lore (embedded in the card)");
+  assert.ok(review.querySelectorAll("button.import-file").some((node) => node.textContent.includes("/lorebook/")));
   assert.ok(!review.textContent.includes("[object"));
   let files = review.querySelectorAll("button.import-file");
   assert.ok(files.length > 1);
@@ -145,14 +194,46 @@ test("a card is found, previewed and decided, and every review state says what h
   assert.ok(byText(body, "div", "Nothing was written; preview it again.").length, "the refusal is said with its reason");
   await again();
 
-  // a file that is no card: said plainly when it is read, and refused by the preview with nothing proposed
-  choose(fileOf("notes.json", new TextEncoder().encode("not a card")));
-  await until(() => main.querySelector("h2.import-found-name"), 15000, "the file read");
-  assert.ok(main.textContent.includes("This is not a JSON document"));
-  const alerts = () => body.querySelectorAll("div").filter((node) => node.getAttribute("role") === "alert" && node.textContent.length).length;
-  const before = alerts();
-  byText(main, "button", "Preview import").find((node) => !node.disabled).click();
-  await until(() => alerts() > before, 15000, "the refusal");
-  assert.equal(main.querySelector("section.import-review"), null, "a refused preview proposes nothing");
-  assert.ok(byText(main, "button", "Use a different file").length);
+  // a PNG card: the card is read out of the picture, the picture is shown from the dropped file itself (a blob:
+  // URL in an img element) and is the portrait, and the embedded lorebook is listed as for a JSON card
+  const png = new Uint8Array(readFileSync(process.env.GRIMOIRE_CARD_PNG));
+  zone().dispatchEvent({ type: "drop", preventDefault() {}, dataTransfer: { files: [fileOf("mara.png", png)] } });
+  await until(() => main.querySelector("h2.import-found-name"), 15000, "the PNG card read");
+  const pictured = main.querySelectorAll("section").find((node) => node.getAttribute("aria-label") === "What was found");
+  assert.equal(pictured.querySelector("h2").textContent, "Mara Vell");
+  assert.ok(byText(pictured, "div.g-eyebrow", "PNG card with its data embedded").length);
+  const picture = pictured.querySelector("img.import-portrait-img");
+  assert.ok(picture.getAttribute("src").startsWith("blob:"), "the preview is a blob: URL made from the dropped file");
+  assert.equal(picture.getAttribute("style"), null, "no inline style");
+  assert.ok(picture.getAttribute("alt").includes("mara.png"));
+  assert.ok(pictured.textContent.includes("Portrait: the PNG itself"));
+  assert.ok(!byText(pictured, "button", "Add a portrait").length, "the PNG is the portrait");
+  assert.ok(books()[0].textContent.includes("Harbor lore") && books()[0].textContent.includes("embedded in the card"));
+  review = await preview();
+  assert.equal(fact(review, "Portrait"), "The PNG itself");
+  const blob = review.querySelectorAll("button.import-file").find((node) => node.textContent.includes("assets/blobs/"));
+  assert.ok(blob, "the picture is one of the files the approval would write");
+  assert.equal(blob.querySelector("span.import-file-meta").textContent, "New file" + png.length + " bytes", "the whole PNG, byte for byte");
+  byText(review, "button", "Reject")[0].click();
+  await outcome("Rejected: nothing was written");
+  await again();
+
+  // files that are no card are said plainly when they are read: no preview is offered and nothing is proposed
+  const held = proposals.length;
+  for (const [file, saying] of [
+    [fileOf("picture.png", new Uint8Array(readFileSync(process.env.GRIMOIRE_PNG))), "This picture holds no character card"],
+    [fileOf("cut.png", png.subarray(0, png.length - 7)), "This PNG is damaged or incomplete"],
+    [fileOf("notes.json", new TextEncoder().encode("not a card")), "This file is not a JSON document."],
+    [fileOf("other.json", new TextEncoder().encode(JSON.stringify({ hello: "world" }))), "This is not a card format this app reads."],
+  ]) {
+    choose(file);
+    const refusal = await until(() => main.querySelector("p.import-refusal"), 15000, "the file read: " + file.name);
+    assert.ok(refusal.textContent.startsWith(saying), refusal.textContent);
+    assert.equal(main.querySelector("h2.import-found-name").textContent, file.name);
+    assert.ok(!byText(main, "button", "Preview import").length, "a file that is no card offers no preview");
+    assert.equal(main.querySelector("section.import-review"), null);
+    byText(main, "button", "Use a different file")[0].click();
+    await until(() => zone(), 15000, "the drop zone again");
+  }
+  assert.equal(proposals.length, held, "nothing was proposed for them");
 });

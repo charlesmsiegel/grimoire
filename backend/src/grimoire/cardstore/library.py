@@ -15,6 +15,7 @@ identity, and nothing it says is ever written as an event, evidence or belief.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import json
 import re
@@ -24,8 +25,8 @@ from datetime import datetime, timezone
 
 from grimoire.cards import (
     CHARACTER, IMPORT_ID, IMPORT_KIND, IMPORT_SCHEMA, LOREBOOK, LOREBOOK_SCHEMA, SCENARIO, SCENARIO_SCHEMA,
-    CardError, CharacterCard, LorebookCard, Loss, ParsedCard, Piece, ScenarioCard, Suggestions,
-    character_payload, lorebook_payload, mention_texts, parse_card, parse_lorebook_document, pieces,
+    CardError, CharacterCard, LorebookCard, Loss, ParsedCard, Piece, ScenarioCard,
+    Suggestions, character_payload, lorebook_payload, mention_texts, parse_card, parse_lorebook_document, pieces,
     key_path, scenario_payload, slugify, suggest_links,
 )
 from grimoire.cards.art import ArtPiece, asset_path, card_art
@@ -43,9 +44,12 @@ from grimoire.store.jsonfmt import JsonError, is_imprecise, parse_strict, render
 from grimoire.store.layout import definition_parts, manifest_parts
 
 from .art import PORTRAIT_SLOT, ArtSlot, recorded_art, stage_art
+from .png import MAX_PNG_BYTES, PNG_SIGNATURE, read_png_card
 
 #: the largest card or separate lorebook file this slice reads
 MAX_CARD_BYTES = 2 * 1024 * 1024
+#: the largest PNG card read: the picture is the card's portrait, so 038's cap on one picture
+MAX_CARD_PNG_BYTES = MAX_PNG_BYTES
 #: an origin label (a file name, say) is short display text
 MAX_ORIGIN = 512
 MAX_LOSSES_PER_FIELD = 20
@@ -54,7 +58,7 @@ MAX_LOSSES = 200
 CARD_NAMESPACE = "card"
 _REVISION = re.compile(r"^r([1-9][0-9]{0,8})$")
 _MAX_PROBE = 10_000
-_PNG = b"\x89PNG\r\n\x1a\n"
+_PNG = PNG_SIGNATURE
 _ZIP = (b"PK\x03\x04", b"PK\x05\x06")
 
 
@@ -141,7 +145,7 @@ def _decode(data: object, label: str) -> Mapping[str, object]:
     if len(data) > MAX_CARD_BYTES:
         raise CardError(f"{label} is larger than {MAX_CARD_BYTES} bytes", "too_large")
     if data.startswith(_PNG):
-        raise CardError(f"{label}: PNG cards are a later milestone", "unsupported_format", "png")
+        raise CardError(f"{label} is a picture, not a JSON document", "unsupported_format", "png")
     if data.startswith(_ZIP):
         raise CardError(f"{label}: CHARX archives are a later milestone", "unsupported_format", "charx")
     try:
@@ -153,6 +157,38 @@ def _decode(data: object, label: str) -> Mapping[str, object]:
     if not isinstance(document, Mapping):
         raise CardError(f"{label} must be a JSON object", "invalid_card", "")
     return document
+
+
+@dataclass(frozen=True)
+class Unwrapped:
+    """A card file as given: the card document's own bytes, and the PNG card that carried them (which is
+    also the card's picture) with the text chunk they were under, when it came as one."""
+
+    card: bytes
+    png: bytes | None = None
+    keyword: str | None = None
+
+
+def unwrap(data: object) -> Unwrapped:
+    """The card document of a card file: a PNG card's embedded document (``grimoire.cardstore.png``, which
+    checks the whole file), else the bytes themselves. Raises ``CardError``."""
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        data = bytes(data)
+        if data.startswith(_PNG):
+            found = read_png_card(data, max_card_bytes=MAX_CARD_BYTES)
+            return Unwrapped(found.data, data, found.keyword)
+    return Unwrapped(data)  # type: ignore[arg-type]
+
+
+def book_path(card: ParsedCard) -> str:
+    """Where a card's own embedded lorebook sits in its document."""
+    if isinstance(card, ScenarioCard):
+        return card.paths.get("lorebook", "lorebook")
+    return "data.character_book" if isinstance(card, CharacterCard) else "data"
+
+
+def _under(path: str, prefix: str) -> bool:
+    return path == prefix or path.startswith((prefix + ".", prefix + "["))
 
 
 def _is_strict_json(data: bytes) -> bool:
@@ -367,6 +403,10 @@ class _Plan:
     origin: str | None
     as_scenario: bool
     replace_edits: bool = False
+    #: ``False`` when the person left the card's embedded lorebook out of this import
+    embedded_lorebook: bool = True
+    #: the PNG card the document came in: its text chunk keyword, sha256 and size
+    container: dict[str, object] | None = None
     losses: list[Loss] = field(default_factory=list)
     #: the slots the card and its portrait fill (Sprint 038)
     art: tuple[ArtPiece, ...] = ()
@@ -388,17 +428,33 @@ class CardImporter:
     # -- planning ----------------------------------------------------------------------------
     def plan(self, data: bytes, *, origin: str | None = None, target: str | None = None,
              portrait: bytes | None = None, lorebook: bytes | None = None,
-             as_scenario: bool = False, replace_edits: bool = False) -> CardImport:
+             as_scenario: bool = False, replace_edits: bool = False,
+             embedded_lorebook: bool = True) -> CardImport:
         """Stage one import; raises ``CardError`` (nothing staged) or ``ImportDenied``.
 
-        A head or the portrait slot changed since the last import (a hand edit) is left as it is and
-        reported as a ``hand_edited`` collision; ``replace_edits=True`` replaces it with the card's.
+        ``data`` is a card document, or a PNG card: its embedded document is the card and, unless a
+        ``portrait`` is given, the PNG itself is the portrait. A head or the portrait slot changed since
+        the last import (a hand edit) is left as it is and reported as a ``hand_edited`` collision;
+        ``replace_edits=True`` replaces it with the card's. ``embedded_lorebook=False`` imports a
+        character or scenario without the lorebook its card embeds.
         """
-        for label, flag in (("as_scenario", as_scenario), ("replace_edits", replace_edits)):
+        for label, flag in (("as_scenario", as_scenario), ("replace_edits", replace_edits),
+                            ("embedded_lorebook", embedded_lorebook)):
             if type(flag) is not bool:
                 raise CardError(f"{label} is true or false", "invalid_options", label)
+        found = unwrap(data)
+        data = found.card
         document = _decode(data, "card")
         card = parse_card(document, as_scenario=as_scenario)
+        left_out = None
+        if not embedded_lorebook:
+            if isinstance(card, LorebookCard):
+                raise CardError("a lorebook card is its lorebook", "invalid_options", "embedded_lorebook")
+            if card.lorebook is not None:
+                left_out = book_path(card)
+                card = dataclasses.replace(card, lorebook=None)
+        if found.png is not None and portrait is None and not isinstance(card, LorebookCard):
+            portrait = found.png  # the PNG card is its own picture
         separate = None
         lorebook_bytes = None
         if lorebook is not None:
@@ -413,8 +469,13 @@ class CardImporter:
                 raise TypeError("portrait must be bytes")
             portrait = bytes(portrait)
         plan = _Plan(card, separate, bytes(data), lorebook_bytes, portrait, _origin(origin), as_scenario,
-                     replace_edits)
+                     replace_edits, embedded_lorebook=left_out is None)
+        if found.png is not None:
+            plan.container = {"format": "png", "keyword": found.keyword, "sha256": _sha(found.png),
+                              "size": len(found.png)}
         losses = list(card.losses) + _rounded(card.losses, plan.original, "")
+        if left_out is not None:  # nothing of a lorebook that is not imported is a loss of this import
+            losses = [loss for loss in losses if not _under(loss.path, left_out)]
         if separate is not None:
             losses += [Loss(f"lorebook_file.{loss.path}", loss.reason) for loss in separate.losses]
             losses += _rounded(separate.losses, lorebook_bytes, "lorebook_file.")
@@ -427,6 +488,8 @@ class CardImporter:
         key = {"card": _sha(plan.original), "format": plan.card.format, "as_scenario": plan.as_scenario,
                "lorebook": _sha(plan.lorebook_bytes) if plan.lorebook_bytes is not None else None,
                "portrait": _sha(plan.portrait) if plan.portrait is not None else None}
+        if not plan.embedded_lorebook:  # only when chosen, so every earlier import keeps its digest
+            key["embedded_lorebook"] = False
         return _sha(json.dumps(key, sort_keys=True).encode("utf-8"))
 
     def _import_record(self, source_id: str) -> StoredDefinition | None:
@@ -734,6 +797,10 @@ class CardImporter:
             "records": [str(ref) for ref in records],
             "losses": [{"path": loss.path, "reason": loss.reason} for loss in plan.losses],
         }
+        if not plan.embedded_lorebook:
+            payload["options"]["embedded_lorebook"] = False  # type: ignore[index]
+        if plan.container is not None:
+            payload["container"] = dict(plan.container)
         if plan.origin is not None:
             payload["origin"] = plan.origin
         if plan.lorebook_bytes is not None:
