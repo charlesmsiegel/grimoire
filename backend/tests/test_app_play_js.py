@@ -43,7 +43,7 @@ def _run(device, **env):
     try:
         host, port = app.address
         result = subprocess.run(
-            [NODE, "--test", str(TESTS / "play.e2e.mjs")], capture_output=True, text=True, timeout=240,
+            [NODE, "--test", "--test-reporter=tap", str(TESTS / "play.e2e.mjs")], capture_output=True, text=True, timeout=240,
             check=False, env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token, **env})
     finally:
         app.close()
