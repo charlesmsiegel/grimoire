@@ -46,6 +46,8 @@ const tileOf = (main, ref) => main.querySelectorAll("button.start-pick").find((n
 const chipOf = (main, ref) => main.querySelectorAll("button.g-chip").find((node) => node.getAttribute("data-ref") === ref);
 const openingsOf = (main) => main.querySelectorAll("button.start-opening");
 const pressed = (node) => node.getAttribute("aria-pressed") === "true";
+// What Start a chat says a card's history set up again, or "" when it says nothing.
+const memoOf = (main) => { const node = main.querySelector("div.start-memo"); return node && !node.hidden ? node.textContent : ""; };
 
 function type(input, text) {
   input.value = text;
@@ -152,6 +154,7 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   assert.equal(openingsOf(main).filter(pressed).length, 1, "the default opening is chosen");
   assert.ok(openingsOf(main).some((node) => node.textContent.includes("You came back. I didn't think you would.")));
   assert.ok(byText(summary, "div", "You meet Mara Vell").length);
+  assert.ok(!main.querySelectorAll("button.g-chip").some(pressed) && memoOf(main) === "", "a card never played sets nobody up");
   byText(main, "button", "Start chat").at(-1).click();
   await until(() => byText(body, "div", "Choose who you play first.").length, 15000, "the persona refusal");
   assert.equal(window.location.hash, "#/start", "no chat is started without a persona");
@@ -406,10 +409,43 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   const again = await until(() => byText(main, "div", "Or continue one already started from this pick").at(-1), 15000, "the chats to continue");
   assert.ok(main.querySelector("aside.start-summary").contains(again));
   assert.ok(main.querySelectorAll("a.start-related-row").some((node) => node.getAttribute("href") === chatHash));
-  // the linked character is the one picked, the persona is still chosen, and the ones played last are listed first
+  // the linked character is the one picked, who was played with her last time is set up again and said so, and
+  // the ones played last are listed first
+  const MEMO = "Last time with Mara Vell you played Anya Rook, so that is set up again.";
   assert.ok(pressed(tileOf(main, env.GRIMOIRE_CHARACTER)) && pressed(chipOf(main, env.GRIMOIRE_PERSONA)));
+  assert.equal(memoOf(main), MEMO);
+  assert.ok(main.querySelector("aside.start-summary").contains(main.querySelector("div.start-memo")));
+  assert.ok(byText(main.querySelector("aside.start-summary"), "div", "Anya Rook meets Mara Vell").length);
   assert.equal(main.querySelectorAll("button.start-pick")[0].getAttribute("data-ref"), env.GRIMOIRE_CHARACTER, "the character played last is first");
   assert.equal(main.querySelectorAll("button.g-chip")[0].getAttribute("data-ref"), env.GRIMOIRE_PERSONA, "the persona played last is first");
+  // the same from the plain page: nobody is chosen until Mara is picked, then Anya is, with the memo
+  window.location.hash = "#/start";
+  await until(() => tileOf(main, env.GRIMOIRE_CHARACTER) && !pressed(tileOf(main, env.GRIMOIRE_CHARACTER)), 15000, "Start a chat, nothing picked");
+  assert.ok(!main.querySelectorAll("button.g-chip").some(pressed) && memoOf(main) === "", "the persona sent with the last start is no draft");
+  tileOf(main, env.GRIMOIRE_CHARACTER).click();
+  await until(() => memoOf(main) === MEMO, 15000, "the memo for Mara");
+  assert.ok(pressed(chipOf(main, env.GRIMOIRE_PERSONA)) && main.querySelectorAll("button.g-chip").filter(pressed).length === 1);
+  // a scenario never played takes back what Mara's history set up; picking Mara again sets it up again
+  kindCard(main, "scenario").click();
+  assert.ok(!main.querySelectorAll("button.g-chip").some(pressed) && memoOf(main) === "");
+  main.querySelectorAll("button.start-pick")[0].click();
+  await until(() => openingsOf(main).length || byText(main, "p", "Nothing to open with: you speak first.").length, 15000, "the scenario's options");
+  assert.ok(!main.querySelectorAll("button.g-chip").some(pressed) && memoOf(main) === "", "the scenario has no history");
+  kindCard(main, "character").click();
+  tileOf(main, env.GRIMOIRE_CHARACTER).click();
+  await until(() => memoOf(main) === MEMO && pressed(chipOf(main, env.GRIMOIRE_PERSONA)), 15000, "the memo for Mara again");
+  // another persona is one click, and the memo goes; choosing Anya back is the person's own choice, with no memo
+  chipOf(main, env.GRIMOIRE_NEWCOMER).click();
+  assert.ok(pressed(chipOf(main, env.GRIMOIRE_NEWCOMER)) && !pressed(chipOf(main, env.GRIMOIRE_PERSONA)));
+  assert.equal(memoOf(main), "");
+  assert.ok(byText(main.querySelector("aside.start-summary"), "div", "Tamsin Hale meets Mara Vell").length);
+  // the person's own unsent choice wins over the card's history, on this visit and the next
+  tileOf(main, env.GRIMOIRE_CHARACTER).click();
+  await until(() => openingsOf(main).length, 15000, "Mara's openings again");
+  assert.ok(pressed(chipOf(main, env.GRIMOIRE_NEWCOMER)) && memoOf(main) === "");
+  window.location.hash = "#/start?source=" + encodeURIComponent(env.GRIMOIRE_CHARACTER);
+  await until(() => byText(main, "div", "Or continue one already started from this pick").length, 15000, "Start a chat, with the draft");
+  assert.ok(pressed(chipOf(main, env.GRIMOIRE_NEWCOMER)) && !pressed(chipOf(main, env.GRIMOIRE_PERSONA)) && memoOf(main) === "");
   // a source the library cannot bind is still named by its exact ref, and its refusal is shown
   window.location.hash = "#/start?source=" + encodeURIComponent("card:nobody/character/nobody");
   const gone = await until(() => tileOf(main, "card:nobody/character/nobody"), 15000, "the unknown source");

@@ -1,6 +1,8 @@
 // Start a chat (Sprint 111): pick a character, a character with a lorebook, a scenario or a premise, who you
 // play, and an opening, then start a new world-less chat, or continue one already started from the same pick.
 // #/start?source=<SourceRef> starts from that character or scenario. The persona and an unsent premise are drafts.
+// A card played before sets up the persona (and, with a lorebook, the lorebook) of its newest chat again, and says
+// so, unless the person has chosen a persona of their own: a persona draft, or a chip clicked in this visit, wins.
 // Every name, opening and premise comes from the library and is only ever set as text.
 
 const KINDS = [
@@ -65,6 +67,15 @@ export function shortlist(items, query, chosen) {
   return { matches, shown };
 }
 
+// What a card's history sets up again, from the `last` of play.options: the persona when the library can still
+// offer it, and the first remembered lorebook that can be chosen and is not the card's own (which is the default).
+export function remembered(last, personas, lorebooks, own) {
+  const named = (items, ref) => items.some((item) => item.ref === ref);
+  if (!last || !last.persona || !named(personas, last.persona.ref)) return { persona: "", lorebook: "" };
+  const lorebook = (last.lorebooks || []).find((item) => named(lorebooks, item.ref));
+  return { persona: last.persona.ref, lorebook: lorebook && lorebook.ref !== unpinned(own) ? lorebook.ref : "" };
+}
+
 function chatTitle(chat) {
   return chat.label || (chat.launch && chat.launch.name)
     || (chat.launch && chat.launch.kind === "premise" ? "Premise chat" : chat.chat);
@@ -92,6 +103,11 @@ export async function mount(root, ctx) {
     persona: named(personas, personaDraft.get()) ? personaDraft.get() : "",
   };
   const queries = { pick: "", persona: "" };
+  // The person's own choices win over a card's history: a persona draft (chosen earlier in this tab and not yet
+  // started with) or a chip clicked now, and a lorebook picked now. `memo` is the history on show, if any.
+  const own = { persona: Boolean(form.persona), lorebook: false };
+  let memo = null;
+  let lorebookChoice = null;
   let asked = 0;  // the newest options request: an older answer that arrives late is dropped
   let shown = null;  // the selection whose options are on screen: Start sends only what was seen
 
@@ -115,6 +131,7 @@ export async function mount(root, ctx) {
       onclick: () => {
         if (form.kind === value) return;
         form.kind = value; form.ref = ""; form.lorebook = ""; form.opening = ""; queries.pick = "";
+        own.lorebook = false;
         press(kinds, "data-kind", value);
         drawPick();
       },
@@ -167,11 +184,13 @@ export async function mount(root, ctx) {
         ctx.registered("import") ? ui.buttonLink("Import a card", "import") : null,
         ctx.registered("sources") ? ui.buttonLink("Characters and lore", "sources") : null));
     }
+    lorebookChoice = null;
     if (form.kind === "bundle") {
-      parts.push(ui.choice("Lorebook", [{ value: "", label: "The card's own lorebook" },
+      lorebookChoice = ui.choice("Lorebook", [{ value: "", label: "The card's own lorebook" },
         ...sources.lorebooks.map((item) => ({ value: item.ref, label: item.name }))], {
-        value: form.lorebook, onchange: (value) => { form.lorebook = value; refresh(); },
-      }).node);
+        value: form.lorebook, onchange: (value) => { form.lorebook = value; own.lorebook = true; refresh(); },
+      });
+      parts.push(lorebookChoice.node);
     }
     pickBody.replaceChildren(...parts);
     fill();
@@ -188,7 +207,10 @@ export async function mount(root, ctx) {
     chips.replaceChildren(...some.map((item) => {
       const node = ui.selectable([ui.avatar(item.name, { size: 22, key: item.ref }), el("span", {}, item.name)], {
         chip: true, selected: item.ref === form.persona, title: item.ref,
-        onclick: () => { form.persona = item.ref; personaDraft.set(item.ref); press(chips, "data-ref", item.ref); summarize(); },
+        onclick: () => {
+          form.persona = item.ref; personaDraft.set(item.ref); own.persona = true; memo = null;
+          press(chips, "data-ref", item.ref); summarize();
+        },
       });
       node.setAttribute("data-ref", item.ref);
       node.setAttribute("data-focus-key", "start:persona:" + item.ref);
@@ -209,6 +231,7 @@ export async function mount(root, ctx) {
   // -- the summary -------------------------------------------------------------------------------------------
   const title = el("div", { class: "start-summary-title" });
   const detail = el("div", { class: "g-stack start-detail", "aria-live": "polite" });
+  const memoNote = el("div", { class: "start-memo", "aria-live": "polite", hidden: true });
   const related = el("div", { class: "start-related", hidden: true });
   const label = ui.field("Name", { placeholder: "Optional: how the chat is listed" });
   label.input.setAttribute("maxlength", "200");
@@ -219,6 +242,24 @@ export async function mount(root, ctx) {
     if (form.kind === "premise") title.textContent = who + " in a new premise";
     else if (!form.ref) title.textContent = "Choose what to start from";
     else title.textContent = who + (form.persona ? " meets " : " meet ") + nameOf(pickFrom(form.kind), form.ref);
+    memoNote.hidden = !memo;
+    memoNote.textContent = memo ? "Last time with " + memo.card + " you played " + memo.persona + ", so that is set up again." : "";
+  }
+
+  // Sets up what `options.last` remembers (or, with none, takes back what an earlier pick's history set up),
+  // leaving alone whatever the person chose themselves. True when the lorebook changed, so the pick did too.
+  function recall(options) {
+    const found = remembered(options && form.kind !== "premise" ? options.last : null, personas, sources.lorebooks,
+      options ? options.lorebook : null);
+    if (!own.persona) {
+      if (form.persona !== found.persona) { form.persona = found.persona; drawPersonas(); }
+      memo = found.persona ? { card: nameOf(pickFrom(form.kind), form.ref), persona: nameOf(personas, found.persona) } : null;
+    }
+    const lorebook = form.kind === "bundle" ? found.lorebook : "";
+    if (own.lorebook || form.lorebook === lorebook) return false;
+    form.lorebook = lorebook;
+    if (lorebookChoice) lorebookChoice.select.value = lorebook;
+    return form.kind === "bundle";
   }
 
   function selection() {
@@ -230,6 +271,7 @@ export async function mount(root, ctx) {
   }
 
   async function refresh() {
+    memo = null;  // the memo is about the pick on show: it comes back with that pick's own answer
     summarize();
     const chosen = selection();
     const mine = ++asked;
@@ -237,6 +279,8 @@ export async function mount(root, ctx) {
     related.hidden = true;
     related.replaceChildren();
     if (!chosen) {
+      recall(null);
+      summarize();
       detail.replaceChildren(ui.empty(form.kind === "premise" ? "Write a premise to start from." : "Pick a card to see how it opens."));
       return;
     }
@@ -246,10 +290,14 @@ export async function mount(root, ctx) {
     try { options = await ctx.api("play.options", chosen); }
     catch (error) {
       if (error.reason === "left" || mine !== asked) return;
+      recall(null);
+      summarize();
       detail.replaceChildren(ui.errorBox(error));
       return;
     }
     if (mine !== asked) return;
+    if (recall(options)) { refresh(); return; }  // the remembered lorebook is part of the pick: show that pick
+    summarize();
     const parts = [];
     if (form.kind === "bundle") {
       parts.push(el("p", { class: "g-muted" }, options.lorebook || form.lorebook
@@ -299,6 +347,8 @@ export async function mount(root, ctx) {
     if (form.opening) args.opening = form.opening;
     if (label.value.trim()) args.label = label.value.trim();
     const scene = await ctx.api("play.start", args);
+    // the persona was sent, so it is no longer an unsent choice: next time the card's own history decides
+    personaDraft.clear();
     // only a premise that was sent is done; text typed into it while the start ran stays a draft
     if (chosen.kind === "premise" && premise.value === chosen.premise) premise.clear();
     // 052 wrote the chat but stopped before it finished: the chat page says so and offers Finish starting, as
@@ -315,7 +365,7 @@ export async function mount(root, ctx) {
       step(pickTitle, pickBody),
       step(el("h2", { class: "g-heading" }, "3 · You play"), ...personaParts)),
     el("aside", { class: "g-card start-summary", "aria-label": "New chat" },
-      el("div", { class: "start-summary-head" }, ui.eyebrow("New chat"), title,
+      el("div", { class: "start-summary-head" }, ui.eyebrow("New chat"), title, memoNote,
         el("div", { class: "g-muted start-small" }, "No world needed. Everything is bound at the revision it has now.")),
       detail, label.node, start, related)));
   drawPersonas();

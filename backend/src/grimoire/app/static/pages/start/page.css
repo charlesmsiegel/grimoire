@@ -29,6 +29,7 @@ textarea.start-premise { padding: 12px 14px; border-radius: 10px; font: 17px/1.5
 .start-summary-head { display: flex; flex-direction: column; gap: 4px; }
 .start-summary-title { font: 600 26px/1.15 var(--g-serif); text-wrap: balance; overflow-wrap: anywhere; }
 .start-small { font-size: 13px; }
+.start-memo { font-size: 14px; line-height: 1.4; color: var(--g-accent); overflow-wrap: anywhere; }
 .start-detail > * { margin: 0; }
 .start-label { font-weight: 600; }
 .start-openings { gap: 8px; }
