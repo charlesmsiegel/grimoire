@@ -1,7 +1,7 @@
 /* The shell's design tokens and primitives (108). Pages use the g- classes and the --g- tokens; a page that
    needs its own styles links its own sheet from its folder. Light and dark follow the system unless the
-   person picks one (html[data-theme]). The fonts are named but not shipped: a device that has IBM Plex or
-   Spectral installed shows them, any other falls back to its own sans and serif. */
+   person picks one (html[data-theme]). The three families are the app's own (shell/fonts/, linked from
+   index.html); the system's sans, serif and mono stand in until they load, or where a file is missing. */
 :root {
   color-scheme: light dark;
   --g-fg: #1d1b18; --g-bg: #faf8f4; --g-raised: #f2eee6; --g-card: #fffdf9; --g-muted: #6b655c; --g-line: #ddd6ca;

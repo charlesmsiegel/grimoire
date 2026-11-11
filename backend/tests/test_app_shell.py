@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -177,6 +178,31 @@ def test_static_modules_are_served_as_code_without_the_token(served):
     # the Host check still holds: no DNS-rebound page can read the code either
     response, _ = server.get("/static/shell/shell.js", host="evil.example")
     assert response.status == 403
+
+
+def test_the_apps_own_fonts_are_served_from_this_app_and_from_nowhere_else(served):
+    """The design's three families ship with the shell (static/shell/fonts/): the host page links their sheet,
+    every file the sheet names is there and served as a font, the sheet names no other site, and the licence
+    travels with the files without being served."""
+    server, _opened, _chat = served
+    _, page = server.get("/")
+    assert b'href="/static/shell/fonts/fonts.css"' in page
+    response, sheet = server.get("/static/shell/fonts/fonts.css")
+    assert response.status == 200 and response.getheader("Content-Type") == "text/css; charset=utf-8"
+    text = sheet.decode("utf-8")
+    assert "http" not in text and "//" not in text.replace("*/", ""), "no font is fetched from another site"
+    names = re.findall(r'url\("([^"]+)"\)', text)
+    assert len(names) == len(set(names)) == 18 and all(re.fullmatch(r"[a-z0-9-]+\.woff2", name) for name in names)
+    folder = STATIC / "shell" / "fonts"
+    assert {path.name for path in folder.glob("*.woff2")} == set(names), "every file is named by the sheet, and none is missing"
+    for family in ("IBM Plex Sans", "IBM Plex Mono", "Spectral"):
+        assert f'font-family: "{family}"' in text
+    for name in names:
+        response, data = server.get("/static/shell/fonts/" + name)
+        assert response.status == 200 and response.getheader("Content-Type") == "font/woff2" and data[:4] == b"wOF2", name
+    assert "SIL Open Font License" in (folder / "OFL.txt").read_text(encoding="utf-8")
+    response, _ = server.get("/static/shell/fonts/OFL.txt")
+    assert response.status == 404, "only modules, style sheets, icons and fonts are served"
 
 
 @pytest.mark.parametrize("path", [

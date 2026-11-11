@@ -13,7 +13,8 @@ server.
 ```
 backend/src/grimoire/app/
   static/index.html            the shell's host page (108)
-  static/shell/                the shell (108): shell.js, router.js, ui.js, api.js, drafts.js, shell.css
+  static/shell/                the shell (108): shell.js, router.js, ui.js, api.js, drafts.js, shell.css, and its
+                               fonts (fonts/)
   static/pages/<id>/           one page: page.json and its ES module (and, optionally, its own .css, .svg,
                                .png, .webp or .woff2 files; nothing else under static/ is served)
   adapter.py                   the adapter contract: Adapter, AdapterContext
@@ -120,8 +121,10 @@ a colour that `hue(key)` keeps the same for the same key everywhere.
 Style with the `g-` classes and the `--g-` tokens of `shell.css`: colours `--g-fg`, `--g-bg`, `--g-raised` (the
 rail and strips), `--g-card`, `--g-muted`, `--g-line`, `--g-accent`, `--g-on-accent`, `--g-accent-soft`, `--g-bad`,
 `--g-bad-soft`, `--g-good`, `--g-focus`; type `--g-sans` (the interface), `--g-serif` (story text and titles) and
-`--g-mono` (paths, refs and diffs). The shell switches the colours for dark mode. The fonts are named, not shipped:
-IBM Plex and Spectral show where a device has them, and its own sans and serif otherwise. Layout classes pages
+`--g-mono` (paths, refs and diffs). The shell switches the colours for dark mode. The fonts are the app's own: `static/shell/fonts/` holds IBM Plex Sans, IBM Plex Mono and Spectral as `.woff2`
+files (Latin and Latin Extended, the weights the design uses) with `fonts.css`, linked from `index.html`, and their
+licence (`OFL.txt`). They are served by this app only, never fetched from another site; the system's sans, serif and
+mono stand in until a file loads. Layout classes pages
 share: `g-stack`, `g-row`, `g-columns`, `g-tiles`, `g-rows`, `g-table`, `g-hero-title`, `g-heading`, `g-quote`,
 `g-prose`, `g-muted`, `g-mono`.
 
