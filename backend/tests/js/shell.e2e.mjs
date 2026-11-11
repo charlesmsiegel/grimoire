@@ -224,26 +224,34 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
     return fetchNow(url, options);
   };
   window.location.hash = chatHash;
-  // (Home has an "All chats" link of its own: wait for the chat's, once Home is gone)
-  const allChats = await until(() => !main.querySelector("section.home-hero") && byText(main, "a", "All chats").at(-1), 15000, "the chat, still loading");
-  allChats.focus();
+  // the chat's side panel is there before the scene: its Details tab is where Pause is
+  const details = await until(() => main.querySelectorAll("button").find((node) => node.textContent === "Details"), 15000, "the chat, still loading");
+  assert.ok(!byText(main, "button", "Pause").length, "the scene has not arrived");
+  details.focus();
+  details.click();
   release();
   globalThis.fetch = fetchNow;
   await until(() => byText(main, "button", "Pause").length, 15000, "the scene after a slow load");
   await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.equal(document.activeElement, allChats, "the control chosen during the load keeps focus");
+  assert.equal(document.activeElement, details, "the control chosen during the load keeps focus");
+  // the way back to the list is the crumb over the title
+  assert.ok(body.querySelector("div.g-crumb").querySelectorAll("a").some((node) => node.textContent === "Chats" && node.getAttribute("href") === "#/chats"));
 
   // post it: the post shows in the chat and the draft is cleared
-  const before = main.querySelectorAll("div").filter((node) => node.className === "chat-post").length;
-  await until(() => byText(main, "button", "Pause").length, 15000, "the scene");
+  const posts = () => main.querySelectorAll("div.chat-post").length;
+  const before = posts();
   const seat = byText(main, "button", "Take your seat").at(-1);  // a fresh device seats its player once
   if (seat) {
     seat.click();
     await until(() => !byText(main, "button", "Take your seat").length, 15000, "a seat");
   }
-  byText(main, "button", "Post").at(-1).click();
-  await until(() => main.querySelectorAll("div").filter((node) => node.className === "chat-post").length > before, 30000, "the post");
-  await until(() => !body.querySelectorAll("button").some((node) => node.disabled), 30000, "the answer");
+  const send = byText(main, "button", "Post").at(-1);
+  await until(() => !send.disabled, 15000, "a seat to post from");
+  send.click();
+  await until(() => posts() > before, 30000, "the post");
+  // the answer is a take to keep or pass: until then Post stays off, and nothing else does
+  await until(() => main.querySelector("article.chat-take") && !body.querySelectorAll("button").some((node) => node.disabled && node !== send), 30000, "the answer");
+  assert.ok(send.disabled, "nothing is posted while a take is pending");
   assert.equal(main.querySelector("textarea").value, "");
   assert.equal(window.sessionStorage.getItem("grimoire-draft:chat:composer:" + decodeURIComponent(chatHash.split("/")[2])), null);
 

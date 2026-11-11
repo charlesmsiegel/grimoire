@@ -67,15 +67,16 @@ address is this serve's key: a new one each time, kept only in that browser tab.
 - **Chats** lists every chat, latest first, or the chats of one character or scenario. A world-less card chat and an
   imported V1 chat both appear, each once.
 - **Take your seat** is needed once on each device: who plays which character is kept per device.
-- **Post**, **Answer**, **Keep** and **Pass** play a turn. **Add picture** gives a character of the chat a new
-  avatar, from the phone's camera or files.
+- **Post**, **Ask for a reply**, **Keep this take** and **Pass the turn** play a turn. **Cast and details** in
+  the chat's scene bar opens its side panel: **Add picture** there gives a character of the chat a new avatar,
+  from the phone's camera or files, and **Sync** is under Details.
 - A chat that **forked** (both devices played it offline) waits until you keep one branch. A turn or picture
   in **conflict** (both devices changed it) waits until you keep one version. The other device must be
   reachable for that.
 
 ## Answers from a model
 
-Without a model, everything but **Answer** works. To have the cast answer, give `serve` a model file:
+Without a model, everything but asking for a reply works. To have the cast answer, give `serve` a model file:
 
 ```json
 {"provider_id": "openrouter", "base_url": "https://openrouter.ai/api/v1", "model": "your-model",

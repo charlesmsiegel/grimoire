@@ -1,22 +1,148 @@
-.chat-cast { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 10px; }
-.chat-member { text-align: center; min-width: 72px; font-size: 13px; }
-.chat-face { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 1px solid var(--g-line);
-  display: grid; place-items: center; color: var(--g-muted); margin: 0 auto 4px; }
-.chat-line { margin: 8px 0; }
-.chat-speaker { font-weight: 600; }
-.chat-post { margin: 14px 0 6px; padding-left: 10px; border-left: 3px solid var(--g-accent); }
-.chat-take { border: 1px dashed var(--g-line); border-radius: var(--g-radius); padding: 8px 10px; margin: 8px 0; }
-.chat-picture { display: inline-flex; gap: 6px; align-items: end; flex-wrap: wrap; }
-.chat-picture .g-field { margin: 0; }
-.chat-bar { position: sticky; bottom: 0; padding: 10px 0; background: var(--g-bg); border-top: 1px solid var(--g-line); }
-.chat-bar-row { display: flex; gap: 6px; align-items: end; }
-.chat-bar-row .g-field { flex: 1; margin: 0; }
-.chat-cast { list-style: none; margin: 0; padding: 0; }
-.chat-log { margin: 8px 0 12px; }
-.chat-tools { display: inline-flex; gap: 6px; flex-wrap: wrap; margin-left: 8px; vertical-align: middle; }
-.chat-tools .g-input { width: auto; min-width: 12em; }
-.chat-add { margin: 4px 0; }
-.chat-add .g-field { margin: 6px 0; }
-.chat-repair { display: flex; gap: 4px; flex-wrap: wrap; align-items: baseline; }
-.chat-mode { width: auto; }
-.chat-hints { font-size: 13px; margin-top: 4px; }
+/* One chat (111). The page owns the pane (layout "full"): a column for the story and a 320px side panel, which
+   lies over the story on a window narrower than 1100px. Every class starts with chat-. */
+.chat-page { display: flex; flex-direction: column; min-height: 0; }
+.chat-frame { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr); }
+.chat-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; }
+
+/* -- what holds play up: slim bars over the story ------------------------------------------------------- */
+.chat-hold { flex: none; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 12px;
+  padding: 8px 16px; background: var(--g-accent-soft); border-bottom: 1px solid var(--g-line); font-size: 14px; }
+.chat-hold.chat-bad { background: var(--g-bad-soft); color: var(--g-bad); }
+.chat-outline { border-color: var(--g-accent); background: transparent; color: var(--g-accent); }
+.chat-outline:hover { border-color: var(--g-accent); color: var(--g-fg); }
+
+/* -- the scene bar: who is here, on the chat's own colour --------------------------------------------- */
+.chat-scene { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 16px; overflow: hidden;
+  color: #fff; background: oklch(0.42 0.07 280); }
+.chat-scene[class*="g-hue-"] { background: oklch(0.42 0.07 var(--g-hue)); }
+.chat-chips { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; }
+.chat-chip { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 10px 2px 2px; border-radius: 99px;
+  background: rgb(0 0 0 / .28); font-size: 13px; white-space: nowrap; }
+.chat-chip .g-avatar { border-radius: 99px; box-shadow: 0 0 0 1px rgb(255 255 255 / .5); }
+.chat-scene-button { flex: none; padding: 4px 10px; border: 1px solid rgb(255 255 255 / .6); border-radius: 7px;
+  background: rgb(0 0 0 / .25); color: #fff; font-size: 13px; white-space: nowrap; cursor: pointer; }
+
+/* -- the transcript: never squeezed under 200px; a shorter pane scrolls the column instead -------------- */
+.chat-stage { flex: 1 0 auto; height: 0; min-height: 200px; display: flex; }
+.chat-log { flex: 1; min-width: 0; overflow-y: auto; padding: 28px 28px 12px; }
+.chat-log:focus-visible { outline-offset: -3px; }
+.chat-rows { max-width: 700px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+.chat-row { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 14px; }
+.chat-post { margin-left: -16px; padding: 14px 16px; background: var(--g-accent-soft); border-radius: 12px; }
+.chat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.chat-speaker { font: 600 13px/1.4 var(--g-sans); color: var(--g-muted); }
+.chat-post .chat-speaker { color: var(--g-accent); }
+.chat-text { margin: 2px 0 0; white-space: pre-wrap; text-wrap: pretty; overflow-wrap: anywhere; }
+.chat-tools { flex: none; display: inline-flex; gap: 2px; }
+.chat-tool { padding: 1px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--g-muted);
+  font-size: 12px; cursor: pointer; }
+.chat-tool:hover { color: var(--g-accent); }
+.chat-tool.chat-danger { color: var(--g-bad); font-weight: 600; }
+.chat-tool:disabled { opacity: .45; cursor: default; }
+.chat-divider { display: flex; align-items: center; gap: 14px; }
+.chat-divider::before, .chat-divider::after { content: ""; flex: 1; height: 1px; background: var(--g-line); }
+.chat-note { text-align: center; font-size: 13px; color: var(--g-muted); }
+.chat-unanswered { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 12px; }
+.chat-writing { padding-left: 54px; font: italic 400 16px/1.5 var(--g-serif); color: var(--g-muted); }
+
+.chat-failed { margin-left: 54px; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px;
+  border: 1px solid var(--g-bad); border-radius: 12px; background: var(--g-bad-soft); }
+.chat-failed-title { font-weight: 600; color: var(--g-bad); }
+.chat-failed-text { font-size: 14px; overflow-wrap: anywhere; }
+.chat-failed-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.chat-take { border: 1px solid var(--g-accent); border-radius: 14px; background: var(--g-card); overflow: hidden; }
+.chat-take-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; border-bottom: 1px solid var(--g-line); }
+.chat-take-sub { font-size: 13px; color: var(--g-muted); }
+.chat-stepper { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--g-muted); }
+.chat-step { width: 30px; height: 30px; padding: 0; border: 1px solid var(--g-line); border-radius: 7px;
+  background: transparent; cursor: pointer; }
+.chat-step:hover { border-color: var(--g-muted); }
+.chat-take-body { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
+.chat-redirect { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 16px; }
+.chat-redirect .g-input { flex: 1; min-width: 160px; }
+.chat-take-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px;
+  border-top: 1px solid var(--g-line); background: var(--g-raised); }
+.chat-pass { margin-left: auto; border-color: transparent; background: transparent; color: var(--g-muted); }
+.chat-pass:hover { border-color: transparent; color: var(--g-fg); }
+.chat-keys { flex-basis: 100%; font-size: 12px; color: var(--g-muted); }
+
+/* -- under the transcript: the waiting tray's place, the no-model notice and the composer ----------------- */
+.chat-foot { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 28px 14px; }
+.chat-foot > * { width: 100%; max-width: 700px; margin: 0 auto; }
+.chat-slot:empty { display: none; }
+.chat-nomodel { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px;
+  border: 1px solid var(--g-bad); border-radius: 12px; background: var(--g-bad-soft); }
+.chat-nomodel-text { flex: 1 1 220px; }
+.chat-nomodel .g-button { background: transparent; font-weight: 600; }
+.chat-composer { border: 1px solid var(--g-line); border-radius: 14px; background: var(--g-card); overflow: hidden; }
+.chat-composer:focus-within { border-color: var(--g-accent); box-shadow: 0 0 0 1px var(--g-accent); }
+.chat-composer .g-field { margin: 0; gap: 0; }
+.chat-composer .g-field label { display: flex; align-items: center; gap: 8px; padding: 10px 14px 0; font-size: 13px;
+  font-weight: 400; color: var(--g-muted); }
+.chat-composer textarea.g-input { display: block; width: 100%; min-height: 0; padding: 8px 14px; border: 0;
+  border-radius: 0; outline: none; background: transparent; resize: none; font: 400 18px/1.5 var(--g-serif); }
+.chat-composer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px 10px 14px; }
+.chat-modes .g-segment { padding: 4px 10px; font-size: 13px; }
+.chat-send { margin-left: auto; display: flex; gap: 8px; }
+.chat-send .g-primary { padding-left: 20px; padding-right: 20px; }
+
+/* -- the side panel ------------------------------------------------------------------------------------ */
+.chat-panel { display: none; flex-direction: column; gap: 18px; min-height: 0; overflow-y: auto; padding: 16px 18px;
+  border-left: 1px solid var(--g-line); background: var(--g-raised); }
+.chat-panel.chat-open { display: flex; position: absolute; top: 0; right: 0; bottom: 0; width: min(320px, 100%);
+  z-index: 3; box-shadow: var(--g-shadow-panel); }
+.chat-panel-close { align-self: flex-end; padding: 0; font-size: 14px; }
+.chat-tabs { flex: none; display: flex; background: var(--g-bg); }
+.chat-tabs .g-segment { flex: 1; padding: 6px 8px; }
+.chat-panel-body { display: flex; flex-direction: column; gap: 18px; }
+@media (min-width: 1100px) {
+  .chat-frame { grid-template-columns: minmax(0, 1fr) 320px; }
+  .chat-panel, .chat-panel.chat-open { display: flex; position: static; width: auto; box-shadow: none; }
+  .chat-panel-close, .chat-panel-toggle { display: none; }
+}
+/* focus mode: only the story and the composer */
+.chat-focused .chat-frame { grid-template-columns: minmax(0, 1fr); }
+.chat-focused .chat-panel, .chat-focused .chat-panel.chat-open, .chat-focused .chat-scene { display: none; }
+
+.chat-cast { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.chat-member { display: flex; gap: 12px; align-items: center; }
+.chat-portrait { flex: none; width: 56px; border-radius: 9px; font-size: 26px; }
+.chat-member-text { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.chat-name { font: 600 17px/1.2 var(--g-serif); overflow-wrap: anywhere; }
+.chat-state { font-size: 13px; color: var(--g-muted); }
+.chat-member-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.chat-member-actions:empty { display: none; }
+.chat-ask { padding: 3px 10px; border-radius: 6px; }
+.chat-ask:hover { border-color: var(--g-accent); color: var(--g-accent); }
+.chat-director { padding-top: 12px; border-top: 1px solid var(--g-line); }
+.chat-add { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.chat-add .g-field { width: 100%; margin: 4px 0 0; }
+.chat-add .g-input { width: 100%; background: var(--g-card); }
+.chat-add p { margin: 0; }
+
+.chat-section { display: flex; flex-direction: column; gap: 8px; }
+.chat-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-size: 14px; }
+.chat-facts dt { color: var(--g-muted); }
+.chat-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.chat-premise { margin-top: 4px; font: italic 400 15px/1.4 var(--g-serif); max-height: 6.2em; overflow-y: auto; }
+.chat-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.chat-bound { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--g-line);
+  border-radius: 8px; background: var(--g-card); color: inherit; text-decoration: none; }
+a.chat-bound:hover { border-color: var(--g-accent); color: inherit; }
+.chat-bound-name { font-weight: 500; overflow-wrap: anywhere; }
+.chat-bound-role { font-size: 12px; color: var(--g-muted); }
+.chat-plain { margin: 0; }
+.chat-repair { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px;
+  border: 1px solid var(--g-line); border-radius: 8px; background: var(--g-card); font-size: 14px; }
+.chat-notes { font-size: 14px; }
+.chat-notes ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
+
+@media (max-width: 720px) {
+  .chat-log { padding: 16px 16px 8px; }
+  .chat-foot { padding: 6px 12px 10px; }
+  .chat-post { margin-left: -8px; padding: 10px 8px; }
+  .chat-failed, .chat-writing { margin-left: 0; padding-left: 14px; }
+}
