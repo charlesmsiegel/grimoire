@@ -19,7 +19,7 @@ No role is ``accepted_event``: nothing a card says ever becomes an event, eviden
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from grimoire.core.entity import EntityDefinition
@@ -292,9 +292,11 @@ def _entry_text(entry: LoreEntry) -> str:
     return "\n".join([*extra, entry.content])
 
 
-def pieces(card: ParsedCard, separate: Lorebook | None = None) -> tuple[Piece, ...]:
+def pieces(card: ParsedCard, separate: Lorebook | None = None, *, more: Sequence[Lorebook] = ()
+           ) -> tuple[Piece, ...]:
     """Every imported text with its role, so a preview shows greeting, premise, lore, instruction, voice
-    and description apart. Nothing is ever an accepted event."""
+    and description apart. Nothing is ever an accepted event. ``separate`` is the first separate lorebook
+    file (``lorebook_file``) and ``more`` the further ones (``lorebook_file-2``, ...)."""
     found: list[Piece] = []
     if isinstance(card, CharacterCard):
         for role, field, text in (
@@ -328,14 +330,18 @@ def pieces(card: ParsedCard, separate: Lorebook | None = None) -> tuple[Piece, .
     elif isinstance(card, LorebookCard):
         found += _pieces_of_book(card.lorebook, "data")
     found += _pieces_of_book(separate, "lorebook_file.data")
+    for number, book in enumerate(more, start=2):
+        found += _pieces_of_book(book, f"lorebook_file-{number}.data")
     assert all(piece.role in ROLES for piece in found)
     return tuple(found)
 
 
-def mention_texts(card: ParsedCard, separate: Lorebook | None = None) -> dict[str, str]:
+def mention_texts(card: ParsedCard, separate: Lorebook | None = None, *, more: Sequence[Lorebook] = ()
+                  ) -> dict[str, str]:
     """The texts a link suggestion may scan, keyed by field (the same keys ``pieces`` uses)."""
     texts: dict[str, str] = {}
     books: list[tuple[str, Lorebook | None]] = [("lorebook_file.data", separate)]
+    books += [(f"lorebook_file-{number}.data", book) for number, book in enumerate(more, start=2)]
     if isinstance(card, CharacterCard):
         texts.update({"data.description": card.description, "data.personality": card.personality,
                       "data.scenario": card.scenario})

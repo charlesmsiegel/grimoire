@@ -22,6 +22,7 @@ from grimoire.textapi import ApiRefused
 OPS = {
     "capabilities": "review.capabilities",
     "card_inspect": "card.inspect", "card_preview": "card.preview",
+    "card_batch_scan": "card.batch_scan", "card_batch_preview": "card.batch_preview",
     "history_scan": "history.scan", "history_preview": "history.preview",
     "v1_scan": "v1.scan", "v1_preview": "v1.preview", "v1_receipts": "v1.receipts",
     "changeset_review": "changeset.review",

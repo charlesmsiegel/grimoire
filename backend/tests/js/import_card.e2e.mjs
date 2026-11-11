@@ -71,7 +71,7 @@ test("a card is found, previewed and decided, and every review state says what h
   const chooser = () => zone().querySelector("input");
   assert.equal(chooser().getAttribute("accept"), ".png,image/png,.json,application/json", "only the formats the app reads");
   assert.ok(zone().textContent.includes("A PNG card with its data embedded"), "the drop zone says what it takes");
-  assert.ok(byText(zone(), "button", "Choose a file").length);
+  assert.ok(byText(zone(), "button", "Choose files").length);
   assert.equal(main.querySelector("section.import-review"), null);
 
   const choose = (file) => { chooser().files = [file]; chooser().dispatchEvent({ type: "change" }); };
@@ -136,9 +136,29 @@ test("a card is found, previewed and decided, and every review state says what h
   bookChooser.dispatchEvent({ type: "change" });
   await until(() => books().length === 2, 15000, "the lorebook file listed");
   assert.ok(books()[1].textContent.includes("gazetteer.json") && books()[1].textContent.includes("from a file"));
-  assert.ok(!byText(lorebooks(), "button", "Add a lorebook file").length, "one separate lorebook file at a time");
-  byText(books()[1], "button", "Remove")[0].click();
-  assert.equal(books().length, 1);
+  // more lorebook files can be added, several at once, each listed and removable on its own
+  assert.ok(bookChooser.hasAttribute("multiple"));
+  const tides = new TextEncoder().encode(JSON.stringify({ spec: "lorebook_v3", data: { name: "Synthetic tide tables", entries: [] } }));
+  const winds = new TextEncoder().encode(JSON.stringify({ spec: "lorebook_v3", data: { name: "Synthetic wind lore", entries: [] } }));
+  const moreBooks = () => lorebooks().querySelectorAll("input").find((node) => node.getAttribute("aria-label") === "Lorebook file");
+  moreBooks().files = [fileOf("tides.json", tides), fileOf("winds.json", winds)];
+  moreBooks().dispatchEvent({ type: "change" });
+  await until(() => books().length === 4, 15000, "three lorebook files listed");
+  assert.ok(lorebooks().textContent.includes("4 attached"));
+  assert.ok(byText(lorebooks(), "button", "Add a lorebook file").length);
+  assert.ok(lorebooks().textContent.includes("A lorebook already in your library is not attached here"));
+  assert.ok(!byText(lorebooks(), "button", "library").length, "no control the app cannot honour");
+  byText(books()[2], "button", "Remove")[0].click();
+  assert.deepEqual(books().map((node) => node.querySelector("span.import-book-name").textContent), ["Harbor lore", "gazetteer.json", "winds.json"]);
+  review = await preview();
+  assert.equal(fact(review, "Lorebooks"), "Harbor lore (embedded in the card), gazetteer.json (from a file), winds.json (from a file)");
+  assert.equal(review.querySelectorAll("button.import-file").filter((node) => node.textContent.includes("/lorebook/")).length, 3,
+    "each lorebook is its own file of the import");
+  byText(review, "button", "Reject")[0].click();
+  await outcome("Rejected: nothing was written");
+  await again();
+  choose(fileOf("mara.json", card));
+  await until(() => main.querySelector("h2.import-found-name"), 15000, "what was found once more");
 
   // the review: a summary, each file with what it does and its size, the selected file's text, and the digest
   review = await preview();

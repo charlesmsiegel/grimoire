@@ -1,9 +1,12 @@
 // The Import page's card form: a card file (a PNG card with its data embedded, or a JSON document) is read by
 // the app (`imports.card_inspect`, which opens no library and proposes nothing), shown as what was found, and
 // then previewed (`imports.card_preview`) into the page's shared review. A PNG card is its own portrait, shown
-// here from the dropped file itself; the lorebook a card embeds is listed and can be left out before the preview.
+// here from the dropped file itself; the lorebook a card embeds is listed and can be left out before the preview,
+// and separate lorebook files can be added beside it. Several files, or a dropped folder, go to batch.js.
 //
 // Every value shown comes from a card or a file name and is only ever set as text, never as markup.
+
+import { batchFlow, droppedFiles } from "./batch.js";
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 export const CARD_ACCEPT = ".png,image/png,.json,application/json";
@@ -38,13 +41,15 @@ const entries = (count) => count + (count === 1 ? " entry" : " entries");
 
 // env: what the page shares with its forms (see page.js).
 export function cardForm(env) {
-  const { ctx, ui, el, capabilities, stage, show, review, facts, rows, present, dropZone, startOver, bytesOf, base64, sizeOf, pictures } = env;
+  const { ctx, ui, el, capabilities, stage, show, review, facts, rows, present, dropZone, startOver, bytesOf, base64, sizeOf, pictures, served } = env;
   const limits = (capabilities.imports && capabilities.imports.card) || {};
+  const maxBooks = limits.lorebook_files_max || 1;
+  const batch = served(["imports.card_batch_scan", "imports.card_batch_preview"]) ? batchFlow(env, UNREADABLE) : null;
 
-  // A file chosen beside the card (a portrait, a lorebook): `onchange` runs when one is chosen.
-  function chooser(label, accept, onfile) {
-    const input = el("input", { type: "file", accept, hidden: true, "aria-label": label });
-    input.addEventListener("change", () => { const file = (input.files && input.files[0]) || null; input.value = ""; if (file) ctx.act(() => onfile(file)); });
+  // Files chosen beside the card (a portrait, lorebooks): `onfiles` gets the ones chosen.
+  function chooser(label, accept, onfiles, many = false) {
+    const input = el("input", { type: "file", accept, hidden: true, multiple: many, "aria-label": label });
+    input.addEventListener("change", () => { const files = [...(input.files || [])]; input.value = ""; if (files.length) ctx.act(() => onfiles(files)); });
     return input;
   }
 
@@ -81,12 +86,12 @@ export function cardForm(env) {
     pictures.clear();
     const name = read.name || file.name || "Card";
     const isBook = read.kind === "lorebook";
-    const state = { portrait: null, embedded: Boolean(read.lorebook) && !isBook, lorebook: null };
+    const state = { portrait: null, embedded: Boolean(read.lorebook) && !isBook, lorebooks: [] };
     const scenario = el("input", { type: "checkbox" });
     const canBeScenario = read.format === "chara_card_v3" || read.format === "chara_card_v2";
 
     // -- the portrait: the PNG itself, or one added beside a JSON card ---------------------------------------
-    const portraitInput = chooser("Portrait file", PORTRAIT_ACCEPT, async (chosen) => {
+    const portraitInput = chooser("Portrait file", PORTRAIT_ACCEPT, async ([chosen]) => {
       state.portrait = { file: chosen, bytes: await bytesOf(chosen) };
       drawPortrait();
     });
@@ -106,11 +111,16 @@ export function cardForm(env) {
       }
     }
 
-    // -- the lorebooks: the one the card embeds, and one from a file ------------------------------------------
+    // -- the lorebooks: the one the card embeds, and files added beside it --------------------------------------
     const lorebookInput = chooser("Lorebook file", LOREBOOK_ACCEPT, async (chosen) => {
-      state.lorebook = { file: chosen, bytes: await bytesOf(chosen) };
+      if (state.lorebooks.length + chosen.length > maxBooks) {
+        throw Object.assign(new Error("A card takes at most " + maxBooks + " separate lorebook files."), { reason: "too_many" });
+      }
+      const added = [];
+      for (const file of chosen) added.push({ file, bytes: await bytesOf(file) });
+      state.lorebooks.push(...added);
       drawLorebooks();
-    });
+    }, maxBooks > 1);
     const lorebooks = el("section", { class: "g-card import-lorebooks", "aria-label": "Lorebooks" });
     const bookRow = (title, detail, origin, remove) => el("li", { class: "import-book" },
       el("span", { class: "import-book-text" }, el("span", { class: "import-book-name" }, title), el("span", { class: "g-muted import-book-detail" }, detail)),
@@ -122,9 +132,9 @@ export function cardForm(env) {
         items.push(bookRow(read.lorebook.name, entries(read.lorebook.entries), "embedded in the card",
           () => { state.embedded = false; drawLorebooks(); }));
       }
-      if (state.lorebook) {
-        items.push(bookRow(state.lorebook.file.name || "A lorebook file", "A separate lorebook, " + sizeOf(state.lorebook.bytes.length),
-          "from a file", () => { state.lorebook = null; drawLorebooks(); }));
+      for (const book of state.lorebooks) {
+        items.push(bookRow(book.file.name || "A lorebook file", "A separate lorebook, " + sizeOf(book.bytes.length),
+          "from a file", () => { state.lorebooks = state.lorebooks.filter((other) => other !== book); drawLorebooks(); }));
       }
       const count = items.length;
       lorebooks.replaceChildren(...present(lorebookInput,
@@ -133,23 +143,25 @@ export function cardForm(env) {
         count ? el("ul", { class: "import-books" }, items)
           : el("p", { class: "g-muted import-book-none" }, "No lorebook attached. The card imports on its own."),
         el("div", { class: "import-book-actions" },
-          state.lorebook ? null : ui.button("Add a lorebook file", () => lorebookInput.click(), { kind: "dashed", size: "small" }),
+          state.lorebooks.length >= maxBooks ? null : ui.button("Add a lorebook file", () => lorebookInput.click(), { kind: "dashed", size: "small" }),
           read.lorebook && !state.embedded ? ui.button("Put back the card's own lorebook", () => { state.embedded = true; drawLorebooks(); },
             { kind: "linklike", size: "small" }) : null),
-        el("p", { class: "g-muted import-book-help" }, read.lorebook
+        el("p", { class: "g-muted import-book-help" }, (read.lorebook
           ? "The card's own lorebook is imported with it unless you remove it here. Each lorebook becomes its own entry in the card's source."
-          : "A separate lorebook file becomes its own entry in the card's source.")));
+          : "Each lorebook file becomes its own entry in the card's source.")
+          + " A lorebook already in your library is not attached here: pick it when you start a chat.")));
     }
 
     async function preview() {
-      const args = { card, origin: file.name, as_scenario: scenario.checked };
+      // the same card as one already here updates that card (the app decides by the card's own bytes, never its name)
+      const args = { card, origin: file.name, as_scenario: scenario.checked, update_same_card: true };
       if (state.portrait) args.portrait = base64(state.portrait.bytes);
-      if (state.lorebook) args.lorebook = base64(state.lorebook.bytes);
+      if (state.lorebooks.length) args.lorebooks = state.lorebooks.map((book) => base64(book.bytes));
       if (read.lorebook && !isBook && !state.embedded) args.embedded_lorebook = false;
       const proposal = await ctx.api("imports.card_preview", args);
       const r = proposal.report;
       const books = present(state.embedded ? read.lorebook.name + " (embedded in the card)" : null,
-        state.lorebook ? (state.lorebook.file.name || "a lorebook file") + " (from a file)" : null);
+        state.lorebooks.map((book) => (book.file.name || "a lorebook file") + " (from a file)"));
       show(review(proposal, {
         title: r.status === "new" ? name + " becomes a new " + r.kind : name + ": " + r.kind + ", " + r.status,
         summary: facts([["Status", r.status], ["Destination", r.source], ["Format", CARD_FORMATS[r.format] || r.format], ["Becomes", r.kind],
@@ -188,7 +200,18 @@ export function cardForm(env) {
     if (go) go.focus();
   }
 
-  return [dropZone({ title: "Drop a card here", label: "Card file", accept: CARD_ACCEPT, onfile: found,
-    hint: "A PNG card with its data embedded fills in the card and the portrait at once. A Card V3 or V2 JSON, a scenario card or a "
-      + "lorebook works too. Nothing is written until you approve the preview." })];
+  const hint = "A PNG card with its data embedded fills in the card and the portrait at once. A Card V3 or V2 JSON, a scenario card or a "
+    + "lorebook works too. Nothing is written until you approve the preview.";
+  if (!batch) return [dropZone({ title: "Drop a card here", label: "Card file", accept: CARD_ACCEPT, onfile: found, hint })];
+  // one file is read on its own; several, or a folder, are listed together and reviewed as one
+  async function taken(reading) {
+    const { files, skipped } = await reading;
+    if (!files.length) throw Object.assign(new Error("No card files (.png or .json) were found in what you dropped."), { reason: "no_cards" });
+    if (files.length === 1 && !skipped) await found(files[0].file);
+    else await batch.open({ files, skipped });
+  }
+  const maxCards = (limits.batch && limits.batch.max_cards) || 50;
+  return [dropZone({ title: "Drop a card, or a whole folder of them", label: "Card files", accept: CARD_ACCEPT, choose: "Choose files", hint,
+    // read at once, inside the event: a drop's folder entries cannot be read later
+    ondrop: (transfer) => taken(droppedFiles(transfer, maxCards)) })];
 }

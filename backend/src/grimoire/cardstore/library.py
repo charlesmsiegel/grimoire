@@ -50,6 +50,8 @@ from .png import MAX_PNG_BYTES, PNG_SIGNATURE, read_png_card
 MAX_CARD_BYTES = 2 * 1024 * 1024
 #: the largest PNG card read: the picture is the card's portrait, so 038's cap on one picture
 MAX_CARD_PNG_BYTES = MAX_PNG_BYTES
+#: the most separate lorebook files one card import takes
+MAX_LOREBOOK_FILES = 8
 #: an origin label (a file name, say) is short display text
 MAX_ORIGIN = 512
 MAX_LOSSES_PER_FIELD = 20
@@ -128,6 +130,8 @@ class ImportReport:
     accepted_events: tuple[()] = ()
     #: each slot the card's art fills on ``main``, and what this import does there (Sprint 038)
     art: tuple[ArtSlot, ...] = ()
+    #: the pinned head each of ``writes`` moves on from (an entity that had a head before this import)
+    replaces: tuple[SourceRef, ...] = ()
 
 
 def _now() -> str:
@@ -370,11 +374,14 @@ class _Entity:
 class CardImport:
     """One planned import: ``report``, the exact bytes (``preview``) and ``commit(approvals)``."""
 
-    def __init__(self, report: ImportReport, batch: object | None, preview: Mapping[str, bytes]) -> None:
+    def __init__(self, report: ImportReport, batch: object | None, preview: Mapping[str, bytes], *,
+                 shared: bool = False) -> None:
         self.report = report
         self._batch = batch
         self._preview = dict(preview)
         self._committed = False
+        #: staged into a batch of several cards (``cardstore.batch``): only that batch commits it
+        self._shared = shared
 
     def preview(self) -> dict[str, bytes]:
         """The bytes each path will hold, keyed by logical path: what a human approves."""
@@ -385,6 +392,8 @@ class CardImport:
         ``WriteDenied`` without a grant and an approval per path for an untrusted handle)."""
         if self._committed:
             raise StoreError("this import was already committed")
+        if self._shared:
+            raise StoreError("this card is part of a batch: commit the batch")
         if self._batch is None:  # unchanged: nothing to write
             self._committed = True
             return ImageCommit({}, (), ())
@@ -407,6 +416,10 @@ class _Plan:
     embedded_lorebook: bool = True
     #: the PNG card the document came in: its text chunk keyword, sha256 and size
     container: dict[str, object] | None = None
+    #: further separate lorebook files after the first, each with its bytes (roles ``lorebook_file-2``...)
+    more: tuple[tuple[LorebookCard, bytes], ...] = ()
+    #: with no ``target``: the one card source whose last import had these card bytes is updated
+    update_same_card: bool = False
     losses: list[Loss] = field(default_factory=list)
     #: the slots the card and its portrait fill (Sprint 038)
     art: tuple[ArtPiece, ...] = ()
@@ -429,17 +442,32 @@ class CardImporter:
     def plan(self, data: bytes, *, origin: str | None = None, target: str | None = None,
              portrait: bytes | None = None, lorebook: bytes | None = None,
              as_scenario: bool = False, replace_edits: bool = False,
-             embedded_lorebook: bool = True) -> CardImport:
+             embedded_lorebook: bool = True, lorebooks: Sequence[bytes] = (),
+             update_same_card: bool = False) -> CardImport:
         """Stage one import; raises ``CardError`` (nothing staged) or ``ImportDenied``.
 
         ``data`` is a card document, or a PNG card: its embedded document is the card and, unless a
         ``portrait`` is given, the PNG itself is the portrait. A head or the portrait slot changed since
         the last import (a hand edit) is left as it is and reported as a ``hand_edited`` collision;
         ``replace_edits=True`` replaces it with the card's. ``embedded_lorebook=False`` imports a
-        character or scenario without the lorebook its card embeds.
+        character or scenario without the lorebook its card embeds. ``lorebooks`` are further separate
+        lorebook files after ``lorebook`` (at most ``MAX_LOREBOOK_FILES`` in all, no file twice).
+        ``update_same_card=True`` with no ``target`` updates the one card source whose last import had
+        exactly these card bytes and the same ``as_scenario``, instead of making a second source.
         """
+        plan = self._read(data, origin=origin, portrait=portrait, lorebook=lorebook, as_scenario=as_scenario,
+                          replace_edits=replace_edits, embedded_lorebook=embedded_lorebook, lorebooks=lorebooks,
+                          update_same_card=update_same_card)
+        with self.store.read_pass():
+            return self._stage(plan, target)
+
+    def _read(self, data: bytes, *, origin: str | None = None, portrait: bytes | None = None,
+              lorebook: bytes | None = None, as_scenario: bool = False, replace_edits: bool = False,
+              embedded_lorebook: bool = True, lorebooks: Sequence[bytes] = (),
+              update_same_card: bool = False) -> _Plan:
+        """Decode and parse every input of one import; the library is not read."""
         for label, flag in (("as_scenario", as_scenario), ("replace_edits", replace_edits),
-                            ("embedded_lorebook", embedded_lorebook)):
+                            ("embedded_lorebook", embedded_lorebook), ("update_same_card", update_same_card)):
             if type(flag) is not bool:
                 raise CardError(f"{label} is true or false", "invalid_options", label)
         found = unwrap(data)
@@ -455,13 +483,22 @@ class CardImporter:
                 card = dataclasses.replace(card, lorebook=None)
         if found.png is not None and portrait is None and not isinstance(card, LorebookCard):
             portrait = found.png  # the PNG card is its own picture
-        separate = None
-        lorebook_bytes = None
-        if lorebook is not None:
-            if isinstance(card, LorebookCard):
-                raise CardError("a lorebook card takes no separate lorebook", "invalid_options", "lorebook")
-            lorebook_bytes = bytes(lorebook) if isinstance(lorebook, (bytes, bytearray, memoryview)) else lorebook
-            separate = parse_lorebook_document(_decode(lorebook_bytes, "lorebook"))
+        if isinstance(lorebooks, (bytes, bytearray, memoryview, str)) or not isinstance(lorebooks, Sequence):
+            raise CardError("lorebooks is a list of lorebook files", "invalid_options", "lorebooks")
+        files = ([] if lorebook is None else [lorebook]) + list(lorebooks)
+        if files and isinstance(card, LorebookCard):
+            raise CardError("a lorebook card takes no separate lorebook", "invalid_options", "lorebook")
+        if len(files) > MAX_LOREBOOK_FILES:
+            raise CardError(f"a card takes at most {MAX_LOREBOOK_FILES} separate lorebook files", "invalid_options",
+                            "lorebooks")
+        books: list[tuple[LorebookCard, bytes]] = []
+        for number, raw in enumerate(files, start=1):
+            raw = bytes(raw) if isinstance(raw, (bytes, bytearray, memoryview)) else raw
+            book = parse_lorebook_document(_decode(raw, "lorebook" if number == 1 else f"lorebook {number}"))
+            if any(raw == other for _, other in books):
+                raise CardError("the same lorebook file was given twice", "invalid_options", "lorebooks")
+            books.append((book, raw))
+        separate, lorebook_bytes = books[0] if books else (None, None)
         if portrait is not None:
             if isinstance(card, LorebookCard):
                 raise CardError("a lorebook has no portrait", "invalid_options", "portrait")
@@ -469,7 +506,8 @@ class CardImporter:
                 raise TypeError("portrait must be bytes")
             portrait = bytes(portrait)
         plan = _Plan(card, separate, bytes(data), lorebook_bytes, portrait, _origin(origin), as_scenario,
-                     replace_edits, embedded_lorebook=left_out is None)
+                     replace_edits, embedded_lorebook=left_out is None, more=tuple(books[1:]),
+                     update_same_card=update_same_card)
         if found.png is not None:
             plan.container = {"format": "png", "keyword": found.keyword, "sha256": _sha(found.png),
                               "size": len(found.png)}
@@ -479,10 +517,12 @@ class CardImporter:
         if separate is not None:
             losses += [Loss(f"lorebook_file.{loss.path}", loss.reason) for loss in separate.losses]
             losses += _rounded(separate.losses, lorebook_bytes, "lorebook_file.")
+        for number, (extra, raw) in enumerate(plan.more, start=2):
+            losses += [Loss(f"lorebook_file-{number}.{loss.path}", loss.reason) for loss in extra.losses]
+            losses += _rounded(extra.losses, raw, f"lorebook_file-{number}.")
         plan.art, art_losses = card_art(card, portrait)
         plan.losses.extend(_bounded(losses + list(art_losses)))
-        with self.store.read_pass():
-            return self._stage(plan, target)
+        return plan
 
     def _digest(self, plan: _Plan) -> str:
         key = {"card": _sha(plan.original), "format": plan.card.format, "as_scenario": plan.as_scenario,
@@ -490,6 +530,8 @@ class CardImporter:
                "portrait": _sha(plan.portrait) if plan.portrait is not None else None}
         if not plan.embedded_lorebook:  # only when chosen, so every earlier import keeps its digest
             key["embedded_lorebook"] = False
+        if plan.more:
+            key["lorebooks"] = [_sha(raw) for _, raw in plan.more]
         return _sha(json.dumps(key, sort_keys=True).encode("utf-8"))
 
     def _import_record(self, source_id: str) -> StoredDefinition | None:
@@ -512,8 +554,9 @@ class CardImporter:
         return found
 
     def _destination(self, plan: _Plan, target: str | None, digest: str,
-                     sources: Mapping[str, StoredSource], cards: Mapping[str, StoredDefinition]
-                     ) -> tuple[str, list[Collision]]:
+                     sources: Mapping[str, StoredSource], cards: Mapping[str, StoredDefinition],
+                     reserved: frozenset[str] = frozenset()) -> tuple[str, list[Collision]]:
+        """``reserved``: sources other cards of the same batch already write (never chosen as a new one)."""
         collisions: list[Collision] = []
         same_bytes = sorted(source for source, record in cards.items()
                             if _get(record, "original", "sha256") == _sha(plan.original))
@@ -534,17 +577,26 @@ class CardImporter:
             chosen = target
         else:
             earlier = sorted(source for source, record in cards.items() if _get(record, "digest") == digest)
+            # exact identity, never a name: the card's own bytes, imported the same way, in one place only
+            same_card = [source for source in same_bytes
+                         if _get(cards[source], "options", "as_scenario") is plan.as_scenario] \
+                if plan.update_same_card else []
             if earlier:
                 chosen = earlier[0]
+            elif len(same_card) == 1:
+                chosen = same_card[0]
             else:
                 base = slugify(_title(plan.card))
                 chosen = f"{CARD_NAMESPACE}:{base}"
                 number = 1
-                while self._taken(chosen, sources):
+                while self._taken(chosen, sources) or chosen in reserved:
                     number += 1
                     chosen = f"{CARD_NAMESPACE}:{base}-{number}"
                 if number > 1:
                     collisions.append(Collision("destination_taken", (f"{CARD_NAMESPACE}:{base}",)))
+        if chosen in reserved:
+            raise CardError("another card of this batch is written to the same source", "duplicate_destination",
+                            "target")
         others = tuple(source for source in same_bytes if source != chosen)
         if others:
             collisions.append(Collision("same_bytes", others))
@@ -612,13 +664,22 @@ class CardImporter:
             file_key = key_for("lorebook_file", LOREBOOK, slugify(book.name or f"{title} lore", "lorebook"))
             entities["lorebook_file"] = _Entity(file_key, lorebook_payload(book, extras=plan.separate.extras),
                                                 book.name or f"{title} lore", LOREBOOK_SCHEMA)
+        for number, (extra, _) in enumerate(plan.more, start=2):
+            book, role = extra.lorebook, f"lorebook_file-{number}"
+            file_key = key_for(role, LOREBOOK, slugify(book.name or f"{title} lore", "lorebook"))
+            entities[role] = _Entity(file_key, lorebook_payload(book, extras=extra.extras),
+                                     book.name or f"{title} lore", LOREBOOK_SCHEMA)
         return entities, losses
 
-    def _stage(self, plan: _Plan, target: str | None) -> CardImport:
+    def _stage(self, plan: _Plan, target: str | None, *, shared: object | None = None,
+               reserved: frozenset[str] = frozenset()) -> CardImport:
+        """``shared``: the one image batch several cards of a batch import are staged into, so they commit
+        as one transaction (``cardstore.batch``); a failure part way leaves it unusable. ``reserved``: the
+        sources its other cards write."""
         view = self.store.load()
         digest = self._digest(plan)
         cards = self._card_sources(view.sources)
-        source_id, collisions = self._destination(plan, target, digest, view.sources, cards)
+        source_id, collisions = self._destination(plan, target, digest, view.sources, cards, reserved)
         stored_source = view.sources.get(source_id)
         record = cards.get(source_id)
         # what the last import made: role -> entity (kept roles carried forward) and the revision it wrote
@@ -644,6 +705,7 @@ class CardImporter:
         writes: list[RecordEnvelope] = []
         records: dict[str, SourceRef] = {}
         edited: list[str] = []
+        replaced: list[SourceRef] = []
 
         def settle(entity: _Entity) -> None:
             head = heads.get(entity.key)
@@ -667,11 +729,13 @@ class CardImporter:
             ref = SourceRef(source_id, entity.kind, entity.entity_id, revision)
             writes.append(RecordEnvelope(ref, entity.payload, name=entity.name, owner=self.owner,
                                          extra={"schema": entity.schema}))
+            if head is not None:
+                replaced.append(SourceRef(source_id, entity.kind, entity.entity_id, head))
             records[entity.key] = ref
             heads[entity.key] = declared[entity.key] = revision
 
-        for role in ("lorebook", "lorebook_file"):
-            if role in entities:
+        for role in entities:  # every lorebook first (the card's own, then each file), in role order
+            if role != "main":
                 settle(entities[role])
         main = entities["main"]
         if "lorebook" in entities and main.kind != LOREBOOK:
@@ -731,6 +795,8 @@ class CardImporter:
             if kept_roles:
                 import_payload["kept_entities"] = dict(sorted(kept_roles.items()))
                 import_payload["kept"] = kept_imported
+            if heads.get(import_key) is not None:
+                replaced.append(SourceRef(source_id, IMPORT_KIND, IMPORT_ID, heads[import_key]))
             revision = self._next_revision(source_id, _Entity(import_key, {}, "", IMPORT_SCHEMA), heads.get(import_key))
             writes.append(RecordEnvelope(SourceRef(source_id, IMPORT_KIND, IMPORT_ID, revision), import_payload,
                                          name=f"Card import: {_title(plan.card)}"[:256], owner=self.owner,
@@ -739,14 +805,17 @@ class CardImporter:
 
         batch, preview = None, {}
         if not unchanged:
-            batch = self.images.change()
+            batch = shared if shared is not None else self.images.change()
+            before = batch.preview() if shared is not None else {}  # type: ignore[attr-defined]
             try:
-                batch.put(_manifest(source_id, stored_source, self.owner, plan, declared),
+                batch.put(_manifest(source_id, stored_source, self.owner, plan, declared),  # type: ignore[attr-defined]
                           stored_source.etag if stored_source is not None else None)
                 for envelope in writes:
-                    batch.put(envelope, None)
-                art.stage(batch, source_id, main_ref)
-                preview = batch.preview()
+                    batch.put(envelope, None)  # type: ignore[attr-defined]
+                art.stage(batch, source_id, main_ref)  # type: ignore[arg-type]
+                # this card's own files: a picture an earlier card of the batch already stages is that card's
+                preview = {path: data for path, data in batch.preview().items()  # type: ignore[attr-defined]
+                           if before.get(path) != data}
                 # the commit's own checks on every write (records, image, blob, placement), run
                 # read-only now, so a plan that passes approval is not refused at commit for the
                 # state of its source
@@ -774,17 +843,20 @@ class CardImporter:
         report = ImportReport(
             status=status, source=source_id, format=plan.card.format, kind=main.kind, main=main_ref,
             writes=tuple(envelope.address for envelope in writes if isinstance(envelope.address, SourceRef)),
-            records=tuple(record_refs), kept=kept, pieces=pieces(plan.card, plan.separate.lorebook if plan.separate
-                                                                  else None),
+            records=tuple(record_refs), kept=kept,
+            pieces=pieces(plan.card, plan.separate.lorebook if plan.separate else None,
+                          more=[extra.lorebook for extra, _ in plan.more]),
             losses=tuple(plan.losses),
             collisions=tuple(collisions + self._same_names(view, entities, source_id)
                              + ([Collision("hand_edited", tuple(edited))] if edited else [])),
             suggestions=suggest_links(
-                mention_texts(plan.card, plan.separate.lorebook if plan.separate else None),
+                mention_texts(plan.card, plan.separate.lorebook if plan.separate else None,
+                              more=[extra.lorebook for extra, _ in plan.more]),
                 view.index.find_by_name, exclude=lambda ref: ref.source == source_id),
             cast=self._cast(plan.card, view, source_id), portrait=art.portrait, paths=tuple(sorted(preview)),
-            grant_scopes=tuple(sorted({_scope(path) for path in preview})), art=tuple(art.slots))
-        return CardImport(report, batch, preview)
+            grant_scopes=tuple(sorted({_scope(path) for path in preview})), art=tuple(art.slots),
+            replaces=tuple(replaced))
+        return CardImport(report, None if shared is not None else batch, preview, shared=shared is not None)
 
     def _import_payload(self, plan: _Plan, digest: str, entities: Mapping[str, _Entity],
                         records: list[SourceRef], portrait: ImageRef | None) -> dict[str, object]:
@@ -806,6 +878,9 @@ class CardImporter:
         if plan.lorebook_bytes is not None:
             payload["lorebook_file"] = {"sha256": _sha(plan.lorebook_bytes), "size": len(plan.lorebook_bytes),
                                         "base64": base64.b64encode(plan.lorebook_bytes).decode("ascii")}
+        if plan.more:  # the further files, in order: ``lorebook_file-2`` is the first of these
+            payload["lorebook_files"] = [{"sha256": _sha(raw), "size": len(raw),
+                                          "base64": base64.b64encode(raw).decode("ascii")} for _, raw in plan.more]
         if plan.portrait is not None:
             # ``image`` is this import's picture when the slot shows it (``None`` while a hand edit stands)
             payload["portrait"] = {"image": str(portrait) if portrait is not None else None,
@@ -830,10 +905,7 @@ class CardImporter:
 
     def _same_names(self, view, entities: Mapping[str, _Entity], source_id: str) -> list[Collision]:  # type: ignore[no-untyped-def]
         found = []
-        for role in ("main", "lorebook", "lorebook_file"):
-            entity = entities.get(role)
-            if entity is None:
-                continue
+        for entity in entities.values():  # main first, then each lorebook in role order
             refs = tuple(str(ref) for ref in view.index.find_by_name(entity.name, entity.kind)
                          if ref.source != source_id)
             if refs:

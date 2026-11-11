@@ -8,7 +8,7 @@
 //
 // The page is three parts: the kinds across the top (the address keeps the chosen one, `?tab=`), that kind's
 // form (`stage`), and what the form found or proposes (`out`), which ends in the shared review. A kind is added
-// by a row in KINDS and a form in FORMS. The card form lives in card.js.
+// by a row in KINDS and a form in FORMS. The card form lives in card.js, and a batch of cards in batch.js.
 //
 // Every value shown comes from a library, card or export and is only ever set as text, never as markup.
 
@@ -106,10 +106,14 @@ export async function mount(root, ctx) {
   };
 
   // -- the shared review: every file, its exact bytes' hash, and digest-bound Approve / Reject -----------------
-  function review(proposal, { title, summary, notes }, after) {
+  // `groups` ([{title, detail, paths}]) lists the files under a heading per group (a batch's cards); `approval`
+  // ({label, question, confirm}) words the approval of something other than "N files"; `written(result)` shows
+  // the result in place of its plain facts.
+  function review(proposal, { title, summary, notes, groups, approval, written }, after) {
     const panel = el("section", { class: "import-review", "aria-label": "Proposed write" });
     const count = proposal.writes + (proposal.writes === 1 ? " file" : " files");
-    let selected = proposal.files.length ? proposal.files[0] : null;
+    const firstPath = groups ? groups.flatMap((group) => group.paths)[0] : undefined;
+    let selected = proposal.files.find((file) => file.path === firstPath) || (proposal.files.length ? proposal.files[0] : null);
 
     const fileButtons = proposal.files.map((file) => {
       const action = ACTIONS[file.action] || (String(file.action).startsWith("unreadable") ? "Current file unreadable" : file.action);
@@ -118,6 +122,19 @@ export async function mount(root, ctx) {
       el("span", { class: "import-path" }, file.path),
       el("span", { class: "import-file-meta" }, el("span", {}, action), el("span", {}, file.size + " bytes")))];
     });
+    // the file list: as it is, or each group's files under the group's heading (what belongs to none comes last)
+    function listed() {
+      if (!groups) return fileButtons.map(([, node]) => node);
+      const byPath = new Map(fileButtons.map(([file, node]) => [file.path, node]));
+      const used = new Set(groups.flatMap((group) => group.paths));
+      const rest = fileButtons.filter(([file]) => !used.has(file.path)).map(([, node]) => node);
+      return [...groups.flatMap((group) => {
+        const nodes = group.paths.map((path) => byPath.get(path)).filter(Boolean);
+        return [el("div", { class: "import-file-group" }, el("span", { class: "import-file-group-name" }, group.title),
+          el("span", { class: "g-muted import-file-group-detail" }, group.detail),
+          el("span", { class: "g-muted import-file-group-detail" }, nodes.length ? nodes.length + (nodes.length === 1 ? " file" : " files") : "Nothing to write")), ...nodes];
+      }), ...(rest.length ? [el("div", { class: "import-file-group" }, el("span", { class: "import-file-group-name" }, "Other files")), ...rest] : [])];
+    }
     const pane = el("div", { class: "import-diff" });
     function fill() {
       for (const [file, node] of fileButtons) node.setAttribute("aria-pressed", String(file === selected));
@@ -138,13 +155,14 @@ export async function mount(root, ctx) {
           summary),
         notes && notes.length ? el("div", { class: "import-review-notes" }, notes) : null,
         el("div", { class: "import-review-body" },
-          el("div", { class: "import-files" }, el("div", { class: "g-muted import-count" }, count), fileButtons.map(([, node]) => node)),
+          el("div", { class: "import-files" }, el("div", { class: "g-muted import-count" }, count), listed()),
           pane),
-        result ? el("div", { class: "import-result" }, ui.eyebrow("What was written"), facts(Object.entries(result))) : null,
+        result ? el("div", { class: "import-result" }, ui.eyebrow("What was written"), written ? written(result) : facts(Object.entries(result))) : null,
         open ? el("div", { class: "import-review-foot" },
           el("span", { class: "import-digest" }, "Digest " + proposal.digest + " · the bytes approved are the bytes written"),
           ui.button("Reject", () => ctx.act(reject)),
-          ui.button(proposal.writes ? "Approve and write " + count : "Approve", () => ctx.act(approve), { kind: "primary" }))
+          ui.button(approval && approval.label ? approval.label : proposal.writes ? "Approve and write " + count : "Approve",
+            () => ctx.act(approve), { kind: "primary" }))
           : el("div", { class: "import-review-foot import-done" },
             el("strong", { class: "import-outcome" }, OUTCOMES[state] || state),
             ui.button("Import another", startOver),
@@ -152,8 +170,8 @@ export async function mount(root, ctx) {
       fill();
     }
     async function approve() {
-      if (proposal.writes && !await ui.confirm("Write " + count + " into this library, exactly as shown?",
-        { confirmLabel: "Write " + count })) return;
+      if (proposal.writes && !await ui.confirm((approval && approval.question) || "Write " + count + " into this library, exactly as shown?",
+        { confirmLabel: (approval && approval.confirm) || "Write " + count })) return;
       let done;
       try {
         done = await ctx.api("imports.proposal_apply", { proposal: proposal.proposal, digest: proposal.digest });
@@ -190,20 +208,28 @@ export async function mount(root, ctx) {
   }
 
   // -- shared form pieces ------------------------------------------------------------------------------------
-  // A large drop zone for one file: drag a file onto it, or choose one. `onfile` gets the file.
-  function dropZone({ title, hint, accept, label, onfile }) {
-    const input = el("input", { type: "file", accept, hidden: true, "aria-label": label });
+  // A large drop zone: drag a file onto it, or choose one. `onfile` gets the file. With `ondrop` it takes several:
+  // `ondrop` gets the drop's own transfer (so a dropped folder can be read), or `{files}` from the chooser, and
+  // is called at once, inside the event, since a drop's entries cannot be read later.
+  function dropZone({ title, hint, accept, label, onfile, ondrop, choose = "Choose a file" }) {
+    const input = el("input", { type: "file", accept, hidden: true, multiple: Boolean(ondrop), "aria-label": label });
     const zone = el("div", { class: "import-drop" },
       el("span", { class: "import-drop-title" }, title), el("span", { class: "g-muted import-drop-hint" }, hint),
-      el("div", { class: "import-drop-actions" }, ui.button("Choose a file", () => input.click())), input);
+      el("div", { class: "import-drop-actions" }, ui.button(choose, () => input.click())), input);
+    const several = (transfer) => { const work = ondrop(transfer); ctx.act(() => work); };
     const take = (file) => { if (file) ctx.act(() => onfile(file)); };
-    input.addEventListener("change", () => { const file = input.files && input.files[0]; input.value = ""; take(file); });
+    input.addEventListener("change", () => {
+      const files = [...(input.files || [])];
+      input.value = "";
+      if (ondrop) { if (files.length) several({ files }); } else take(files[0]);
+    });
     for (const type of ["dragenter", "dragover"]) zone.addEventListener(type, (event) => { event.preventDefault(); zone.classList.add("import-over"); });
     zone.addEventListener("dragleave", () => zone.classList.remove("import-over"));
     zone.addEventListener("drop", (event) => {
       event.preventDefault();
       zone.classList.remove("import-over");
-      if (event.dataTransfer) take(event.dataTransfer.files[0]);
+      if (!event.dataTransfer) return;
+      if (ondrop) several(event.dataTransfer); else take(event.dataTransfer.files[0]);
     });
     return zone;
   }
@@ -215,7 +241,7 @@ export async function mount(root, ctx) {
   // -- one form per kind -------------------------------------------------------------------------------------
   // the card form is its own module (card.js): it shares this page's pieces
   const cardFormOf = () => cardForm({ ctx, ui, el, capabilities, stage, show, review, facts, rows, present, dropZone, startOver,
-    bytesOf, base64, sizeOf, pictures });
+    bytesOf, base64, sizeOf, pictures, served });
 
   function historyForm() {
     async function scanIt(file) {
