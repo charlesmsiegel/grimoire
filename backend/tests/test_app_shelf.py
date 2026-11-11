@@ -244,7 +244,10 @@ def test_a_library_root_swapped_for_a_link_is_followed_by_no_shelf_op(app, tmp_p
     elsewhere.mkdir()
     root = desk / "v2" if (desk / "v2").is_dir() else desk  # the folder the store opened
     moved = tmp_path / "moved"
-    root.rename(moved)
+    try:
+        root.rename(moved)
+    except OSError:  # Windows: a folder with an open library in it cannot be moved, so its root cannot be swapped
+        pytest.skip("this platform does not let an open library's folder be moved")
     try:
         root.symlink_to(elsewhere, target_is_directory=True)
     except (OSError, NotImplementedError):

@@ -170,6 +170,9 @@ turn's call would. It carries a fixed one-line prompt and asks for at most 32 re
   neither that provider's own host nor this machine. A draft like that cannot be saved from the app at all; a
   file written by hand keeps its endpoint for turns, and a test call is still not sent there.
 - The whole call, every attempt included, is cancelled after 30 seconds and answered as `status: "timeout"`.
+  On Windows the cancel may not wake a read that is already waiting on the model (the transport's shutdown does
+  not always interrupt a blocked `recv` there), so the answer can come later than the limit: when the read's own
+  timeout or the server ends it. It is still answered as a timeout.
 - Like every op it runs under the text API's lock, so no turn plays while it is under way.
 
 The answer: `ok` (the model answered: `accepted`, or `incomplete` only because the test's own small reply bound

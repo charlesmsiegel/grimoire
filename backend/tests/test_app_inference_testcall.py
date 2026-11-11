@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -160,7 +161,13 @@ def test_a_model_that_never_answers_is_given_up_on_and_said_to_have_timed_out(de
         assert inference.call("models")["test_call"]["seconds"] == 0.5
         result = inference.call("test_call", {"expected": etag})
         assert (result["ok"], result["status"], result["reason"]) == (False, "timeout", "timeout")
-        assert result["seconds"] < 10 and result["limit_seconds"] == 0.5
+        assert result["limit_seconds"] == 0.5
+        # The limit cancels the call by shutting its socket down, which wakes the blocked read at once, except on
+        # Windows, where shutdown() may not wake a recv blocked in another thread (the transport's own test of
+        # this is an expected failure there: test_providers_transport.py). There the read ends when the server
+        # lets go, and the call is still reported as timed out.
+        if sys.platform != "win32":
+            assert result["seconds"] < 10
         assert len(result["attempts"]) == 1 and result["sent"] is True  # cancelled as a whole: no retry follows
         assert result["tokens"]["unreported"]["input_tokens"] == 1  # sent, and what it used is unknown
         assert inference.call("diagnostics")["traces"][0]["status"] == "timeout"
