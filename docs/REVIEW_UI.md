@@ -84,13 +84,20 @@ trusted owner handle, so a proposal previewed in one request is approved in the 
 and are gone when the app restarts. The shell's client keeps only a refusal's reason and message, so the adapter
 folds a refusal's details into its message (cut at 600 characters).
 
-The Import page (`static/pages/import/`, route `import`, Library menu) has one tab per kind the app serves:
-Card, Chat history, V1 library, Change set and Source update (a chat's characters following a newer revision
-of their source). A tab shows only when the app serves every op its form calls. Each tab previews; the shared proposal
-panel then lists every file with its action, size, sha256 and its text or diff, and the digest. Approve and
-write asks first, naming how many files, and sends the digest back; Reject discards the proposal. A stale or
-conflicting approval says nothing was written and to preview again; a proposal the server no longer holds (an
-approval whose answer was lost, or an app restart) says to check the library first, since it may have been written. The "Not available yet" list comes from `imports.capabilities`.
+The Import page (`static/pages/import/`, route `import`, Library menu) lists the kinds the app serves across its
+top, the chosen one kept in the address as `?tab=`: Character card (`card`), Chat history (`history`), V1 library
+(`v1`), Change set (`changeset`) and Source update (`rebase`: a chat's characters following a newer revision of
+their source). A kind shows only when the app serves every op its form calls and `imports.capabilities` lists it.
+A card or a chat export is dropped on a drop zone or chosen as a file; the card zone takes only JSON documents,
+the formats the app reads. Once a card is read the page shows what the file says of itself (its format and
+name) with an optional portrait, an optional separate lorebook and "Import as a scenario", then previews. Each
+kind previews into the shared review: a summary, every file on the left with its action and size, the selected
+file's sha256 and its diff or text on the right, and a footer with the digest. "Approve and write N files" asks
+first, naming how many files, and sends the digest back; Reject discards the proposal. Once decided, the footer
+says the outcome and offers "Import another" and "Open the library". A stale or conflicting approval says nothing
+was written and to preview again; a proposal the server no longer holds (an approval whose answer was lost, or an
+app restart) says to check the library first, since it may have been written. The "What this app cannot import
+yet" list comes from `imports.capabilities`.
 Files are sent as base64 in one request, which the app server caps at 48 MiB, so one card or history file is
 limited to about 34 MiB.
 

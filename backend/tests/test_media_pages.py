@@ -43,10 +43,13 @@ def test_every_media_op_is_served_and_the_art_and_sync_pages_need_only_those(tmp
         served = set(app.call("library")["ops"])
         assert {f"media.{op}" for op in OPS} <= served
         pages = {page.id: page for page in load_pages(STATIC)}
-        for page_id, route in (("art", "art"), ("sync", "sync")):
+        # Art is reached from a character, not from the rail: it is hidden there, and still opens by its route
+        for page_id, route, slot in (("art", "art", "hidden"), ("sync", "sync", "media")):
             page = pages[page_id]
-            assert (page.route, page.slot, page.owner, page.unavailable) == (route, "media", "114", None)
+            assert (page.route, page.slot, page.owner, page.unavailable) == (route, slot, "114", None)
             assert set(page.requires) <= served
+        # the picture picker other pages import is served from the Art page's folder, with its own style sheet
+        assert (STATIC / "pages" / "art" / "picker.js").is_file() and (STATIC / "pages" / "art" / "picker.css").is_file()
 
 
 def test_one_media_adapter_serves_each_open_library_so_a_pairing_made_here_is_listed(tmp_path):
@@ -112,6 +115,31 @@ def test_the_art_and_sync_pages_end_to_end(tmp_path):
         (portrait,) = [slot for slot in art["slots"] if slot["slot"] == "portrait"]
         assert portrait["state"] == "shown" and device.api.image(portrait["image"]) == ("image/png", PNG)
         assert AppApi(device.api).call("media.devices")["device"] == "desk-e2e"
+
+
+@pytest.mark.skipif(NODE is None, reason="Node is not installed")
+def test_the_picture_picker_chooses_cancels_and_closes_with_its_page(tmp_path):
+    desk, _chat = desktop_library(tmp_path / "desk")
+    with Device(desk) as device:
+        app = AppServer(device.api)
+        thread = threading.Thread(target=app.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = app.address
+            result = subprocess.run(
+                [NODE, "--test", "--test-reporter=tap", str(TESTS / "picker.e2e.mjs")], capture_output=True, text=True,
+                timeout=180, check=False,
+                env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token,
+                     "GRIMOIRE_SCOPE": "card:mara-vell", "GRIMOIRE_SUBJECT": MARA_CARD})
+        finally:
+            app.close()
+            thread.join(10)
+        assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
+        assert "# pass 1" in result.stdout
+        # what the picker left in the library: the avatar's picture with the crop its zoom stands for
+        art = AppApi(device.api).call("media.art", {"subject": MARA_CARD})
+        (avatar,) = [slot for slot in art["slots"] if slot["slot"] == "avatar"]
+        assert avatar["state"] == "shown" and avatar["crop"] == {"x": 2500, "y": 2500, "w": 5000, "h": 5000}
 
 
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")

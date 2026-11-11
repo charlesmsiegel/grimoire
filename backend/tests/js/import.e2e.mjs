@@ -47,13 +47,17 @@ test("a pasted change set is reviewed, approved and written", { skip: !base }, a
   // review: every file is listed with its hash, and nothing is written yet
   type(field, readFileSync(process.env.GRIMOIRE_CHANGESET, "utf8"));
   byText(main, "button", "Review change set")[0].click();
-  await until(() => byText(main, "h2", "Review before anything is written").length, 30000, "the review");
-  assert.ok(byText(main, "p", "Digest sha256:").length, "the digest is shown");
+  const review = await until(() => main.querySelector("section.import-review"), 30000, "the review");
+  assert.equal(review.querySelector("div.g-eyebrow").textContent, "Review before anything is written");
+  assert.ok(byText(review, "span.import-digest", "Digest sha256:").length, "the digest is shown");
   const applicable = main.querySelectorAll("dt").find((node) => node.textContent === "Can be applied");
   assert.ok(applicable, "the report's facts are shown as labelled values");
   assert.ok(!main.textContent.includes("[object"), "no value is shown as an object's name");
-  const files = main.querySelectorAll("details").filter((node) => node.className.includes("import-file"));
+  const files = review.querySelectorAll("button.import-file");
   assert.ok(files.length > 0, "each file it would write is listed");
+  assert.equal(files.filter((node) => node.getAttribute("aria-pressed") === "true").length, 1, "one file is open at a time");
+  assert.ok(byText(review, "p.import-hash", "sha256 ").length, "the open file is shown with its hash");
+  assert.ok(byText(review, "button", "Approve and write " + files.length + " file").length, "the approval names how many files");
 
   // approve: the confirmation names the count; cancelling writes nothing, confirming writes
   byText(main, "button", "Approve and write")[0].click();
@@ -62,10 +66,13 @@ test("a pasted change set is reviewed, approved and written", { skip: !base }, a
   byText(dialog, "button", "Cancel")[0].click();
   const approveAgain = await until(() => !body.querySelector("dialog")
     && byText(main, "button", "Approve and write").find((node) => !node.disabled), 15000, "the confirmation closed");
-  assert.ok(byText(main, "h2", "Review before anything is written").length, "still only a review");
+  assert.equal(main.querySelector("div.g-eyebrow").textContent, "Review before anything is written", "still only a review");
   approveAgain.click();
   dialog = await until(() => body.querySelector("dialog"), 15000, "the confirmation again");
   byText(dialog, "button", "Write ")[0].click();
-  await until(() => byText(main, "h2", "Written").length, 30000, "the write");
+  await until(() => byText(main, "strong.import-outcome", "Written to your library").length, 30000, "the write");
+  assert.equal(main.querySelector("div.g-eyebrow").textContent, "Written");
   assert.ok(!byText(main, "button", "Approve and write").length, "a written proposal offers no second approval");
+  assert.ok(byText(main, "button", "Import another").length && byText(main, "a", "Open the library").length,
+    "a decided review says where to go next");
 });

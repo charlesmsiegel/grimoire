@@ -1,13 +1,74 @@
-/* Sprint 110's import and review page: every class starts with "import-" (docs/APP_SHELL.md). */
-.import-pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto; padding: 0.5rem;
-  border: 1px solid var(--g-line); border-radius: var(--g-radius); background: var(--g-raised); font-size: 0.85rem; }
-.import-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
-.import-file { border-top: 1px solid var(--g-line); padding: 0.5rem 0; }
-.import-file > summary { cursor: pointer; }
-.import-badge { display: inline-block; padding: 0 0.4rem; border: 1px solid var(--g-line); border-radius: var(--g-radius);
-  font-size: 0.8rem; }
-.import-facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.75rem; margin: 0.5rem 0; }
+/* The Import page: every class starts with "import-" (docs/APP_SHELL.md). */
+.import-page { display: flex; flex-direction: column; gap: 22px; }
+
+/* the kinds across the top: one of them chosen */
+.import-kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.import-kind { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border: 1px solid var(--g-line);
+  border-radius: 10px; background: var(--g-card); color: inherit; text-decoration: none; }
+.import-kind:hover { border-color: var(--g-muted); color: inherit; }
+.import-kind[aria-current="page"] { border-color: var(--g-accent); background: var(--g-accent-soft); }
+.import-kind-name { font-weight: 600; }
+.import-kind-about { font-size: 13px; }
+
+/* the drop zone, and what was found in the file */
+.import-drop { display: grid; place-items: center; gap: 6px; padding: 56px 24px; border: 1.5px dashed var(--g-muted);
+  border-radius: 14px; background: var(--g-card); text-align: center; }
+.import-drop.import-over { border-color: var(--g-accent); background: var(--g-accent-soft); }
+.import-drop-title { font: 600 26px/1.2 var(--g-serif); }
+.import-drop-hint { max-width: 520px; text-wrap: pretty; }
+.import-drop-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
+.import-drop-actions .g-button { background: var(--g-bg); }
+.import-found-name { margin: 6px 0 2px; font: 600 28px/1.1 var(--g-serif); overflow-wrap: anywhere; }
+.import-path { font: 12px/1.4 var(--g-mono); color: var(--g-muted); word-break: break-all; }
+.import-extra { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
+.import-extra-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.import-next { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.import-next-end { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.import-check { display: flex; gap: 8px; align-items: center; margin: 4px 0; cursor: pointer; }
+.import-step-title { margin: 0 0 8px; }
+.import-sub { margin: 14px 0 4px; font: 600 17px/1.3 var(--g-serif); }
+textarea.import-document { min-height: 180px; font: 13px/1.6 var(--g-mono); }
+
+.import-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 16px; margin: 8px 0; font-size: 14px; align-content: start; }
 .import-facts dt { color: var(--g-muted); }
 .import-facts dd { margin: 0; overflow-wrap: anywhere; }
-.import-check { display: flex; gap: 0.5rem; align-items: center; margin: 0.25rem 0; }
-.import-proposal { border: 1px solid var(--g-line); border-radius: var(--g-radius); padding: 0.75rem; margin-top: 1rem; }
+.import-rows { font-size: 14px; }
+.import-rows > summary { cursor: pointer; padding: 4px 0; }
+.import-rows ul { margin: 4px 0 8px; padding-left: 20px; }
+.import-rows li { overflow-wrap: anywhere; }
+.import-later { color: var(--g-muted); }
+
+/* the review: a summary, the files on the left, the selected file on the right, and a footer that decides */
+.import-review { display: flex; flex-direction: column; border: 1px solid var(--g-line); border-radius: 14px;
+  background: var(--g-card); overflow: hidden; }
+.import-review-head { display: flex; flex-wrap: wrap; gap: 20px 40px; padding: 20px 22px; border-bottom: 1px solid var(--g-line); }
+.import-review-what { flex: 1 1 260px; min-width: 0; }
+.import-review-title { margin: 4px 0 0; font: 600 26px/1.15 var(--g-serif); overflow-wrap: anywhere; }
+.import-review-head .import-facts { flex: 0 1 420px; margin: 0; }
+.import-review-notes { padding: 10px 22px; border-bottom: 1px solid var(--g-line); }
+.import-review-notes p { margin: 4px 0; }
+.import-review-body { display: grid; grid-template-columns: minmax(220px, 340px) minmax(0, 1fr); }
+.import-files { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-right: 1px solid var(--g-line);
+  max-height: 560px; overflow-y: auto; }
+.import-count { font-size: 13px; padding: 0 4px; }
+.import-file { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--g-line);
+  border-radius: 9px; background: var(--g-bg); color: inherit; text-align: left; cursor: pointer; }
+.import-file:hover { border-color: var(--g-muted); }
+.import-file[aria-pressed="true"] { border-color: var(--g-accent); background: var(--g-accent-soft); }
+.import-file .import-path { color: inherit; }
+.import-file-meta { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--g-muted); }
+.import-diff { min-width: 0; max-height: 560px; overflow: auto; padding: 14px 20px 18px; }
+.import-hash { margin: 0 0 10px; font: 12px/1.4 var(--g-mono); color: var(--g-muted); word-break: break-all; }
+.import-pre { margin: 0; font: 13px/1.7 var(--g-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.import-result { padding: 14px 22px; border-top: 1px solid var(--g-line); }
+.import-review-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 22px;
+  border-top: 1px solid var(--g-line); background: var(--g-raised); }
+.import-digest { flex: 1 1 200px; font: 12px/1.4 var(--g-mono); color: var(--g-muted); word-break: break-all; }
+.import-done { background: var(--g-accent-soft); }
+.import-outcome { flex: 1 1 200px; }
+
+@media (max-width: 720px) {
+  .import-review-body { grid-template-columns: minmax(0, 1fr); }
+  .import-files { border-right: 0; border-bottom: 1px solid var(--g-line); max-height: 260px; }
+  .import-drop { padding: 36px 16px; }
+}

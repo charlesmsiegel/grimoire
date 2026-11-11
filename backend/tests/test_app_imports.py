@@ -15,6 +15,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from card_fixtures import V3
 from changeset_fixtures import move_the_guild, seed_world
 from grimoire.app import AppServer
 from grimoire.app.adapters.imports import OPS, review_api
@@ -110,3 +111,29 @@ def test_the_import_page_reviews_approves_and_writes_a_change_set_end_to_end(app
     assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
     assert "# pass 1" in result.stdout
     assert files_of(folder) != before  # the page's approval wrote into the library
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is not installed")
+def test_the_import_page_finds_a_card_and_says_every_review_state(app, tmp_path):
+    _api, device, folder = app
+    card = tmp_path / "mara.json"
+    card.write_text(json.dumps(V3), encoding="utf-8")
+    before = files_of(folder)
+    server = AppServer(device.api)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.address
+        result = subprocess.run([shutil.which("node"), "--test", "--test-reporter=tap", str(JS / "import_card.e2e.mjs")],
+                                capture_output=True, text=True, timeout=180, check=False,
+                                env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": server.token,
+                                     "GRIMOIRE_CARD": str(card)})
+    finally:
+        server.close()
+        thread.join(10)
+    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
+    assert "# pass 1" in result.stdout
+    # the page wrote nothing itself: only the approval made beside it (the stale case) reached the library
+    written = set(files_of(folder)) - set(before)
+    cards = {path for path in written if path.startswith("sources/card")}
+    assert cards and all(path == "sources/card" or path.startswith("sources/card/mara-vell") for path in cards)

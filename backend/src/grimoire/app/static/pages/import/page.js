@@ -6,37 +6,58 @@
 // approved are the bytes written. Reject ends the proposal and writes nothing. Nothing on this page writes any
 // other way, and a V1 library is only ever read.
 //
+// The page is three parts: the kinds across the top (the address keeps the chosen one, `?tab=`), that kind's
+// form (`stage`), and what the form found or proposes (`out`), which ends in the shared review. A kind is added
+// by a row in KINDS and a form in FORMS.
+//
 // Every value shown comes from a library, card or export and is only ever set as text, never as markup.
 
 const MAX_FILE = 34 * 1024 * 1024;  // the app takes a request of 48 MiB, base64 included
+const CARD_ACCEPT = ".json,application/json";  // the card formats the app reads today are all JSON documents
+const PORTRAIT_ACCEPT = "image/png,image/jpeg,image/webp";
+const HISTORY_ACCEPT = ".jsonl,application/jsonl,text/plain";
 
-// each tab, and every op its form calls: a tab is shown only when the app serves all of them
-const TABS = [
-  ["card", "Card", ["imports.card_preview"]],
-  ["history", "Chat history", ["imports.history_scan", "imports.history_preview"]],
-  ["v1", "V1 library", ["imports.v1_scan", "imports.v1_preview", "imports.v1_receipts"]],
-  ["changeset", "Change set", ["imports.changeset_review"]],
-  ["rebase", "Source update", ["imports.rebase_candidates", "imports.rebase_review", "imports.rebase_preview"]],
+// each kind: its key (the `tab` of the address), its name, a line about it, and every op its form calls. A kind
+// is shown only when the app serves all of them
+const KINDS = [
+  ["card", "Character card", "A Card V3 JSON, scenario card or lorebook", ["imports.card_preview"]],
+  ["history", "Chat history", "A SillyTavern chat export", ["imports.history_scan", "imports.history_preview"]],
+  ["v1", "V1 library", "Migrate a Grimoire 0.2.1 library", ["imports.v1_scan", "imports.v1_preview", "imports.v1_receipts"]],
+  ["changeset", "Change set", "Review a proposed set of edits", ["imports.changeset_review"]],
+  ["rebase", "Source update", "Move a chat to a newer revision", ["imports.rebase_candidates", "imports.rebase_review", "imports.rebase_preview"]],
 ];
 
 const ACTIONS = { create: "New file", replace: "Replaces a file", unchanged: "Unchanged", write: "Written" };
+const CARD_FORMATS = { chara_card_v3: "Character Card V3", lorebook_v3: "Lorebook V3", "grimoire.scenario-card/1": "Scenario card" };
+// what a review is called at each state, and what its footer says once it is decided
+const STATES = { open: "Review before anything is written", applied: "Written", rejected: "Rejected", ended: "Not written",
+  unknown: "Check whether this was written" };
+const OUTCOMES = { applied: "Written to your library", rejected: "Rejected: nothing was written",
+  ended: "Not written: preview it again", unknown: "This may already have been written: check the library before you preview it again" };
 
-function base64Of(file) {
-  return new Promise((resolve, reject) => {
-    if (file.size > MAX_FILE) {
-      reject(Object.assign(new Error(file.name + " is larger than this app takes in one request"), { reason: "too_large" }));
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const bytes = new Uint8Array(reader.result);
-      let text = "";
-      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      resolve(btoa(text));
-    };
-    reader.onerror = () => reject(reader.error || new Error("the file could not be read"));
-    reader.readAsArrayBuffer(file);
-  });
+async function bytesOf(file) {
+  if (file.size > MAX_FILE) {
+    throw Object.assign(new Error((file.name || "The file") + " is larger than this app takes in one request"), { reason: "too_large" });
+  }
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+function base64(bytes) {
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(text);
+}
+
+// What a card file says of itself, read here only to show it: its format and its name. The preview is what
+// decides how it is imported.
+function cardFacts(bytes) {
+  let doc;
+  try { doc = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch (error) { return { readable: false }; }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return { readable: false };
+  const spec = typeof doc.spec === "string" ? doc.spec : typeof doc.format === "string" ? doc.format : null;
+  const data = doc.data && typeof doc.data === "object" ? doc.data : doc;
+  const name = [data.name, doc.title, doc.name].find((value) => typeof value === "string" && value.trim());
+  return { readable: true, spec, name: name || null };
 }
 
 function shown(value) {
@@ -44,13 +65,20 @@ function shown(value) {
   return typeof value === "object" ? JSON.stringify(value) : String(value);
 }
 
+function sizeOf(bytes) {
+  return bytes < 1024 ? bytes + " bytes" : bytes < 1024 * 1024 ? (bytes / 1024).toFixed(1) + " KB" : (bytes / 1024 / 1024).toFixed(1) + " MB";
+}
+
 export async function mount(root, ctx) {
   const { ui } = ctx;
   const { el } = ui;
   ctx.styles("page.css");
-  ctx.setTitle("Import and review");
-  const served = (ops) => ops.every((op) => ctx.has(op));
-  const usable = TABS.filter(([, , ops]) => served(ops));
+  ctx.layout("page");
+  ctx.setTitle("Import");
+  const capabilities = await ctx.api("imports.capabilities", {});
+  const offered = Array.isArray(capabilities.ops) ? new Set(capabilities.ops) : null;
+  const served = (ops) => ops.every((op) => ctx.has(op) && (!offered || offered.has(op)));
+  const usable = KINDS.filter(([, , , ops]) => served(ops));
   const tab = usable.some(([key]) => key === ctx.query.get("tab")) ? ctx.query.get("tab") : usable.length ? usable[0][0] : null;
 
   const facts = (pairs) => el("dl", { class: "import-facts" },
@@ -61,44 +89,72 @@ export async function mount(root, ctx) {
     const items = Array.isArray(found) ? found : found.rows || [];
     const total = Array.isArray(found) ? found.length : found.total;
     if (!total) return null;
-    return ui.section(title + " (" + total + ")",
-      el("ul", { class: "g-list" }, items.map((row) => el("li", {}, describe(row)))),
+    return el("details", { class: "import-rows" }, el("summary", {}, title + " (" + total + ")"),
+      el("ul", {}, items.map((row) => el("li", {}, describe(row)))),
       found.truncated ? el("p", { class: "g-muted" }, "Showing " + items.length + " of " + total + ".") : null);
   };
-  const out = el("div", { "aria-live": "polite" });
-  const show = (...nodes) => out.replaceChildren(...nodes.flat().filter(Boolean));
+  const present = (...nodes) => nodes.flat().filter(Boolean);
+  const stage = el("div", {});
+  const out = el("div", { class: "g-stack", "aria-live": "polite" });
+  const show = (...nodes) => out.replaceChildren(...present(nodes));
+  // a step of a kind's own flow (who is speaking, what a V1 library holds): a titled card
+  const step = (title, ...children) => ui.card({ tag: "section", label: title }, el("h2", { class: "g-heading import-step-title" }, title), ...present(children));
+  // the foot of a form or a step: what happens next, said once, and the one button that does it
+  const next = (note, label, work) => el("div", { class: "import-next" }, el("span", { class: "g-muted" }, note),
+    ui.button(label, () => ctx.act(work), { kind: "primary" }));
+  const startOver = () => {
+    show();
+    stage.replaceChildren(...present(FORMS[tab]()));
+    ctx.scrollTo(0);
+    const first = stage.querySelector("button") || stage.querySelector("input") || stage.querySelector("textarea");
+    if (first) first.focus();
+  };
 
-  // -- the shared proposal panel: every file, its exact bytes' hash, and digest-bound Approve / Reject ----------
-  function fileRow(file) {
-    const action = ACTIONS[file.action] || (String(file.action).startsWith("unreadable") ? "Current file unreadable" : file.action);
-    const body = file.diff !== null && file.diff !== undefined ? el("pre", { class: "import-pre" }, file.diff)
-      : file.text !== null && file.text !== undefined ? el("pre", { class: "import-pre" }, file.text)
-        : el("p", { class: "g-muted" }, file.binary ? "Binary file: shown by its size and hash only."
-          : "Too large to show: shown by its size and hash only.");
-    return el("details", { class: "import-file" },
-      el("summary", {}, el("strong", {}, file.path), " ", el("span", { class: "import-badge" }, action), " ",
-        el("span", { class: "g-muted" }, file.size + " bytes")),
-      el("p", { class: "g-muted import-mono" }, "sha256 " + file.sha256), body);
-  }
-
-  function proposalPanel(proposal, report, after) {
-    const panel = el("section", { class: "import-proposal", "aria-label": "Proposed write" });
+  // -- the shared review: every file, its exact bytes' hash, and digest-bound Approve / Reject -----------------
+  function review(proposal, { title, summary, notes }, after) {
+    const panel = el("section", { class: "import-review", "aria-label": "Proposed write" });
     const count = proposal.writes + (proposal.writes === 1 ? " file" : " files");
+    let selected = proposal.files.length ? proposal.files[0] : null;
+
+    const fileButtons = proposal.files.map((file) => {
+      const action = ACTIONS[file.action] || (String(file.action).startsWith("unreadable") ? "Current file unreadable" : file.action);
+      return [file, el("button", { type: "button", class: "import-file", "aria-pressed": String(file === selected),
+        onclick: () => { selected = file; fill(); } },
+      el("span", { class: "import-path" }, file.path),
+      el("span", { class: "import-file-meta" }, el("span", {}, action), el("span", {}, file.size + " bytes")))];
+    });
+    const pane = el("div", { class: "import-diff" });
+    function fill() {
+      for (const [file, node] of fileButtons) node.setAttribute("aria-pressed", String(file === selected));
+      if (!selected) { pane.replaceChildren(ui.empty("Nothing to write: the library already holds exactly this.")); return; }
+      const body = selected.diff !== null && selected.diff !== undefined ? el("pre", { class: "import-pre" }, selected.diff)
+        : selected.text !== null && selected.text !== undefined ? el("pre", { class: "import-pre" }, selected.text)
+          : el("p", { class: "g-muted" }, selected.binary ? "Binary file: shown by its size and hash only."
+            : "Too large to show: shown by its size and hash only.");
+      pane.replaceChildren(el("p", { class: "import-hash" }, selected.path + " · sha256 " + selected.sha256), body);
+    }
+
     function render(state, result) {
       const open = state === "open";
-      panel.replaceChildren(...[
-        el("h2", {}, open ? "Review before anything is written" : state === "applied" ? "Written"
-          : state === "unknown" ? "Check whether this was written" : "Not written"),
-        report,
-        el("h3", {}, count),
-        proposal.files.length ? proposal.files.map(fileRow)
-          : ui.empty("Nothing to write: the library already holds exactly this."),
-        el("p", { class: "g-muted import-mono" }, "Digest " + proposal.digest),
-        result ? facts(Object.entries(result)) : null,
-        open ? ui.actions(
-          ui.button(proposal.writes ? "Approve and write" : "Approve", () => ctx.act(approve), { kind: "primary" }),
-          ui.button("Reject", () => ctx.act(reject))) : null,
-      ].flat().filter(Boolean));
+      panel.replaceChildren(...present(
+        el("div", { class: "import-review-head" },
+          el("div", { class: "import-review-what" }, ui.eyebrow(STATES[state] || state, { accent: true }),
+            el("h2", { class: "import-review-title" }, title)),
+          summary),
+        notes && notes.length ? el("div", { class: "import-review-notes" }, notes) : null,
+        el("div", { class: "import-review-body" },
+          el("div", { class: "import-files" }, el("div", { class: "g-muted import-count" }, count), fileButtons.map(([, node]) => node)),
+          pane),
+        result ? el("div", { class: "import-result" }, ui.eyebrow("What was written"), facts(Object.entries(result))) : null,
+        open ? el("div", { class: "import-review-foot" },
+          el("span", { class: "import-digest" }, "Digest " + proposal.digest + " · the bytes approved are the bytes written"),
+          ui.button("Reject", () => ctx.act(reject)),
+          ui.button(proposal.writes ? "Approve and write " + count : "Approve", () => ctx.act(approve), { kind: "primary" }))
+          : el("div", { class: "import-review-foot import-done" },
+            el("strong", { class: "import-outcome" }, OUTCOMES[state] || state),
+            ui.button("Import another", startOver),
+            ctx.registered("sources") ? ui.buttonLink("Open the library", "sources") : null)));
+      fill();
     }
     async function approve() {
       if (proposal.writes && !await ui.confirm("Write " + count + " into this library, exactly as shown?",
@@ -138,46 +194,93 @@ export async function mount(root, ctx) {
     return panel;
   }
 
-  // -- one form per kind -------------------------------------------------------------------------------------
-  const fileInput = (label, accept, hint) => {
-    const input = el("input", { type: "file", accept, class: "g-input", id: ui.id("file") });
-    return { input, node: el("div", { class: "g-field" }, el("label", { for: input.id }, label),
-      hint ? el("div", { class: "g-muted" }, hint) : null, input) };
-  };
+  // -- shared form pieces ------------------------------------------------------------------------------------
+  // A large drop zone for one file: drag a file onto it, or choose one. `onfile` gets the file.
+  function dropZone({ title, hint, accept, label, onfile }) {
+    const input = el("input", { type: "file", accept, hidden: true, "aria-label": label });
+    const zone = el("div", { class: "import-drop" },
+      el("span", { class: "import-drop-title" }, title), el("span", { class: "g-muted import-drop-hint" }, hint),
+      el("div", { class: "import-drop-actions" }, ui.button("Choose a file", () => input.click())), input);
+    const take = (file) => { if (file) ctx.act(() => onfile(file)); };
+    input.addEventListener("change", () => { const file = input.files && input.files[0]; input.value = ""; take(file); });
+    for (const type of ["dragenter", "dragover"]) zone.addEventListener(type, (event) => { event.preventDefault(); zone.classList.add("import-over"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("import-over"));
+    zone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      zone.classList.remove("import-over");
+      if (event.dataTransfer) take(event.dataTransfer.files[0]);
+    });
+    return zone;
+  }
+  // An optional extra file beside the main one: a dashed button until one is chosen, then its name and Remove.
+  function extraFile(label, accept, hint) {
+    let file = null;
+    const input = el("input", { type: "file", accept, hidden: true, "aria-label": label });
+    const node = el("div", { class: "import-extra" });
+    const render = () => node.replaceChildren(...present(input, file
+      ? [el("span", { class: "import-extra-name" }, el("strong", {}, label), el("span", { class: "g-mono" }, file.name || "chosen file")),
+        ui.button("Remove", () => { file = null; render(); }, { kind: "linklike", size: "small" })]
+      : [ui.button(label + " (optional)", () => input.click(), { kind: "dashed", size: "small" }),
+        hint ? el("span", { class: "g-muted" }, hint) : null]));
+    input.addEventListener("change", () => { file = (input.files && input.files[0]) || null; input.value = ""; render(); });
+    render();
+    return { node, get file() { return file; } };
+  }
   const check = (label) => {
     const input = el("input", { type: "checkbox" });
     return { input, node: el("label", { class: "import-check" }, input, label) };
   };
 
+  // -- one form per kind -------------------------------------------------------------------------------------
   function cardForm() {
-    const cardFile = fileInput("Card", ".json,application/json",
-      "Character Card V3 JSON, a scenario card or a V3 lorebook.");
-    const portrait = fileInput("Portrait", "image/png,image/jpeg,image/webp", "Optional. Without it the card's pictures are reported missing.");
-    const lorebook = fileInput("Separate lorebook", ".json,application/json", "Optional.");
-    const scenario = check("Import as a scenario");
-    async function preview() {
-      const file = cardFile.input.files[0];
-      if (!file) { ctx.notify("Choose a card file first.", { bad: true }); return; }
-      const args = { card: await base64Of(file), origin: file.name, as_scenario: scenario.input.checked };
-      if (portrait.input.files[0]) args.portrait = await base64Of(portrait.input.files[0]);
-      if (lorebook.input.files[0]) args.lorebook = await base64Of(lorebook.input.files[0]);
-      const proposal = await ctx.api("imports.card_preview", args);
-      const r = proposal.report;
-      show(proposalPanel(proposal, el("div", {},
-        facts([["Status", r.status], ["Destination", r.source], ["Format", r.format], ["Becomes", r.kind]]),
-        rows("Not carried over", r.losses), rows("Collisions", r.collisions),
-        r.suggestions ? ui.section("Name suggestions (shown, never linked)", facts(Object.entries(r.suggestions))) : null)));
+    const limit = capabilities.imports && capabilities.imports.card && capabilities.imports.card.max_bytes;
+    async function found(file) {
+      const bytes = await bytesOf(file);
+      if (limit && bytes.length > limit) {
+        throw Object.assign(new Error((file.name || "The card") + " is larger than a card may be (" + sizeOf(limit) + ")"), { reason: "too_large" });
+      }
+      const read = cardFacts(bytes);
+      const portrait = extraFile("Add a portrait", PORTRAIT_ACCEPT, "Without it the card's pictures are reported missing.");
+      const lorebook = extraFile("Add a lorebook file", CARD_ACCEPT, "A separate V3 lorebook to import with the card.");
+      const scenario = check("Import as a scenario");
+      async function preview() {
+        const args = { card: base64(bytes), origin: file.name, as_scenario: scenario.input.checked };
+        if (portrait.file) args.portrait = base64(await bytesOf(portrait.file));
+        if (lorebook.file) args.lorebook = base64(await bytesOf(lorebook.file));
+        const proposal = await ctx.api("imports.card_preview", args);
+        const r = proposal.report;
+        const name = read.name || r.source;
+        show(review(proposal, {
+          title: r.status === "new" ? name + " becomes a new " + r.kind : name + ": " + r.kind + ", " + r.status,
+          summary: facts([["Status", r.status], ["Destination", r.source], ["Format", CARD_FORMATS[r.format] || r.format], ["Becomes", r.kind]]),
+          notes: present(rows("Not carried over", r.losses), rows("Collisions", r.collisions),
+            r.suggestions ? el("details", { class: "import-rows" }, el("summary", {}, "Name suggestions (shown, never linked)"),
+              facts(Object.entries(r.suggestions))) : null),
+        }));
+      }
+      show();
+      stage.replaceChildren(el("div", { class: "g-stack" },
+        ui.card({ tag: "section", label: "What was found" },
+          ui.eyebrow(read.readable ? (CARD_FORMATS[read.spec] || "A JSON document") : "Not read here", { accent: true }),
+          el("h2", { class: "import-found-name" }, read.name || file.name || "Card"),
+          el("div", { class: "import-path" }, file.name || ""),
+          facts([["Format", read.readable ? (CARD_FORMATS[read.spec] || read.spec || "It names no format: the preview says whether it can be imported")
+            : "This is not a JSON document: the preview says whether it can be imported"], ["Size", sizeOf(bytes.length)]]),
+          portrait.node, lorebook.node,
+          el("div", {}, ui.button("Use a different file", startOver, { kind: "linklike" }))),
+        el("div", { class: "import-next" }, scenario.node, el("span", { class: "import-next-end" },
+          el("span", { class: "g-muted" }, "Nothing is written until you approve the preview."),
+          ui.button("Preview import", () => ctx.act(preview), { kind: "primary" })))));
+      const go = [...stage.querySelectorAll("button")].find((node) => node.textContent === "Preview import");
+      if (go) go.focus();
     }
-    return [cardFile.node, portrait.node, lorebook.node, scenario.node,
-      ui.actions(ui.button("Preview import", () => ctx.act(preview), { kind: "primary" }))];
+    return [dropZone({ title: "Drop a card here", label: "Card file", accept: CARD_ACCEPT, onfile: found,
+      hint: "A Character Card V3 JSON, a scenario card or a V3 lorebook. Nothing is written until you approve the preview." })];
   }
 
   function historyForm() {
-    const exportFile = fileInput("SillyTavern chat export", ".jsonl,application/jsonl,text/plain");
-    async function scanIt() {
-      const file = exportFile.input.files[0];
-      if (!file) { ctx.notify("Choose a SillyTavern chat export first.", { bad: true }); return; }
-      const exported = await base64Of(file);
+    async function scanIt(file) {
+      const exported = base64(await bytesOf(file));
       const found = await ctx.api("imports.history_scan", { export: exported });
       const speakers = Array.isArray(found.speakers) ? found.speakers : [];
       const inputs = speakers.map((speaker) => [speaker.id, ui.field(
@@ -191,19 +294,22 @@ export async function mount(root, ctx) {
         if (label.value.trim()) args.label = label.value.trim();
         const proposal = await ctx.api("imports.history_preview", args);
         const r = proposal.report;
-        show(proposalPanel(proposal, el("div", {},
-          facts([["Status", r.status], ["Chat", r.chat], ["Pages", r.pages], ["Counts", r.counts], ["Staged", r.staged],
+        show(review(proposal, {
+          title: "Chat history from " + (file.name || "an export"),
+          summary: facts([["Status", r.status], ["Chat", r.chat], ["Pages", r.pages], ["Counts", r.counts], ["Staged", r.staged],
             ["Accepted events", r.accepted_events.length], ["Character memories", r.memories.length]]),
-          el("p", { class: "g-muted" }, "Imported lines are kept as transcript only: they become no accepted events and no character memories."),
-          rows("Not carried over", r.losses)),
-        async (done) => { if (ctx.registered("chat") && done.result.chat) ctx.notify("Imported as " + done.result.chat + "."); }));
+          notes: present(el("p", { class: "g-muted" }, "Imported lines are kept as transcript only: they become no accepted events and no character memories."),
+            rows("Not carried over", r.losses)),
+        }, async (done) => { if (ctx.registered("chat") && done.result.chat) ctx.notify("Imported as " + done.result.chat + "."); }));
       }
-      show(ui.section("Who is speaking",
+      show(step("Who is speaking",
+        el("div", { class: "import-path" }, file.name || ""),
         facts([["Bytes", found.bytes], ["sha256", found.sha256], ["Counts", found.counts]]),
         inputs.map(([, input]) => input.node), label.node, rows("Not carried over", found.losses),
-        ui.actions(ui.button("Preview import", () => ctx.act(preview), { kind: "primary" }))));
+        next("Nothing is written until you approve the preview.", "Preview import", preview)));
     }
-    return [exportFile.node, ui.actions(ui.button("Read export", () => ctx.act(scanIt), { kind: "primary" }))];
+    return [dropZone({ title: "Drop a chat export here", label: "SillyTavern chat export", accept: HISTORY_ACCEPT, onfile: scanIt,
+      hint: "A SillyTavern chat export (.jsonl). It is read first, so you can say who each speaker is." })];
   }
 
   function v1Form() {
@@ -226,61 +332,68 @@ export async function mount(root, ctx) {
         for (const [kind, legacy, target, box] of picks) if (box.checked) chosen[kind][legacy] = target;
         const proposal = await ctx.api("imports.v1_preview", { scan: found.scan, selection: chosen });
         const r = proposal.report;
-        show(proposalPanel(proposal, el("div", {},
-          facts([["Archive", r.archive_id], ["Outcomes", r.outcome_counts], ["Model calls", r.provider_calls]]),
-          rows("Unresolved", r.unresolved), rows("Not imported", r.not_imported),
-          rows("Flagged", r.flags), rows("Not carried over", r.losses)),
-        async () => {
+        show(review(proposal, {
+          title: "V1 library " + r.archive_id,
+          summary: facts([["Archive", r.archive_id], ["Outcomes", r.outcome_counts], ["Model calls", r.provider_calls]]),
+          notes: present(rows("Unresolved", r.unresolved), rows("Not imported", r.not_imported),
+            rows("Flagged", r.flags), rows("Not carried over", r.losses)),
+        }, async () => {
           const receipts = await ctx.api("imports.v1_receipts", { archive_id: found.archive_id });
           ctx.notify("Import receipt: run " + receipts.runs + ", " + receipts.written + " files written so far.");
         }));
       }
-      show(ui.section("What the V1 library holds",
+      show(step("What the V1 library holds",
         facts([["Archive", found.archive_id], ["Status", found.status], ["Counts", found.counts],
           ["Pictures", found.images], ["Model calls", found.provider_calls]]),
-        el("h3", {}, "Import"),
+        el("h3", { class: "import-sub" }, "Import"),
         Object.entries(selection.worlds).map(([legacy, target]) => pick("worlds", legacy, target)),
         Object.entries(selection.campaigns).map(([legacy, target]) => pick("campaigns", legacy, target)),
         rows("Not proposed", selection.unproposed),
         rows("Identities", found.identities, (row) => [row.legacy_id, row.status, row.candidate].filter(Boolean).join(" · ")),
         rows("Findings", found.findings), rows("Unresolved", found.unresolved), rows("Not carried over", found.losses),
-        ui.actions(ui.button("Preview import", () => ctx.act(preview), { kind: "primary" }))));
+        next("Nothing is written until you approve the preview.", "Preview import", preview)));
     }
-    return [source.node, archive.node, ui.actions(ui.button("Scan library", () => ctx.act(scanIt), { kind: "primary" }))];
+    return [ui.card({ tag: "section", label: "V1 library" }, source.node, archive.node,
+      next("Every write is previewed first, file by file.", "Scan library", scanIt))];
   }
 
   function changesetForm() {
     const documentField = ui.field("Change set (JSON)", { multiline: true,
       hint: "Proposed change sets are not stored yet: paste the change set document to review it." });
-    async function review() {
+    documentField.input.classList.add("import-document");
+    async function reviewIt() {
       let changeset;
       try { changeset = JSON.parse(documentField.value); }
       catch (error) { documentField.setError("This is not JSON."); return; }
       documentField.setError("");
       const proposal = await ctx.api("imports.changeset_review", { changeset });
       const r = proposal.report;
-      show(proposalPanel(proposal, el("div", {},
-        facts([["Change set", r.changeset], ["Title", r.title], ["Author", r.author], ["Why", r.rationale],
+      show(review(proposal, {
+        title: r.title || r.changeset,
+        summary: facts([["Change set", r.changeset], ["Title", r.title], ["Author", r.author], ["Why", r.rationale],
           ["Can be applied", r.applicable ? "yes" : "no"]]),
-        rows("Changes", r.changes, (row) => row.action + " " + row.path + (row.summary ? ": " + row.summary : "")),
-        rows("Conflicts", r.conflicts), rows("Blocked", r.blocked))));
+        notes: present(rows("Changes", r.changes, (row) => row.action + " " + row.path + (row.summary ? ": " + row.summary : "")),
+          rows("Conflicts", r.conflicts), rows("Blocked", r.blocked)),
+      }));
     }
-    return [documentField.node, ui.actions(ui.button("Review change set", () => ctx.act(review), { kind: "primary" }))];
+    return [ui.card({ tag: "section", label: "Change set" }, documentField.node,
+      next("Every write is previewed first, file by file.", "Review change set", reviewIt))];
   }
 
   function rebaseForm() {
     const chat = ui.field("Chat", { value: ctx.query.get("chat") || "", placeholder: "chat:…",
       hint: "The chat whose characters may follow a newer revision of their source." });
-    async function review(actor) {
+    async function reviewActor(actor) {
       const found = await ctx.api("imports.rebase_review", { actor });
       const choices = [];
       async function preview() {
         const decisions = {};
         for (const [name, select] of choices) decisions[name] = select.value;
         const proposal = await ctx.api("imports.rebase_preview", { review: found.review, decisions });
-        show(proposalPanel(proposal, facts([["From", found.ancestor], ["To", found.upstream], ["Decisions", decisions]])));
+        show(review(proposal, { title: "Update " + found.actor,
+          summary: facts([["From", found.ancestor], ["To", found.upstream], ["Decisions", decisions]]) }));
       }
-      show(ui.section("Update " + found.actor,
+      show(step("Update " + found.actor,
         facts([["From", found.ancestor], ["To", found.upstream], ["History kept", found.history]]),
         found.rows.map((row) => {
           let control = null;
@@ -290,35 +403,33 @@ export async function mount(root, ctx) {
             control = ui.choice(row.field, options);
             choices.push([row.field, control.select]);
           }
-          return el("details", { class: "import-file", open: row.needs_decision },
+          return el("details", { class: "import-rows", open: row.needs_decision },
             el("summary", {}, row.field + ": " + row.status),
             facts([["Before", row.ancestor], ["New", row.upstream], ["This chat", row.local]]), control ? control.node : null);
         }),
         rows("Notices", found.notices),
-        ui.actions(ui.button("Preview update", () => ctx.act(preview), { kind: "primary" }))));
+        next("Nothing is written until you approve the preview.", "Preview update", preview)));
     }
     async function candidates() {
       const found = await ctx.api("imports.rebase_candidates", { chat: chat.value.trim() });
-      show(ui.section("Characters in this chat", ui.list(found.actors.map((row) => row.behind
-        ? ui.button(row.binding + " has a newer revision: review the update", () => ctx.act(() => review(row.actor)))
+      show(step("Characters in this chat", ui.list(found.actors.map((row) => row.behind
+        ? ui.button(row.binding + " has a newer revision: review the update", () => ctx.act(() => reviewActor(row.actor)))
         : el("span", {}, ui.rowText(row.binding, row.problem ? "Its source cannot be read: " + row.problem : "Up to date"))),
       { empty: "No character in this chat follows a source." })));
     }
-    return [chat.node, ui.actions(ui.button("Find updates", () => ctx.act(candidates), { kind: "primary" }))];
+    return [ui.card({ tag: "section", label: "Source update" }, chat.node,
+      next("Every write is previewed first, file by file.", "Find updates", candidates))];
   }
 
   const FORMS = { card: cardForm, history: historyForm, v1: v1Form, changeset: changesetForm, rebase: rebaseForm };
 
-  const capabilities = await ctx.api("imports.capabilities", {});
-  const tabs = el("div", { class: "g-actions", role: "group", "aria-label": "What to import or review" });
-  for (const [key, label] of usable) {
-    const link = el("a", { class: "g-button", href: ctx.href("import", [], { tab: key }) }, label);
-    if (key === tab) link.setAttribute("aria-current", "page");
-    tabs.append(link);
-  }
-  root.append(tabs, tab ? ui.section(TABS.find(([key]) => key === tab)[1], ...FORMS[tab]())
-    : ui.unavailable("Import", "This app serves no import or review yet."), out,
-    el("details", {}, el("summary", {}, "Not available yet"),
-      el("ul", { class: "g-list" }, capabilities.unavailable.map((row) =>
-        el("li", {}, ui.rowText(row.detail, "Waits on " + row.blocked_by))))));
+  const kinds = el("nav", { class: "import-kinds", "aria-label": "What to import or review" }, usable.map(([key, label, about]) =>
+    el("a", { class: "import-kind", href: ctx.href("import", [], { tab: key }), "aria-current": key === tab ? "page" : null },
+      el("span", { class: "import-kind-name" }, label), el("span", { class: "g-muted import-kind-about" }, about))));
+  if (tab) stage.replaceChildren(...present(FORMS[tab]()));
+  else stage.replaceChildren(ui.unavailable("Import", "This app serves no import or review yet."));
+  root.append(el("div", { class: "import-page" }, usable.length ? kinds : null, stage, out,
+    capabilities.unavailable && capabilities.unavailable.length ? el("details", { class: "import-rows import-later" },
+      el("summary", {}, "What this app cannot import yet"),
+      el("ul", {}, capabilities.unavailable.map((row) => el("li", {}, row.detail, el("span", { class: "g-muted" }, " · waits on " + row.blocked_by))))) : null));
 }
