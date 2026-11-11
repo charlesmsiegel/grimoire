@@ -48,3 +48,12 @@ test("a theme is kept and applied; anything else is the system's", () => {
   assert.equal(readTheme(storage), "system");
   assert.equal(readTheme({ getItem() { throw new Error("blocked"); } }), "system");
 });
+
+test("the theme showing is the person's choice, or the system's when they made none", async () => {
+  const { shownTheme } = await import(path.join(shell, "palette.js"));
+  const storage = { value: null, getItem() { return this.value; }, setItem(_key, value) { this.value = value; } };
+  assert.equal(shownTheme(storage, true), "dark");
+  assert.equal(shownTheme(storage, false), "light");
+  storage.value = "light";
+  assert.equal(shownTheme(storage, true), "light");
+});

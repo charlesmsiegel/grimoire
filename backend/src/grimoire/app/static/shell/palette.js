@@ -57,6 +57,12 @@ export function setTheme(choice, root, storage) {
   return theme;
 }
 
+// The theme showing now: the person's choice, or the system's when they have made none.
+export function shownTheme(storage, prefersDark) {
+  const choice = readTheme(storage);
+  return choice === "system" ? (prefersDark ? "dark" : "light") : choice;
+}
+
 // Whether a key is Ctrl+K or Cmd+K.
 export function isPaletteKey(event) {
   return (event.ctrlKey || event.metaKey) && !event.altKey && String(event.key).toLowerCase() === "k";
@@ -84,7 +90,7 @@ export function openPalette({ items, more, label = "Search pages, chats and comm
   const input = el("input", { type: "search", class: "g-input g-palette-input", "aria-label": label,
     placeholder: "Search", autocomplete: "off", role: "combobox", "aria-expanded": "true", "aria-controls": listId });
   const results = el("ul", { id: listId, class: "g-palette-results", role: "listbox", "aria-label": "Results" });
-  const status = el("div", { class: "g-muted", "aria-live": "polite" });
+  const status = el("div", { class: "g-muted g-palette-status", "aria-live": "polite" });
   const dialog = el("dialog", { class: "g-dialog g-palette", "aria-label": label }, input, status, results);
   let shown = [];
   let active = 0;
@@ -113,7 +119,8 @@ export function openPalette({ items, more, label = "Search pages, chats and comm
     shown = rank(input.value, [...items(), ...found], input.value.trim() ? undefined : Infinity);
     active = 0;
     results.replaceChildren(...shown.map((item) => el("li", { id: id("option"), role: "option", class: "g-palette-option",
-      onclick: () => choose(item) }, el("span", {}, item.label), item.detail ? el("span", { class: "g-muted" }, " " + item.detail) : null)));
+      onclick: () => choose(item) }, el("span", { class: item.line ? "g-palette-line" : undefined }, item.label),
+      item.detail ? el("span", { class: "g-muted" }, " " + item.detail) : null)));
     status.textContent = shown.length ? "" : "Nothing matches.";
     mark();
   };

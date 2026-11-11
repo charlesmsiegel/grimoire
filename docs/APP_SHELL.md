@@ -78,30 +78,62 @@ sheet stays linked once loaded, so an unprefixed class would restyle other pages
 | `ctx.restart(hash)` | load the app again (its pages, ops and library) and open `hash`: after first run opens a library |
 | `ctx.draft(key)` | an unsent draft (`get`, `set`, `clear`), kept per tab until cleared, across navigation and reloads |
 | `ctx.setTitle(text)`, `ctx.setActions(...nodes)` | the header's title and its action buttons |
+| `ctx.setCrumb(...parts)` | the line above the title saying where the page sits ("Chats / Harbor"): text, or links and text |
+| `ctx.layout(name)` | how wide the page is: `reading`, `page`, `wide`, or `full` (the page lays out the whole pane itself, as a chat does); unset, a page gets the default column |
+| `ctx.focusMode(on, onchange)` | hide the rail and the header (a chat's story only); the shell shows "Leave focus · Esc" and tells `onchange(on)` when it changes |
+| `ctx.scrollTo(y \| "end")` | scroll the page's pane (the pane scrolls, not the window) |
+| `ctx.setCount(route, {value, label, bad})` | a count beside a page in the rail, or `null` to clear it |
 | `ctx.notify(text, {bad})` | a notice above the page (`bad` stays until dismissed and is announced) |
 | `ctx.styles(file)` | link a style sheet from the page's own folder (inline styles are refused by the page's policy) |
 | `ctx.signal` | aborted when the page is left: pass it on, and do nothing after it fires |
 | `ctx.ui` | the design primitives below |
 
-The shell moves focus to the page heading after each navigation and restores the scroll position when the person
-comes back to an address. Coming back also puts focus in the control they were last in on that page, with the
+The shell moves focus to the page heading after each navigation and restores the pane's scroll position when the
+person comes back to an address. Coming back also puts focus in the control they were last in on that page, with the
 caret where it was, when that control has a `data-focus-key`: every `field` with a draft has one, and a page may
 give one to any other control, as a key that stays the same from one mount to the next (ids do not). A control
 the person picks while the page is still loading keeps focus.
 
 ### Design primitives (`ctx.ui`, `static/shell/ui.js`)
 
-`el(tag, attrs, ...children)`, `button(label, onclick, {kind})` (`primary`, `danger`), `link(label, route,
-segments, query)`, `sourceLink(ref, name)` (shows the exact ref when the name is missing; a source is never
-replaced by another of the same name), `field(label, {draft, multiline, hint})` (labelled, with `setError` tied
-to the input for screen readers), `choice(label, options, {value, onchange})`, `section(title, ...)`,
-`list(items, {empty})`, `rowText(title, detail)`, `notice(text, {kind})`, `errorBox(error)`, `errorText(error)`,
-`unavailable(what, blocker)`, `empty(text)`, `actions(...)` and `confirm(message, {confirmLabel, danger})`, which
-names exactly what is about to happen before anything that cannot be undone (and answers no by itself if the
-person leaves the page while it is open).
+`el(tag, attrs, ...children)`, `button(label, onclick, {kind, size})` (`primary`, `danger`, `dashed` for an "add"
+action, `linklike`; `small`, `large`), `buttonLink(label, route, segments, query, {kind, size})` (going somewhere,
+where a button does something), `link(label, route, segments, query)`, `sourceLink(ref, name)` (shows the exact ref
+when the name is missing; a source is never replaced by another of the same name), `field(label, {draft, multiline,
+hint})` (labelled, with `setError` tied to the input for screen readers), `choice(label, options, {value,
+onchange})`, `search(label, {oninput})`, `section(title, ...)`, `list(items, {empty})`, `rowText(title, detail)`,
+`notice(text, {kind})` (`soft`, `bad`), `errorBox(error)`, `errorText(error)`, `unavailable(what, blocker)`,
+`empty(text)`, `actions(...)` and `confirm(message, {confirmLabel, danger})`, which names exactly what is about to
+happen before anything that cannot be undone (and answers no by itself if the person leaves the page while it is
+open).
 
-Style with the `g-` classes and the `--g-` tokens of `shell.css` (`--g-fg`, `--g-bg`, `--g-raised`, `--g-muted`,
-`--g-line`, `--g-accent`, `--g-bad`, `--g-good`, `--g-focus`, `--g-radius`); the shell switches them for dark mode.
+The shared pieces of the design: `eyebrow(text, {accent})`, `pill(text, {kind})` (`accent`, `bad`, `good`),
+`card({kind}, ...)` (`hero`, `accent`, `dashed`, `flush`), `segments(label, options, {value, onchange})` (a
+segmented control; `set(value)` moves the choice without calling back), `selectable(content, {selected, chip})`
+(one of a set of cards or chips), `avatar(name, {size, key, picture})`, `avatars(people)`, `portrait(name, {key,
+picture})`, `tile(name, href, {key, picture, detail})`, `cover({key, picture, tall}, ...)` and `modal(title,
+{onclose})` (a fixed head and foot around a body that scrolls; it closes with its page). A picture is a promise of
+an image URL (`ctx.picture(ref)`); until it resolves, and when there is none, the piece shows the name's initial on
+a colour that `hue(key)` keeps the same for the same key everywhere.
+
+Style with the `g-` classes and the `--g-` tokens of `shell.css`: colours `--g-fg`, `--g-bg`, `--g-raised` (the
+rail and strips), `--g-card`, `--g-muted`, `--g-line`, `--g-accent`, `--g-on-accent`, `--g-accent-soft`, `--g-bad`,
+`--g-bad-soft`, `--g-good`, `--g-focus`; type `--g-sans` (the interface), `--g-serif` (story text and titles) and
+`--g-mono` (paths, refs and diffs). The shell switches the colours for dark mode. The fonts are named, not shipped:
+IBM Plex and Spectral show where a device has them, and its own sans and serif otherwise. Layout classes pages
+share: `g-stack`, `g-row`, `g-columns`, `g-tiles`, `g-rows`, `g-table`, `g-hero-title`, `g-heading`, `g-quote`,
+`g-prose`, `g-muted`, `g-mono`.
+
+### The rail and the header
+
+The rail lists the registry's pages in four groups made of the slots: **Play** (`home`, `play`), **Library**
+(`library`), **Table** (`campaign`) and **System** (`media`, `settings`). The `start` page is the rail's **New
+chat** button, not an item. Under the groups, **Jump back in** lists the three chats played last (the `chats` op),
+and the foot says whether a model will answer and names this device. A `hidden` page is in no group; the command
+palette still lists it when its route takes no path segment (Library setup).
+
+The header shows the page's crumb and title, the page's own actions, **Search** and a button that switches between
+the light and dark themes.
 
 ### Addresses
 

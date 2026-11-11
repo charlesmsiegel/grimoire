@@ -2,7 +2,7 @@
   "contract": 1,
   "id": "import",
   "route": "import",
-  "title": "Import and review",
+  "title": "Import",
   "slot": "library",
   "order": 50,
   "owner": "110",

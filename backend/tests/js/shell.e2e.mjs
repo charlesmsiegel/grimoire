@@ -58,6 +58,20 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   chatsItem.click();
   await until(() => byText(main, "a", "By character").length && main.querySelector("ul"), 15000, "the chat list");
   assert.equal(nav.querySelector("a[aria-current]").textContent, "Chats");
+  // the rail: New chat, the groups, the chats played last and whether a model will answer
+  assert.ok(!taken.has("start") || byText(nav, "a", "New chat")[0].getAttribute("href") === "#/start");
+  assert.ok(!byText(nav, "a", "Start Chat").length, "Start Chat is the New chat button, not a second item");
+  for (const label of ["Play", "System"]) assert.ok(byText(nav, "div", label).length, label + " is a group of the rail");
+  await until(() => byText(nav, "div", "Jump back in").length, 15000, "the chats played last");
+  assert.ok(nav.querySelectorAll("a.g-nav-recent").some((node) => node.getAttribute("href") === "#/chat/" + encodeURIComponent(process.env.GRIMOIRE_CHAT)));
+  assert.ok(byText(nav, "div", "Model ready").length || byText(nav, "div", "No model set up").length);
+  // the header's theme button names the theme it switches to, and switches
+  const theme = body.querySelector("button.g-theme");
+  assert.equal(theme.textContent, "Dark");
+  theme.click();
+  assert.equal(document.documentElement.getAttribute("data-theme"), "dark");
+  assert.equal(theme.textContent, "Light");
+  theme.click();
   const chatHash = "#/chat/" + encodeURIComponent(process.env.GRIMOIRE_CHAT);
   const first = main.querySelector("ul").querySelectorAll("a").find((node) => node.getAttribute("href") === chatHash);
   assert.ok(first, "the card chat is listed, linked by its exact ref");

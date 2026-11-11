@@ -57,7 +57,7 @@ async function boot() {
 
 test("Start Chat, play a turn, correct it and find the chat again", { skip: !env.GRIMOIRE_APP || Boolean(env.GRIMOIRE_BROKEN || env.GRIMOIRE_UNFINISHED) }, async () => {
   const { window, body, main } = await boot();
-  const nav = await until(() => byText(body.querySelector("nav"), "a", "Start Chat").length && body.querySelector("nav"), 15000, "the menu");
+  const nav = await until(() => byText(body.querySelector("nav"), "a", "New chat").length && body.querySelector("nav"), 15000, "the menu");
 
   // Chats has the way to Start Chat, and an All tab beside Recent
   byText(nav, "a", "Chats")[0].click();

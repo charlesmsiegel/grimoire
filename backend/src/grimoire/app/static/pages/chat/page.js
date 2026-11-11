@@ -78,7 +78,7 @@ export async function mount(root, ctx) {
     if (generates() && posted && !scene.state.waiting.length) { await answer(); scrollDown(); }
   }
 
-  function scrollDown() { window.scrollTo(0, document.body.scrollHeight); }
+  function scrollDown() { ctx.scrollTo("end"); }
 
   function render(scene, { bottom = false } = {}) {
     page.scene = scene;

@@ -85,7 +85,7 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
 
   // Home now links the library, and the menu lists it
   const fromHome = await until(() => byText(main, "a", "Your library")[0], 15000, "the library on Home");
-  assert.ok(byText(body.querySelector("nav"), "a", "Library").length, "Library is in the menu");
+  assert.ok(byText(body.querySelector("nav"), "a", "Characters and lore").length, "the library is in the menu");
   await step(main, () => fromHome.click(), (root) => library(root) && byText(root, "h2", "Everything").length, "the library");
 
   // characters: three entries named Mara, each its own exact ref, each naming the others

@@ -2,7 +2,7 @@
   "contract": 1,
   "id": "sync",
   "route": "sync",
-  "title": "Sync",
+  "title": "Devices and sync",
   "slot": "media",
   "order": 20,
   "owner": "114",

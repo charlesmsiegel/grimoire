@@ -42,7 +42,7 @@ test("a picture added to a portrait, then this device named and paired", { skip:
   const main = await until(() => body.querySelector("main"), 15000, "the frame");
   await until(() => window.location.hash === "#/home", 15000, "Home");
   const nav = body.querySelector("nav");
-  assert.ok(byText(nav, "a", "Art")[0] && byText(nav, "a", "Sync")[0], "Art and Sync are in the menu");
+  assert.ok(byText(nav, "a", "Art")[0] && byText(nav, "a", "Devices and sync")[0], "Art and sync are in the menu");
 
   // one character's slots: nothing placed yet, nothing substituted
   const scope = process.env.GRIMOIRE_SCOPE, subject = process.env.GRIMOIRE_SUBJECT;
