@@ -26,6 +26,8 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   sources/<segs>/_source/placements/<kind>/<entity_id>/<slot>.json   # one placement (018)
   campaigns/<campaign_id>/images/<image_id>.json                  # a campaign's image object (018)
   campaigns/<campaign_id>/placements/<kind>/<instance_id>/<slot>.json  # a campaign placement (018)
+  sources/<segs>/_source/scope-art/<slot>.json                    # a placement of the source itself: its cover
+  campaigns/<campaign_id>/scope-art/<slot>.json                   # a placement of the campaign itself (cover, chat backdrops, post pictures)
   campaigns/<campaign_id>/holdings/<kind>/<instance_id>.json      # one holder's counted holdings (023)
   assets/blobs/<sha256[:2]>/<sha256>.<png|jpg|gif|webp>           # content-addressed bytes (018)
   campaigns/<campaign_id>/accepted/<event_id>.json                # one accepted fictional event (021)
@@ -195,7 +197,7 @@ Fields:
   - `blob_etag(sha, ext)`: a file over 32 MiB raises `BlobCorrupt` unread;
   - `read_blob(sha, ext)` verifies the digest or raises `BlobCorrupt`;
   - `list_images(scope)` and `list_placements(subject)` return canonical refs plus `LoadProblem`s for stray names and for differently spelled sibling folders on the way down (`Wren-b` beside `wren-b`), without reading contents.
-- **`load()`** recognises `images/` and `placements/` inside `_source/` and inside a campaign, and does not interpret them. Anything else there is `unrecognized` or `name_mismatch`. `assets/` remains a reserved root and is skipped.
+- **`load()`** recognises `images/`, `placements/` and `scope-art/` (the placements of the source or campaign itself, [IMAGES](IMAGES.md#subjects); one flat folder of `<slot>.json`, its own so that no kind or id folder of `placements/` can be mistaken for it) inside `_source/` and inside a campaign, and does not interpret them. Anything else there is `unrecognized` or `name_mismatch`. `assets/` remains a reserved root and is skipped.
 - **Authorization:**
   - `assets/blobs/…` is library-global, so a grant on `sources/<s>` or `campaigns/<c>` never covers it: grant `assets` or approve each blob;
   - the service does not re-stage deduplicated bytes, so they need no new approval;

@@ -1,6 +1,7 @@
 // The picture picker (pages/art/picker.js) in fakedom, against a real app server over a synthetic library: its
 // zoom and crop arithmetic, then on the Art page an avatar chosen from the pictures already there, a cancel that
-// writes nothing, a slot that changed meanwhile refused inside the modal, and the modal closing with its page.
+// writes nothing, a slot that changed meanwhile refused inside the modal, the modal closing with its page, and a
+// cover framed 16/5 and taken off again with Remove.
 // Run by test_media_pages.py, which passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_SCOPE and GRIMOIRE_SUBJECT.
 import assert from "node:assert/strict";
 import { register } from "node:module";
@@ -34,7 +35,7 @@ async function call(op, args) {
 
 test("the picker chooses, cancels, refuses a stale slot and closes with its page", { skip: !base }, async () => {
   const window = install(base);
-  const { cropOf, zoomOf, aspectClass, slotAspect, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } = await import("/static/pages/art/picker.js");
+  const { cropOf, zoomOf, aspectClass, slotAspect, slotKind, slotName, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } = await import("/static/pages/art/picker.js");
 
   // a zoom is stored as a centred crop, and read back as the same zoom; any other box is an exact crop
   assert.equal(cropOf(100), null);
@@ -47,8 +48,14 @@ test("the picker chooses, cancels, refuses a stale slot and closes with its page
   assert.equal(zoomOf(null), 100);
   assert.equal(zoomOf({ x: 0, y: 0, w: 5000, h: 5000 }), null);
   assert.equal(zoomOf({ x: 1000, y: 1000, w: 8000, h: 6000 }), null);
-  assert.deepEqual([slotAspect("avatar"), slotAspect("portrait")], ["1/1", "3/4"]);
+  assert.deepEqual([slotAspect("avatar"), slotAspect("portrait"), slotAspect("gallery1")], ["1/1", "3/4", "3/4"]);
   assert.deepEqual([aspectClass("1/1"), aspectClass("3/4")], ["art-aspect-1-1", "art-aspect-3-4"]);
+  // slots beyond a character's own: a cover and a backdrop are 16/5 bands, an entry's picture a square, a post's 16/10
+  assert.deepEqual(["cover", "backdrop.inn", "backdrop.t-1", "entry.0a1b", "post.t-1.000002"].map(slotAspect), ["16/5", "16/5", "16/5", "1/1", "16/10"]);
+  assert.deepEqual([aspectClass("16/5"), aspectClass("16/10"), aspectClass("9/9")], ["art-aspect-16-5", "art-aspect-16-10", "art-aspect-1-1"]);
+  assert.deepEqual(["cover", "backdrop.inn", "entry.0a1b", "post.t-1.2", "avatar", "backdrop", "expr.default.smile", "coverage"].map(slotKind),
+    ["cover", "backdrop", "entry", "post", null, null, null, null]);
+  assert.deepEqual(["cover", "backdrop.inn", "entry.0a1b", "post.t-1.2", "gallery1"].map(slotName), ["Cover", "Backdrop", "Entry picture", "Post picture", "gallery1"]);
 
   // two pictures are already in the character's gallery, placed nowhere
   const dusk = (await call("media.upload", { scope, media: png("dusk"), note: "Harbor at dusk", origin: null })).image.image;
@@ -80,8 +87,11 @@ test("the picker chooses, cancels, refuses a stale slot and closes with its page
   assert.ok(byText(dialog, "button", "Drop or choose a file").length);
   assert.ok(tile(dialog, "Harbor at dusk") && tile(dialog, "Lamp room"), "the subject's pictures are offered");
   assert.equal(dialog.querySelectorAll("button.art-pick").filter((node) => node.getAttribute("aria-pressed") === "true" && !node.hidden).length, 0);
-  assert.deepEqual(dialog.querySelector("div.g-modal-foot").querySelectorAll("button").map((node) => node.textContent), ["Cancel", "Use this picture"]);
-  assert.ok(!byText(dialog, "button", "Hide this slot").length, "a standalone card's slot cannot be hidden, so it is not offered");
+  // the card says a picture belongs here that it does not hold: the slot can be hidden (a standalone card inherits
+  // nothing, so there is no inherited picture to go back to), or given a picture
+  assert.deepEqual(dialog.querySelector("div.g-modal-foot").querySelectorAll("button").map((node) => node.textContent),
+    ["Hide this slot", "Cancel", "Use this picture"]);
+  assert.ok(!byText(dialog, "button", "Use the inherited picture").length);
   const range = dialog.querySelectorAll("input").find((node) => node.getAttribute("type") === "range");
   assert.deepEqual([range.getAttribute("min"), range.getAttribute("max")], ["100", "200"]);
 
@@ -110,6 +120,8 @@ test("the picker chooses, cancels, refuses a stale slot and closes with its page
   // a slot another device changed while the picker was open: refused in the modal, nothing swapped
   dialog = await open("avatar", "Replace");
   assert.equal(tile(dialog, "Lamp room").getAttribute("aria-pressed"), "true", "the picture shown now starts picked");
+  assert.deepEqual(dialog.querySelector("div.g-modal-foot").querySelectorAll("button").map((node) => node.textContent),
+    ["Hide this slot", "Cancel", "Use this picture"], "a character's picture can be hidden; a standalone card has none to go back to");
   await call("media.place", { subject, slot: "avatar", mode: "set", image: dusk, expected: art.own.find((item) => item.slot === "avatar").etag });
   byText(dialog, "button", "Use this picture")[0].click();
   await until(() => alertIn(dialog), 15000, "the stale slot refused");
@@ -139,4 +151,26 @@ test("the picker chooses, cancels, refuses a stale slot and closes with its page
   assert.deepEqual(avatar.crop, { x: 2500, y: 2500, w: 5000, h: 5000 });
   const shown = await until(() => slot("avatar") && slot("avatar").querySelector("img"), 15000, "the framed avatar");
   assert.ok(shown.classList.contains("art-zoom-200"), "the slot shows the zoom it stores");
+
+  // a cover, here the source's own: framed 16/5 at the modal's width, and taken off again with Remove
+  window.location.hash = "#/art?scope=" + encodeURIComponent(scope) + "&subject=" + encodeURIComponent(scope);
+  dialog = await open("cover", "Choose");
+  assert.ok(dialog.getAttribute("aria-label").endsWith(": cover"), dialog.getAttribute("aria-label"));
+  const wide = dialog.querySelector("div.art-picker-frame");
+  assert.ok(wide.classList.contains("art-aspect-16-5") && wide.classList.contains("art-picker-wide"), "a cover is framed 16/5");
+  assert.ok(dialog.textContent.includes("Shown as a band across the top, and on its tile"));
+  assert.deepEqual(dialog.querySelector("div.g-modal-foot").querySelectorAll("button").map((node) => node.textContent),
+    ["Cancel", "Use this picture"], "nothing to remove before a cover is set");
+  tile(dialog, "Lamp room").click();
+  byText(dialog, "button", "Use this picture")[0].click();
+  await until(() => !body.querySelector("dialog") && slot("cover") && slot("cover").textContent.includes("Shown"), 15000, "the cover placed");
+  assert.ok((await until(() => slot("cover").querySelector("div.art-frame"), 15000, "its frame")).classList.contains("art-aspect-16-5"));
+  dialog = await open("cover", "Replace");
+  assert.deepEqual(dialog.querySelector("div.g-modal-foot").querySelectorAll("button").map((node) => node.textContent),
+    ["Remove", "Cancel", "Use this picture"]);
+  byText(dialog, "button", "Remove")[0].click();
+  await until(() => !body.querySelector("dialog") && slot("cover") && slot("cover").textContent.includes("Hidden"), 15000, "the cover removed");
+  const removed = (await call("media.shown", { subjects: [scope] })).shown[0];
+  assert.equal(removed.state, "hidden");
+  assert.ok((await call("media.gallery", { scope })).images.some((image) => image.image === lamp), "the picture stays in its gallery");
 });

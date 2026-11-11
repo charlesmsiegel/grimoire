@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
+from grimoire.core.identity import ImageRef, InstanceRef, OwnerRef, PlacementRef, SourceRef
 
 from .model import BlobInfo, Crop, Focus, ImageObject, Placement, slot_role, validate_placement
 
@@ -48,7 +48,7 @@ class Shown:
     blob: BlobInfo
     crop: Crop | None
     focus: Focus | None
-    layer: str  # source | campaign | campaign_adjusted
+    layer: str  # source | source_adjusted | campaign | campaign_adjusted
     provenance: Mapping[str, object] | None
 
 
@@ -86,18 +86,18 @@ class ArtOrigin:
     slot: str
     origin: str
     #: the subject whose placement decided the slot: the resolved subject, or an ancestor in its lineage
-    placed_by: SourceRef | InstanceRef
+    placed_by: SourceRef | InstanceRef | OwnerRef
 
 
 @dataclass(frozen=True)
 class Resolution:
-    subject: SourceRef | InstanceRef
+    subject: SourceRef | InstanceRef | OwnerRef
     slots: tuple[Slot, ...]
     problems: tuple[Problem, ...] = ()
     #: 046: who decided each shown, hidden or unavailable slot (``ArtOrigin``), in slot order
     origins: tuple[ArtOrigin, ...] = ()
     #: 046: the subjects whose placements were layered, root first; the resolved subject is last
-    lineage: tuple[SourceRef | InstanceRef, ...] = ()
+    lineage: tuple[SourceRef | InstanceRef | OwnerRef, ...] = ()
 
     def slot(self, name: str) -> Slot | None:
         return next((entry for entry in self.slots if entry.slot == name), None)
@@ -116,7 +116,7 @@ class Layer:
     whose placements may also ``hide``, ``adjust`` or ``inherit``.
     """
 
-    subject: SourceRef | InstanceRef
+    subject: SourceRef | InstanceRef | OwnerRef
     entries: Mapping[str, PlacementEntry]
     scope: str | None
     derived: bool = False
@@ -174,6 +174,8 @@ def inherited(slot: str, source_layer: Mapping[str, PlacementEntry], source: str
     assert entry.placement is not None
     if entry.placement.mode == "unresolved":
         return _unresolved(slot, entry.placement)
+    if entry.placement.mode != "set":  # a hide: the layer shows nothing there
+        return None
     allowed = frozenset({source}) if source is not None else frozenset()
     return _show(slot, entry, allowed, facts, "source")
 
@@ -195,7 +197,8 @@ def _step(slot: str, layers: Sequence[Layer], index: int, below: Slot | None,
         return broken, "broken"
     placement = entry.placement
     assert placement is not None
-    instance = isinstance(layer.subject, InstanceRef)
+    # a campaign's own layer: an instance's, or the campaign itself (its cover); anything else is a source's
+    instance = getattr(layer.subject, "campaign_id", None) is not None
     if placement.mode == "inherit":  # an explicit reset: exactly as if there were no placement
         return below, None
     if placement.mode == "hide":  # never falls back to the inherited picture, or any picture by name

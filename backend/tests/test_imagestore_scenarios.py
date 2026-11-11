@@ -264,7 +264,7 @@ def test_f7_unknown_subjects_and_campaigns_are_refused(pictured):
 
 
 @pytest.mark.parametrize("subject, slot, placement, reason", [
-    (SAILOR, "avatar", Placement("hide"), "mode_not_allowed"),
+    (SAILOR, "avatar", Placement("inherit"), "mode_not_allowed"),
     (SAILOR, "avatar", Placement("adjust", image=WREN_IMG), "mode_not_allowed"),
     (WREN_A, "gallery_7", Placement("adjust", image=WREN_IMG), "nothing_to_adjust"),
     (WREN_A, "avatar", Placement("adjust", image=ImageRef("campaign:c1", "nope")), "missing_image"),

@@ -143,14 +143,23 @@ on, under the text API's writer lock, as the owner's trusted handle, with the re
   also shows tag chips (`tags=`), a Pinned shelf (`shelf=pinned`), saved filters and Select mode with its bulk
   Pin and Tag, and an entry's sheet shows its tags and pin: see [SHELF](SHELF.md#in-the-app). Each role and shelf shows how many entries it holds. Same-named entries are
   separate tiles, each saying how many others share its name. A character or scenario has a Chat link to Start Chat.
+  Where the app reads covers ([MEDIA_SYNC_UI](MEDIA_SYNC_UI.md#beyond-character-slots)), a text tile shows its
+  entry's cover behind its kind and title, or **Add cover**; the list shows it as the row's picture; and one
+  source's shelf opens under that source's cover band (**Add cover**, **Change cover**, **Remove**). A grid reads
+  all of its covers in one request and keeps them a few moments.
   How often and how lately an entry was played is counted from the `chats` op, and is shown and sorted by only when
   that list is whole. New entry, New source and a shelf's Rename each open a dialog; a refusal is shown in it.
 - **`#/source/<SourceRef>`** shows one revision exactly: a character as a character sheet, anything else as an entry
-  sheet under a title band. Its tabs are in the address (`?tab=art|edit|revisions|raw`; no tab is the sheet):
+  sheet under a title band: the entry's cover with **Change cover** and **Remove**, or, with no cover, a dashed
+  block that takes a dropped image or opens the picture picker. Its tabs are in the address
+  (`?tab=art|edit|revisions|raw`; no tab is the sheet):
   - **Sheet**: each field's value, and for a portrayal its state and source (046); what it opens with, the lorebook
     an imported card binds, a lorebook's entries with their keys; the chats that use it and the revisions they are
     on, its portrayals, namesakes and links. A portrayal overrides, clears (after a confirmation) and resets
-    inherited fields here, and any entity can be derived from the revision shown.
+    inherited fields here, and any entity can be derived from the revision shown. On the current version, each
+    lorebook entry has a picture slot beside it, and the sheet says how many entry pictures no entry reads as any
+    more. A scenario lists its **Scene backdrops** (add, change, remove), and every entry links to all of its
+    pictures on the Art page.
   - **Art** (a character, where the app serves `media.art`): its picture slots as the library resolves them, and a
     link to the Art page for it, where pictures are placed.
   - **Edit**: on the head, the structured editor for its family.

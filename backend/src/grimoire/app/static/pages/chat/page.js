@@ -5,6 +5,8 @@
 // only once posted. Everything shown from the library (card text, model output) is set as text, never as markup.
 
 import { makeTray } from "./tray.js";
+import { makeBackdrop } from "./backdrop.js";
+import { makeAttach } from "./attach.js";
 import { composerState, isCorrectable, isStopped, replyState, shownTake, stepTake, takeKey, takeLabel } from "./turn.js";
 
 const MODE_LABELS = { auto: "Auto", speech: "Speech", action: "Action" };
@@ -67,6 +69,10 @@ export async function mount(root, ctx) {
   const foot = el("div", { class: "chat-foot" }, tray, noModel,
     el("div", { class: "chat-composer" }, composer.node,
       el("div", { class: "chat-composer-foot" }, modes, el("div", { class: "chat-send" }, ask, send))));
+  // the chat's backdrop and the pictures on its posts (./backdrop.js, ./attach.js): beside the story, never in it
+  const redrawPictures = () => { if (page.scene && !ctx.signal.aborted) render(page.scene); };
+  const backdrop = makeBackdrop(ctx, chat, { run, redraw: redrawPictures });
+  const attach = makeAttach(ctx, chat, { field: composer.node, run, redraw: redrawPictures });
   const panelBody = el("div", { class: "chat-panel-body" });
   // The panel's tabs. Each has something to show for every chat; a tab that might have nothing is left out here.
   const PANEL_TABS = [
@@ -159,6 +165,7 @@ export async function mount(root, ctx) {
     else composer.value = composer.value.startsWith(typed) ? composer.value.slice(typed.length).trimStart() : composer.value;
     fit();
     render(scene, { bottom: true });
+    await attach.posted(scene, before);
     // a typed table request ("Grimoire, pause") writes no new turn: nobody is asked to answer it
     const last = scene.turns[scene.turns.length - 1];
     const posted = scene.turns.length > before && last && last.post && last.open;
@@ -292,6 +299,7 @@ export async function mount(root, ctx) {
         el("span", {}, member.persona ? short + " · you" : short)));
     }
     sceneBar.replaceChildren(chips, panelToggle);
+    backdrop.draw(sceneBar);
   }
 
   // -- the transcript ---------------------------------------------------------------------------------------------
@@ -323,6 +331,7 @@ export async function mount(root, ctx) {
         const mine = scene.persona && turn.post.actor === scene.persona.actor;
         out.push(said(scene, { actor: turn.post.actor, speaker: turn.post.speaker, text: turn.post.text, kind: "chat-post", you: mine, to,
           aside: turn.post.withheld ? "Only you know this." : turn.post.private ? "Private." : "" }));
+        attach.under(turn, out[out.length - 1]);  // the picture attached to this post, if any, under its text
       }
       if (turn.kept) {
         for (const item of turn.kept.lines) {

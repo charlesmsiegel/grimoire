@@ -8,6 +8,7 @@
 import { campaignName, chatName, count, hubSections, isDirector, knowledgeTabs, pendingEffects } from "./logic.js";
 import { effectDetails, weighed } from "./shown.js";
 import { itemHref, itemId, served as inboxServed } from "../inbox/feed.js";
+import { coverBand } from "../art/covers.js";
 
 const AUDIENCES = [{ value: "table", label: "Table view" }, { value: "director", label: "Director view" }];
 const NOTES = { table: "What the table can see. World truth is the director's.",
@@ -32,8 +33,10 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   };
 
   const meta = found ? (found.world || "No world") + " · " + count(chats.length, "chat") : campaign;
-  const cover = ui.cover({ key: campaign }, el("div", {}, el("div", { class: "campaign-cover-title" }, name),
-    el("div", { class: "campaign-cover-meta" }, meta)));
+  const coverText = el("div", {}, el("div", { class: "campaign-cover-title" }, name), el("div", { class: "campaign-cover-meta" }, meta));
+  // the campaign's own cover, where it has one and the app reads it (pages/art/covers.js)
+  const cover = found ? coverBand(ctx, { subject: "campaign:" + campaign, key: campaign, name, use: "Shown at the top of the campaign hub" }, coverText)
+    : ui.cover({ key: campaign }, coverText);
   const shown = chats.some((item) => item.chat === chat) || !chat ? chats : [{ chat, label: null, name: null, problem: null }, ...chats];
   const chips = shown.map((item) => {
     const chip = el("a", { class: "g-select g-chip campaign-chip", href: address({ chat: item.chat }), title: item.chat },

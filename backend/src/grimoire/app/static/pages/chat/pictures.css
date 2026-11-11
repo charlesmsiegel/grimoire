@@ -1,0 +1,27 @@
+/* The chat's backdrop and the pictures on its posts (pages/chat/backdrop.js, attach.js): only chat- classes.
+   The scene bar's text is white on any picture: the picture sits under a dark scrim, in both themes (white on
+   a white picture under it is still 5.7 to 1). */
+.chat-scene.chat-backdrop-on { position: relative; }
+.chat-backdrop { position: absolute; inset: 0; overflow: hidden; }
+.chat-backdrop img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chat-backdrop-scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .6); }
+.chat-scene.chat-backdrop-on > :not(.chat-backdrop) { position: relative; }
+
+/* a picture under a post */
+.chat-attached { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; margin-top: 10px; }
+.chat-attached-frame { display: block; width: 100%; max-width: 320px; aspect-ratio: 16 / 10; overflow: hidden; border-radius: 10px; }
+.chat-attached-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+/* the composer: "Attach an image" in its header, and the file waiting for the next post */
+.chat-attach-host { position: relative; }
+.chat-attach-button { position: absolute; top: 7px; right: 10px; padding: 2px 10px; border: 1px dashed var(--g-muted);
+  border-radius: 6px; background: transparent; color: var(--g-muted); font: inherit; font-size: 13px; cursor: pointer; }
+.chat-attach-button:hover { border-color: var(--g-accent); color: var(--g-accent); }
+.chat-attach-button[hidden] { display: none; }
+.chat-attach-tray { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 4px 14px 2px; }
+.chat-attach-tray[hidden] { display: none; }
+.chat-attach-thumb { flex: none; width: 48px; height: 48px; border: 1px solid var(--g-accent); border-radius: 8px;
+  overflow: hidden; background: var(--g-raised); }
+.chat-attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chat-attach-text { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; font-size: 13px; }
+.chat-attach-name { overflow-wrap: anywhere; }

@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from grimoire.core.identity import (
-    ChatRef, ImageRef, InstanceRef, PlacementRef, ScopeRef, SourceRef, TranscriptRef,
+    ChatRef, ImageRef, InstanceRef, OwnerRef, PlacementRef, ScopeRef, SourceRef, TranscriptRef,
 )
 from grimoire.images import (
     IMAGE_SCHEMA, PLACEMENT_SCHEMA, BlobFact, BlobInfo, Facts, ImageEntry, ImageModelError, ImageObject, Placement,
@@ -170,7 +170,7 @@ class ImageBatch:
     def repair_blob(self, data: bytes) -> BlobKey:
         return self._add(("repair", data))  # type: ignore[return-value]
 
-    def place(self, subject: SourceRef | InstanceRef, slot: str, placement: Placement,
+    def place(self, subject: SourceRef | InstanceRef | OwnerRef, slot: str, placement: Placement,
               expected: str | None) -> PlacementRef:
         return self._add(("place", subject, slot, placement, expected))  # type: ignore[return-value]
 
@@ -350,7 +350,11 @@ def _repair(state: _State, disk: _Disk, data: bytes) -> BlobKey:
     return key
 
 
-def _subject_exists(state: _State, disk: _Disk, subject: SourceRef | InstanceRef) -> bool:
+def _subject_exists(state: _State, disk: _Disk, subject: SourceRef | InstanceRef | OwnerRef) -> bool:
+    if isinstance(subject, OwnerRef):  # the owner itself: an admitted source, or a campaign that exists (as W5)
+        if subject.campaign_id is not None:
+            return subject.campaign_id in state.campaigns or disk.campaign_exists(subject.campaign_id)
+        return _admitted(state, disk, subject.scope)
     if isinstance(subject, SourceRef):
         if isinstance(disk.definition(subject), StoredDefinition):
             return True
@@ -478,7 +482,7 @@ def _facts(state: _State, disk: _Disk, layers: list[Mapping[str, PlacementEntry]
     return Facts(images, blobs)
 
 
-def _place(library: ImageLibrary, state: _State, disk: _Disk, subject: SourceRef | InstanceRef, slot: str,
+def _place(library: ImageLibrary, state: _State, disk: _Disk, subject: SourceRef | InstanceRef | OwnerRef, slot: str,
            placement: Placement, expected: str | None) -> PlacementRef:
     try:
         ref = PlacementRef(subject, slot)
@@ -506,7 +510,7 @@ def _place(library: ImageLibrary, state: _State, disk: _Disk, subject: SourceRef
     return ref
 
 
-def _names_paired(disk: _Disk, subject: SourceRef | InstanceRef, placement: Placement) -> bool:
+def _names_paired(disk: _Disk, subject: SourceRef | InstanceRef | OwnerRef, placement: Placement) -> bool:
     """Whether this placement would picture a paired instance (W11), which ``load()`` leaves out.
 
     A ``hide`` is exempt: it shows nothing, grants nothing, and is the only way 018 takes art off a
@@ -530,9 +534,12 @@ def _check_placement(state: _State, disk: _Disk, ref: PlacementRef, placement: P
         problem = validate_placement(subject, slot, placement, derived=_lineage(state, disk, subject).derived[-1])
         if problem is not None:
             raise InvalidPlacement(problem[1], problem[0])
-    entity = subject if isinstance(subject, SourceRef) else _instance_derivation(state, disk, subject)
+    entity = subject if isinstance(subject, SourceRef) else None if isinstance(subject, OwnerRef) \
+        else _instance_derivation(state, disk, subject)
     pinned = _pinned_inheritance(state, disk, subject, entity) if isinstance(subject, InstanceRef) else None
-    if isinstance(subject, SourceRef):
+    if isinstance(subject, OwnerRef):  # it inherits nothing and derives from nothing: only its own pictures (W7)
+        allowed = {subject.scope}
+    elif isinstance(subject, SourceRef):
         allowed = {subject.source}
     else:
         allowed = {f"campaign:{subject.campaign_id}"} | ({entity.source} if entity is not None else set())
@@ -588,7 +595,7 @@ class ImageLibrary:
         batch.add_image(scope, image_id, data, provenance)
         return batch
 
-    def place(self, subject: SourceRef | InstanceRef, slot: str, placement: Placement,
+    def place(self, subject: SourceRef | InstanceRef | OwnerRef, slot: str, placement: Placement,
               expected: str | None = None) -> ImageBatch:
         batch = self.change()
         batch.place(subject, slot, placement, expected)
@@ -661,7 +668,7 @@ class ImageLibrary:
         except (StoreError, ValueError, OSError) as error:
             raise InvalidImage(str(error), "missing_blob") from None
 
-    def effective_placements(self, subject: SourceRef | InstanceRef) -> Resolution:
+    def effective_placements(self, subject: SourceRef | InstanceRef | OwnerRef) -> Resolution:
         """What ``subject`` shows in each slot, failing closed; reads only, no model, no network.
 
         A 022 derived portrayal layers its base chain's placements beneath its own (046), live: each
@@ -673,6 +680,13 @@ class ImageLibrary:
         with self.store.read_pass():  # the lock: one consistent state for every read below
             disk, state = _Disk(self.store), _State()
             problems: list[Problem] = []
+            if isinstance(subject, OwnerRef):  # one layer, its own: a source or a campaign inherits nothing
+                if not _subject_exists(state, disk, subject):
+                    code = "missing_subject" if subject.campaign_id is not None else str(disk.source(subject.scope))
+                    return Resolution(subject, (), (Problem(str(subject), code, "no slots are shown"),))
+                own, own_problems, _ = disk.layer(subject)
+                layers = [Layer(subject, dict(own), subject.scope)]
+                return resolve_lineage(subject, layers, _facts(state, disk, [own]), problems=own_problems)
             if isinstance(subject, SourceRef):
                 found = disk.definition(subject)
                 if not isinstance(found, StoredDefinition):

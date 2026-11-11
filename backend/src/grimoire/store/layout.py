@@ -17,7 +17,7 @@ import unicodedata
 from typing import Literal
 
 from grimoire.core.identity import (
-    KNOWLEDGE_FAMILIES, AcceptedRef, ChatRef, HoldingsRef, ImageRef, InstanceRef, KnowledgeRef, PlacementRef,
+    KNOWLEDGE_FAMILIES, AcceptedRef, ChatRef, HoldingsRef, ImageRef, InstanceRef, KnowledgeRef, OwnerRef, PlacementRef,
     RelationRef, ScopeRef, SourceRef, TranscriptRef, TurnRef, WrapUpRef, validate_segment, validate_source_id,
 )
 from grimoire.security import InvalidResourcePath, ResourcePath
@@ -77,6 +77,9 @@ EVIDENCE = "evidence"  # campaigns/<id>/evidence/<family>/<id>.json: everything 
 EVIDENCE_FAMILIES = frozenset(KNOWLEDGE_FAMILIES) - {"event"}
 IMAGES = "images"  # <owner>/images/<image_id>.json: one image object (018)
 PLACEMENTS = "placements"  # <owner>/placements/<kind>/<id>/<slot>.json: one placement (018)
+#: <owner>/scope-art/<slot>.json: one placement of the owner itself (a source or a campaign as a whole: its
+#: cover, a chat's backdrop). Its own folder, so no kind or id folder of ``placements/`` can be mistaken for it.
+SCOPE_ART = "scope-art"
 ASSETS = "assets"  # assets/blobs/<sha[:2]>/<sha256>.<ext>: content-addressed bytes (018)
 BLOBS = "blobs"
 BLOB_EXTS = tuple(MEDIA)  # the sniffer's formats are the only blob extensions
@@ -179,6 +182,10 @@ def image_parts(ref: ImageRef) -> Parts:
 
 def placement_parts(ref: PlacementRef) -> Parts:
     subject = ref.subject
+    if isinstance(subject, OwnerRef):
+        if subject.campaign_id is not None:
+            return _checked((CAMPAIGNS, subject.campaign_id, SCOPE_ART, ref.slot + SUFFIX))
+        return _checked(source_parts(subject.scope) + (SCOPE_ART, ref.slot + SUFFIX))
     if isinstance(subject, InstanceRef):
         return _checked((CAMPAIGNS, subject.campaign_id, PLACEMENTS, subject.kind, subject.instance_id,
                          ref.slot + SUFFIX))
@@ -297,6 +304,10 @@ def classify(parts: Parts) -> tuple[Kind, object] | None:
             stem = _stem(parts[3])
             if stem is not None:
                 found = ("image", ImageRef(f"campaign:{parts[1]}", stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == SCOPE_ART:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("placement", PlacementRef(OwnerRef(f"campaign:{parts[1]}"), stem))
         elif len(parts) == 6 and parts[0] == CAMPAIGNS and parts[2] == PLACEMENTS:
             stem = _stem(parts[5])
             if stem is not None:
@@ -361,6 +372,10 @@ def classify(parts: Parts) -> tuple[Kind, object] | None:
                 stem = _stem(tail[1])
                 if stem is not None:
                     found = ("image", ImageRef(source_id, stem))
+            elif len(tail) == 2 and tail[0] == SCOPE_ART:
+                stem = _stem(tail[1])
+                if stem is not None:
+                    found = ("placement", PlacementRef(OwnerRef(source_id), stem))
             elif len(tail) == 4 and tail[0] == PLACEMENTS:
                 stem = _stem(tail[3])
                 if stem is not None:

@@ -17,6 +17,7 @@ import { askedTab, chatsOn, count, diffRevisions, kindLabel, loreBound, loreEntr
 import { draftsOf, editTab, rawTab, staleDrafts, unsaved } from "./editors.js";
 import { attachPanel, deriveForm, portrayalTools } from "./actions.js";
 import { headerMarks } from "./marks.js";
+import { coverBand, entryPictures, lorePictures, shownOf as coverOf } from "../art/covers.js";
 
 const STATES = {
   inherited: "inherited from the base",
@@ -85,7 +86,8 @@ export async function mount(root, ctx) {
   const tabs = tabsFor(read, { art: character && ctx.has("media.art") });
   const tab = askedTab(ctx.query.get("tab"), tabs);
   const address = (which, extra = {}) => ctx.href("source", [asked], { tab: which === "sheet" ? undefined : which, ...extra });
-  const page = { read, pinned, name, art, artError, address, tab, titleOf, marks: await headerMarks(ctx, read) };
+  const page = { read, pinned, name, art, artError, address, tab, titleOf, marks: await headerMarks(ctx, read),
+    cover: character ? null : await coverOf(ctx, read.entity, "cover", { fresh: true }) };  // the entry's cover, where the app reads covers
 
   const attach = read.actions.attach === null && ctx.has("sources.attach") && ctx.has("sources.chats") ? attachPanel(ctx, read, pinned) : null;
   const parts = [character ? characterHeader(ctx, page, attach) : entryHeader(ctx, page, attach)];
@@ -206,7 +208,8 @@ function entryHeader(ctx, page, attach) {
   const { read, name } = page;
   const marks = [...pills(ctx, read).slice(1), page.marks].filter(Boolean);
   return el("section", { class: "source-entry-header g-stack", "aria-label": name },
-    ui.cover({ key: read.entity, tall: true }, el("div", { class: "g-stack source-cover-text" },
+    coverBand(ctx, { subject: read.entity, name, tall: true, dashed: true, view: page.cover,
+      use: "Shown across the top of its sheet and on its library tile" }, el("div", { class: "g-stack source-cover-text" },
       el("div", { class: "g-eyebrow source-cover-kind" }, kindLabel(read.kind)), el("h2", { class: "g-hero-title" }, name))),
     el("div", { class: "g-row g-between" },
       el("div", { class: "g-stack source-header-text" }, marks.length ? el("div", { class: "g-row source-pills" }, ...marks) : null, ...identity(ctx, page)),
@@ -245,6 +248,8 @@ function sheetTab(ctx, page) {
       : el("span", { class: "g-muted" }, "None bound.")));
   }
   main.append(...parts.rest);
+  const pictures = read.kind === "character" ? null : entryPictures(ctx, { subject: read.entity, source: read.source, name: page.name, kind: read.kind });
+  if (pictures) main.append(pictures);
   return el("div", { class: "source-sheet" }, main, aside(ctx, page));
 }
 
@@ -337,11 +342,14 @@ function written(ctx, read) {
   }
   if (read.family === "lorebook") {
     const entries = loreEntries(read);
-    nodes.push(labelled(el, "Entries", entries.length ? el("div", { class: "g-stack" }, entries.map((entry) =>
-      ui.card({}, el("div", { class: "g-stack source-lore" },
-        el("div", { class: "g-row" }, el("span", { class: "g-mono g-muted source-keys" }, entry.keys.length ? entry.keys.join(", ") : "no keys"),
-          entry.enabled ? null : ui.pill("Off"), entry.constant ? ui.pill("Always in context", { kind: "accent" }) : null),
-        el("div", { class: "source-value source-lore-text" }, entry.content || "(empty)")))))
+    // each entry's own picture, on the current version (pages/art/covers.js): a slot beside it, filled once read
+    const pictured = read.is_head ? lorePictures(ctx, { subject: read.entity, source: read.source, name: read.name || read.ref }) : null;
+    nodes.push(labelled(el, "Entries", entries.length ? el("div", { class: "g-stack" }, entries.map((entry, index) =>
+      ui.card({}, el("div", { class: "source-lore-row" }, pictured ? pictured.slot(index, entry.keys.join(", ") || "entry " + (index + 1)) : null,
+        el("div", { class: "g-stack source-lore" },
+          el("div", { class: "g-row" }, el("span", { class: "g-mono g-muted source-keys" }, entry.keys.length ? entry.keys.join(", ") : "no keys"),
+            entry.enabled ? null : ui.pill("Off"), entry.constant ? ui.pill("Always in context", { kind: "accent" }) : null),
+          el("div", { class: "source-value source-lore-text" }, entry.content || "(empty)"))))), pictured ? pictured.note : null)
       : el("p", { class: "g-muted" }, model.locked ? "Its entries are not all plain text; the Raw tab shows them." : "No entries yet.")));
   }
   if (model.locked && read.family !== "lorebook") {

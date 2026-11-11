@@ -1,6 +1,9 @@
-// Art (Sprint 114): a scope's pictures, and one character's or chat actor's picture slots, over the media ops
+// Art (Sprint 114): a scope's pictures, and one subject's picture slots, over the media ops
 // (docs/MEDIA_SYNC_UI.md). The address holds the place: #/art?scope=<scope> lists its pictures and who uses
-// them, and #/art?scope=<scope>&subject=<subject> shows one subject's slots and every picture it may use.
+// them, and #/art?scope=<scope>&subject=<subject> shows one subject's slots and every picture it may use. A
+// subject is a character or a chat actor (an avatar, a portrait), any other entry (a cover; a lorebook's entry
+// pictures, a scenario's backdrops), or the source or campaign itself (its cover; a campaign's chat backdrops
+// and the pictures on its posts, with the ones whose post is gone).
 //
 // Everything shown comes from the library (titles, descriptions, provenance) and is only ever set as text. A
 // slot is shown, hidden or unavailable exactly as the library resolves it: a picture that cannot be shown says
@@ -9,10 +12,21 @@
 // written.
 
 import { ACCEPT, MAX_LIST, MAX_UPLOAD, base64, describe, frame, openPicker, refusal, reusablePictures, slotAspect,
-  slotName, slotUse, zoomOf } from "./picker.js";
+  slotKind, slotName, slotUse, zoomOf } from "./picker.js";
+import { forgetSubject } from "./covers.js";
 
 const PAGE = 200;  // pictures listed at first
-const SLOTS = ["avatar", "portrait"];
+// The slots a subject is shown with even before anything is placed there: a character's or a chat actor's
+// avatar and portrait, and the cover of anything else (an entry, a source, a campaign).
+function firstSlots(subject) {
+  const parts = subject.split("/");
+  return parts.length === 3 && parts[1] === "character" ? ["avatar", "portrait"] : ["cover"];
+}
+// What a slot card is called: its slot's name, and for a named slot (a backdrop, an entry or post picture) which one.
+function slotTitle(slot) {
+  const kind = slotKind(slot);
+  return kind && kind !== "cover" ? slotName(slot) + " (" + slot.slice(kind.length + 1) + ")" : slotName(slot);
+}
 const GALLERY_SLOT = /^gallery[0-9]{1,3}$/;
 const STATES = { shown: "Shown", hidden: "Hidden", unavailable: "Unavailable", empty: "Nothing placed" };
 const ORIGINS = { local: "Placed here", replaced: "Replaced here", cleared: "Hidden here", adjusted: "Re-cropped here",
@@ -71,7 +85,7 @@ async function galleryView(root, ctx, scope, choices) {
           ui.avatar(item.name || item.subject, { size: 36, key: item.subject }),
           el("span", { class: "g-grow" }, el("span", { class: "g-title g-clip art-block" }, item.name || item.subject),
             el("span", { class: "g-muted g-ref art-block" }, item.subject)))))
-        : ui.empty("No characters or chat actors here.")),
+        : ui.empty("Nothing here uses pictures yet.")),
     el("section", { class: "g-stack", "aria-label": "Pictures" },
       ui.eyebrow("Pictures"),
       adding ? adding.tray : ui.unavailable("Adding pictures", "This app does not serve media.upload."),
@@ -112,6 +126,7 @@ async function subjectView(root, ctx, scope, subject) {
   root.append(region);
   const editable = () => art.editable && (ctx.has("media.place") || ctx.has("media.upload"));
   const reload = async (next) => {
+    forgetSubject(subject);  // what other pages kept of this subject's cover is out of date after a change here
     art = next || await ctx.api("media.art", { subject });
     galleries = await reusablePictures(ctx, art);
     render();
@@ -134,7 +149,7 @@ async function subjectView(root, ctx, scope, subject) {
 
   const slotCard = (slot, mine) => {
     const conflicted = art.conflicts.includes(slot.slot);
-    const title = slotName(slot.slot);
+    const title = slotTitle(slot.slot);
     const label = (art.name || art.subject) + ": " + title.toLowerCase();
     const use = slotUse(slot.slot);
     const name = slot.state === "shown" ? named(slot.image) : null;
@@ -166,10 +181,14 @@ async function subjectView(root, ctx, scope, subject) {
         crop.setAttribute("aria-label", "Crop " + label);
         buttons.push(crop);
       }
-      if (ctx.has("media.place") && art.modes.includes("hide") && slot.state !== "hidden") {
-        const hide = ui.button("Hide", () => place(slot, "hide", mine, title + " hidden."), { size: "small" });
-        hide.setAttribute("aria-label", "Hide " + label);
-        buttons.push(hide);
+      if (ctx.has("media.place") && art.modes.includes("hide") && slot.state !== "hidden" && slot.state !== "empty") {
+        // a character's slot is hidden; a cover, a backdrop and the like are taken off once something is there
+        const named = slotKind(slot.slot);
+        if (!named || mine) {
+          const hide = ui.button(named ? "Remove" : "Hide", () => place(slot, "hide", mine, title + (named ? " removed." : " hidden.")), { size: "small" });
+          hide.setAttribute("aria-label", (named ? "Remove " : "Hide ") + label);
+          buttons.push(hide);
+        }
       }
       if (ctx.has("media.place") && art.modes.includes("inherit") && mine && mine.mode !== "inherit") {
         const reset = ui.button("Use inherited", () => place(slot, "inherit", mine, title + " follows its source again."), { size: "small" });
@@ -199,7 +218,7 @@ async function subjectView(root, ctx, scope, subject) {
     const own = Object.fromEntries(art.own.map((entry) => [entry.slot, entry]));
     // the avatar and the portrait first, placed or not; then every other slot the subject has, then new ones
     const read = new Map(art.slots.map((slot) => [slot.slot, slot]));
-    const slots = new Map(SLOTS.map((name) => [name, read.get(name) || { slot: name, state: "empty" }]));
+    const slots = new Map(firstSlots(art.subject).map((name) => [name, read.get(name) || { slot: name, state: "empty" }]));
     for (const [name, slot] of read) slots.set(name, slot);
     for (const name of added) if (!slots.has(name)) slots.set(name, { slot: name, state: "empty" });
     const pictures = galleries.flatMap(({ scope: from, images }) => images.map((image) => ({ image, from })));

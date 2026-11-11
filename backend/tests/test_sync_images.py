@@ -501,10 +501,11 @@ def test_the_same_picture_dropped_by_hand_on_both_devices_can_be_imported_again(
     assert sync(desktop, phone, H).conflicts == ()
 
 
-@pytest.mark.parametrize("mode", ["hide", "adjust"])
-def test_a_hand_edited_source_hide_or_adjust_is_never_copied(unpaired, mode):
-    """W8 ``mode_not_allowed``: a source placement may only ``set`` a picture. One edited by hand to
-    ``hide`` or ``adjust`` is a state the origin's own batch refuses, so sync holds it, never copies it."""
+@pytest.mark.parametrize("mode", ["inherit", "adjust"])
+def test_a_hand_edited_source_inherit_or_adjust_is_never_copied(unpaired, mode):
+    """W8 ``mode_not_allowed``: a standalone source placement inherits nothing, so it may ``set`` or ``hide``
+    but never reset or re-crop. One edited by hand to ``inherit`` or ``adjust`` is a state the origin's own
+    batch refuses, so sync holds it, never copies it."""
     desktop, phone = unpaired
     batch = _images(desktop).change()
     ref = batch.add_image(HARBOR, "wren", PNG, {"origin": "test"})
@@ -512,8 +513,9 @@ def test_a_hand_edited_source_hide_or_adjust_is_never_copied(unpaired, mode):
     batch.commit()
     source = desktop.root / _path(PlacementRef(SAILOR, "avatar"))
     text = source.read_text()
-    edited = (text.replace('"image": "world:harbor#image/wren",\n    "mode": "set",', '"mode": "hide",')
-              if mode == "hide" else text.replace('"mode": "set"', '"mode": "adjust"'))
+    edited = (text.replace('"image": "world:harbor#image/wren",\n    "mode": "set",', '"mode": "inherit",')
+              .replace(',\n    "role": "avatar"', "")
+              if mode == "inherit" else text.replace('"mode": "set"', '"mode": "adjust"'))
     assert edited != text
     source.write_text(edited)
     report = sync_until_quiet(desktop, phone, H)

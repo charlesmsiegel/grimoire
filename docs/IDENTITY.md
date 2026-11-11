@@ -23,7 +23,7 @@ A name, a legacy V1 slug or an inherited portrayal is never identity. Two defini
 | Relation (017) | `RelationRef(campaign_id, relation_id)` | `campaign:<campaign_id>#relation/<relation_id>` |
 | Stored knowledge record (020) | `KnowledgeRef(campaign_id, family, record_id)` | `campaign:<campaign_id>#<family>/<record_id>`. `family` is one of `event`, `proposition`, `ruling`, `evidence`, `belief`, `disclosure` or `batch`. A batch ID is its ten-digit sequence number from 1. `name` gives 012's `<family>:<id>` |
 | Image object (018) | `ImageRef(scope, image_id)` | `<source>#image/<image_id>` or `campaign:<campaign_id>#image/<image_id>` |
-| Placement (018) | `PlacementRef(subject, slot)` | `<unpinned definition or instance>#placement/<slot>` (slot ≤ 123 characters) |
+| Placement (018) | `PlacementRef(subject, slot)` | `<unpinned definition, instance or owner>#placement/<slot>` (slot ≤ 123 characters). An owner (`OwnerRef`) is a source or a play scope as a whole, written as an image scope is: `world:harbor#placement/cover`, `campaign:c9#placement/cover` |
 | Accepted event (021) | `AcceptedRef(campaign_id, event_id)` | `campaign:<campaign_id>#accepted/<event_id>` |
 | Scene wrap-up (021) | `WrapUpRef(campaign_id, wrapup_id)` | `campaign:<campaign_id>#wrapup/<wrapup_id>` |
 | Holdings (023) | `HoldingsRef(campaign_id, kind, instance_id)` | `campaign:<campaign_id>/<kind>/<instance_id>#holdings` |

@@ -19,6 +19,7 @@ import { CARDS, PAGE, ROLES, askedRole, askedSort, canChat, count, countRoles, f
   shelvesOf, sortEntries, sortsFor, when } from "./catalog.js";
 import { PINNED, askedTags, filterOf, marksOf, problemText, readShelf, tagsParam } from "./shelf.js";
 import { bulkBar, entryMarks, pickButton, savedFilters, selection, tagRow } from "./marks.js";
+import { coverBand, coverTile, pictureOf as coverOf, reads as coversRead } from "../art/covers.js";
 
 // What a new entry can be: its kind, and the structured field its first revision needs besides a name.
 const NEW_KINDS = [["character", "Character"], ["location", "Location"], ["item", "Item"], ["scenario", "Scenario"],
@@ -242,6 +243,7 @@ function tile(view, entry) {
   const target = ctx.href("source", [entry.ref]);
   const detail = metaLine(entry, titles.get(entry.source), plays);
   let link;
+  let cover = null;  // a text tile's "Add cover", once its cover is known to be missing (pages/art/covers.js)
   if (entry.kind === "character") {
     link = ui.tile(name, target, { key: entry.ref, picture: entry.problem ? undefined : view.portrait(entry.ref), detail });
   } else {
@@ -249,6 +251,7 @@ function tile(view, entry) {
       el("span", { class: "g-tile-text sources-text-tile" }, el("span", { class: "g-eyebrow" }, kindLabel(entry.kind)),
         el("span", { class: "sources-text-title", "aria-hidden": "true" }, name)),
       el("span", { class: "g-tile-name" }, name), el("span", { class: "g-muted" }, detail));
+    if (!entry.problem) cover = coverTile(ctx, { subject: entry.ref, name }, link.querySelector("span.g-tile-text"), view.refresh);
   }
   link.title = entry.ref;
   if (!entry.name) link.classList.add("sources-unnamed");
@@ -256,7 +259,7 @@ function tile(view, entry) {
   if (view.picks.on) view.picks.asPick(node, link, entry);
   else {
     const acts = [chatLink(view, entry), entryMarks(view, entry, { tags: false })].filter(Boolean);
-    node.append(...[entryMarks(view, entry, { pin: false }), acts.length ? el("div", { class: "g-row sources-acts" }, acts) : null].filter(Boolean));
+    node.append(...[entryMarks(view, entry, { pin: false }), cover, acts.length ? el("div", { class: "g-row sources-acts" }, acts) : null].filter(Boolean));
   }
   return node;
 }
@@ -274,7 +277,7 @@ function table(view, entries) {
     const link = el("a", { class: "sources-name" + (entry.name ? "" : " g-ref"), href: ctx.href("source", [entry.ref]), title: entry.ref }, name);
     return el("tr", { class: view.picks.on && view.picks.has(entry.ref) ? "sources-picked-row" : undefined },
       el("td", {}, view.picks.on ? pickButton(view, entry) : ui.avatar(name, { size: 30, key: entry.ref,
-        picture: entry.kind === "character" && !entry.problem ? view.portrait(entry.ref) : undefined })),
+        picture: entry.problem ? undefined : entry.kind === "character" ? view.portrait(entry.ref) : coverOf(ctx, entry.ref) })),
       el("td", {}, el("div", { class: "g-stack sources-cell" }, link, entry.derived ? el("span", { class: "g-muted" }, "a portrayal") : null, ...facts(view, entry))),
       el("td", { class: "g-muted sources-nowrap" }, kindLabel(entry.kind)),
       marked ? el("td", { class: "sources-tagcell" }, view.picks.on ? el("span", { class: "sources-tags" }, marksOf(view.shelf, entry.ref).tags.join(", "))
@@ -296,14 +299,19 @@ function table(view, entries) {
 function sourceHead(ctx, source, sources, address) {
   const { ui } = ctx;
   const { el } = ui;
-  return ui.card({ tag: "section", label: source.title || source.source }, el("div", { class: "g-row g-between" },
-    el("div", { class: "g-stack sources-source-head" }, ui.eyebrow(NAMESPACES[source.namespace] || "Source"),
-      el("h2", { class: "g-heading" }, source.title || source.source),
-      el("div", { class: "g-muted" }, el("span", { class: "g-ref" }, source.source), " · " + count(source.entities, "entry", "entries"))),
-    el("div", { class: "g-row" },
-      ctx.has("sources.rename_source") ? focusKey(ui.button("Rename", () => rename(ctx, source)), "sources-rename") : null,
-      ctx.has("sources.create") ? focusKey(ui.button("New entry here", () => newEntry(ctx, sources, source)), "sources-new-here") : null,
-      el("a", { class: "g-button", href: address({ source: "", limit: "" }) }, "Show every source"))));
+  const title = el("div", { class: "g-stack sources-source-head" }, ui.eyebrow(NAMESPACES[source.namespace] || "Source"),
+    el("h2", { class: "g-heading" }, source.title || source.source),
+    el("div", { class: "g-muted" }, el("span", { class: "g-ref" }, source.source), " · " + count(source.entities, "entry", "entries")));
+  const acts = el("div", { class: "g-row" },
+    ctx.has("sources.rename_source") ? focusKey(ui.button("Rename", () => rename(ctx, source)), "sources-rename") : null,
+    ctx.has("sources.create") ? focusKey(ui.button("New entry here", () => newEntry(ctx, sources, source)), "sources-new-here") : null,
+    el("a", { class: "g-button", href: address({ source: "", limit: "" }) }, "Show every source"));
+  // where the app reads covers, the shelf's own cover band (pages/art/covers.js) with what can be done under it
+  if (coversRead(ctx)) {
+    return el("section", { class: "g-stack sources-source-cover", "aria-label": source.title || source.source },
+      coverBand(ctx, { subject: source.source, name: source.title || source.source, use: "Shown above this shelf in the library" }, title), acts);
+  }
+  return ui.card({ tag: "section", label: source.title || source.source }, el("div", { class: "g-row g-between" }, title, acts));
 }
 
 // -- making and renaming --------------------------------------------------------------------------------

@@ -17,6 +17,8 @@
 .source-cover-text .g-hero-title { font-size: 40px; line-height: 1.05; overflow-wrap: anywhere; }
 .source-cover-kind { color: inherit; }
 .source-tabs { display: flex; }
+.source-lore-row { display: flex; align-items: center; gap: 14px; }
+.source-lore-row > .source-lore { flex: 1; min-width: 0; }
 .source-attach .g-heading { margin-bottom: 6px; }
 .source-stale .g-heading { margin-bottom: 8px; }
 

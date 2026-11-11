@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
+from grimoire.core.identity import ImageRef, InstanceRef, OwnerRef, PlacementRef, SourceRef
 from grimoire.images import (
     IMAGE_SCHEMA, PLACEMENT_SCHEMA, ImageModelError, image_from_payload, placement_from_payload, validate_placement,
 )
@@ -124,6 +124,20 @@ def art_needs(path: str, data: bytes | None, origin: Mapping[str, bytes], blobs:
     if not readable:
         return done("its mode or image cannot be read")
     subject = ref.subject
+    if isinstance(subject, OwnerRef):  # a source's or a campaign's own picture (a cover, a chat's backdrop)
+        # W5: its owner, exactly as an image object's (an admitted source's manifest; a campaign with state).
+        # It inherits nothing, so W8 allows it only set, hide or unresolved, and W7 only its own pictures.
+        if subject.campaign_id is None:
+            excluded_why = admitted(subject.scope)
+            if excluded_why is not None:
+                return done(excluded_why)
+            present.add("/".join(manifest_parts(subject.scope)))
+        refused = _placement_refusal(ref, data)
+        if refused is not None:
+            return done(refused, subject.campaign_id)
+        if image is not None and image.scope != subject.scope:
+            return done(f"{image} is not in scope for {subject}", subject.campaign_id)
+        return done(None if image is None else art(image), subject.campaign_id)
     if isinstance(subject, SourceRef):  # W5 (source admitted, entity exists), W8, W7, W6
         excluded_why = admitted(subject.source)  # before its head: the origin's load() refuses that data
         if excluded_why is not None:

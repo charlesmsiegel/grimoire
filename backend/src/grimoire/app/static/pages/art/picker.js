@@ -8,12 +8,18 @@
 // openPicker(ctx, options) resolves to { art } once a picture was placed (or the slot hidden or reset), and to
 // null when the person cancelled or left the page. It rejects only when the subject's art cannot be read.
 //
-//   subject   whose slot: a source or chat actor ref, as media.art takes it (required)
-//   slot      "avatar", "portrait", or another slot name (required)
+//   subject   whose slot: an entry, a chat actor, or a source or campaign as a whole, as media.art takes it (required)
+//   slot      "avatar", "portrait", "cover", or another slot name (required)
 //   target    what the header names after "Choose a picture for" (default: the subject's name and the slot)
-//   aspect    the preview's shape: "1/1" or "3/4" (default: 1/1 for an avatar, 3/4 otherwise)
+//   aspect    the preview's shape: "1/1", "3/4", "16/5" or "16/10" (default: slotAspect(slot))
 //   use       one line saying where the picture shows (default: what is known of the slot)
 //   art       the subject's media.art answer, when the caller already holds it (saves a read)
+//   file      a picture file to start with (one dropped on the page), as if it had been chosen here
+//   offered   pictures the subject may take from elsewhere, listed with its own:
+//             { pictures: [{ ref, label, from }], place(ref, frame, expected) -> the subject's art }
+//
+// A cover, a backdrop, an entry's picture and a post's picture can also be taken off again ("Remove"): the
+// slot then shows nothing, and the picture stays in its gallery.
 //
 // It needs media.art and media.gallery; it places with media.place and adds a file with media.upload, and offers
 // each only when the app serves it. Every write names the slot's revision as read, so a slot that changed
@@ -31,13 +37,25 @@ export const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 export const MAX_LIST = 1000;  // the most one gallery request returns
 export const ZOOM_MIN = 100, ZOOM_MAX = 200, ZOOM_STEP = 5;
 
-const ASPECTS = { "1/1": "art-aspect-1-1", "3/4": "art-aspect-3-4" };
-const SLOT_NAMES = { avatar: "Avatar", portrait: "Portrait" };
-const USES = { avatar: "Beside their lines and in lists", portrait: "On their sheet and on stage" };
+const ASPECTS = { "1/1": "art-aspect-1-1", "3/4": "art-aspect-3-4", "16/5": "art-aspect-16-5", "16/10": "art-aspect-16-10" };
+const WIDE = new Set(["16/5", "16/10"]);
+const SLOT_NAMES = { avatar: "Avatar", portrait: "Portrait", cover: "Cover", backdrop: "Backdrop", entry: "Entry picture",
+  post: "Post picture" };
+const USES = { avatar: "Beside their lines and in lists", portrait: "On their sheet and on stage",
+  cover: "Shown as a band across the top, and on its tile", backdrop: "Shown as a band behind a chat's scene bar",
+  entry: "Shown beside the entry on its lorebook's sheet", post: "Shown under the post" };
+const KIND_ASPECTS = { cover: "16/5", backdrop: "16/5", entry: "1/1", post: "16/10" };
 
-export function slotName(slot) { return SLOT_NAMES[slot] || slot; }
-export function slotUse(slot) { return USES[slot] || null; }
-export function slotAspect(slot) { return slot === "avatar" ? "1/1" : "3/4"; }
+// What a slot beyond a character's own is for: "cover", or the word before the first dot of "backdrop.<name>",
+// "entry.<key>" and "post.<turn>". Null for a character's slots (avatar, portrait, an expression, a gallery slot).
+export function slotKind(slot) {
+  if (slot === "cover") return "cover";
+  const head = String(slot).split(".")[0];
+  return head !== slot && Object.hasOwn(KIND_ASPECTS, head) ? head : null;
+}
+export function slotName(slot) { return SLOT_NAMES[slot] || SLOT_NAMES[slotKind(slot)] || slot; }
+export function slotUse(slot) { return USES[slot] || USES[slotKind(slot)] || null; }
+export function slotAspect(slot) { return slot === "avatar" ? "1/1" : KIND_ASPECTS[slotKind(slot)] || "3/4"; }
 export function aspectClass(aspect) { return ASPECTS[aspect] || ASPECTS["1/1"]; }
 export function zoomClass(zoom) { return "art-zoom-" + zoom; }
 
@@ -164,6 +182,14 @@ export async function openPicker(ctx, options) {
 
   const pictures = galleries.flatMap(({ scope, images }) => images.map((image) =>
     ({ ref: image.image, label: describe(image.provenance), from: scope })));
+  // pictures the subject may take from elsewhere (a scenario's backdrops, for a chat): placed by the caller's own op
+  const offered = options.offered && ctx.has("media.place") ? options.offered : null;
+  const foreign = new Set();
+  for (const picture of offered ? offered.pictures : []) {
+    if (pictures.some((item) => item.ref === picture.ref)) continue;
+    foreign.add(picture.ref);
+    pictures.push({ ref: picture.ref, label: picture.label, from: picture.from });
+  }
   // the picture shown now stays in the list even when its gallery does not list it, so framing it alone never
   // swaps it for another
   if (current && !pictures.some((picture) => picture.ref === current)) {
@@ -203,7 +229,7 @@ export async function openPicker(ctx, options) {
     const pick = el("div", { class: "art-picker-col" }, ui.eyebrow("1 · Pick a picture"), grid, caption, fresh);
 
     // -- 2 · frame -----------------------------------------------------------------------------------------
-    const view = el("div", { class: "art-frame art-picker-frame " + aspectClass(aspect) });
+    const view = el("div", { class: "art-frame art-picker-frame " + aspectClass(aspect) + (WIDE.has(aspect) ? " art-picker-wide" : "") });
     const zoom = el("input", { type: "range", class: "art-zoom", min: ZOOM_MIN, max: ZOOM_MAX, step: ZOOM_STEP, id: ui.id("zoom") });
     const zoomSays = el("span", { class: "g-muted art-zoom-value" });
     const box = ["x", "y", "w", "h"].map((key) => number(ui, "Crop " + key + " %", null));
@@ -334,6 +360,7 @@ export async function openPicker(ctx, options) {
           note: note.value.trim() || null, origin: null, subject, slot, expected, ...framed() });
         return answer.art;
       }
+      if (foreign.has(chosen.ref)) return offered.place(chosen.ref, framed(), expected);
       const mode = chosen.ref === inherited && art.modes.includes("adjust") ? "adjust" : "set";
       return ctx.api("media.place", { subject, slot, mode, image: chosen.ref, expected, ...framed() });
     };
@@ -346,8 +373,13 @@ export async function openPicker(ctx, options) {
       modal.foot.append(cancel);
       return;
     }
-    if (ctx.has("media.place") && art.modes.includes("hide") && shown.state !== "hidden") {
-      buttons.push(ui.button("Hide this slot", run(() => ctx.api("media.place", { subject, slot, mode: "hide", expected }), name + " hidden.")));
+    if (ctx.has("media.place") && art.modes.includes("hide") && shown.state !== "hidden" && shown.state !== "empty") {
+      // a cover, a backdrop and the like are taken off ("Remove") once something is there; a character's slot is hidden
+      if (!slotKind(slot)) {
+        buttons.push(ui.button("Hide this slot", run(() => ctx.api("media.place", { subject, slot, mode: "hide", expected }), name + " hidden.")));
+      } else if (own) {
+        buttons.push(ui.button("Remove", run(() => ctx.api("media.place", { subject, slot, mode: "hide", expected }), name + " removed.")));
+      }
     }
     if (ctx.has("media.place") && art.modes.includes("inherit") && own && own.mode !== "inherit") {
       buttons.push(ui.button("Use the inherited picture", run(() => ctx.api("media.place", { subject, slot, mode: "inherit", expected }),
@@ -360,6 +392,7 @@ export async function openPicker(ctx, options) {
     modal.foot.append(...extra, el("span", { class: "g-grow" }), cancel, confirm);
     if (chosen) { const start = chosen; chosen = null; choose(start); }
     else { setFrame(null, null); preview(); caption.textContent = pictures.length ? "" : "No picture here yet: add one."; }
+    if (options.file && ctx.has("media.upload")) take(options.file);
     const first = tiles.find(([picture]) => chosen && picture.ref === chosen.ref) || tiles[0];
     (first ? first[1] : ctx.has("media.upload") ? add : cancel).focus();
   });

@@ -43,7 +43,7 @@ from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
     ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, HOLDINGS, IMAGES, INSTANCES, PLACEMENTS,
     SCOPE, MANIFEST, MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX,
-    SYNC, TRANSCRIPTS,
+    SYNC, SCOPE_ART, TRANSCRIPTS,
     TURNS, TXN, WRAPUPS, Parts, classify, is_noise, manifest_parts, name_key,
 )
 
@@ -398,9 +398,9 @@ def scan_source(access: Access, source_id: str, *, assets: bool = False) -> Sour
     access.guard.check_read(base)  # never list through a linked ancestor (LinkRefused)
     names = _listing(access, base, problems, source_id)  # links are reported here, not entered
     for name in names:
-        if name in (IMAGES, PLACEMENTS):
+        if name in (IMAGES, PLACEMENTS, SCOPE_ART):
             if assets:
-                walk_assets(access, base + (name,), 0 if name == IMAGES else 2,
+                walk_assets(access, base + (name,), 2 if name == PLACEMENTS else 0,
                             "image" if name == IMAGES else "placement", problems, source_id)
         elif name not in (MANIFEST, RECORDS):
             _unrecognized(access, base + (name,), problems, source_id)
@@ -1079,6 +1079,9 @@ def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems
             continue
         if entry == PLACEMENTS:
             walk_assets(access, base + (entry,), 2, "placement", problems, None)
+            continue
+        if entry == SCOPE_ART:  # the campaign's own pictures (its cover, its chats' backdrops)
+            walk_assets(access, base + (entry,), 0, "placement", problems, None)
             continue
         if entry != INSTANCES or not _is_dir(access, base + (entry,)):
             _unrecognized(access, base + (entry,), problems, None)

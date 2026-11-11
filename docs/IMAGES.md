@@ -13,7 +13,17 @@ There is **no UI, no importer and no image generation**. Nothing is fetched from
 |---|---|---|---|
 | **Blob** | The exact bytes of a picture | `sha256` of the bytes, plus a media type sniffed from magic bytes | Create-only. The only exception is the explicit repair of a file whose bytes no longer hash to its name. Shared by the whole library. |
 | **Image object** | "This picture": owned by one source or one campaign, points at exactly one blob, carries provenance | `ImageRef`: `<source>#image/<id>` or `campaign:<c>#image/<id>` | Create-only. A different picture, or new metadata, is a new image object. |
-| **Placement** | One use of an image object by one subject in one slot: its role, crop, focus and provenance | `PlacementRef`: `<subject>#placement/<slot>`. The subject is an **unpinned** definition or a campaign instance. | Compare-and-swap, one file per (subject, slot) |
+| **Placement** | One use of an image object by one subject in one slot: its role, crop, focus and provenance | `PlacementRef`: `<subject>#placement/<slot>`. The subject is an **unpinned** definition, a campaign instance, or an owner itself (below). | Compare-and-swap, one file per (subject, slot) |
+
+### Subjects
+
+A placement's subject is one of three things, told apart by structure and never by name:
+
+- an **unpinned definition** (`world:harbor/character/wren`): the entity across its revisions, of any kind (a character, a lorebook, a scenario, a location);
+- a **campaign instance** (`campaign:c9/character/wren-1`);
+- an **owner itself** (`OwnerRef`): a source or a play scope as a whole, written exactly as an image scope is (`world:harbor`, `campaign:c9`). It is the subject of pictures that belong to no one entity or actor: a world's or a campaign's cover, a chat's backdrop. It names no entity and no instance, so nothing is inherited through it, it derives from nothing, and it is never a member of a lineage. Its placements live in their own folder, `<owner>/scope-art/<slot>.json` ([STORAGE](STORAGE.md)), so no kind or id folder of `placements/` can be mistaken for one, and they reserve no instance id.
+
+What a slot's name means beyond the role it decides (a `cover`, an entry's picture, a backdrop) is the app adapter's convention: [MEDIA_SYNC_UI](MEDIA_SYNC_UI.md#beyond-character-slots).
 
 - A V1 `px1-…` id is not a file path, a blob or an actor identity. The importer chooses an image id and records the old id in `provenance.legacy_id`.
 - Two image objects in different sources may share a blob. The bytes are shared; ownership is not.
@@ -51,7 +61,7 @@ There is **no UI, no importer and no image generation**. Nothing is fetched from
   - `inherit` ([046](INHERITANCE.md)): show whatever the base chain shows, as if this subject had never placed the slot. It names no `role`, `image`, `crop`, `focus` or `expression`. The store has no deletes, so this is how a derived portrayal, or an instance, resets an override;
   - `unresolved` ([038](roadmap/sprints/expression-and-art-lineage.md)): a picture belongs in this slot but its bytes are not here, such as a card's remote or packaged picture. It names the slot's `role` (and, for a sprite, its `expression`) and no `image`, `crop` or `focus`. `provenance.note` says why, in the importer's words.
 
-  A standalone source placement may only `set` or mark a picture `unresolved`, never `adjust`, `hide` or `inherit`. A placement on a [046](INHERITANCE.md#art-down-a-base-chain) derived portrayal (an entity whose head revision has a `derivation`) may use every mode, and its `set` may only name its own source's images. A build older than 046 reads a portrayal's `hide`, `adjust` or `inherit`, and any `inherit`, as `invalid_placement`. A build older than 038 reads an `unresolved` placement as `invalid_placement`, so it shows nothing there either.
+  A placement that inherits nothing (a standalone definition's, or an owner's own) may `set` a picture, mark one `unresolved`, or `hide` its slot, never `adjust` or `inherit`: there is nothing beneath it to re-crop or to reset to. Its `hide` is how a picture is taken off a slot (no placement is ever deleted), and what inherits from a definition inherits its `hide` like any other placement. A placement on a [046](INHERITANCE.md#art-down-a-base-chain) derived portrayal (an entity whose head revision has a `derivation`) may use every mode, and its `set` may only name its own source's images. A build older than 046 reads a portrayal's `hide`, `adjust` or `inherit`, and any `inherit`, as `invalid_placement`; a build older than the standalone `hide` reads one as `invalid_placement` too, so it shows nothing there either, and one older than owner placements reports the `scope-art/` folder as `unrecognized` and shows no cover. A build older than 038 reads an `unresolved` placement as `invalid_placement`, so it shows nothing there either.
 - **The slot decides the role:**
 
   | role | slot |
@@ -101,9 +111,9 @@ A refused rule writes nothing. Reasons are machine-readable: `InvalidImage.reaso
 | W1–W2 | The bytes must sniff as PNG, JPEG, GIF or WebP, be nonempty, and be at most 32 MiB | `unsupported_media`, `empty`, `too_large` |
 | W3 | Image ids are never reused | `image_exists` |
 | W4 | Identical intact bytes are stored once. If an existing blob with that name is corrupt, `add_image` is refused and you must `repair_blob` first. A look-alike spelling raises `NameCollision`. | `blob_corrupt` |
-| W5 | The subject must exist. For a definition that means an admitted source entity, or a revision in the batch whose source is admitted; a batch manifest counts only for a `missing_source`, never for an `excluded_source`. For an instance it means a readable instance, or one in the batch. A campaign image needs an existing campaign: a canonical `scope.json`, an instance, or an instance put in the batch. | `missing_subject`, `missing_scope` |
+| W5 | The subject must exist. For a definition that means an admitted source entity, or a revision in the batch whose source is admitted; a batch manifest counts only for a `missing_source`, never for an `excluded_source`. For an instance it means a readable instance, or one in the batch. For an owner it means what an image of that scope needs: an admitted source, or an existing campaign. A campaign image needs an existing campaign: a canonical `scope.json`, an instance, or an instance put in the batch. | `missing_subject`, `missing_scope` |
 | W6 | A placed image must exist, be readable, and its blob be present with the declared size | `missing_image`, `invalid_image`, `missing_blob` |
-| W7 | A source placement may use only its **own** source's images: not a parent's, a sub-source's or a campaign's. A campaign placement may use that campaign's images and its instance's derivation source's. | `wrong_scope` |
+| W7 | A source placement may use only its **own** source's images: not a parent's, a sub-source's or a campaign's. A campaign placement may use that campaign's images and its instance's derivation source's. An owner's own placement may use only that owner's images (a campaign's cover, only campaign images: it derives from nothing). | `wrong_scope` |
 | W8 | The mode, role, slot and field rules above | `invalid_field`, `mode_not_allowed`, `role_slot_mismatch` |
 | W9 | An `adjust` needs a shown inherited picture in that slot, and it must name that picture | `nothing_to_adjust`, `stale_adjust` |
 | W10 | Compare-and-swap on a placement's expected etag (`None` for a new one) | store `StaleWrite` |
@@ -192,7 +202,7 @@ The [inventory](MIGRATION_INVENTORY.md) rows map as follows. `grimoire.import_v1
 **Unmapped or unrepresentable.** The importer must report each of these as unresolved; 018 defines no fallback:
 - `unarrived_blob` / `hash_mismatch` objects: no intact bytes, so no image object (the slots that name them are `unresolved`, above);
 - `dangling_object`: no image object to name (its slot is `unresolved`, above);
-- a world-level `focus_only` placement: sources may only `set`;
+- a world-level `focus_only` placement: a standalone source placement has nothing to `adjust`;
 - a world's hidden outfits and expressions, the default outfit, the rest of a campaign expression layer (its own sprites and default outfit), and stale expression revisions;
 - `animated`, width/height, descriptions, associations, reviews, `sources` lists and unknown sidecar fields. These may be carried as preserved `provenance` keys at the importer's choice;
 - the `cover`, `library` and `embed` slots, collections, legacy loose images and Markdown image references;
@@ -206,7 +216,7 @@ The [inventory](MIGRATION_INVENTORY.md) rows map as follows. `grimoire.import_v1
   - Gating uses `check_source`/`check_definition`, which consult the store's shared, cached [`excluded_sources`](STORAGE.md#read-only-helpers-107). A source excluded **only** by a cross-source `identity_conflict` therefore shows no art, exactly as `load()` would exclude it. [Device sync](SYNC.md#art) reads the same verdict on both devices: art of a source either one excludes is never copied, so a device never shows a picture the other excludes, until the source is repaired. Writing art never invalidates that cache; a batch verifies it once until a commit, and each preview, commit or resolution once ([STORAGE](STORAGE.md#read-only-helpers-107) has the costs and the one staleness limit). Reading many images one by one should be wrapped in one `store.read_pass()`. A derived portrayal's lineage needs one library `load()`; inside one pass, every resolution shares it until a commit.
   - A damaged campaign layer (a linked, unreadable or look-alike folder or file) shows no source picture at all: every inherited slot, and any `adjust` of one, is `Unavailable(invalid_placement)`.
   - Art follows the entity, not a portrayal's pinned `base` revision. A pinned chat's actor is the exception: it keeps a snapshot of its pinned revision's art until a reviewed rebase ([INHERITANCE](INHERITANCE.md#pinned-art)). Pinning placements to a release is not built.
-  - There is no unplace or delete, because the store has no deletes. A derived portrayal or an instance resets a slot with `inherit`; a standalone source avatar can be removed only by hand.
+  - There is no unplace or delete, because the store has no deletes. A derived portrayal or an instance resets a slot with `inherit`; a standalone definition or an owner takes a picture off with `hide`, and the image object stays in its gallery.
   - Direct store use (not the service) of a blob create or repair over a hand-placed file larger than 32 MiB reads that file whole during the commit.
   - **Placement subject ids stay taken.** `placement_subject_ids(store, campaign_id)` returns every id with a campaign placement folder (`placements/<kind>/<id>/`) from listings only, and a look-alike folder keeps the id it folds to. It is part of the one reservation set, [`campaign_taken_ids`](CHATS.md#taken-instance-ids), so a hand-deleted actor's id never goes to a new individual who would show the old one's `hide` or `set` art. A folder that could hold a subject but is a link or cannot be listed raises `TakenIdsUnlisted`.
-- **Later milestones:** gallery ordering and collections; expression manifests and outfit sets; captions and subjects; scene art; legacy loose images; blob garbage collection; dimension probing; and image generation. Image objects, placements and blobs are synced between devices ([SYNC](SYNC.md#art)).
+- **Later milestones:** gallery ordering and collections; expression manifests and outfit sets; captions and subjects; legacy loose images; blob garbage collection; dimension probing; and image generation. Image objects, placements and blobs are synced between devices ([SYNC](SYNC.md#art)).

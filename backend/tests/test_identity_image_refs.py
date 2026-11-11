@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from grimoire.core.identity import TEXT_MAX, ImageRef, InstanceRef, PlacementRef, SourceRef, parse_ref
+from grimoire.core.identity import TEXT_MAX, ImageRef, InstanceRef, OwnerRef, PlacementRef, SourceRef, parse_ref
 
 WREN = SourceRef("world:harbor", "character", "wren")
 WREN_A = InstanceRef("c1", "character", "wren-a")
@@ -34,6 +34,8 @@ def test_image_ref_rejections(text):
 
 @pytest.mark.parametrize("ref", [
     PlacementRef(WREN, "avatar"), PlacementRef(WREN_A, "expr.default.smile"), PlacementRef(WREN, "gallery_1"),
+    PlacementRef(OwnerRef("campaign:c1"), "cover"), PlacementRef(OwnerRef("world:harbor"), "cover"),
+    PlacementRef(OwnerRef("catalog"), "backdrop.t-1"),
 ])
 def test_placement_refs_round_trip(ref):
     assert PlacementRef.parse(str(ref)) == ref
@@ -44,7 +46,10 @@ def test_placement_refs_round_trip(ref):
     "world:harbor/character/wren#placement/",
     "world:harbor/character/wren#placement/Avatar",
     "world:harbor/character/wren#placement/a/b",
-    "campaign:c1#placement/avatar",
+    "campaign:#placement/avatar",  # no campaign
+    "campaign:c1:x#placement/avatar",  # an owner is a source id or one play scope
+    "World:harbor#placement/cover",
+    "world:harbor/character#placement/cover",  # neither an entity nor an owner
     "world:harbor/character/wren",
     "v1:a:b#placement/avatar",
 ])

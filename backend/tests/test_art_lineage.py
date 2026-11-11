@@ -104,11 +104,15 @@ def test_an_adjust_recrops_the_inherited_picture_and_goes_stale_when_it_changes(
     assert caught.value.reason == "stale_adjust"
 
 
-def test_a_standalone_definition_still_cannot_clear_or_reset(images):
-    for mode in ("hide", "inherit"):
-        with pytest.raises(InvalidPlacement) as caught:
-            images.place(CATALOG_MARA, "gallery-1", Placement(mode), None)
-        assert caught.value.reason == "mode_not_allowed"
+def test_a_standalone_definition_may_hide_a_slot_but_has_nothing_to_reset_to(images):
+    with pytest.raises(InvalidPlacement) as caught:
+        images.place(CATALOG_MARA, "gallery-1", Placement("inherit"), None)
+    assert caught.value.reason == "mode_not_allowed"
+    # a hide is the one way to take a picture off a slot (nothing is deleted), and it reaches what inherits it
+    _set(images, CATALOG_MARA, "portrait", Placement("hide"))
+    assert isinstance(images.effective_placements(CATALOG_MARA).slot("portrait"), Hidden)
+    assert isinstance(images.effective_placements(VAMPIRE_ENTITY).slot("portrait"), Hidden)
+    assert images.effective_placements(VAMPIRE_ENTITY).origin("portrait").placed_by == CATALOG_MARA
 
 
 def test_a_portrayal_may_only_set_its_own_sources_pictures(images):
@@ -138,8 +142,8 @@ def test_the_batch_judges_a_mode_by_the_head_it_will_leave(store, images):
     batch.put(manifest(VAMPIRE, derives(VAMPIRE_MARA), heads={"character/mara": "r2"}),
               store.check_source(VAMPIRE).etag)
     batch.put(envelope(standalone), None)
-    with pytest.raises(InvalidPlacement) as caught:  # the head it leaves is standalone: no clear
-        batch.place(VAMPIRE_ENTITY, "portrait", Placement("hide"), None)
+    with pytest.raises(InvalidPlacement) as caught:  # the head it leaves is standalone: nothing to reset to
+        batch.place(VAMPIRE_ENTITY, "portrait", Placement("inherit"), None)
     assert caught.value.reason == "mode_not_allowed"
     namesake_r2 = derived(NAMESAKE.unpinned().at("r2"), BASE)
     batch = images.change()
@@ -147,7 +151,7 @@ def test_the_batch_judges_a_mode_by_the_head_it_will_leave(store, images):
               store.check_source(ELSEWHERE).etag)
     batch.put(envelope(namesake_r2), None)  # derived, but not the head the batch leaves
     with pytest.raises(InvalidPlacement) as caught:
-        batch.place(NAMESAKE.unpinned(), "avatar", Placement("hide"), None)
+        batch.place(NAMESAKE.unpinned(), "avatar", Placement("inherit"), None)
     assert caught.value.reason == "mode_not_allowed"
 
 
@@ -224,10 +228,10 @@ def test_a_species_gets_new_art_children_follow_the_customized_one_keeps_its_pic
     assert gone[:2] == [None, None] and gone[2].image == snik
 
 
-def test_a_later_put_cannot_leave_an_earlier_clear_on_a_standalone_head(store, images):
+def test_a_later_put_cannot_leave_an_earlier_reset_on_a_standalone_head(store, images):
     standalone = EntityDefinition(VAMPIRE_ENTITY.at("r2"), "Mara", "individual", base({}).traits, "Alone now")
     batch = images.change()
-    batch.place(VAMPIRE_ENTITY, "portrait", Placement("hide"), None)  # allowed: the head is derived now
+    batch.place(VAMPIRE_ENTITY, "portrait", Placement("inherit"), None)  # allowed: the head is derived now
     batch.put(manifest(VAMPIRE, derives(VAMPIRE_MARA), heads={"character/mara": "r2"}),
               store.check_source(VAMPIRE).etag)
     batch.put(envelope(standalone), None)
@@ -249,7 +253,7 @@ def test_an_adjust_through_a_damaged_portrayal_layer_is_refused(store, images):
     assert caught.value.reason == "nothing_to_adjust"
 
 
-def test_an_ancestor_whose_head_is_now_standalone_cannot_clear_for_its_descendants(store, images):
+def test_an_ancestor_whose_head_is_now_standalone_cannot_reset_for_its_descendants(store, images):
     """A child pins Vampire r1 (derived); Vampire's head is now a standalone r2. Vampire's own reset
     reads as broken, and the child sees it the same way, never the catalog picture behind it."""
     child = derived(SourceRef("world:elderfen-regency", "character", "mara", "r1"), VAMPIRE_MARA)
@@ -257,7 +261,7 @@ def test_an_ancestor_whose_head_is_now_standalone_cannot_clear_for_its_descendan
     txn.put(manifest("world:elderfen-regency", derives(child.ref, VAMPIRE_MARA)), None)
     txn.put(envelope(child), None)
     txn.commit(handle())
-    _set(images, VAMPIRE_ENTITY, "portrait", Placement("hide"))
+    _set(images, VAMPIRE_ENTITY, "portrait", Placement("inherit"))
     standalone = EntityDefinition(VAMPIRE_ENTITY.at("r2"), "Mara", "individual", base({}).traits, "Alone now")
     txn = store.transaction()
     txn.put(manifest(VAMPIRE, derives(VAMPIRE_MARA), heads={"character/mara": "r2"}), store.check_source(VAMPIRE).etag)

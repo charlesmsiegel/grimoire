@@ -81,13 +81,14 @@ test("a picture added to a portrait, then this device named and paired", { skip:
   assert.ok(shown.getAttribute("src").startsWith("blob:"));
   assert.ok(slot("portrait").textContent.includes("Mara at the harbor"));
 
-  // a standalone card's slot inherits nothing, so it offers no Hide and no way back to an inherited picture;
-  // Crop opens the picker on the picture shown, so saving a focus alone keeps that picture
-  assert.ok(!byText(slot("portrait"), "button", "Hide").length && !byText(slot("portrait"), "button", "Use inherited").length);
+  // a standalone card's slot inherits nothing, so it offers no way back to an inherited picture; its picture can
+  // be hidden (the one way to take it off). Crop opens the picker on the picture shown, so saving a focus alone
+  // keeps that picture
+  assert.ok(byText(slot("portrait"), "button", "Hide").length === 1 && !byText(slot("portrait"), "button", "Use inherited").length);
   byText(slot("portrait"), "button", "Crop").find((node) => !node.disabled).click();
   dialog = await until(() => body.querySelector("dialog"), 15000, "the picker for a crop");
   assert.deepEqual(picked(), ["Mara at the harbor · " + scope]);
-  assert.ok(!byText(dialog, "button", "Hide this slot").length && !byText(dialog, "button", "Use the inherited picture").length);
+  assert.ok(byText(dialog, "button", "Hide this slot").length === 1 && !byText(dialog, "button", "Use the inherited picture").length);
   type(numbers(dialog)[4], "25");
   type(numbers(dialog)[5], "40");
   byText(dialog, "button", "Use this picture")[0].click();

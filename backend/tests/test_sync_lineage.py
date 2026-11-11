@@ -73,9 +73,10 @@ def test_a_reset_is_held_because_it_shows_what_the_chain_shows(devices, subject,
     assert isinstance(ImageLibrary(phone, H[PHONE], owner=OWNER).effective_placements(subject).slot(slot), Hidden)
 
 
-def test_a_clear_waits_until_both_devices_select_the_same_derived_head(devices):
-    """A ``hide`` is valid only on a derived head; if the phone now selects a standalone one, the
-    desktop's new clear is never copied to where it would read as broken."""
+def test_a_clear_is_read_against_the_head_both_devices_select(devices):
+    """A ``hide`` is valid on a derived head and on a standalone one, and sync copies it only once both
+    devices hold the same manifest, so both read it against the same head: the phone's newer head arrives on
+    the desktop first, and the desktop's clear then hides the slot on both, never a broken placement."""
     desktop, phone, images = devices
     standalone = EntityDefinition(VAMPIRE_ENTITY.at("r2"), "Mara", "individual", base({}).traits, "Alone now")
     txn = phone.transaction()
@@ -84,6 +85,9 @@ def test_a_clear_waits_until_both_devices_select_the_same_derived_head(devices):
     txn.commit(H[PHONE])
     images.place(VAMPIRE_ENTITY, "avatar", Placement("hide"), None).commit()  # valid on the desktop's head
     report = sync_until_quiet(desktop, phone, H)
-    held = _path(PlacementRef(VAMPIRE_ENTITY, "avatar"))
-    assert held in {conflict.path for conflict in report.conflicts}
-    assert not (phone.root / held).exists()
+    clear = _path(PlacementRef(VAMPIRE_ENTITY, "avatar"))
+    assert report.conflicts == () and (phone.root / clear).read_bytes() == (desktop.root / clear).read_bytes()
+    assert desktop.check_definition(VAMPIRE_ENTITY).ref.revision == "r2"  # the head both now select
+    for store in (desktop, phone):
+        shown = ImageLibrary(store, H[PHONE], owner=OWNER).effective_placements(VAMPIRE_ENTITY).slot("avatar")
+        assert isinstance(shown, Hidden)

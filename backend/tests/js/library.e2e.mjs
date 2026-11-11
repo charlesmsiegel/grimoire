@@ -114,7 +114,12 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   const counts = group(page, "Which entries").querySelectorAll("button").map((node) => Number(node.textContent.split(" ").pop()));
   assert.equal(counts.slice(1).reduce((sum, n) => sum + n, 0), counts[0]);
   // nothing of the design that the app cannot do yet is on the page
-  for (const absent of ["Save this filter", "Add cover", "Move", "Delete"]) assert.equal(byText(page, "button", absent).length, 0, absent);
+  for (const absent of ["Save this filter", "Move", "Delete"]) assert.equal(byText(page, "button", absent).length, 0, absent);
+  // a text tile with no cover offers to add one, once its cover is known to be missing; a character's tile never does
+  await until(() => byText(page, "button", "Add cover").length, 15000, "Add cover on the text tiles");
+  for (const tile of tiles(page)) {
+    assert.equal(byText(tile, "button", "Add cover").length, tile.querySelector("span.g-tile-text") && !tile.querySelector("span.sources-problem") ? 1 : 0, refOf(tile));
+  }
   // nothing is tagged, pinned or saved yet, and the page says so with real counts
   assert.equal(page.querySelector("div.sources-tagrow"), null, "no tag is in use, so there are no chips");
   assert.equal(byText(page.querySelector("nav.sources-shelves"), "a", "Pinned")[0].textContent, "Pinned0");
@@ -174,7 +179,7 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   const own = tiles(page).map(refOf);
   assert.ok(own.length === held && own.every((ref) => ref.startsWith("world:saltmarch/")), own.join(", "));
   assert.ok(page.querySelector("nav.sources-shelves").querySelector("a[aria-current]").textContent.startsWith("Saltmarch"));
-  assert.equal(page.querySelector("section.g-card").querySelector("h2").textContent, "Saltmarch");
+  assert.equal(page.querySelector("section.sources-source-cover").querySelector("h2").textContent, "Saltmarch");
   assert.equal(pressed(group(page, "Which entries")), "Everything " + held, "the roles count what this shelf holds");
   page = await step(main, () => byText(page.querySelector("nav.sources-shelves"), "a", "Imported cards")[0].click(), library, "the imported cards");
   assert.ok(window.location.hash.includes("shelf=cards"));
@@ -210,7 +215,7 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   page = await press(asked, "Create source", library, "the new source");
   assert.equal(body.querySelector("dialog"), null);
   assert.ok(window.location.hash.includes("source=world%3Aharbor"));
-  assert.equal(page.querySelector("section.g-card").querySelector("h2").textContent, "Harbour");
+  assert.equal(page.querySelector("section.sources-source-cover").querySelector("h2").textContent, "Harbour");
   assert.ok(byText(page, "p", "Nothing here yet.").length);
 
   // renamed from its shelf
@@ -219,7 +224,7 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   assert.equal(asked.querySelector("input").value, "Harbour");
   type(asked.querySelector("input"), "Harbor");
   page = await press(asked, "Rename", library, "the renamed source");
-  assert.equal(page.querySelector("section.g-card").querySelector("h2").textContent, "Harbor");
+  assert.equal(page.querySelector("section.sources-source-cover").querySelector("h2").textContent, "Harbor");
 
   // a new entry in it: a scenario, which opens as an entry sheet under its title band
   byText(page, "button", "New entry here")[0].click();
@@ -231,10 +236,13 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   type(asked.querySelector("textarea"), "The lamps are out along the quay.");
   page = await press(asked, "Create", entry, "the new scenario");
   assert.equal(decodeURIComponent(window.location.hash), "#/source/world:harbor/scenario/night-watch@r1");
-  const band = page.querySelector("div.g-cover");
+  // it has no cover yet: its title sits in a dashed block that offers to add one (covers.e2e.mjs sets and removes one)
+  const band = page.querySelector("div.art-cover-empty");
   assert.equal(band.querySelector("div.g-eyebrow").textContent, "Scenario");
   assert.equal(band.querySelector("h2").textContent, "Night watch");
-  assert.equal(byText(band, "button", "").length, 0, "the band has no cover controls yet");
+  assert.deepEqual(band.querySelectorAll("button").map((node) => node.textContent), ["Drop a cover image, or choose one"]);
+  assert.equal(page.querySelector("div.g-cover"), null);
+  assert.ok(page.querySelector('section[aria-label="Scene backdrops"]'), "a scenario's sheet has its backdrops");
   assert.ok(page.querySelector("p.source-lede").textContent.includes("The lamps are out"));
   assert.ok(page.querySelector("div.source-meta").textContent.startsWith("Harbor · version 1"));
   assert.equal(byText(page, "a", "Start a chat")[0].getAttribute("href"), "#/start?source=" + encodeURIComponent("world:harbor/scenario/night-watch"));
@@ -387,7 +395,7 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
 
   // the lorebook's entry sheet lists its entries, with their keys
   page = await go(at(LORE), entry, "the lorebook");
-  assert.equal(page.querySelector("div.g-cover").querySelector("h2").textContent, "Harbor lore");
+  assert.equal(page.querySelector("div.art-cover-host").querySelector("h2").textContent, "Harbor lore");
   const entries = block(page, "Entries").querySelectorAll("div.source-lore");
   assert.deepEqual(entries.map((row) => row.querySelector("span.source-keys").textContent), ["lighthouse", "guild, Silver Guild"]);
   assert.ok(entries[0].textContent.includes("The lighthouse has been dark for a year."));
@@ -410,7 +418,7 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   const lore = await call("sources.read", { ref: LORE });
   await call("sources.save", { ref: LORE, head: lore.head, etag: lore.etag, expected: lore.manifest_etag, fields: { name: "Mara's lore, renamed" } });
   page = await go(at(LORE + "@" + lore.head), entry, "the older lorebook revision");
-  assert.equal(page.querySelector("div.g-cover").querySelector("h2").textContent, lore.payload.name);
+  assert.equal(page.querySelector("div.art-cover-host").querySelector("h2").textContent, lore.payload.name);
   assert.equal(block(page, "Entries").querySelectorAll("div.source-lore").length, 2, "an older lorebook revision shows what it holds");
   page = await go(at(LORE, "?tab=revisions"), entry, "the lorebook's revisions");
   const restore = page.querySelector("div.source-compare");

@@ -1,0 +1,53 @@
+/* Covers and other single pictures on any page (covers.js): every class starts with "art-" (docs/APP_SHELL.md).
+   covers.js links this sheet itself. A band and a tile with a picture keep white text over a dark scrim, in
+   both themes: the picture is the person's own and may be any brightness (white text over a white picture
+   under the scrim is still 5.7 to 1). */
+.art-cover-host { display: block; min-width: 0; }
+.art-cover { align-items: flex-end; flex-wrap: wrap; }
+.art-cover-text { min-width: 0; flex: 1 1 200px; }
+.art-cover-actions { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-end; }
+.art-cover-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.art-cover > .art-scrim, .art-tile-cover > .art-scrim { position: absolute; inset: 0;
+  background: linear-gradient(to top, rgb(0 0 0 / .8), rgb(0 0 0 / .6)); }
+.art-cover.art-over, .art-cover-empty.art-over { outline: 2px dashed var(--g-accent); outline-offset: 2px; }
+.art-cover-button:hover { background: rgb(0 0 0 / .45); }
+.art-cover-button:disabled { opacity: .55; cursor: default; }
+
+/* no cover yet: a dashed block that takes a dropped file */
+.art-cover-empty { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px;
+  padding: 20px 24px; border: 1.5px dashed var(--g-muted); border-radius: 14px; }
+.art-cover-add { padding: 8px 14px; border: 1px dashed var(--g-muted); border-radius: 8px; background: transparent;
+  color: var(--g-muted); font: inherit; cursor: pointer; }
+.art-cover-add:hover, .art-add-cover:hover, .art-row-add:hover, .art-slot-button.art-slot-empty:hover { border-color: var(--g-accent); color: var(--g-accent); }
+
+/* a library tile's face with its cover behind its kind and title */
+.art-tile-cover { position: relative; overflow: hidden; color: #fff; border-color: transparent; }
+.art-tile-cover > :not(.art-cover-img):not(.art-scrim) { position: relative; color: #fff; }
+.art-add-holder { display: inline-flex; }
+.art-add-holder[hidden] { display: none; }
+.art-add-cover { padding: 3px 10px; border: 1px dashed var(--g-muted); border-radius: 6px; background: transparent;
+  color: var(--g-muted); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+
+/* one small picture slot (a lorebook entry's) */
+.art-slot-button { flex: none; display: grid; place-items: center; width: 72px; height: 72px; padding: 0; overflow: hidden;
+  border: 1px solid var(--g-line); border-radius: 9px; background: var(--g-raised); color: var(--g-muted); font: inherit;
+  font-size: 12px; line-height: 1.2; text-align: center; }
+button.art-slot-button { cursor: pointer; }
+.art-slot-button.art-slot-empty { border: 1.5px dashed var(--g-muted); background: transparent; padding: 4px; }
+.art-slot-button img, .art-row-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* a row of pictures in named slots (a scenario's backdrops) */
+.art-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; align-items: start; }
+.art-row-tile { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.art-row-frame { display: grid; place-items: center; aspect-ratio: 16 / 10; overflow: hidden; border: 1px solid var(--g-line);
+  border-radius: 10px; background: var(--g-raised); color: var(--g-muted); font-size: 13px; text-align: center; }
+.art-row-name { font-weight: 500; }
+.art-row-actions { gap: 6px; }
+.art-row-add { aspect-ratio: 16 / 10; padding: 12px; border: 1.5px dashed var(--g-muted); border-radius: 10px;
+  background: transparent; color: var(--g-muted); font: inherit; cursor: pointer; }
+.art-orphans { margin: 0; font-size: 13px; }
+.art-slot-holder { flex: none; display: block; width: 72px; height: 72px; }
+.art-pictures-title { margin: 0; }
+.art-cover-text .g-eyebrow, .art-cover-text .g-muted, .art-cover-text .g-ref { color: inherit; }
+.art-cover-empty .art-cover-text .g-eyebrow { color: var(--g-accent); }
+.art-cover-empty .art-cover-text .g-muted { color: var(--g-muted); }

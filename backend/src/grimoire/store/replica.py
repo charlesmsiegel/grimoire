@@ -23,7 +23,7 @@ from .errors import InvalidEnvelope, LinkRefused, RevisionReferenced, Unstorable
 from .jsonfmt import MAX_FILE_BYTES, JsonError, parse_strict
 from .jsonfmt import etag as _etag
 from .layout import (
-    ASSETS, BLOBS, CAMPAIGNS, CONFLICTS, IMAGES, MARKER, PLACEMENTS, SCOPE, SECRETS, SOURCE_DIR, SOURCES, SUFFIX, SYNC,
+    ASSETS, BLOBS, CAMPAIGNS, CONFLICTS, IMAGES, MARKER, PLACEMENTS, SCOPE, SCOPE_ART, SECRETS, SOURCE_DIR, SOURCES, SUFFIX, SYNC,
     TXN,
     Parts, blob_parts, classify, chat_parts, definition_parts, instance_parts, is_noise, name_key,
 )
@@ -374,7 +374,7 @@ def _may_hold_records(access: Access, original: Parts) -> bool:
     if found is not None:
         return found[0] in EXACT_KINDS - ASSET_RECORD_KINDS  # 018 art attaches to entities, never revisions
     if parts[0] == SOURCES:
-        if SOURCE_DIR in parts and parts[parts.index(SOURCE_DIR) + 1:][:1] in ((IMAGES,), (PLACEMENTS,)):
+        if SOURCE_DIR in parts and parts[parts.index(SOURCE_DIR) + 1:][:1] in ((IMAGES,), (PLACEMENTS,), (SCOPE_ART,)):
             return False  # 018's images and placements attach to entities, never to revisions
         return not _regular_file(access, original)  # by kind, not name: source folder names may hold dots
     if parts[0] != CAMPAIGNS:

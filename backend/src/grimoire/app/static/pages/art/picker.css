@@ -19,6 +19,9 @@
 .art-picker-frame { max-width: 220px; }
 .art-aspect-1-1 { aspect-ratio: 1 / 1; }
 .art-aspect-3-4 { aspect-ratio: 3 / 4; }
+.art-aspect-16-5 { aspect-ratio: 16 / 5; }
+.art-aspect-16-10 { aspect-ratio: 16 / 10; }
+.art-picker-frame.art-picker-wide { max-width: 100%; }
 
 /* a zoom, in the steps the picker's slider has */
 .art-zoom-105 { transform: scale(1.05); } .art-zoom-110 { transform: scale(1.1); } .art-zoom-115 { transform: scale(1.15); }

@@ -293,15 +293,15 @@ def test_hide_crop_and_inherit_edit_an_actors_slot_without_ever_substituting_a_p
         assert _slot(mobile("media.art", subject=MARA_CARD), "portrait")["crop"] is None
 
 
-def test_a_standalone_definition_may_only_set_and_every_edit_needs_the_slot_as_read(synced):
+def test_a_standalone_definition_may_set_or_hide_and_every_edit_needs_the_slot_as_read(synced):
     _desk, phone, chat = synced
     with Device(phone) as device:
         mobile = Both(device)
-        assert mobile("media.art", subject=MARA_CARD)["modes"] == ["set"]
+        assert mobile("media.art", subject=MARA_CARD)["modes"] == ["set", "hide"]  # it inherits nothing to adjust
         card = mobile("media.upload", scope="card:mara-vell", media=_media(PNG), subject=MARA_CARD, slot="gallery1",
                       expected=None)
         etag = _own(card["art"], "gallery1")["etag"]
-        error = _refused(mobile, "media.place", subject=MARA_CARD, slot="gallery1", mode="hide", expected=etag)
+        error = _refused(mobile, "media.place", subject=MARA_CARD, slot="gallery1", mode="inherit", expected=etag)
         assert error.reason == "mode_not_allowed"
         image = _slot(card["art"], "gallery1")["image"]
         assert _refused(mobile, "media.place", subject=MARA_CARD, slot="gallery1", mode="set",

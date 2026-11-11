@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef
+from grimoire.core.identity import ImageRef, InstanceRef, OwnerRef, PlacementRef, SourceRef
 from grimoire.images import (
     MEDIA_TYPES, BlobFact, BlobInfo, Crop, Expression, Facts, Focus, Hidden, ImageCodecError, ImageEntry,
     ImageModelError, ImageObject, Placement, PlacementEntry, Problem, Shown, Unavailable, expression_slot,
@@ -123,8 +123,10 @@ def _set(role="avatar", image=IMG, **kwargs):
 
 
 @pytest.mark.parametrize("subject, slot, placement, reason", [
-    (SAILOR, "avatar", Placement("hide"), "mode_not_allowed"),
+    (SAILOR, "avatar", Placement("inherit"), "mode_not_allowed"),
     (SAILOR, "avatar", Placement("adjust", image=IMG), "mode_not_allowed"),
+    (OwnerRef(HARBOR), "cover", Placement("inherit"), "mode_not_allowed"),  # an owner inherits nothing either
+    (OwnerRef("campaign:c1"), "cover", Placement("adjust", image=IMG), "mode_not_allowed"),
     (SAILOR, "gallery_1", _set("avatar"), "role_slot_mismatch"),
     (SAILOR, "avatar", _set("portrait"), "role_slot_mismatch"),
     (SAILOR, "expr.a.b", _set("expression", expression=Expression("a", "c")), "role_slot_mismatch"),
@@ -218,7 +220,7 @@ def test_broken_campaign_slots_are_unavailable_and_never_fall_back(campaign, slo
 
 def test_source_layer_problems_fail_closed():
     stranger = {"avatar": _entry(SAILOR, "avatar", _set(image=FOREIGN)),
-                "portrait": _entry(SAILOR, "portrait", Placement("hide")),  # hand-edited: sources only set
+                "portrait": _entry(SAILOR, "portrait", Placement("inherit")),  # hand-edited: it inherits nothing
                 "gallery_1": _entry(SAILOR, "gallery_1", None, "invalid_placement")}
     result = resolve(SAILOR, stranger, {}, FACTS, derivation_source=HARBOR)
     assert {(s.slot, s.reason) for s in result.slots} == {

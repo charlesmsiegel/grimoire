@@ -39,12 +39,17 @@ Refusals are the text API's `ApiRefused` (`reason`, `status`). A refused op writ
 | `media.art` | `subject` | the subject's slots, own placements, modes, reusable scopes, conflicts |
 | `media.upload` | `scope`, `media` (base64), `note`, `origin`; optionally `subject`, `slot`, `expected`, `crop`, `focus` | `image`, and `art` when placed |
 | `media.place` | `subject`, `slot`, `mode`, `image` (set, adjust), `crop`, `focus`, `expected` | the subject's `art` as it now reads |
+| `media.shown` | `subjects` (at most 200), `slot` (default `cover`) | `shown`: that one slot of each subject, with its `etag` |
+| `media.entries` | `subject` (a lorebook) | `entries` (each with its picture's `slot` and what shows there), `orphans`, `art` |
+| `media.chat` | `chat` | `backdrop`, `posts`, `orphans`, `offered`, and the campaign's `art` |
+| `media.backdrop_from` | `chat`, `image` (one of `offered`), `expected`, `crop`, `focus` | the campaign's `art` as it now reads |
 
 A **scope** is a source id or `campaign:<id>`. A **subject** is an unpinned definition
-(`card:mara-vell/character/mara-vell`) or a campaign instance (`campaign:q-c-1/character/mara-vell-1`); a pinned
-revision is refused, because placements attach to the entity.
+(`card:mara-vell/character/mara-vell`), a campaign instance (`campaign:q-c-1/character/mara-vell-1`), or a source
+or a campaign as a whole, written as its scope is (`world:saltmarch`, `campaign:q-c-1`: 018's
+[owner subject](IMAGES.md#subjects)); a pinned revision is refused, because placements attach to the entity.
 
-**Gallery.** Each image shows its blob (`media_type`, `size`, `sha256`), its 018 provenance and `used_by`, the
+**Gallery.** `subjects` lists the scope itself first, then what it holds. Each image shows its blob (`media_type`, `size`, `sha256`), its 018 provenance and `used_by`, the
 placements of the scope's own subjects that name it. Provenance shows `origin`, `note` and `legacy_id` as text and
 every other key an importer kept under `other`, as compact JSON cut at 2000 characters. An image whose blob is
 missing or the wrong size is `unavailable` with that `reason`; the picture is never shown from anywhere else.
@@ -55,8 +60,9 @@ provenance), `hidden`, or `unavailable` (with `reason`). Each slot says who deci
 instance, whether its inherited art is the snapshot pinned with its revision (`pinned`, 046: a picture added to
 the definition later shows only after a reviewed rebase) or follows its definition (`live`). `modes` is what an
 edit may write here: an instance or a derived portrayal may `set`, `adjust`, `hide` and `inherit`; a standalone
-definition only `set`s. `reusable` is the scopes whose pictures may be placed here (038 W7): a campaign's own and
-its instances' derivation source, or a definition's own source.
+definition, a source and a campaign inherit nothing, so they `set` and `hide`. `reusable` is the scopes whose
+pictures may be placed here (038 W7): a campaign's own and its instances' derivation source, a definition's own
+source, or, for a source or a campaign itself, only its own.
 
 **Writes.** `expected` is required: the slot's `etag` from `own`, or `null` when the subject placed nothing
 there. A slot that changed since it was read is refused `changed` (409). An upload that names a subject places
@@ -67,10 +73,60 @@ old `note` and records `origin: placed in the app`, and so does placing another 
 picture keeps its record. `crop` is `{x, y, w, h}` and `focus` is `{x, y}`, in
 integer basis points (0 to 10000).
 
-**Conflicted slots.** A slot of an instance that a sync left in conflict is listed in `conflicts`, and every
+**Conflicted slots.** A slot of an instance, or of a campaign itself (its cover, a chat's backdrop, a post's
+picture), that a sync left in conflict is listed in `conflicts`, and every
 write to it is refused `art_conflict` until it is resolved: a third version would leave neither device a
 version to resolve against. When this device's sync records cannot be read, `editable` is false and every write
 is refused.
+
+## Beyond character slots
+
+Covers, lore entry pictures, scene backdrops and pictures on posts are ordinary 018 placements
+(`grimoire.mediaapi.beyond`). Nothing else stores them: provenance, pictures stored once and referenced,
+compare-and-swap on the slot, sync and keep-both conflicts are the image model's own. Only the **slot** of the
+**subject** differs, and each is exact, never matched by name:
+
+| What | Subject | Slot | Shape |
+|---|---|---|---|
+| a cover | any entry (an unpinned definition), a source, a campaign | `cover` | 16/5 |
+| a lore entry's picture | the lorebook | `entry.<key>` | 1/1 |
+| a scenario's backdrops | the scenario | `backdrop.<name>` | 16/5 |
+| a chat's backdrop | the chat's campaign | `backdrop.<chat id>` | 16/5 |
+| a picture on a post | the chat's campaign | `post.<turn id>` | 16/10 |
+
+All of them are per library, so they sync to the other device like any picture. Each is a `gallery`-role slot,
+written with `media.upload` and `media.place` like any other, with the same refusals, etags and 32 MiB limit, and
+taken off with a `hide` (the picture stays in its gallery). A picture is put (`set`) only where the slot's name
+points at something; a `hide` is never checked, since it is how an orphan is taken off:
+
+- **`entry.<key>`**: a lorebook's entries carry no id of their own (a card may repeat the one it gives, and an
+  entry's place changes when the list is edited), so an entry is keyed by what it says: `<key>` is 24 hex digits of
+  the sha256 of its keys and text (`entry_slot`). Reordering a lorebook, or changing an entry's settings, keeps
+  every picture on its entry; two entries that say exactly the same share one. Editing an entry's keys or text
+  leaves its picture an **orphan**: `media.entries` lists it under `orphans`, on no entry, until it is taken off
+  or placed again. A slot no entry of the head reads as is refused `missing_entry`.
+- **`backdrop.<chat id>`**: one per chat, not per scene, since a chat's scenes have no identity a picture could be
+  keyed by. The chat must exist (`missing_chat`). A campaign may place only its own pictures (038 W7), so a chat
+  never names a scenario's picture: `media.chat` lists, under `offered`, the backdrops of the scenarios the chat is
+  played from (an active `scenario` binding), and `media.backdrop_from` makes one the campaign's own image over the
+  same stored bytes, its provenance naming the image it was copied from (`x-copied-from`), and places it in the
+  same batch. A copy made before is used again. Any other image is refused `wrong_scope`.
+- **`post.<turn id>`**: the person's own illustration of a post, kept beside the transcript like a bookmark. The
+  turn must be on the chat's line of play (`missing_turn`) and hold a post (`not_a_post`). The turn record is never
+  read into the picture or written for it, no context builder reads placements, and no model is called, so no
+  character knows of it and no prompt names it. Two devices' turns have different ids, so their pictures never
+  share a slot. `media.chat` lists a post's picture under `posts` only while its turn is a post on the line; one
+  whose turn a fork choice set aside, or whose turn is gone, is under `orphans` (`why`: `set_aside`, `turn_gone`,
+  `not_a_post`, or `unknown` when the chat cannot be opened): listed, on the Art page too, and shown on no post.
+
+`media.shown` reads one slot of many subjects in one pass (a grid's covers): each answer is the slot as resolved
+(`state` `empty` when nothing was ever placed) with the etag of the subject's own placement, and a subject that
+cannot be parsed or read is `unavailable` without failing the others.
+
+**Conflicts.** Two devices that each set a different cover keep both. A campaign's (its cover, a backdrop, a post's
+picture) is listed by `sync.conflicts` and in the inbox, the slot is in `conflicts`, and every write to it is
+refused `art_conflict` until the owner keeps one. An entry's or a source's is a source's file: Sync reports it on
+every sync and each device keeps showing its own (below, "Unavailable here").
 
 ## Devices and sync
 
@@ -116,23 +172,34 @@ API refuses it (`stale`) and nothing changes.
 **Unavailable here.** `sync.devices` lists, with reasons, what the app does not offer yet: unpairing (ending a
 pairing drops the conflicts kept with that device), background sync (waits on an encrypted transport), and
 resolving a source's conflict (only a campaign's files can be resolved in the app; Sync still reports a source's
-conflict). A definition's placements are a source's files, so a definition slot in conflict is not marked in
-`conflicts`.
+conflict). A definition's and a source's own placements are a source's files, so such a slot in conflict is not
+marked in `conflicts`.
 
 ## Limits of this slice
 
 - The app shell serves every op as `media.<op>` (`media.devices` for `sync.devices`, `media.sync` for `sync.run`,
   and so on), through one `MediaSyncApi` per open library, so a pairing made on one request is listed on the next.
-  The Art page (`#/art`, a scope's gallery or one subject's slots) and the Devices and sync page (`#/sync`) use
+  The Art page (`#/art`, a scope's gallery or one subject's slots: a character's or a chat actor's avatar and
+  portrait, any other entry's cover and named slots, and the source's or campaign's own, with every orphaned entry
+  or post picture) and the Devices and sync page (`#/sync`) use
   only those ops (and Devices and sync `inbox.list`, for what waits), and hide an action whose op the app does
   not serve. Art is not in the rail: it is
   opened by its address (`?scope=`, `&subject=`) or from the command palette.
 - A slot's picture is chosen and framed in the **picture picker**, a modal any page may open
-  (`static/pages/art/picker.js`, `openPicker(ctx, {subject, slot, target, aspect, use, art})`, resolving to the
-  subject's art after a write or to `null` on a cancel). It lists the readable pictures of the scopes the subject
-  may reuse, takes a new file (`media.upload`, placed in the same batch), and writes with `media.place`: `adjust`
-  when the picked picture is the one the slot inherits and the subject may adjust, `set` otherwise; Hide and
-  "Use the inherited picture" show only where `modes` allows them. Its zoom (100 to 200 percent) is stored as the
+  (`static/pages/art/picker.js`, `openPicker(ctx, {subject, slot, target, aspect, use, art, file, offered})`,
+  resolving to the subject's art after a write or to `null` on a cancel). It lists the readable pictures of the
+  scopes the subject may reuse, takes a new file (`media.upload`, placed in the same batch; `file` starts with one
+  dropped on the page), and writes with `media.place`: `adjust` when the picked picture is the one the slot
+  inherits and the subject may adjust, `set` otherwise; Hide and "Use the inherited picture" show only where
+  `modes` allows them and something is there. The preview has the slot's shape (`aspect`: 1/1, 3/4, 16/5 or
+  16/10). For a cover, a backdrop, an entry's or a post's picture, Hide reads **Remove**, offered once the subject
+  placed something. `offered` lists pictures the subject may take from elsewhere (a scenario's backdrops, for a
+  chat) and places them with the caller's own op.
+- Covers and the other single pictures are drawn by `static/pages/art/covers.js`, for any page: a cover band
+  (Add cover, Change cover, Remove, or a dashed block that takes a dropped file), a library tile's cover, a
+  lorebook's entry slots and a scenario's backdrops. A grid reads every tile's cover in one `media.shown` request
+  and keeps the answers for 20 seconds; a page that shows one subject reads afresh, and a write refused `changed`
+  reads the slot again. A band or a tile with a picture keeps its text white over a dark scrim. Its zoom (100 to 200 percent) is stored as the
   placement's `crop`, a centred box; exact crop and focus numbers can be typed instead. The preview and the Art
   page's slot cards show that zoom; other screens do not apply a crop yet.
 - The Devices and sync page shows a card for this device, one for each other device (how it is reached, its
@@ -147,3 +214,7 @@ conflict). A definition's placements are a source's files, so a definition slot 
   with several, one of theirs is kept and this device's is listed as not kept, or it is kept on the other device.
 - Expression slots (`expr.<outfit>.<name>`) are placed by name; there is no expression editor yet.
 - `media.gallery` lists at most 1000 pictures of one scope per call, from the start.
+- A slot is at most 123 characters (018), so a chat or a turn whose id leaves no room after `backdrop.` or `post.`
+  takes no picture: the write is refused `invalid_field`.
+- An entry's picture shows on its lorebook's sheet and on the Art page only; nothing shows it during play. A
+  chat's backdrop is one picture for the whole chat. The Campaigns list shows no covers.
