@@ -4,7 +4,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { composerState, isCorrectable, isStopped, openTurn, replyState, shownTake, stepTake, takeKey, takeLabel }
+import { COMPARE_COLUMNS, canCompare, compareTakes, composerState, isCorrectable, isStopped, keepLabel, linePlace, openTurn, orderText,
+  pickLine, pickOrder, replyState, shownTake, speakerKey, stepTake, takeKey, takeLabel }
   from "../../src/grimoire/app/static/pages/chat/turn.js";
 
 const line = (id, text) => ({ line: id, speaker: "Mara", actor: "campaign:c#character/mara", text });
@@ -109,16 +110,69 @@ test("a pause holds play but not corrections; a fork holds both", () => {
   assert.equal(isCorrectable(scene({ seated: false })), false);
 });
 
-test("the take's keys: arrows step, Enter keeps, R tries again, P passes, and a chord is nobody's", () => {
+test("the take's keys: arrows step, Enter keeps, R tries again, C compares, P passes, and a chord is nobody's", () => {
   assert.equal(takeKey({ key: "ArrowLeft" }), "prev");
   assert.equal(takeKey({ key: "ArrowRight" }), "next");
   assert.equal(takeKey({ key: "Enter" }), "keep");
   assert.equal(takeKey({ key: "r" }), "again");
   assert.equal(takeKey({ key: "R", shiftKey: true }), "again");
   assert.equal(takeKey({ key: "p" }), "pass");
-  for (const key of ["c", "k", "/", "?", "Escape", " "]) assert.equal(takeKey({ key }), null, key + " is left alone");
+  assert.equal(takeKey({ key: "c" }), "compare");
+  assert.equal(takeKey({ key: "C", shiftKey: true }), "compare");
+  assert.equal(takeKey({ key: "c", ctrlKey: true }), null, "Ctrl+C is the browser's");
+  for (const key of ["x", "k", "/", "?", "Escape", " "]) assert.equal(takeKey({ key }), null, key + " is left alone");
   assert.equal(takeKey({ key: "k", ctrlKey: true }), null);
   assert.equal(takeKey({ key: "r", ctrlKey: true }), null, "Ctrl+R is the browser's");
   assert.equal(takeKey({ key: "p", metaKey: true }), null);
   assert.equal(takeKey({ key: "Enter", isComposing: true }), null);
 });
+
+// -- comparing takes side by side -----------------------------------------------------------------------------
+
+const said = (id, who, text) => ({ line: id, speaker: who, actor: who ? "campaign:c/character/" + who.toLowerCase() : null, text });
+const pair = (number) => take(number, [said("t2." + number + ".1", "Mara", "M" + number), said("t2." + number + ".2", "Tamsin", "T" + number)]);
+
+test("takes are compared when there are at least two, the newest three side by side", () => {
+  assert.equal(canCompare([pair(1)]), false);
+  assert.equal(canCompare([pair(1), pair(2)]), true);
+  assert.equal(COMPARE_COLUMNS, 3);
+  assert.deepEqual(compareTakes([pair(1), pair(2), pair(3), pair(4)]).map((item) => item.take), [2, 3, 4]);
+  assert.deepEqual(compareTakes([pair(1), pair(2)]).map((item) => item.take), [1, 2]);
+});
+
+test("a pressed line is chosen, pressed again is let go, and one speaker has one line", () => {
+  const takes = [pair(1), pair(2)];
+  let picks = pickLine(takes, [], "t2.1.1");
+  assert.deepEqual(picks, ["t2.1.1"]);
+  picks = pickLine(takes, picks, "t2.2.2");
+  assert.deepEqual(picks, ["t2.1.1", "t2.2.2"]);
+  picks = pickLine(takes, picks, "t2.2.1");  // Mara's line of the other take: it takes the place of her first
+  assert.deepEqual([...picks].sort(), ["t2.2.1", "t2.2.2"]);
+  picks = pickLine(takes, picks, "t2.2.1");
+  assert.deepEqual(picks, ["t2.2.2"], "a chosen line pressed again is let go");
+  assert.deepEqual(pickLine(takes, picks, "t2.9.9"), ["t2.2.2"], "a line that is not on offer chooses nothing");
+  assert.deepEqual(pickLine([pair(2)], ["t2.1.1", "t2.2.2"], "t2.2.1"), ["t2.2.2", "t2.2.1"], "a chosen line no longer on offer is dropped");
+});
+
+test("the narrator is one speaker too, and a line with no actor is the narrator's", () => {
+  const takes = [take(1, [said("t2.1.1", null, "Rain."), said("t2.1.2", "Mara", "M1")]), take(2, [said("t2.2.1", null, "Fog.")])];
+  assert.equal(speakerKey(takes[0].lines[0]), "narrator");
+  assert.notEqual(speakerKey(takes[0].lines[1]), "narrator");
+  assert.deepEqual(pickLine(takes, ["t2.1.1", "t2.1.2"], "t2.2.1").sort(), ["t2.1.2", "t2.2.1"]);
+});
+
+test("chosen lines are kept in the order they were spoken, then by take, and the order is said first", () => {
+  const takes = [take(1, [said("t2.1.1", "Mara", "M1"), said("t2.1.2", "Tamsin", "T1")]),
+    take(2, [said("t2.2.1", "Corin", "C2"), said("t2.2.2", "Tamsin", "T2")]), take(3, [said("t2.3.12", "Ilse", "I3")])];
+  assert.equal(linePlace("chat.one.000002.3.12"), 12);
+  const ordered = pickOrder(takes, ["t2.3.12", "t2.2.2", "t2.2.1", "t2.1.1", "gone"]);
+  assert.deepEqual(ordered.map((item) => item.line.line), ["t2.1.1", "t2.2.1", "t2.2.2", "t2.3.12"]);
+  assert.deepEqual(ordered.map((item) => item.take.take), [1, 2, 2, 3]);
+  assert.equal(orderText(ordered), "Kept in this order: Mara, then Corin, then Tamsin, then Ilse.");
+  assert.equal(orderText(ordered.slice(0, 1)), "", "one line has no order to say");
+  assert.equal(orderText([{ take: takes[0], line: said("x.1.1", null, "Rain.") }, ordered[1]]), "Kept in this order: Narrator, then Corin.");
+  assert.equal(keepLabel(0), "Pick the lines to keep");
+  assert.equal(keepLabel(1), "Keep 1 selected line");
+  assert.equal(keepLabel(3), "Keep 3 selected lines");
+});
+

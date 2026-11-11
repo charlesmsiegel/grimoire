@@ -1,7 +1,8 @@
 // Sprint 111's pages end to end in the shell (108), against a real app server, in fakedom: Start a chat from a
 // character played as a persona, post with a typed mode, wait for the answer, pause, skip a line, ask again, step
 // through the takes and keep one by its keys, bookmark moments on the Story tab and jump to one, strike, see a
-// reply fail and ask again, pass, add a card, read "Last time" as another day would show it, then find
+// reply fail and ask again, pass, add a card, compare two takes and keep a line of each, read "Last time" as
+// another day would show it, then find
 // the chat under All and among the chats to continue on Start a chat. A second test mends a chat whose added card is gone.
 // Run by test_app_play_js.py, which serves a synthetic card library with a scripted model and passes
 // GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHARACTER (Mara), GRIMOIRE_PERSONA (Anya) and GRIMOIRE_NEWCOMER (Tamsin),
@@ -380,6 +381,65 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   assert.ok(byText(main, "button", "Ask the director").length, "the director can be asked alone");
   assert.equal(byText(main.querySelector("ul.chat-cast"), "button", "Add picture").length, 3, "each of the cast can be given a picture");
 
+  // compare: Mara and Tamsin both answer, twice, and one line of each take is kept as one reply
+  const refusals = body.querySelectorAll("div.g-bad").length;
+  type(main.querySelector("textarea"), "\"Who goes first?\"");
+  byText(main, "button", "Post").at(-1).click();
+  await until(() => takes(main).some((node) => node.textContent.includes("Tamsin, one.")), 30000, "both answers");
+  await until(() => idle(body), 15000, "the fifth answer");
+  assert.ok(!exact(main, "button", "Compare side by side"), "one take has nothing to compare with");
+  assert.ok(!press("c").defaultPrevented, "and C does nothing");
+  press("r");
+  await until(() => takes(main).some((node) => node.textContent.includes("Tamsin, two.")), 30000, "the second pair of answers");
+  await until(() => idle(body), 15000, "the sixth answer");
+  assert.equal(exact(main, "button", "Compare side by side").getAttribute("aria-pressed"), "false");
+  assert.ok(byText(takes(main)[0], "span", "C compares").length, "the compare key is named");
+  body.querySelector("h1").focus();
+  assert.ok(press("c").defaultPrevented, "C opens compare mode");
+  const columns = () => main.querySelectorAll("section.chat-compare-col");
+  const picks = () => main.querySelectorAll("button.chat-pick");
+  const pickOf = (text) => picks().find((node) => node.textContent.includes(text));
+  const marks = () => picks().map((node) => node.getAttribute("aria-pressed") + " " + node.querySelector("span.chat-pick-mark").textContent);
+  assert.deepEqual(columns().map((node) => node.querySelector("span.chat-compare-name").textContent), ["Take 1", "Take 2"]);
+  assert.deepEqual(columns().map((node) => node.querySelectorAll("button.chat-pick").length), [2, 2], "each line is a card to choose");
+  assert.deepEqual(marks(), Array(4).fill("false Keep this line"));
+  assert.equal(takes(main).length, 1, "it is still one proposed reply");
+  assert.ok(!main.querySelector("button.chat-step") && !byText(main, "button", "Keep this take").length, "the stepper is away");
+  assert.equal(exact(main, "button", "One at a time").getAttribute("aria-pressed"), "true");
+  assert.equal(byText(main, "button", "Keep all of it").length, 2, "each column keeps its own take whole");
+  const none = exact(main, "button", "Pick the lines to keep");
+  assert.ok(none.disabled && none.classList.contains("g-primary"), "nothing chosen: nothing to keep");
+  press("Enter");
+  // choose Mara's first line and Tamsin's second; choosing Mara's other line replaces her first
+  pickOf("Mara, one.").click();
+  assert.ok(pickOf("Mara, one.").getAttribute("aria-pressed") === "true" && document.activeElement === pickOf("Mara, one."), "the chosen card keeps focus");
+  assert.ok(!exact(main, "button", "Keep 1 selected line").disabled);
+  pickOf("Tamsin, two.").click();
+  assert.deepEqual(marks(), ["true Keeping", "false Keep this line", "false Keep this line", "true Keeping"]);
+  assert.ok(exact(main, "button", "Keep 2 selected lines"));
+  assert.ok(byText(main, "p", "Kept in this order: Mara Vell, then Tamsin Hale.").length, "the order is said before anything is kept");
+  assert.ok(byText(main, "p", "One line for each speaker").length, "and why two lines of one speaker are a choice");
+  pickOf("Mara, two.").click();
+  assert.deepEqual(marks(), ["false Keep this line", "false Keep this line", "true Keeping", "true Keeping"], "one line a speaker");
+  pickOf("Mara, two.").click();
+  assert.ok(exact(main, "button", "Keep 1 selected line"), "a chosen card pressed again is let go");
+  // leaving compare mode goes back to one take at a time, with nothing kept and nothing chosen
+  body.querySelector("h1").focus();
+  press("c");
+  assert.ok(main.querySelector("button.chat-step") && byText(main, "button", "Keep this take").length && !picks().length, "the stepper is back");
+  assert.ok(!kept(main).some((node) => node.textContent.includes("Tamsin, two.")), "nothing was kept");
+  exact(main, "button", "Compare side by side").click();
+  assert.ok(exact(main, "button", "Pick the lines to keep"), "what was chosen before is not remembered");
+  pickOf("Tamsin, two.").click();
+  pickOf("Mara, one.").click();
+  body.querySelector("h1").focus();
+  press("Enter");
+  await until(() => kept(main).some((node) => node.textContent.includes("Tamsin, two.")), 15000, "the kept lines");
+  await until(() => idle(body), 15000, "the mixed keep");
+  assert.deepEqual(kept(main).slice(-2).map((node) => node.querySelector("p.chat-text").textContent), ["Mara, one.", "Tamsin, two."], "kept in the order that was said");
+  assert.ok(!main.textContent.includes("Tamsin, one.") && !main.textContent.includes("Mara, two.") && !takes(main).length, "the lines not chosen are gone with the turn");
+  assert.equal(body.querySelectorAll("div.g-bad").length, refusals, "the keep was not refused");
+
   // another day: a new browser session opens the chat, and "Last time" quotes the last lines of the sitting
   // before, as this device remembers it. A struck line and a take nobody kept are not among them.
   const chatRef = decodeURIComponent(chatHash.slice("#/chat/".length));
@@ -392,11 +452,11 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   const said = main.querySelector("div.chat-recap");
   assert.ok(byText(said, "div", "The last lines from last time").length, "the recap is of the last sitting");
   assert.deepEqual(said.querySelectorAll("p.chat-recap-line").map((node) => node.textContent), [
-    "Mara Vell: You came back. I didn't think you would.", "Anya Rook · you: Is the cargo safe?", "Anya Rook · you: Then where is it?"]);
+    "Anya Rook · you: Then where is it?", "Anya Rook · you: Who goes first?", "Mara Vell: Mara, one.", "Tamsin Hale: Tamsin, two."]);
   exact(main, "button", "Story").click();
   await until(() => main.querySelectorAll("li.chat-spine-item").length === 2, 15000, "the timeline, another day");
   assert.deepEqual(main.querySelectorAll("li.chat-spine-item").map((node) => node.querySelector("span.chat-spine-label").textContent + " / " + node.querySelector("span.chat-spine-at").textContent),
-    ["Bookmark: The tide / Turn 2", "Last time you played / Turn 3"]);
+    ["Bookmark: The tide / Turn 2", "Last time you played / Turn 4"]);
   assert.ok(!main.querySelectorAll("li.chat-spine-item")[1].querySelectorAll("button.chat-tool").length, "the last-time entry is not a bookmark");
 
   // the same chat from All, and among the chats to continue on Start a chat for Mara

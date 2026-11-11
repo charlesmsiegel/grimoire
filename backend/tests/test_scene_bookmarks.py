@@ -192,6 +192,18 @@ def test_a_file_that_is_not_a_bookmark_is_reported_and_never_dropped_or_written_
         assert after[name] == before[name]
 
 
+def test_a_chat_holds_a_bounded_number_of_bookmarks_removed_ones_included(library, monkeypatch):
+    import grimoire.scenestore.bookmarks as store_module
+    monkeypatch.setattr(store_module, "MAX_BOOKMARKS", 2)
+    first = library.add(CHAT, TURN, "One")
+    library.add(CHAT, TURN, "Two")
+    assert refused(library.add, CHAT, TURN, "Three") == "too_many_bookmarks"
+    library.remove(CHAT, first.bookmark.bookmark_id, expected=first.etag)
+    assert refused(library.add, CHAT, TURN, "Three") == "too_many_bookmarks"  # a removed one is still a file
+    library.add(OTHER, "t-2.000001", "Another chat has its own count")
+    assert [item.bookmark.label for item in library.bookmarks(CHAT).bookmarks] == ["Two"]
+
+
 def test_a_new_id_never_lands_on_an_existing_file(tmp_path):
     with LibraryStore.create(tmp_path / LIB) as store:
         scenes = SceneLibrary(store, owner_handle(), owner=OWNER)

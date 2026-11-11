@@ -18,7 +18,7 @@ from grimoire.core.identity import ChatRef, SourceRef
 from grimoire.quickstart import Repair, Selection
 from grimoire.textapi import MAX_POST_CHARS, ApiRefused, parse_ref
 
-from . import play_story
+from . import play_compare, play_story
 from .play_last import last_played
 
 #: What Start Chat starts from (052's selection kinds), and the definition kind each one's ``ref`` names.
@@ -246,6 +246,7 @@ ADAPTER = Adapter("play", owner="111", ops={
     "sources": _sources, "options": _options, "start": _start, "post": _post, "add_card": _add_card,
     "withdraw": _withdraw, "strike": _strike, "repairs": _repairs, "detach": _detach,
     **play_story.OPS,  # the recap, the Story timeline and bookmarks
+    **play_compare.OPS,  # keeping chosen lines of several takes
 })
 
 __all__ = ["ADAPTER", "ADD_ROLES", "LINE_REQUESTS", "PICKER_KINDS", "POST_MODES", "START_KINDS"]

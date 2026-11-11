@@ -4,6 +4,7 @@
 // record of its own except the composer's unsent text, a draft that survives leaving the chat and is cleared
 // only once posted. Everything shown from the library (card text, model output) is set as text, never as markup.
 
+import { makeCompare } from "./compare.js";
 import { makeStory } from "./story.js";
 import { makeTray } from "./tray.js";
 import { makeBackdrop } from "./backdrop.js";
@@ -403,8 +404,13 @@ export async function mount(root, ctx) {
     return el("div", { class: "chat-note chat-unanswered" }, el("span", {}, "Nobody has answered this turn yet."), passButton(reply));
   }
 
+  // Takes side by side, with lines kept from each (compare.js): the proposed reply's other face.
+  const compare = makeCompare(ctx, { run, act, rows, generates, passButton, redraw: () => render(page.scene), again: () => run(() => answer()),
+    setKeys: (keys) => { page.keys = keys; } });
+
   // The proposed reply: one take on show, the others a step away, and what to do with it.
   function takeCard(scene, reply) {
+    if (compare.showing(reply)) return compare.card(scene, reply);
     const turn = reply.turn;
     const chosen = page.chosen && page.chosen.turn === turn.turn ? page.chosen.take : null;
     const take = shownTake(reply.takes, chosen);
@@ -415,7 +421,8 @@ export async function mount(root, ctx) {
     if (reply.takes.length > 1) {
       keys.prev = local(el("button", { type: "button", class: "chat-step", "aria-label": "Previous take", onclick: step(-1) }, "‹"));
       keys.next = local(el("button", { type: "button", class: "chat-step", "aria-label": "Next take", onclick: step(1) }, "›"));
-      head.append(el("div", { class: "chat-stepper" }, keys.prev, el("span", { "aria-live": "polite" }, takeLabel(reply.takes, take)), keys.next));
+      keys.compare = compare.toggle(reply);
+      head.append(el("div", { class: "chat-stepper" }, keys.compare, keys.prev, el("span", { "aria-live": "polite" }, takeLabel(reply.takes, take)), keys.next));
     } else if (take.origin === "director") {
       head.append(el("div", { class: "chat-stepper" }, "Director"));
     }
@@ -453,7 +460,7 @@ export async function mount(root, ctx) {
     }
     keys.pass = passButton(reply, { quiet: true });
     footer.append(keys.pass, el("span", { class: "chat-keys" }, "Keys: "
-      + [keys.prev && "← → step through takes", keys.keep && "Enter keeps", keys.again && "R tries again", "P passes"].filter(Boolean).join(" · ")));
+      + [keys.prev && "← → step through takes", keys.keep && "Enter keeps", keys.again && "R tries again", keys.compare && "C compares", "P passes"].filter(Boolean).join(" · ")));
     card.append(footer);
     page.keys = keys;
     return card;

@@ -55,6 +55,7 @@ from grimoire.play.adjudicate import (
 from grimoire.play.forks import choose_branch
 from grimoire.play.history import chat_history
 from grimoire.play.labels import label_action
+from grimoire.play.mixed import keep_lines
 from grimoire.play.obstacles import pass_attempt
 from grimoire.play.scene import (
     DEFAULT_BUDGET, NOW, WRITE_RETRIES, Scene, _assigned, _audience, _Context, _declined, _find_line, _first_text,
@@ -978,11 +979,7 @@ class SceneRunner:
             raise _refuse("unscreened_lore", "this take was written with director lore no screen covered; "
                                             "keep it only after reading it")
         _stage_ok(scene)
-        if set(found.cast) != set(scene.cast) or set(found.present) != set(scene.on_stage) or _differs(
-                found.players, _table(scene)) or any(
-                (line.actor is not None and line.actor not in scene.npcs)  # a player's character now
-                or set(line.audience) != set(scene.players if line.actor is None else _heard_now(scene, line.actor))
-                for line in found.shown()):
+        if not _stands(scene, found, found.shown()):
             raise _refuse("cast_changed", "who is present, who plays them, or who is in earshot changed since this "
                                           "take was written; ask again")
         if any(_differs(intention.perceived, _sight(scene, intention.actor))
@@ -996,6 +993,13 @@ class SceneRunner:
         self._write(record, stored, unpaused=True,
                     before_commit=lambda: self._check_now(chat, principal, found.shown()))
         return record
+
+    @traced("keep_lines")
+    def keep_lines(self, chat: ChatRef, by, lines: Iterable[str], *, acknowledge_unscreened: bool = False,
+                   turn: str | None = None) -> TurnRecord:
+        """Keep chosen lines of the open turn's proposed takes, at most one a speaker, as the turn's one kept
+        take (``play.mixed``): what ``keep`` would store had one take held exactly those lines."""
+        return keep_lines(self, chat, by, lines, acknowledge_unscreened=acknowledge_unscreened, turn=turn)
 
     @traced("strike")
     def strike(self, chat: ChatRef, by, line_id: str) -> TurnRecord:
@@ -1274,6 +1278,19 @@ def _sight(scene: Scene, actor: InstanceRef) -> tuple[InstanceRef, ...] | None:
 
 def _differs(then: tuple[InstanceRef, ...] | None, now: tuple[InstanceRef, ...] | None) -> bool:
     return (then is None) != (now is None) or set(then or ()) != set(now or ())
+
+
+def _stands(scene: Scene, take: Take, lines: Iterable[SceneLine]) -> bool:
+    """Whether ``take`` was written for the cast as it stands now (who is in the chat, who is present, who the
+    player characters are), and each of ``lines`` is still an NPC's, heard by exactly who would hear it now
+    (narration: by the player characters). What keeping those lines requires (``cast_changed`` otherwise)."""
+    if set(take.cast) != set(scene.cast) or set(take.present) != set(scene.on_stage) or _differs(
+            take.players, _table(scene)):
+        return False
+    return not any(
+        (line.actor is not None and line.actor not in scene.npcs)  # a player's character now
+        or set(line.audience) != set(scene.players if line.actor is None else _heard_now(scene, line.actor))
+        for line in lines)
 
 
 def _hearing(scene: Scene, rooms: Mapping[InstanceRef, tuple[InstanceRef, ...]]):

@@ -56,9 +56,16 @@ def _run(device, **env):
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")
 def test_start_chat_and_play_end_to_end(tmp_path):
     folder = _library(tmp_path)
-    replies = ["Safe as the tide.", "Gone with the tide.", "Out with the tide.", "Back with the tide."]
+    replies = ["Safe as the tide.", "Gone with the tide.", "Out with the tide.", "Back with the tide.",
+               "Mara, one.", "Tamsin, one.", "Mara, two.", "Tamsin, two."]  # the last four: two takes of two lines
     with Device(folder, [say(text) for text in replies]) as device:
         _run(device, GRIMOIRE_CHARACTER=str(MARA_VELL), GRIMOIRE_PERSONA=str(ANYA), GRIMOIRE_NEWCOMER=str(TAMSIN))
+        play = AppApi(device.api)
+        (chat,) = [entry["chat"] for entry in play.call("chats", {})["chats"]]
+        last = play.call("open", {"chat": chat})["turns"][-1]
+        # the page's compare mode kept one line of each take as the turn's one kept take
+        assert [line["text"] for line in last["kept"]["lines"]] == ["Mara, one.", "Tamsin, two."] and not last["open"]
+        assert [item["label"] for item in play.call("play.story", {"chat": chat})["bookmarks"]] == ["The tide"]
 
 
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")

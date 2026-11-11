@@ -1,6 +1,7 @@
 // What the chat page shows of the open turn, worked out from the scene alone (no DOM): which takes can be
-// stepped through and which one is on show, whether a reply is being written or did not arrive, and what the
-// composer says and allows. The page draws these; chat_turn.test.mjs proves them.
+// stepped through and which one is on show, whether a reply is being written or did not arrive, what the
+// composer says and allows, and, comparing takes side by side, which lines are chosen and in what order they
+// would be kept. The page draws these; chat_turn.test.mjs proves them.
 
 // What stops play until someone acts: no new post, answer or pass is taken meanwhile.
 export const STOPS = ["paused", "forked", "conflicted", "turns_unreadable"];
@@ -97,6 +98,64 @@ export function takeKey(event) {
     case "Enter": return "keep";
     case "r": case "R": return "again";
     case "p": case "P": return "pass";
+    case "c": case "C": return "compare";
     default: return null;
   }
 }
+
+// -- comparing takes side by side: lines chosen across takes, kept as one reply (play.keep_lines) ------------
+
+// How many takes are set side by side: the newest ones.
+export const COMPARE_COLUMNS = 3;
+
+// Whether there is anything to compare: at least two takes with a line to read.
+export function canCompare(takes) {
+  return takes.length >= 2;
+}
+
+// The takes shown as columns, oldest first.
+export function compareTakes(takes) {
+  return takes.slice(-COMPARE_COLUMNS);
+}
+
+// Who a line is by, for "one line a speaker": the actor, or the narrator for a line with none.
+export function speakerKey(line) {
+  return line.actor || "narrator";
+}
+
+// Where a line was spoken in its own take: the number that ends its id (<turn>.<take>.<n>), as the app reads it.
+export function linePlace(id) {
+  return Number(String(id).slice(String(id).lastIndexOf(".") + 1)) || 0;
+}
+
+// The chosen lines that are still on offer, in the order they would be kept: by their place in their own take,
+// then by take. Each is { take, line }. The app keeps them in this same order (grimoire.play.mixed).
+export function pickOrder(takes, picks) {
+  const found = [];
+  for (const take of takes) for (const line of take.lines) if (picks.includes(line.line)) found.push({ take, line });
+  return found.sort((a, b) => (linePlace(a.line.line) - linePlace(b.line.line)) || (a.take.take - b.take.take));
+}
+
+// The picks after `id` is pressed: taken out if it was chosen; otherwise chosen, in place of any other chosen
+// line of the same speaker (a reply holds one line a speaker, so two takes' lines of one character are a choice
+// between them, never both). A line no longer on offer is dropped.
+export function pickLine(takes, picks, id) {
+  const on = pickOrder(takes, picks);
+  const pressed = takes.flatMap((take) => take.lines).find((line) => line.line === id);
+  if (!pressed) return on.map((item) => item.line.line);
+  if (picks.includes(id)) return on.filter((item) => item.line.line !== id).map((item) => item.line.line);
+  return [...on.filter((item) => speakerKey(item.line) !== speakerKey(pressed)).map((item) => item.line.line), id];
+}
+
+// "Keep 2 selected lines": the compare footer's primary button. With none chosen it says what to do first.
+export function keepLabel(count) {
+  if (!count) return "Pick the lines to keep";
+  return "Keep " + count + " selected " + (count === 1 ? "line" : "lines");
+}
+
+// The order the chosen lines would be kept in, said before they are: "Kept in this order: Mara, then Tamsin."
+export function orderText(ordered) {
+  if (ordered.length < 2) return "";
+  return "Kept in this order: " + ordered.map((item) => item.line.speaker || "Narrator").join(", then ") + ".";
+}
+
