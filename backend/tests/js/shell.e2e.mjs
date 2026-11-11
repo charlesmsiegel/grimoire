@@ -300,7 +300,7 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   said.click();
   await until(() => window.location.hash === chatHash + "?turn=" + turn && !body.querySelector("dialog"), 15000, "the chat at the line's turn");
   const marked = await until(() => main.querySelectorAll("div.chat-found").length && main.querySelectorAll("div.chat-found"), 15000, "the turn marked");
-  assert.ok(marked.every((node) => node.getAttribute("data-turn") === turn));
+  assert.ok(marked.every((node) => node.getAttribute("data-turn-number") === turn));
   assert.ok(marked.some((node) => node.classList.contains("chat-post") && node.textContent.includes("Hello over the shell.")));
 
   // an address no page owns says so; a reserved one names its sprint

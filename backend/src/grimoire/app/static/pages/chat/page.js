@@ -349,7 +349,7 @@ export async function mount(root, ctx) {
         }
       }
       if (turn.passed && !turn.kept) out.push(note("The turn was passed."));
-      for (const row of out.slice(first)) row.setAttribute("data-turn", String(turn.number));  // find.js opens a chat at a turn
+      for (const row of out.slice(first)) row.setAttribute("data-turn-number", String(turn.number));  // find.js opens a chat at a turn
       story.anchor(out.slice(first), turn);
     }
     if (scene.set_aside && scene.set_aside.length) {

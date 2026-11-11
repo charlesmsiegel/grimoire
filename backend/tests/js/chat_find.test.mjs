@@ -17,7 +17,7 @@ test("only a whole positive number is a turn to open at", () => {
 
 test("the turn's rows are scrolled to and marked for a moment; a turn that is not shown changes nothing", () => {
   const rows = document.createElement("div");
-  const row = (turn) => { const node = document.createElement("div"); if (turn) node.setAttribute("data-turn", String(turn)); rows.append(node); return node; };
+  const row = (turn) => { const node = document.createElement("div"); if (turn) node.setAttribute("data-turn-number", String(turn)); rows.append(node); return node; };
   const [history, post, line, other] = [row(null), row(2), row(2), row(12)];
   let scrolled = null;
   post.scrollIntoView = (how) => { scrolled = how; };

@@ -5,7 +5,7 @@
 // test_app_shell_js.py.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 import { byText, install, until } from "./fakedom.mjs";
@@ -13,10 +13,10 @@ import { byText, install, until } from "./fakedom.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = path.join(here, "..", "..", "src", "grimoire", "app", "static");
 install("http://127.0.0.1:1");
-const ui = await import(path.join(STATIC, "shell", "ui.js"));
-const { href } = await import(path.join(STATIC, "shell", "router.js"));
-const feed = await import(path.join(STATIC, "pages", "inbox", "feed.js"));
-const { makeTray } = await import(path.join(STATIC, "pages", "chat", "tray.js"));
+const ui = await import(pathToFileURL(path.join(STATIC, "shell", "ui.js")).href);
+const { href } = await import(pathToFileURL(path.join(STATIC, "shell", "router.js")).href);
+const feed = await import(pathToFileURL(path.join(STATIC, "pages", "inbox", "feed.js")).href);
+const { makeTray } = await import(pathToFileURL(path.join(STATIC, "pages", "chat", "tray.js")).href);
 
 const CHAT = "campaign:c1#chat/t1";
 const action = (overrides = {}) => ({ id: "confirm", label: "Confirm the labelling", op: "campaign.confirm",
