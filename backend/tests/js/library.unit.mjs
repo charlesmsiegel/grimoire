@@ -1,10 +1,15 @@
-// 109's source page drafts (static/pages/source/drafts.js) under Node's own test runner: what a structured save
-// sends, and how a draft is held over a newer head. Run by test_library_pages.py.
+// 109's library pages' pure modules under Node's own test runner: the source page's drafts (what a structured save
+// sends, and how a draft is held over a newer head), what its sheet shows and how two revisions compare, and which
+// entries Characters and lore lists, counts and in what order. Run by test_library_pages.py.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { changesOf, draftParts, fieldsOf, modelOf, rebase, rebaseRaw, stale, unsafeNumbers } from
   "../../src/grimoire/app/static/pages/source/drafts.js";
+import { askedTab, chatsOn, diffRevisions, loreBound, loreEntries, metaParts, nextVersion, opensWith, tabsFor, versionOf } from
+  "../../src/grimoire/app/static/pages/source/sheet.js";
+import { CARDS, askedRole, askedSort, canChat, countRoles, filterEntries, kindLabel as catalogKind, metaLine, playsOf, roleOf, shelvesOf,
+  sortEntries, sortsFor, when } from "../../src/grimoire/app/static/pages/sources/catalog.js";
 
 const entity = (head, payload) => ({ family: "entity", head, payload });
 const lorebook = (head, entries, extra = {}) => ({ family: "lorebook", head, payload: { name: "Book", entries, ...extra } });
@@ -219,4 +224,216 @@ test("a number the browser cannot keep exactly is noticed", () => {
   assert.equal(unsafeNumbers([JSON.parse("-1e400")]), true);
   assert.equal(unsafeNumbers({ extensions: { uid: JSON.parse("9007199254740993") } }), true);
   assert.equal(unsafeNumbers({ uid: 9007199254740991, n: 1.5, list: [1, "2"] }), false);
+});
+
+// -- Characters and lore: which entries are listed, counted and in what order (static/pages/sources/catalog.js) --
+
+const entryOf = (ref, name, extra = {}) => {
+  const [source, kind] = ref.split("/");
+  return { ref, source, kind, name, problem: null, derived: false, ...extra };
+};
+const SHELF = [
+  entryOf("card:anya/character/anya", "Anya"),
+  entryOf("card:anya/lorebook/anya-lore", "Quay lore"),
+  entryOf("world:harbor/character/mara", "mara"),
+  entryOf("world:harbor/scenario/watch", "Night watch"),
+  entryOf("world:harbor/location/quay", "The quay"),
+  entryOf("world:realm/item/ledger", null),
+];
+const SOURCES = [
+  { source: "card:anya", title: "Anya", namespace: "card" },
+  { source: "import:run", title: "Receipts", namespace: "import" },
+  { source: "world:realm", title: null, namespace: "world" },
+  { source: "world:harbor", title: "Harbor", namespace: "world" },
+];
+
+test("an entry is listed under one role, and the roles count every entry once", () => {
+  assert.deepEqual(SHELF.map(roleOf), ["character", "lore", "character", "scenario", "world", "world"]);
+  assert.deepEqual(countRoles(SHELF), { "": 6, character: 2, scenario: 1, lore: 1, world: 2 });
+  assert.deepEqual(countRoles([]), { "": 0, character: 0, scenario: 0, lore: 0, world: 0 });
+});
+
+test("the address's role is one the page lists: a persona is a character, and anything else is everything", () => {
+  assert.deepEqual(askedRole("lore"), { role: "lore", persona: false });
+  assert.deepEqual(askedRole("persona"), { role: "character", persona: true });
+  assert.deepEqual(askedRole("constructor"), { role: "", persona: false });
+  assert.deepEqual(askedRole(null), { role: "", persona: false });
+});
+
+test("the shelves are everything, the imported cards and each other source, worlds first, with their counts", () => {
+  assert.deepEqual(shelvesOf(SOURCES, SHELF), [
+    { id: "", label: "Everything", count: 6 },
+    { id: CARDS, label: "Imported cards", count: 2 },
+    { id: "world:harbor", label: "Harbor", count: 3 },
+    { id: "world:realm", label: "world:realm", count: 1 },
+    { id: "import:run", label: "Receipts", count: 0 },
+  ]);
+  // no imported card, no shelf of them
+  assert.deepEqual(shelvesOf(SOURCES.slice(1), []).map((shelf) => shelf.id), ["", "world:harbor", "world:realm", "import:run"]);
+});
+
+test("a shelf and a role each narrow the entries, and together leave only what both hold", () => {
+  const refs = (found) => found.map((entry) => entry.ref);
+  assert.equal(filterEntries(SHELF).length, 6);
+  assert.deepEqual(refs(filterEntries(SHELF, { shelf: CARDS })), ["card:anya/character/anya", "card:anya/lorebook/anya-lore"]);
+  assert.deepEqual(refs(filterEntries(SHELF, { shelf: "world:harbor", role: "character" })), ["world:harbor/character/mara"]);
+  assert.deepEqual(refs(filterEntries(SHELF, { role: "world" })), ["world:harbor/location/quay", "world:realm/item/ledger"]);
+  assert.deepEqual(filterEntries(SHELF, { shelf: "world:nowhere" }), []);
+});
+
+const CHATS = [
+  { chat: "c1", last_activity: "2026-03-02T10:00:00Z", sources: [{ role: "character", ref: "world:harbor/character/mara" },
+    { role: "persona", ref: "card:anya/character/anya" }] },
+  { chat: "c2", last_activity: "2026-03-05T10:00:00Z", sources: [{ role: "character", ref: "world:harbor/character/mara" },
+    { role: "persona", ref: "world:harbor/character/mara" }, { role: "scenario", ref: "world:harbor/scenario/watch" }] },
+];
+
+test("play is counted from the chats, once a chat, and only when the list of chats is whole", () => {
+  const plays = playsOf(CHATS, 1000);
+  assert.deepEqual(plays.get("world:harbor/character/mara"), { count: 2, last: "2026-03-05T10:00:00Z" });
+  assert.deepEqual(plays.get("card:anya/character/anya"), { count: 1, last: "2026-03-02T10:00:00Z" });
+  assert.equal(plays.get("card:anya/lorebook/anya-lore"), undefined);
+  assert.equal(playsOf(CHATS, 2), null, "a list as long as was asked for may be cut short");
+  assert.equal(playsOf(null, 1000), null);
+});
+
+test("the orders by play are offered only when play is known", () => {
+  const plays = playsOf(CHATS, 1000);
+  assert.deepEqual(sortsFor(plays).map((sort) => sort.value), ["recent", "name", "played"]);
+  assert.deepEqual(sortsFor(null).map((sort) => sort.value), ["name"]);
+  assert.equal(askedSort(null, plays), "recent");
+  assert.equal(askedSort("played", plays), "played");
+  assert.equal(askedSort("played", null), "name");
+  assert.equal(askedSort("nonsense", plays), "recent");
+});
+
+test("entries are put in order by name, by last play or by how many chats, never changing the list given", () => {
+  const plays = playsOf(CHATS, 1000);
+  const refs = (found) => found.map((entry) => entry.ref.split("/").pop());
+  const before = refs(SHELF);
+  assert.deepEqual(refs(sortEntries(SHELF, "name", plays)), ["ledger", "anya", "mara", "watch", "anya-lore", "quay"]);
+  assert.deepEqual(refs(sortEntries(SHELF, "recent", plays)), ["mara", "watch", "anya", "ledger", "anya-lore", "quay"]);
+  assert.deepEqual(refs(sortEntries(SHELF, "played", plays)), ["mara", "anya", "watch", "ledger", "anya-lore", "quay"]);
+  assert.deepEqual(refs(sortEntries(SHELF, "played", null)), refs(sortEntries(SHELF, "name", null)), "no play, no order by play");
+  assert.deepEqual(refs(SHELF), before);
+});
+
+test("a moment is said as a person says it, and something that is no moment is said as nothing", () => {
+  const noon = (day) => new Date(2026, 2, day, 12, 0, 0).getTime();
+  const at = (day, hour) => new Date(2026, 2, day, hour, 0, 0).toISOString();
+  assert.equal(when(at(10, 1), noon(10)), "today");
+  assert.equal(when(at(9, 23), noon(10)), "yesterday");
+  assert.equal(when(at(7, 12), noon(10)), "3 days ago");
+  assert.ok(/2026/.test(when(at(1, 12), noon(10))), "an older day is its date");
+  assert.equal(when("not a date", noon(10)), "");
+  assert.equal(when(null, noon(10)), "");
+});
+
+test("the line under a name says where it lives, and its play only when play is known", () => {
+  const plays = playsOf(CHATS, 1000);
+  const now = Date.parse("2026-03-05T12:00:00Z");
+  const mara = SHELF[2];
+  assert.equal(metaLine(mara, "Harbor", null, now), "Harbor");
+  assert.ok(metaLine(mara, "Harbor", plays, now).startsWith("Harbor · 2 chats · "));
+  assert.equal(metaLine(SHELF[1], "Anya", plays, now), "Anya", "an entry in no chat shows no count");
+  assert.equal(metaLine({ ...mara, derived: true }, null, null, now), "world:harbor · a portrayal");
+});
+
+test("a Chat button belongs to a character or a scenario that resolves", () => {
+  assert.deepEqual(SHELF.map(canChat), [true, false, true, true, false, false]);
+  assert.equal(canChat({ ...SHELF[0], problem: "entity_dropped" }), false);
+  assert.equal(catalogKind("lorebook"), "Lorebook");
+  assert.equal(catalogKind("receipt"), "Receipt");
+});
+
+// -- the sheet: tabs, versions, what it opens with and two revisions compared (static/pages/source/sheet.js) -----
+
+test("an entry's tabs are the same five, with Art only for a character whose pictures the app reads", () => {
+  const names = (read, options) => tabsFor(read, options).map((tab) => tab.value);
+  assert.deepEqual(names({ kind: "character" }, { art: true }), ["sheet", "art", "edit", "revisions", "raw"]);
+  assert.deepEqual(names({ kind: "character" }, { art: false }), ["sheet", "edit", "revisions", "raw"]);
+  assert.deepEqual(names({ kind: "lorebook" }, { art: true }), ["sheet", "edit", "revisions", "raw"]);
+  const tabs = tabsFor({ kind: "lorebook" });
+  assert.equal(askedTab("raw", tabs), "raw");
+  assert.equal(askedTab("art", tabs), "sheet", "a tab this entry does not have opens the sheet");
+  assert.equal(askedTab(null, tabs), "sheet");
+});
+
+test("a version is a revision's place among its entity's revisions, and a save writes the next", () => {
+  const revisions = ["v1-aa", "r2", "r3"];
+  assert.equal(versionOf(revisions, "v1-aa"), 1);
+  assert.equal(versionOf(revisions, "r3"), 3);
+  assert.equal(versionOf(revisions, "r9"), null);
+  assert.equal(nextVersion({ revisions }), 4);
+});
+
+test("the line under a sheet's name is made of what the answer holds, and nothing else", () => {
+  const read = { source: "card:mara", source_title: "Mara Vell", revisions: ["r1", "r2"], revision: "r2", is_head: true, derived: false,
+    chats: [{ active: true, revisions: ["r2"] }, { active: false, revisions: [] }] };
+  assert.deepEqual(metaParts(read), ["Imported card", "version 2", "1 chat"]);
+  assert.deepEqual(metaParts({ ...read, source: "world:harbor", source_title: "Harbor", revision: "r1", is_head: false, derived: true, chats: [] }),
+    ["Harbor", "version 1 of 2", "a portrayal"]);
+  assert.deepEqual(metaParts({ ...read, source: "world:realm", source_title: null, chats: undefined }), ["world:realm", "version 2"]);
+  assert.deepEqual(chatsOn({ chats: [{ chat: "a", active: true, revisions: ["r1"] }, { chat: "b", active: true, revisions: ["r2"] },
+    { chat: "c", active: false, revisions: [] }] }, "r2").map((chat) => chat.chat), ["b"]);
+});
+
+test("a sheet opens with a card's greetings or a scenario's openings, and names the lorebook a card binds", () => {
+  const card = entity("r1", { name: "Mara", card: { greetings: [{ id: "first", text: "You came back." }, { id: "blank", text: " " }, null,
+    { id: "alt", text: "The tide is late." }], lorebook: "card:mara/lorebook/lore@r1" } });
+  assert.deepEqual(opensWith(card), ["You came back.", "The tide is late."]);
+  assert.deepEqual(loreBound(card), ["card:mara/lorebook/lore@r1"]);
+  assert.deepEqual(opensWith(entity("r1", { name: "Plain" })), []);
+  assert.deepEqual(loreBound(entity("r1", { name: "Plain", card: "not an object" })), []);
+  assert.deepEqual(opensWith(scenario("r1", { title: "Watch", openings: [{ id: "a", text: "The bell rings." }] })), ["The bell rings."]);
+});
+
+test("a lorebook's entries are listed with their keys and whether they are off or always in context", () => {
+  const book = lorebook("r1", [{ keys: ["bell", "tide bell"], content: "It rings.", settings: { constant: true } },
+    { keys: [], content: "Quiet.", enabled: false }]);
+  assert.deepEqual(loreEntries(book), [{ keys: ["bell", "tide bell"], content: "It rings.", enabled: true, constant: true },
+    { keys: [], content: "Quiet.", enabled: false, constant: false }]);
+  assert.deepEqual(loreEntries(lorebook("r1", ["not an entry"])), [], "entries that are not plain are left to the raw view");
+  assert.deepEqual(loreEntries(entity("r1", { name: "Mara" })), []);
+});
+
+test("two revisions of a character are compared field by field: changed, added and removed", () => {
+  const before = { name: "Mara", description: "A smuggler.", sections: { personality: "Wry.", history: "Long." } };
+  const after = { name: "Mara Vell", description: "A smuggler.", sections: { personality: "Sharp.", wants: "The ledger." } };
+  assert.deepEqual(diffRevisions("entity", before, after), [
+    { field: "Name", before: "Mara", after: "Mara Vell", stored: false },
+    { field: "Section personality", before: "Wry.", after: "Sharp.", stored: false },
+    { field: "Section wants", before: null, after: "The ledger.", stored: false },
+    { field: "Section history", before: "Long.", after: null, stored: false },
+  ]);
+  assert.deepEqual(diffRevisions("entity", before, structuredClone(before)), []);
+});
+
+test("a key the editor has no field for is compared as it is written, whatever it is called", () => {
+  const before = { name: "Mara", derivation: { base: "card:mara/character/mara@r1" } };
+  const after = JSON.parse('{"name": "Mara", "derivation": {"base": "card:mara/character/mara@r1", "clear_description": true}, "__proto__": 1}');
+  const changes = diffRevisions("entity", before, after);
+  assert.deepEqual(changes.map((change) => [change.field, change.stored]), [["Stored field __proto__", true], ["Stored field derivation", true]]);
+  assert.equal(changes[0].before, null);
+  assert.equal(changes[0].after, "1");
+  assert.ok(changes[1].after.includes('"clear_description": true'));
+  // sections that are not all text are a stored field too, never dropped from the comparison
+  const locked = diffRevisions("entity", { name: "Mara", sections: { a: "x" } }, { name: "Mara", sections: { a: { rich: true } } });
+  assert.deepEqual(locked.map((change) => change.field), ["Stored field sections", "Section a"]);
+});
+
+test("scenarios, lorebooks and records with no editor are compared too", () => {
+  assert.deepEqual(diffRevisions("scenario", { title: "Watch", openings: [{ id: "a", text: "Bell." }] },
+    { title: "Watch", premise: "Fog.", openings: [{ id: "a", text: "Two bells." }] }), [
+    { field: "Premise", before: null, after: "Fog.", stored: false },
+    { field: "Opening a", before: "Bell.", after: "Two bells.", stored: false },
+  ]);
+  const entries = diffRevisions("lorebook", { name: "Book", entries: [{ keys: ["bell"], content: "It rings." }] },
+    { name: "Book", entries: [{ keys: ["bell", "tide"], content: "It rings.", enabled: false }] });
+  assert.deepEqual(entries, [{ field: "Entry 1", before: "Keys: bell\nIt rings.", after: "Keys: bell, tide\nIt rings.\n(off)", stored: false }]);
+  assert.deepEqual(diffRevisions("other", { runs: 1 }, { runs: 2, note: "x" }), [
+    { field: "Stored field note", before: null, after: "x", stored: true },
+    { field: "Stored field runs", before: "1", after: "2", stored: true },
+  ]);
+  assert.deepEqual(diffRevisions("other", null, {}), []);
 });

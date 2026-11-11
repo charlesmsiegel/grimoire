@@ -152,8 +152,8 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `chats` | 111 | `?filter=character\|scenario&source=<SourceRef>` |
 | `chat` | 111 | `/<ChatRef>` |
 | `start` | 111 | `?source=<SourceRef>` |
-| `sources` | 109 | `?role=character\|persona\|scenario\|lore\|world` |
-| `source` | 109 | `/<SourceRef>` |
+| `sources` | 109 | `?role=character\|persona\|scenario\|lore\|world&source=<source>&q=<text>` |
+| `source` | 109 | `/<SourceRef>?tab=art\|edit\|revisions\|raw` |
 | `import` | 110 | |
 | `providers` | 112 | |
 | `campaign` | 113 | `/<campaign id>` |

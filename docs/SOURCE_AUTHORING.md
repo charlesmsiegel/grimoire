@@ -131,18 +131,33 @@ Only the head revision is edited. An older revision is read exactly and can stil
 
 ## In the app
 
-The Library is two pages of the [app shell](APP_SHELL.md), reached from the Library menu and Home. They call these
+The Library is two pages of the [app shell](APP_SHELL.md), reached from the Library menu. They call these
 ops as the app's `sources` adapter (`backend/src/grimoire/app/adapters/sources.py`): `POST /api/sources.read` and so
 on, under the text API's writer lock, as the owner's trusted handle, with the refusals above.
 
-- **`#/sources`** (`?role=character|persona|scenario|lore|world`, `q=` a search, `source=` one source) lists every
-  entry by its exact ref. Same-named entries are separate rows, each naming the others. It creates and renames
-  sources and creates entries in the source shown.
-- **`#/source/<SourceRef>`** shows one revision exactly: its ref, source and revisions, each field's state, value and
-  source (046), and where it is used (chats and the revisions they bind, portrayals, namesakes, links). On the head
-  it has the structured editor for its family and the raw editor. A portrayal overrides, clears (after a
-  confirmation) and resets inherited fields in the field list. Any entity can be derived from the revision shown,
-  and any revision can be attached to a chat exactly as shown, after a confirmation that names it.
+- **`#/sources`**, Characters and lore, lists every entry by its exact ref, as portrait tiles (characters) and text
+  tiles (everything else) or as a table (`view=list`), 48 at a time. Its address holds what is in view:
+  `role=character|scenario|lore|world` (`persona` is the characters; `world` is locations, items and every other
+  kind), `q=` a search over names and refs, `source=` one source's shelf or `shelf=cards` every imported card's,
+  `sort=recent|name|played` and `limit=`. Each role and shelf shows how many entries it holds. Same-named entries are
+  separate tiles, each saying how many others share its name. A character or scenario has a Chat link to Start Chat.
+  How often and how lately an entry was played is counted from the `chats` op, and is shown and sorted by only when
+  that list is whole. New entry, New source and a shelf's Rename each open a dialog; a refusal is shown in it.
+- **`#/source/<SourceRef>`** shows one revision exactly: a character as a character sheet, anything else as an entry
+  sheet under a title band. Its tabs are in the address (`?tab=art|edit|revisions|raw`; no tab is the sheet):
+  - **Sheet**: each field's value, and for a portrayal its state and source (046); what it opens with, the lorebook
+    an imported card binds, a lorebook's entries with their keys; the chats that use it and the revisions they are
+    on, its portrayals, namesakes and links. A portrayal overrides, clears (after a confirmation) and resets
+    inherited fields here, and any entity can be derived from the revision shown.
+  - **Art** (a character, where the app serves `media.art`): its picture slots as the library resolves them, and a
+    link to the Art page for it, where pictures are placed.
+  - **Edit**: on the head, the structured editor for its family.
+  - **Revisions**: every revision, newest first, and one (`rev=`) compared with the head field by field
+    (`static/pages/source/sheet.js`). An older one is restored by saving its payload as a new revision
+    (`sources.save_raw`, after a confirmation); nothing old is changed.
+  - **Raw**: the stored payload; on the head, the raw editor.
+
+  Any revision can be attached to a chat exactly as shown (Attach to a chat), after a confirmation that names it.
 - **Drafts and stale writes.** What is typed is kept per tab, with the head it started from and the editor's model
   of that head, until it is saved or discarded. A structured save sends only the fields that differ from the head;
   a lorebook entry the edit leaves alone is sent as `{"index": n}` alone, and an indexed entry keeps whatever keys,
@@ -154,7 +169,7 @@ on, under the text API's writer lock, as the owner's trusted handle, with the re
   already holds (saved, then the page left) is recognized, additions and lore entries included, and a draft with
   nothing else is dropped. A head changed in place (same revision, new etag) counts as moved on. What is typed
   while a save is on its way is kept as a draft. The editors wait until the draft is kept or discarded.
-- An older revision with no field list (a scenario, a lorebook, a world...) shows what it holds, read-only.
+- An older revision shows what it holds, read-only, on the same tabs.
 - The raw editor is unavailable for a payload holding a whole number beyond 2^53, which the browser would round, and
   refuses to save one, or a number beyond its range.
   Nothing is offered to derive from a revision that does not compose.

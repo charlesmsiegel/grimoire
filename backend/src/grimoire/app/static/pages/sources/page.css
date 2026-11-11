@@ -1,3 +1,55 @@
-.sources-search { display: flex; gap: 6px; align-items: end; flex-wrap: wrap; }
-.sources-search .g-field { flex: 1; min-width: 12em; margin: 0; }
-.sources-problem .g-row-title { color: var(--g-bad); }
+/* Characters and lore (109): search, roles, shelves and the grid or table of entries. */
+.sources-page { display: flex; flex-direction: column; gap: 16px; }
+.sources-page > .g-notice, .sources-note { margin: 0; }
+.sources-top { gap: 12px; }
+.sources-search { flex: 1 1 260px; display: flex; }
+.sources-search .g-searchbox { width: 100%; padding: 10px 14px; font-size: 16px; }
+.sources-controls { gap: 10px; }
+.sources-order { gap: 10px; margin-left: auto; }
+.sources-nowrap, .sources-table .g-table th { white-space: nowrap; }
+.sources-source-head { gap: 4px; min-width: 0; }
+
+.sources-body { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+.sources-shelves { flex: 0 0 180px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sources-shelves > .g-eyebrow { padding: 0 10px 6px; }
+.sources-shelves > .g-button { align-self: flex-start; margin: 10px 10px 0; }
+.sources-shelf { display: flex; justify-content: space-between; gap: 8px; padding: 7px 10px; border-radius: 7px; color: inherit;
+  text-decoration: none; }
+.sources-shelf:hover { background: var(--g-raised); color: inherit; }
+.sources-shelf[aria-current="page"] { background: var(--g-raised); font-weight: 600; }
+.sources-shelf > .g-muted { font-size: 13px; font-weight: 400; }
+.sources-results { flex: 1 1 300px; min-width: 0; gap: 14px; }
+.sources-count { font-size: 13px; }
+.sources-more { align-self: center; padding: 8px 18px; }
+
+.sources-grid { gap: 16px 14px; }
+.sources-tile { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sources-tile .g-tile { gap: 0; min-width: 0; }
+.sources-tile .g-portrait, .sources-tile .g-tile-text { margin-bottom: 6px; border-radius: 9px; }
+.sources-tile .g-tile-name { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.sources-tile .g-tile > .g-muted { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sources-text-tile { justify-content: space-between; }
+.sources-text-title { font: 600 18px/1.15 var(--g-serif); text-wrap: balance; overflow-wrap: anywhere; overflow: hidden; }
+.sources-unnamed .g-tile-name { font-family: var(--g-mono); font-size: 12px; font-weight: 400; }
+.sources-namesakes { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sources-problem { color: var(--g-bad); font-size: 12px; }
+.sources-chat { align-self: flex-start; padding: 3px 10px; border-radius: 6px; }
+.sources-chat:hover { border-color: var(--g-accent); color: var(--g-accent); }
+
+.sources-table { overflow-x: auto; }
+.sources-table .g-table { min-width: 720px; }
+.sources-table .g-table th { background: var(--g-raised); padding: 9px 12px; }
+.sources-table .g-table td { padding: 7px 12px; font-size: 14px; }
+.sources-table .g-table tbody tr:last-child td { border-bottom: 0; }
+.sources-cell { gap: 0; }
+.sources-name { font: 600 16px/1.3 var(--g-serif); color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.sources-name:hover { color: var(--g-accent); }
+.sources-source { font-size: 13px; }
+.sources-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .sources-shelves { flex: 1 1 100%; flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .sources-shelves > .g-eyebrow { flex: 1 1 100%; padding: 0 0 2px; }
+  .sources-shelf { border: 1px solid var(--g-line); border-radius: 99px; padding: 4px 12px; }
+  .sources-shelves > .g-button { margin: 0; }
+}
