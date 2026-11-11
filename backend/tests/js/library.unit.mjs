@@ -9,7 +9,7 @@ import { changesOf, draftParts, fieldsOf, modelOf, rebase, rebaseRaw, stale, uns
   "../../src/grimoire/app/static/pages/source/drafts.js";
 import { askedTab, chatsOn, diffRevisions, loreBound, loreEntries, metaParts, nextVersion, opensWith, orderRevisions, tabsFor, versionOf } from
   "../../src/grimoire/app/static/pages/source/sheet.js";
-import { CARDS, askedRole, askedSort, canChat, countRoles, filterEntries, kindLabel as catalogKind, metaLine, playsOf, roleOf, shelvesOf,
+import { CARDS, askedRole, askedSort, canChat, countRoles, filterEntries, kindLabel as catalogKind, metaLine, playsOf, roleArgs, roleOf, shelvesOf,
   sortEntries, sortsFor, when } from "../../src/grimoire/app/static/pages/sources/catalog.js";
 
 const entity = (head, payload) => ({ family: "entity", head, payload });
@@ -280,6 +280,12 @@ test("a shelf and a role each narrow the entries, and together leave only what b
   assert.deepEqual(refs(filterEntries(SHELF, { source: "world:harbor", role: "character" })), ["world:harbor/character/mara"]);
   assert.deepEqual(refs(filterEntries(SHELF, { role: "world" })), ["world:harbor/location/quay", "world:realm/item/ledger"]);
   assert.deepEqual(filterEntries(SHELF, { source: "world:nowhere" }), []);
+  // what the catalog is asked for so one role is filtered before the list is cut: its kind, or every kind but those
+  assert.deepEqual(roleArgs("character"), { kind: "character" });
+  assert.deepEqual(roleArgs("scenario"), { kind: "scenario" });
+  assert.deepEqual(roleArgs("lore"), { kind: "lorebook" });
+  assert.deepEqual(roleArgs("world"), { not_kinds: ["character", "scenario", "lorebook"] });
+  assert.deepEqual(roleArgs(""), {});
   // a source's shelf and a built-in shelf are told apart by which is asked for, never by the id's spelling: a
   // source named "cards" or "pinned" lists its own entries, and is a source's shelf among the shelves
   const named = [{ ref: "cards/character/ace", source: "cards", kind: "character", name: "Ace" },

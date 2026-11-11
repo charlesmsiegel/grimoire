@@ -186,7 +186,18 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   assert.ok(tiles(page).length && tiles(page).every((tile) => refOf(tile).startsWith("card:")));
 
   // lore: the card's lorebook, a text tile that names its kind and offers no chat
+  // a role asks the app for that role's own entries besides the whole catalog, so the kind is filtered before the
+  // list is cut at its limit: a kind past the first thousand entries does not open empty
+  const roleAsks = [];
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = (url, options) => {
+    if (String(url).endsWith("/api/sources.catalog")) roleAsks.push(JSON.parse(options.body));
+    return fetchBefore(url, options);
+  };
   page = await go("#/sources?role=lore", library, "the lore");
+  globalThis.fetch = fetchBefore;
+  assert.ok(roleAsks.some((args) => args.kind === "lorebook" && args.limit === 1000), "the role's own entries are asked for");
+  assert.ok(roleAsks.some((args) => args.kind === undefined && args.not_kinds === undefined), "and the whole catalog, for the counts");
   const book = tiles(page).find((tile) => refOf(tile) === LORE);
   assert.ok(book, "the card's lorebook is listed");
   assert.equal(book.querySelector("span.g-tile-text").querySelector("span.g-eyebrow").textContent, "Lorebook");

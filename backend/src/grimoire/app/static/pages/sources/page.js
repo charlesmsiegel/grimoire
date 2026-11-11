@@ -15,7 +15,7 @@
 // draws them (the tag chips, the saved filters, Select mode and its bar). Nothing of them is shown where the
 // app does not serve the shelf ops.
 
-import { CARDS, PAGE, ROLES, askedRole, askedSort, canChat, count, countRoles, filterEntries, kindLabel, metaLine, onShelf, playsOf,
+import { CARDS, PAGE, ROLES, askedRole, roleArgs, askedSort, canChat, count, countRoles, filterEntries, kindLabel, metaLine, onShelf, playsOf,
   shelvesOf, sortEntries, sortsFor, when } from "./catalog.js";
 import { PINNED, askedTags, filterOf, marksOf, problemText, readShelf, tagsParam } from "./shelf.js";
 import { bulkBar, entryMarks, pickButton, savedFilters, selection, tagRow } from "./marks.js";
@@ -54,16 +54,19 @@ export async function mount(root, ctx) {
 
   const args = { limit: MAX_LIST };
   if (query) args.query = query;
-  // The whole catalog gives the shelves and their counts. One source's shelf is asked for by itself as well, so the
-  // app filters by source before it cuts the list at its limit: in a library of more than MAX_LIST entries, a source
-  // that sorts after the first MAX_LIST would otherwise open empty.
-  const [catalog, chats, read, own] = await Promise.all([ctx.api("sources.catalog", args), ctx.has("chats")
+  // The whole catalog gives the shelves and their counts. One source's shelf is asked for by itself as well, and so
+  // is one role, so the app filters by source and by kind before it cuts the list at its limit: in a library of
+  // more than MAX_LIST entries, a source or a kind that sorts after the first MAX_LIST would otherwise open empty.
+  const [catalog, chats, read, own, ofRole] = await Promise.all([ctx.api("sources.catalog", args), ctx.has("chats")
     ? ctx.api("chats", { limit: MAX_CHATS }).catch((error) => { if (error.reason === "left") throw error; return null; }) : null,
-  readShelf(ctx), only ? ctx.api("sources.catalog", { ...args, source: only }) : null]);
-  const listed = own || catalog;  // the entries this view lists
-  if (own) {  // a namesake in another source is still said: the whole catalog knows it where it reaches
-    const elsewhere = new Map(catalog.entries.map((entry) => [entry.ref, entry.namesakes || []]));
-    for (const entry of own.entries) entry.namesakes = [...new Set([...(entry.namesakes || []), ...(elsewhere.get(entry.ref) || [])])];
+  readShelf(ctx), only ? ctx.api("sources.catalog", { ...args, source: only }) : null,
+  role ? ctx.api("sources.catalog", { ...args, ...(only ? { source: only } : {}), ...roleArgs(role) }) : null]);
+  const listed = own || catalog;  // the entries of this shelf, every role: what the role tabs and the tag chips count
+  const viewed = ofRole || listed;  // the entries this view lists: this role's own
+  // a namesake in another source, or of another kind, is still said: the whole catalog knows it where it reaches
+  const elsewhere = new Map(catalog.entries.map((entry) => [entry.ref, entry.namesakes || []]));
+  for (const narrowed of [own, ofRole]) {
+    if (narrowed) for (const entry of narrowed.entries) entry.namesakes = [...new Set([...(entry.namesakes || []), ...(elsewhere.get(entry.ref) || [])])];
   }
   const sources = catalog.sources;
   const titles = new Map(sources.map((source) => [source.source, source.title || source.source]));
@@ -117,7 +120,7 @@ export async function mount(root, ctx) {
     }
     const onThisShelf = listed.entries.filter((entry) => onShelf(entry, shelf, marks, only));
     const counts = countRoles(filterEntries(onThisShelf, { tags, marks }));
-    const found = sortEntries(filterEntries(listed.entries, { role, shelf, source: only, tags, marks }), sort, plays);
+    const found = sortEntries(filterEntries(viewed.entries, { role, shelf, source: only, tags, marks }), sort, plays);
     const shown = found.slice(0, limit);
     view.shown = shown;
 
@@ -139,8 +142,10 @@ export async function mount(root, ctx) {
     const unread = problemText(view.shelf);
     if (unread) notes.push(ui.notice(unread, { kind: "bad" }));
     for (const reason of catalog.excluded || []) notes.push(ui.notice(describeExcluded(reason), { kind: "bad" }));
-    if (listed.truncated) {
-      notes.push(ui.notice("Only the first " + listed.entries.length + " of " + listed.total + " entries are listed and counted here. Search to narrow them."));
+    if (viewed.truncated) {
+      notes.push(ui.notice("Only the first " + viewed.entries.length + " of " + viewed.total + " entries are listed here. Search to narrow them."));
+    } else if (listed.truncated) {
+      notes.push(ui.notice("The counts beside each kind and tag are from the first " + listed.entries.length + " of " + listed.total + " entries here."));
     } else if (catalog.truncated) {
       notes.push(ui.notice("The other shelves are counted from the first " + catalog.entries.length + " of " + catalog.total + " entries in the library."));
     }

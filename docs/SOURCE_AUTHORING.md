@@ -68,7 +68,7 @@ the revision they replace, and `etag`, that head record's own etag from `sources
 
 | Op | Arguments | Result |
 |---|---|---|
-| `sources.catalog` | `query?`, `kind?`, `source?`, `limit?` (1 to 1000, default 200) | `sources` (each with title, owner, namespace, etag, entity count), `entries` (each entity's unpinned ref, kind, head, name, family, whether it is derived, any problem, and its `namesakes` among the listed entries), `total`, `truncated`, `excluded`, `kinds` |
+| `sources.catalog` | `query?`, `kind?`, `not_kinds?` (kinds to leave out, at most 16), `source?`, `limit?` (1 to 1000, default 200); every filter is applied before the limit | `sources` (each with title, owner, namespace, etag, entity count), `entries` (each entity's unpinned ref, kind, head, name, family, whether it is derived, any problem, and its `namesakes` among the listed entries), `total`, `truncated`, `excluded`, `kinds` |
 | `sources.read` | `ref` (pinned: that revision; unpinned: the head) | the exact `payload` and `envelope`, `revision`, `head`, `is_head`, `revisions`, `etag`, `manifest_etag`; for an entity, `effective` (the composed chain and each field's state, source, upstream and value, plus notices) or `composition_error`; `links`, `portrayals` (entities derived from this one), `namesakes`, the `chats` that bind it and at which revisions, `actions` and `unavailable` |
 | `sources.create_source` | `source`, `title?` | `source`, `manifest_etag` |
 | `sources.rename_source` | `source`, `title?`, `expected` | `source`, `manifest_etag` |

@@ -21,6 +21,14 @@ export function roleOf(entry) {
   return ROLE_OF_KIND[entry.kind] || "world";
 }
 
+// What to ask the catalog for so it lists one role's entries only, before it cuts the list at its limit: the one
+// kind a role is, or for world entries every kind but those (`not_kinds`). {} for every role.
+export function roleArgs(role) {
+  const kind = Object.keys(ROLE_OF_KIND).find((name) => ROLE_OF_KIND[name] === role);
+  if (kind) return { kind };
+  return role === "world" ? { not_kinds: Object.keys(ROLE_OF_KIND) } : {};
+}
+
 // The role an address asks for. "persona" is the characters: any character can be a persona.
 export function askedRole(text) {
   if (text === "persona") return { role: "character", persona: true };
