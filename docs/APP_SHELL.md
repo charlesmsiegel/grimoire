@@ -18,7 +18,8 @@ backend/src/grimoire/app/
                                .png, .webp or .woff2 files; nothing else under static/ is served)
   adapter.py                   the adapter contract: Adapter, AdapterContext
   adapters/<name>.py           one sprint's ops: sources 109, imports 110, play 111, providers 112,
-                               campaign 113, media 114, shell 108
+                               campaign 113, media 114, shell 108; and inbox, what waits on the person
+                               (INBOX.md)
   pages.py                     the page manifest format and its checks
 ```
 
@@ -135,11 +136,17 @@ palette still lists it when its route takes no path segment (Library setup).
 The header shows the page's crumb and title, the page's own actions, **Search** and a button that switches between
 the light and dark themes.
 
-**Home** (`home`) opens on the chat played last, with **Continue chat**, then the three chats played last and
+The count beside **Needs you** is how many things wait on the person ([INBOX](INBOX.md)): the shell reads
+`inbox.list` once after it connects and after the person leaves the inbox, a chat, Devices and sync or a campaign
+(unless the page then opening reads the feed itself, as Home does), so the count is there before that page was
+ever opened.
+
+**Home** (`home`) opens on the chat played last, with **Continue chat**, then the three chats played last beside
+the top item of the inbox (one card that opens **Needs you** on it, or "Nothing needs you."), and
 the library's characters, ending in the way to import a card. A library with no chat yet points to a new chat
 and to Import instead, and Home says so when no model is set up. A screen this app has not registered is named
-as not in this app yet, never linked. Home reads the `chats` op and `sources.catalog`, and shows a placeholder
-where neither names a picture.
+as not in this app yet, never linked. Home reads the `chats` op, `sources.catalog` and `inbox.list`, and shows a
+placeholder where none names a picture.
 
 ### Addresses
 
@@ -149,6 +156,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | Route | Owner | Path / query |
 |---|---|---|
 | `home`, `setup` | 108 | |
+| `inbox` | 108 | `?item=<item id>` (the item to open on, as `inbox.list` names it) |
 | `chats` | 111 | `?filter=character\|scenario&source=<SourceRef>` |
 | `chat` | 111 | `/<ChatRef>` |
 | `start` | 111 | `?source=<SourceRef>` |
@@ -200,6 +208,8 @@ ADAPTER = Adapter("sources", owner="109", ops={"show": _show}, refusals={CardErr
   ...)`), never looked up by name. A write that replaces a record takes the revision it was shown (an etag) and is
   refused `changed` if the record moved on.
 - An adapter may grow into a package (`adapters/sources/`), keeping `ADAPTER` at its top.
+- An adapter that only gathers what other adapters' services already answer (the inbox) reaches them as those
+  adapters do (`hub_of`, `media_of`), and adds no way to write.
 - An adapter imports `grimoire.app.adapter` and domain packages only, never `grimoire.app` itself, its server or
   `appapi`: the registry loads every adapter while `grimoire.app` is still loading, so that would close a cycle.
 
@@ -241,6 +251,6 @@ shortcuts. The theme (system, light or dark) is kept per browser and switches th
 ## Tests
 
 `backend/tests/test_app_shell.py` proves the registry, the static files and the adapter seam;
-`backend/tests/js/*.test.mjs` the shell's pure modules (run with Node when it is installed). A page's own
+`backend/tests/js/*.test.mjs` the shell's pure modules and the pages' shared ones (run with Node when it is installed). A page's own
 behaviour is its sprint's to test, through its adapter ops (`AppApi(device.api).call("sources.show", {...})`) and
 its module.

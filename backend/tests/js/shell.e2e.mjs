@@ -76,7 +76,17 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   assert.equal(hero.querySelector("h2").textContent, recentRows[0].querySelector("span.g-title").textContent);
   assert.ok(hero.querySelectorAll("span.home-face").length >= 1 && hero.querySelectorAll("span.home-face").length <= 3, "its cast, as portraits");
   assert.ok(!hero.querySelector("img") && !hero.querySelector("p.g-quote"), "no picture or last line the list does not give");
-  assert.ok(!byText(main, "h2", "Needs you").length, "nothing is shown for an inbox this app does not have");
+  // Needs you: the inbox's top item, or that nothing waits; the rail lists the inbox between Home and Chats, with
+  // no count while nothing waits
+  if (taken.has("inbox")) {
+    assert.ok(byText(main, "h2", "Needs you").length);
+    await until(() => byText(main, "div", "Nothing needs you.").length, 15000, "Home's inbox card");
+    assert.equal(main.querySelector("a.home-top"), null);
+    assert.equal(byText(main, "a", "Open the inbox")[0].getAttribute("href"), "#/inbox");
+    const play = nav.querySelectorAll("a.g-nav-item").map((node) => node.getAttribute("data-route"));
+    assert.ok(play.indexOf("home") < play.indexOf("inbox") && play.indexOf("inbox") < play.indexOf("chats"));
+    assert.equal(byText(nav, "a", "Needs you")[0].querySelector("span.g-nav-count"), null);
+  } else assert.ok(!byText(main, "h2", "Needs you").length, "nothing is shown for an inbox this app does not have");
   if (taken.has("source") && taken.has("sources")) {
     const tiles = main.querySelectorAll("a.g-tile");
     assert.ok(tiles.length && tiles.every((node) => node.getAttribute("href").startsWith("#/source/")), "characters, each by its exact ref");

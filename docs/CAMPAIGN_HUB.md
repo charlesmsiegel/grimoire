@@ -27,6 +27,11 @@ Every op takes `chat` (a `ChatRef` string) and an optional `audience`, checked b
 - The hub is laid out as cards: the open action, cast and stage, holdings and powers, changes waiting on approval, obstacles, knowledge, then turns and effects, sources and what is not available yet. The director's view adds world truth, NPC goals and proposing an effect.
 - Each view shows what the hub returns for that audience, and nothing more. The director's cards are shown only when the director's view was asked for and the hub answered as the director's.
 - Every write is one `campaign.*` call. The page then shows the hub that the write returned.
+- What waits on the table is decided in the inbox ([INBOX](INBOX.md)): where the app has it, the table's view
+  shows a labelling to confirm and a change to endorse in full, with **Decide in Needs you** linking to that item,
+  and the confirming and endorsing are done there, by the same `campaign.confirm` and `campaign.endorse_effect`
+  with the same confirmation. An app without the inbox keeps both buttons in place. The director's view links to
+  nothing: its keys and decisions stay on the hub.
 - The page offers an action only where the hub's `actions` says it is available. Anything else is named under "Not available yet", with what it waits on.
 
 Who acts:

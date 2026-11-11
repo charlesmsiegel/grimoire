@@ -4,6 +4,7 @@
 // shown comes from the library and is set as text.
 
 import { chatCharacters, chatFaces, chatMeta, chatTitle, chatWhere, listNames, when } from "../chats/model.js";
+import { itemHref, loadFeed, served as inboxServed } from "../inbox/feed.js";
 
 const RECENT = 3;   // the row cards under "Recent chats"
 const SHELF = 11;   // characters shown, so the grid with its Import tile is twelve
@@ -127,10 +128,33 @@ function recent(ctx, chats) {
   return el("section", { class: "g-stack" }, heading(ctx, "Recent chats", more(ctx, "chats", "All chats")), el("ul", { class: "home-rows" }, rows));
 }
 
-// Needs you: the top open item of the inbox, in the column beside Recent chats. This app has no inbox feed
-// yet, so there is nothing to show; when it does, return that section here and Home lays it out.
-function needsYou(_ctx) {
-  return null;
+// Needs you: the top open item of the inbox (pages/inbox/feed.js), in the column beside Recent chats, as one
+// card that opens the inbox on it; or that nothing does. The feed is read after Home is drawn, so a slow one
+// never holds the page up, and one that cannot be read says so here and nowhere else.
+function needsYou(ctx) {
+  if (!inboxServed(ctx)) return null;
+  const { ui } = ctx;
+  const { el } = ui;
+  const body = el("div", { class: "home-needs", "aria-live": "polite" }, el("div", { class: "g-muted" }, "Checking what is waiting…"));
+  loadFeed(ctx).then((feed) => {
+    const [top] = feed.items;
+    if (!top) {
+      const none = ui.card({ kind: "dashed" }, "Nothing needs you.");
+      none.classList.add("home-nothing");
+      body.replaceChildren(none);
+      return;
+    }
+    const rest = feed.items.length - 1;
+    body.replaceChildren(el("a", { class: "g-card g-accent home-top", href: itemHref(ctx, top.id) },
+      el("span", { class: "home-top-meta" }, ui.pill(top.label, { kind: "accent" }), el("span", { class: "home-top-where" }, top.where.text)),
+      el("span", { class: "g-heading home-top-title" }, top.title),
+      el("span", { class: "home-top-foot" }, el("span", { class: "g-muted" }, rest ? "and " + rest + " more" : ""),
+        el("span", { class: "home-top-decide" }, "Decide"))));
+  }, (error) => {
+    if (error && error.reason === "left") return;
+    body.replaceChildren(el("div", { class: "g-muted" }, "What is waiting could not be read: " + ui.errorText(error)));
+  });
+  return el("section", { class: "g-stack" }, heading(ctx, "Needs you", more(ctx, "inbox", "Open the inbox")), body);
 }
 
 // Your characters: a portrait tile for each, by its exact ref, ending in the way to import another.

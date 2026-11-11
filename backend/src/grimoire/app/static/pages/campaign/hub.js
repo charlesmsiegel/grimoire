@@ -1,9 +1,13 @@
 // The campaign hub (Sprint 113): one chat's campaign situation as the table or the director sees it. The view
 // shows what `campaign.hub` answered for its audience and nothing more; logic.js says which cards a view gets.
 // An actor's beliefs are always shown as that actor's, never as what is true. Actions the app does not offer
-// are named with what they wait on, never shown as buttons.
+// are named with what they wait on, never shown as buttons. What waits on the table (a labelling to confirm, a
+// change to endorse) is decided in the inbox ("Needs you"), which the table's view links to; the director's own
+// deciding stays here.
 
-import { campaignName, chatName, count, hubSections, isDirector, knowledgeTabs, leaning, pendingEffects } from "./logic.js";
+import { campaignName, chatName, count, hubSections, isDirector, knowledgeTabs, pendingEffects } from "./logic.js";
+import { effectDetails, weighed } from "./shown.js";
+import { itemHref, itemId, served as inboxServed } from "../inbox/feed.js";
 
 const AUDIENCES = [{ value: "table", label: "Table view" }, { value: "director", label: "Director view" }];
 const NOTES = { table: "What the table can see. World truth is the director's.",
@@ -145,7 +149,7 @@ function line(ui, title, detail) {
 
 // -- the open action --------------------------------------------------------------------------------------
 
-function actionCard({ ctx, hub, nameOf, write, director, numberOf }) {
+function actionCard({ ctx, hub, nameOf, write, director, numberOf, chat }) {
   const { ui } = ctx;
   const { el } = ui;
   const action = hub.open_action;
@@ -184,9 +188,12 @@ function actionCard({ ctx, hub, nameOf, write, director, numberOf }) {
   if (label && !framed) {
     if (director) parts.push(el("div", { class: "campaign-band" }, "Waiting on the table to confirm how this was read."));
     else {
+      // the table confirms in the inbox, beside everything else that waits on it (here only where there is none,
+      // or for a labelling the inbox does not list because it is not one to confirm)
       parts.push(available(ctx, can.confirm, "Confirming the labelling", () => el("div", { class: "g-row campaign-band" },
         el("span", { class: "g-grow" }, "Waiting on you to confirm how this was read."),
-        ui.button("Confirm this labelling", () => write("confirm", {}, "Labelling confirmed."), { kind: "primary" }))));
+        inboxServed(ctx) && label.state === "proposed" ? decideLink(ctx, itemId.label(chat, action.turn))
+          : ui.button("Confirm this labelling", () => write("confirm", {}, "Labelling confirmed."), { kind: "primary" }))));
     }
   }
   if (framed) {
@@ -199,28 +206,6 @@ function actionCard({ ctx, hub, nameOf, write, director, numberOf }) {
 function obstacleName(hub, id) {
   const found = hub.obstacles.find((item) => item.obstacle === id);
   return found ? found.goal : id;
-}
-
-// A labelling's or a frame's factors (each with how it bears) and its stakes, each said in full. With `pick`,
-// each has a tick: the factors a decision cites and the stakes it brings.
-function weighed(ui, factors, stakes, pick) {
-  const { el } = ui;
-  const ticked = { cites: [], consequences: [] };
-  const row = (into, item, detail, tone) => {
-    const text = el("span", { class: "g-grow" }, item.text);
-    const end = detail ? el("span", { class: "campaign-bearing" + (tone ? " campaign-" + tone : "") }, detail) : null;
-    if (!pick) return el("div", { class: "campaign-weigh-row" }, text, end);
-    const input = el("input", { type: "checkbox", value: item.id });
-    into.push(input);
-    return el("label", { class: "campaign-weigh-row" }, input, text, end);
-  };
-  const column = (title, rows) => (rows.length ? el("div", { class: "campaign-weigh-col", role: "group", "aria-label": title },
-    el("div", { class: "campaign-weigh-title" }, title), rows) : null);
-  const columns = [column("What bears on it", factors.map((factor) => row(ticked.cites, factor, factor.bearing, leaning(factor.bearing)))),
-    column("At stake", stakes.map((stake) => row(ticked.consequences, stake, null, "")))].filter(Boolean);
-  const value = (inputs) => inputs.filter((input) => input.checked).map((input) => input.getAttribute("value"));
-  return { node: columns.length ? el("div", { class: "campaign-weigh" }, columns) : null, picks: pick && columns.length > 0,
-    cites: () => value(ticked.cites), consequences: () => value(ticked.consequences) };
 }
 
 // The director adjudicates; the acting player may instead consent to a setback, naming the frame they were shown.
@@ -371,42 +356,23 @@ function turnsCard(at) {
   return card(ui, "Turns and effects", { wide: true }, blocks.length ? blocks : ui.empty("No turn has been labelled or given an effect yet."));
 }
 
-// One holdings line in full, as the key on it covers it: who gives, who gets, how many, and who acts. Every
-// field the line carries is said, so two different changes never read the same beside "Endorse as shown".
-function holdingLine(item, nameOf) {
-  const counted = (item.amount ?? "?") + " " + item.item;
-  const said = item.kind === "add" ? "add " + counted + " to " + nameOf(item.holder)
-    : item.kind === "consume" ? "consume " + counted + " from " + nameOf(item.holder)
-    : item.kind === "move" ? "move " + counted + " from " + nameOf(item.holder) + " to " + nameOf(item.target)
-    : item.kind === "adjust" ? "adjust " + nameOf(item.holder) + "'s " + item.item + " from " + item.seen + " to " + item.to
-    : item.kind + " " + counted + " (" + nameOf(item.holder) + ")";
-  return said + (item.agent ? " (by " + nameOf(item.agent) + ")" : "");
-}
-
-function effectBlock({ ctx, hub, nameOf, write, director }, turn, effect, can, waiting) {
+function effectBlock({ ctx, hub, nameOf, write, director, chat }, turn, effect, can, waiting) {
   const { ui } = ctx;
   const { el } = ui;
-  const ops = effect.operations.map((op) => op.kind + " " + op.predicate + ": " + nameOf(op.subject) + " → " + nameOf(op.object)
-    + (op.agent ? " (by " + nameOf(op.agent) + ")" : ""));
-  const held = effect.holdings ? effect.holdings.lines.map((item) => holdingLine(item, nameOf)) : [];
-  const keys = effect.endorsers.map((key) => el("span", { class: "campaign-key" }, (key.principal === hub.player ? "Your key" : key.principal) + ": ",
-    el("strong", { class: key.given ? "campaign-given" : "" }, key.given ? "given" : "not given")));
-  if (!keys.length) keys.push(el("span", { class: "campaign-key" }, "No player's key is needed"));
-  keys.push(el("span", { class: "campaign-key" }, "Director: ", el("strong", { class: effect.approved_by ? "campaign-given" : "" }, effect.approved_by ? "approved" : "not yet")));
   const box = el("div", { class: "campaign-effect" },
     waiting ? el("div", { class: "g-muted campaign-small" }, "Turn " + turn.number + " · effect " + effect.number + " · " + effect.state) : null,
     waiting ? el("p", { class: "campaign-summary" }, effect.summary)
       : el("p", {}, el("strong", {}, "Effect " + effect.number + " (" + effect.state + "): "), effect.summary),
-    ops.length || held.length ? el("ul", { class: "campaign-ops" }, [...ops, ...held].map((text) => el("li", {}, text))) : null,
-    effect.holdings && effect.holdings.note ? el("p", { class: "g-muted" }, "Holdings note: " + effect.holdings.note) : null,
-    effect.waivers.length ? el("p", { class: "g-muted" }, "Waived: " + effect.waivers.map((item) => item.change + " (" + item.reason + ")").join("; ")) : null,
-    el("div", { class: "g-row campaign-keys" }, keys));
+    effectDetails(ui, effect, nameOf, hub.player));
   if (!waiting) return box;
   const mine = effect.endorsers.some((key) => key.principal === hub.player && !key.given);
   const args = { turn: turn.turn, number: effect.number };
   // Two keys, two calls: the player endorses exactly what is shown here; the director approves. One person may
   // hold both, but this page never gives one key for the other.
-  if (!director && mine) {
+  // the table endorses in the inbox, beside everything else that waits on it (here only where there is none)
+  if (!director && mine && inboxServed(ctx)) {
+    put(box, available(ctx, can.endorse_effect, "Endorsing this effect", () => ui.actions(decideLink(ctx, itemId.effect(chat, turn.turn, effect.number)))));
+  } else if (!director && mine) {
     put(box, available(ctx, can.endorse_effect, "Endorsing this effect", () => ui.actions(ui.button("Endorse as shown", async () => {
       if (await ui.confirm("Give your key to effect " + effect.number + ", exactly as shown: " + effect.summary, { confirmLabel: "Endorse" })) {
         write("endorse_effect", { ...args, fingerprint: effect.fingerprint }, "Your key is given.");
@@ -629,6 +595,11 @@ function unavailableCard({ ctx, hub }) {
 }
 
 // -- small helpers ----------------------------------------------------------------------------------------
+
+// Where the table decides what waits on it: that item, open in the inbox.
+function decideLink(ctx, item) {
+  return ctx.ui.el("a", { class: "g-button g-primary", href: itemHref(ctx, item) }, "Decide in Needs you");
+}
 
 function put(parent, node) { if (node) parent.append(node); }
 

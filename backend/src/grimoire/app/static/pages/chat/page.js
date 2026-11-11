@@ -4,6 +4,7 @@
 // record of its own except the composer's unsent text, a draft that survives leaving the chat and is cleared
 // only once posted. Everything shown from the library (card text, model output) is set as text, never as markup.
 
+import { makeTray } from "./tray.js";
 import { composerState, isCorrectable, isStopped, replyState, shownTake, stepTake, takeKey, takeLabel } from "./turn.js";
 
 const MODE_LABELS = { auto: "Auto", speech: "Speech", action: "Action" };
@@ -458,8 +459,9 @@ export async function mount(root, ctx) {
   }
 
   // -- above the composer ---------------------------------------------------------------------------------------
-  // What waits on the person for this chat (the inbox's open items). Nothing feeds it yet: it returns no row.
-  function waitingTray(_scene) { return null; }
+  // What waits on the person for this chat (the inbox's open items for it): tray.js reads and draws it.
+  const waits = makeTray(ctx, chat, { run, reopen: open, redraw: () => { if (page.scene && !page.busy) render(page.scene); } });
+  function waitingTray(scene) { return waits.view(scene); }
 
   function noModelNotice() {
     if (ctx.library && ctx.library.generation) return null;

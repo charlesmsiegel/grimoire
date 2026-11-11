@@ -10,6 +10,7 @@ export const ROUTE = /^[a-z][a-z0-9-]{0,39}$/;
 export const RESERVED = Object.freeze({
   home: { owner: "108", segments: "", what: "Home" },
   setup: { owner: "108", segments: "", what: "Library setup" },
+  inbox: { owner: "108", segments: "", what: "Needs you (?item=<item id>)" },
   chats: { owner: "111", segments: "", what: "Chats (?filter=character|scenario&source=SourceRef)" },
   chat: { owner: "111", segments: "ChatRef", what: "One chat" },
   start: { owner: "111", segments: "", what: "Start Chat (?source=SourceRef)" },

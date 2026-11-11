@@ -1,6 +1,7 @@
 // Sprint 113's campaign page end to end, in fakedom against a real app server: from the menu to the list, a campaign and
 // its chat, the table's and the director's views, and one effect accepted with two keys given in two calls
-// (the director proposes and approves, the player endorses exactly what was shown).
+// (the director proposes and approves; the player endorses exactly what was shown, in the inbox the table's
+// view links to).
 // Run by test_campaign_page.py, which serves a synthetic library whose card chat has a kept turn by the seated
 // player, and passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHAT (that chat) and GRIMOIRE_CAMPAIGN (its campaign).
 import assert from "node:assert/strict";
@@ -98,14 +99,26 @@ test("a campaign's chat, its two views and an effect accepted with two keys", { 
   assert.ok(effect.textContent.includes("Your key: not given"));
   assert.ok(!byText(effect, "button", "Endorse").length, "the director's view gives no player's key");
 
-  // the player's key, on exactly what was shown
+  // the player's key, on exactly what was shown: the table's view shows the effect and links to the inbox,
+  // where it is decided beside everything else that waits on the player
   view(main, "Table view").click();
-  const shown = await until(() => waiting() && waiting().querySelectorAll("div.campaign-effect").find((node) => byText(node, "button", "Endorse").length), 15000, "the effect at the table");
-  byText(shown, "button", "Endorse as shown")[0].click();
+  const shown = await until(() => waiting() && waiting().querySelectorAll("div.campaign-effect").find((node) => byText(node, "a", "Decide in Needs you").length), 15000, "the effect at the table");
+  assert.ok(shown.textContent.includes("Your key: not given"));
+  assert.ok(!byText(main, "button", "Endorse").length && !byText(main, "button", "Approve").length, "the table's view decides nothing in place");
+  byText(shown, "a", "Decide in Needs you")[0].click();
+  const item = await until(() => main.querySelector("section.inbox-open"), 15000, "the item in the inbox");
+  assert.ok(window.location.hash.startsWith("#/inbox?item=effect"));
+  assert.equal(item.querySelector("h2").textContent, "Anya pays Mara a coin.");
+  assert.ok(item.textContent.includes("begin knows: Mara Vell → Anya Rook (by Anya Rook)"), "shown in full before the key is given");
+  byText(item, "button", "Endorse as shown")[0].click();
   await answerDialog("Endorse");
+  await until(() => byText(main, "span", "Your key is given").length, 15000, "the endorsement");
   await idle();
-  await until(() => byText(main, "span", "Your key: given").length, 15000, "the endorsement");
+  await until(() => main.querySelector("section.inbox-empty"), 15000, "nothing else waiting");
+  window.location.hash = chatHash;
+  await until(() => waiting() && byText(main, "span", "Your key: given").length, 15000, "the hub after the endorsement");
   assert.ok(!byText(main, "button", "Approve").length, "the table gives no director's key");
+  assert.ok(!byText(main, "a", "Decide in Needs you").length, "and nothing waits on the table now");
 
   // the director's key is the last: it accepts the effect, once
   view(main, "Director view").click();

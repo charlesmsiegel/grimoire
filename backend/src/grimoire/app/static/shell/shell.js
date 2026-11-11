@@ -190,6 +190,21 @@ async function showRecent() {
   box.hidden = !items.length;
 }
 
+// "Needs you": how many things wait on the person, beside the inbox in the rail from the start and not only once
+// that page was opened. Read after connecting and after leaving a page where something may have been decided.
+// Not when the page now opening reads the whole feed itself: it sets the count from the same answer.
+const DECIDES = ["inbox", "chat", "sync", "campaign"], READS_FEED = ["home", "inbox", "sync"];
+async function countInbox() {
+  if (!state.ops.has("inbox.list") || !pageFor(state.registry.pages, "inbox")) return;
+  if (READS_FEED.includes(parse(window.location.hash).route || defaultRoute())) return;
+  let count;
+  try { count = (await api.call("inbox.list", {})).count; } catch (error) { return; }
+  if (count) state.counts.set("inbox", { value: count, label: count === 1 ? "1 thing needs you" : count + " things need you", bad: true });
+  else state.counts.delete("inbox");
+  buildNav();
+  markNav(parse(window.location.hash).route);
+}
+
 function chatTitle(chat) {
   return chat.label || (chat.launch && chat.launch.name) || chat.chat;
 }
@@ -348,6 +363,7 @@ async function leave() {
   state.current = null;
   if (state.focused) setFocusMode(false);
   if (current.route === "chat") showRecent();
+  if (DECIDES.includes(current.route)) countInbox();
   if (typeof current.cleanup === "function") {
     try { current.cleanup(); } catch (error) { console.error("grimoire: a page's cleanup failed", error); }
   }
@@ -511,6 +527,7 @@ async function connect() {
     return false;
   }
   buildNav();
+  countInbox();
   await route();
   return true;
 }

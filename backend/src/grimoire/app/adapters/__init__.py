@@ -3,9 +3,9 @@ list. Add ops to your own sprint's module; see ``grimoire.app.adapter``."""
 
 from __future__ import annotations
 
-from . import campaign, imports, media, play, providers, shell, sources
+from . import campaign, imports, inbox, media, play, providers, shell, sources
 
 #: Every adapter the app serves, in name order.
-ADAPTERS = tuple(module.ADAPTER for module in (campaign, imports, media, play, providers, shell, sources))
+ADAPTERS = tuple(module.ADAPTER for module in (campaign, imports, inbox, media, play, providers, shell, sources))
 
 __all__ = ["ADAPTERS"]

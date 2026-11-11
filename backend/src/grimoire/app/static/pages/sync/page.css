@@ -16,16 +16,9 @@
 .sync-notice-title { font-weight: 600; color: var(--g-bad); }
 .sync-notice-text { font-size: 14px; }
 .sync-notice-dot { align-self: center; }
-.sync-card-body { padding: 14px 16px 16px; }
-.sync-versions { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); }
-.sync-version { border: 1px solid var(--g-line); border-radius: 10px; padding: 10px 12px; background: var(--g-bg); min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.sync-holder { font-weight: 600; }
-.sync-side { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--g-line); }
-.sync-thumb { display: block; max-width: 100%; max-height: 160px; object-fit: contain; border-radius: 8px; margin-top: 4px; }
-.sync-line { margin: 4px 0; font: 400 15px/1.5 var(--g-serif); }
-.sync-speaker { font: 600 14px/1.5 var(--g-sans); }
-.sync-path { font: 400 13px/1.4 var(--g-mono); overflow-wrap: anywhere; }
 .sync-bad { color: var(--g-bad); }
 .sync-keycard { display: flex; flex-direction: column; gap: 8px; border-radius: 14px; }
 .sync-key { font: 500 15px/1.5 var(--g-mono); overflow-wrap: anywhere; user-select: all; padding: 10px 12px; border-radius: 8px; background: var(--g-raised); }
-.sync-resolved { border-radius: 14px; }
+.sync-waiting { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 18px 20px; border-radius: 14px; }
+.sync-waiting-text { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.sync-waiting-sub { font-size: 14px; }

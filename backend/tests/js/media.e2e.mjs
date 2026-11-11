@@ -1,7 +1,7 @@
 // 114's Art and Sync pages end to end in fakedom, against a real app server over a synthetic library: add a
 // picture straight into a character's portrait slot through the picture picker, re-frame it, see it listed in
 // the gallery with where it is used, then name this device and pair it from the Devices and sync page, which says
-// what sync cannot do and lists nothing in conflict.
+// what sync cannot do and that nothing from sync is waiting.
 // Run by test_media_pages.py, which passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_SCOPE and GRIMOIRE_SUBJECT.
 import assert from "node:assert/strict";
 import { register } from "node:module";
@@ -115,12 +115,16 @@ test("a picture added to a portrait, then this device named and paired", { skip:
   assert.ok(byText(pictures, "span", "Mara at the harbor").length);
   assert.ok(byText(labelled("Who uses these pictures"), "a", "Mara Vell").length);
 
-  // Devices and sync: what it cannot do is said plainly, and nothing is in conflict
+  // Devices and sync: what it cannot do is said plainly, and nothing from sync is waiting (one card says so:
+  // conflicts and forks are decided in the inbox, never here)
   window.location.hash = "#/sync";
   const region = (label) => main.querySelector(`section[aria-label="${label}"]`);
-  const conflicts = await until(() => region("Conflicts"), 15000, "the Devices and sync page");
-  assert.ok(conflicts.textContent.includes("Nothing is in conflict."));
-  assert.ok(region("Forks").textContent.includes("No chat is waiting on a choice."));
+  const waiting = await until(() => region("Waiting from sync"), 15000, "the Devices and sync page");
+  assert.ok(waiting.textContent.includes("Nothing from sync is waiting"));
+  assert.ok(waiting.textContent.includes("Conflicts and forks are decided in one place"));
+  assert.equal(byText(waiting, "a", "Decide in Needs you").length, 0, "with nothing waiting there is nothing to decide");
+  assert.equal(region("Conflicts"), null);
+  assert.equal(region("Forks"), null);
   assert.ok(main.textContent.includes("not encrypted"));
   assert.ok(byText(region("Not in this app yet"), "strong", "Unpairing is not available yet").length);
   assert.equal(byText(main, "button", "Pair a device").length, 0, "a device with no name cannot pair yet");

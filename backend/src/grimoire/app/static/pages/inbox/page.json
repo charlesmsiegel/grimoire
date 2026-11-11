@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "inbox",
+  "route": "inbox",
+  "title": "Needs you",
+  "slot": "play",
+  "order": 5,
+  "owner": "108",
+  "entry": "page.js",
+  "requires": ["inbox.list"],
+  "unavailable": null
+}

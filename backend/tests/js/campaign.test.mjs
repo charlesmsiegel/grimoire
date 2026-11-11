@@ -57,7 +57,9 @@ function context(path_, query, api, { scene = null, routes = ["chat"] } = {}) {
     ui, path: path_, query: new URLSearchParams(query),
     href: (route, segments = [], query_ = {}) => "#/" + [route, ...segments.map(encodeURIComponent)].join("/")
       + "?" + new URLSearchParams(Object.entries(query_ || {}).filter(([, value]) => value !== undefined)).toString(),
-    has: (op) => op === "open" && scene !== null, registered: (route) => routes.includes(route),
+    // an app with the inbox serves its feed and has its page: both, or neither
+    has: (op) => (op === "open" && scene !== null) || (op === "inbox.list" && routes.includes("inbox")),
+    registered: (route) => routes.includes(route),
     setTitle(text) { seen.title = text; }, setActions() {}, setCrumb() {}, styles() {}, layout(name) { seen.layout = name; },
     setCount(route, value) { seen.counts.push([route, value]); }, navigate(target) { seen.went.push(target); },
     notify: (text) => seen.notices.push(text),
@@ -275,6 +277,46 @@ test("a proposed labelling shows its factors and stakes beside the button that c
   // the director's view waits on the table for it, and is not offered the table's confirmation
   const director = await mounted("director", hub("director", { open_action: open }));
   assert.ok(!byText(section(director.root, "Open action"), "button", "Confirm").length);
+});
+
+test("with an inbox, the table's view links to the item to decide there, and the director's deciding stays", async () => {
+  const label = { label: "sneak", state: "proposed", reason: null, against: null,
+    factors: [{ id: "lantern", bearing: "hinders", text: "The lantern is lit." }], stakes: [] };
+  const effect = { number: 1, state: "proposed", reason: null, summary: "Anya pays Mara a coin.", proposed_by: "director",
+    sequence: 1, operations: [], holdings: null, waivers: [], endorsers: [{ contribution: "t0.000001", principal: "human:owner", given: false }],
+    approved_by: null, event: null, fingerprint: "e".repeat(64), accepted_on: null };
+  const turns = [{ turn: "t0.000001", number: 1, open: false, kept: true, passed: false, post: null, labels: [], effects: [effect], intentions: [] }];
+  const waiting = { open_action: { ...hub("table").open_action, label, framed: null }, turns };
+  const item = (id) => "#/inbox?" + new URLSearchParams({ item: id }).toString();
+  const { root, calls } = await mounted("table", hub("table", waiting), null, ["chat", "inbox"]);
+  // what confirming locks in is still read here; the confirming itself is the inbox's
+  const action = section(root, "Open action");
+  assert.ok(action.textContent.includes("Waiting on you to confirm how this was read.") && action.textContent.includes("The lantern is lit."));
+  assert.ok(!byText(action, "button", "Confirm").length, "nothing is confirmed in place");
+  const confirm = byText(action, "a", "Decide in Needs you")[0];
+  assert.equal(confirm.getAttribute("href"), item("label:" + CHAT + ":t1.000001"));
+  assert.ok(confirm.classList.contains("g-primary"));
+  // the change is shown in full, with the same link in place of the endorsement
+  const block = section(root, "Changes waiting on approval");
+  assert.ok(block.textContent.includes("Your key: not given"));
+  assert.ok(!byText(block, "button", "Endorse").length);
+  assert.equal(byText(block, "a", "Decide in Needs you")[0].getAttribute("href"), item("effect:" + CHAT + ":t0.000001:1"));
+  assert.deepEqual(writes(calls), [], "the table's view writes nothing");
+
+  // the director's view links to no inbox item: its own keys and decisions stay where they are
+  const director = await mounted("director", hub("director", { ...waiting, turns: [{ ...turns[0], effects: [{ ...effect, endorsers: [{ ...effect.endorsers[0], given: true }] }] }] }),
+    null, ["chat", "inbox"]);
+  assert.ok(!byText(director.root, "a", "Decide in Needs you").length);
+  assert.ok(byText(section(director.root, "Changes waiting on approval"), "button", "Approve and accept").length);
+  const framed = await mounted("director", hub("director"), null, ["chat", "inbox"]);
+  assert.ok(byText(section(framed.root, "Open action"), "button", "Decide").length, "the director decides in place");
+
+  // a change the hub says cannot be endorsed now is named as unavailable, never linked
+  const paused = hub("table", { ...waiting, actions: hub("table").actions.map((entry) => (entry.op === "endorse_effect" || entry.op === "confirm"
+    ? { op: entry.op, available: false, reason: "play is paused" } : entry)) });
+  const held = await mounted("table", paused, null, ["chat", "inbox"]);
+  assert.ok(!byText(held.root, "a", "Decide in Needs you").length);
+  assert.ok(byText(held.root, "strong", "Endorsing this effect is not available yet").length);
 });
 
 // -- the hub's frame: cover, chats, views --------------------------------------------------------------------
