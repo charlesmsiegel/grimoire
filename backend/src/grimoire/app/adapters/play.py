@@ -18,6 +18,8 @@ from grimoire.core.identity import ChatRef, SourceRef
 from grimoire.quickstart import Repair, Selection
 from grimoire.textapi import MAX_POST_CHARS, ApiRefused, parse_ref
 
+from . import play_story
+
 #: What Start Chat starts from (052's selection kinds), and the definition kind each one's ``ref`` names.
 START_KINDS = {"character": "character", "scenario": "scenario", "bundle": "character", "premise": None}
 #: The kinds the launch picker lists. A persona is a ``character`` definition played by the player.
@@ -238,6 +240,7 @@ def _detach(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
 ADAPTER = Adapter("play", owner="111", ops={
     "sources": _sources, "options": _options, "start": _start, "post": _post, "add_card": _add_card,
     "withdraw": _withdraw, "strike": _strike, "repairs": _repairs, "detach": _detach,
+    **play_story.OPS,  # the recap, the Story timeline and bookmarks
 })
 
 __all__ = ["ADAPTER", "ADD_ROLES", "LINE_REQUESTS", "PICKER_KINDS", "POST_MODES", "START_KINDS"]

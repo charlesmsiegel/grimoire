@@ -1,9 +1,10 @@
 // One chat (Sprint 111): #/chat/<ChatRef>. The page owns the whole pane: the story in one column (what holds
-// play up, the scene bar, the transcript, the composer) and a side panel (Cast, Details) beside it, or over it
+// play up, the scene bar, the transcript, the composer) and a side panel (Cast, Story, Details) beside it, or over it
 // on a narrow window. Every action is one op that answers the scene, which is drawn again; the page keeps no
 // record of its own except the composer's unsent text, a draft that survives leaving the chat and is cleared
 // only once posted. Everything shown from the library (card text, model output) is set as text, never as markup.
 
+import { makeStory } from "./story.js";
 import { makeTray } from "./tray.js";
 import { makeBackdrop } from "./backdrop.js";
 import { makeAttach } from "./attach.js";
@@ -78,6 +79,7 @@ export async function mount(root, ctx) {
   // The panel's tabs. Each has something to show for every chat; a tab that might have nothing is left out here.
   const PANEL_TABS = [
     { value: "cast", label: "Cast", draw: castTab },
+    ...(ctx.has("play.story") ? [{ value: "story", label: "Story", draw: (scene) => story.tab(scene) }] : []),
     { value: "details", label: "Details", draw: detailsTab },
   ];
   const panelName = "Cast and " + PANEL_TABS[PANEL_TABS.length - 1].label.toLowerCase();
@@ -88,7 +90,10 @@ export async function mount(root, ctx) {
     tabs.node, panelBody);
   const panelToggle = el("button", { type: "button", class: "chat-scene-button chat-panel-toggle", "aria-expanded": "false",
     onclick: () => setPanel(!page.panelOpen) }, panelName);
-  root.append(el("div", { class: "chat-frame" }, el("div", { class: "chat-column" }, bars, sceneBar, el("div", { class: "chat-stage" }, log), foot), panel));
+  // The story so far (story.js): the recap under the scene bar, the Story tab and bookmarks.
+  const story = makeStory(ctx, chat, { run, rows, tint, redraw: () => { if (page.scene && !page.busy) render(page.scene); },
+    afterJump: () => setPanel(false) });
+  root.append(el("div", { class: "chat-frame" }, el("div", { class: "chat-column" }, bars, sceneBar, story.recap, el("div", { class: "chat-stage" }, log), foot), panel));
 
   function setPanel(open) {
     page.panelOpen = open;
@@ -180,6 +185,7 @@ export async function mount(root, ctx) {
     page.stopped = isStopped(scene);
     if (!scene.problems.some((problem) => problem.code === "broken_binding")) page.repairs = null;
     const reply = replyState(scene, { writing: page.writing, failure: page.failure });
+    story.update(scene);
     drawHeader(scene);
     bars.replaceChildren(...holds(scene));
     drawSceneBar(scene);
@@ -299,7 +305,7 @@ export async function mount(root, ctx) {
       chips.append(el("span", { class: "chat-chip", role: "listitem", title: member.name }, face(scene, member.actor, member.name, 22),
         el("span", {}, member.persona ? short + " · you" : short)));
     }
-    sceneBar.replaceChildren(chips, panelToggle);
+    sceneBar.replaceChildren(chips, story.button, panelToggle);
     backdrop.draw(sceneBar);
   }
 
@@ -338,11 +344,12 @@ export async function mount(root, ctx) {
       if (turn.kept) {
         for (const item of turn.kept.lines) {
           out.push(said(scene, { actor: item.actor, speaker: speakerOf(item), text: item.text,
-            tools: ctx.has("play.strike") ? strikeTools(item) : null }));
+            tools: el("span", { class: "chat-tools" }, story.lineTool(turn), ctx.has("play.strike") ? strikeTools(item) : null) }));
         }
       }
       if (turn.passed && !turn.kept) out.push(note("The turn was passed."));
       for (const row of out.slice(first)) row.setAttribute("data-turn", String(turn.number));  // find.js opens a chat at a turn
+      story.anchor(out.slice(first), turn);
     }
     if (scene.set_aside && scene.set_aside.length) {
       out.push(note(scene.set_aside.length + " turn(s) set aside by a fork choice; nobody heard them."));

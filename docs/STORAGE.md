@@ -34,6 +34,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   campaigns/<campaign_id>/wrapups/<wrapup_id>.json                # one scene wrap-up (021)
   campaigns/<campaign_id>/transcripts/<chat_id>/<seq:010d>.json   # one page of a chat's transcript (036)
   campaigns/<campaign_id>/turns/<turn_id>.json                    # one played chat turn (035)
+  campaigns/<campaign_id>/bookmarks/<bookmark_id>.json            # one bookmark on a chat's turn
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
   .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
@@ -172,6 +173,18 @@ Fields:
 - 019 synchronizes turn files as a mutable campaign-local kind since 028's turn merge ([SYNC](SYNC.md#played-turns-035-028s-turn-merge)); a turn's lines pin revisions, so an unlistable `turns/` folder means the store's reference check cannot prove a revision unreferenced.
 
 **Rollback:** a pre-035 build reports `turns/` as an `unrecognized` load problem (no crash) and never writes it. Its allocators do not protect the actor ids turns name. It **cannot recover a journal that names a turn**: recover with a 035+ build, or run `LibraryStore.discard_journal`.
+
+### Bookmarks
+
+A person's bookmarks on the moments of a chat. Interpreted by `grimoire.scene.bookmarks`, never by the store; see [CHAT_PLAY](CHAT_PLAY.md#bookmarks).
+
+- The scope-record address union adds `BookmarkRef`, `campaign:<id>#bookmark/<bookmark_id>`, at `campaigns/<id>/bookmarks/<bookmark_id>.json`. `parse_scope_record` dispatches by the exact fragment; `parse_ref` does not return it. The payload schema is `grimoire.chat-bookmark/1`.
+- `classify` recognises exactly the new path (kind `bookmark`), so recovery accepts journals that name it, and the replica treats it as an exact kind.
+- `load()` skips `bookmarks/`. It is read through `campaign_bookmarks(id, *, skip=None)` (`CampaignRecords`, contained per file; `skip` leaves out files by name before reading them) and `read(BookmarkRef)`.
+- A bookmark is created once and then changed by compare-and-swap. It is never deleted (`bookmark` is not in `DELETABLE_KINDS`): a removed bookmark is a record marked `removed`.
+- 019 synchronizes bookmark files as a mutable campaign-local kind, file by file ([SYNC](SYNC.md#what-is-synchronized)).
+
+**Rollback:** a build without bookmarks reports `bookmarks/` as an `unrecognized` load problem (no crash), never writes it and does not sync it. It **cannot recover a journal that names a bookmark**: recover with a build that has them, or run `LibraryStore.discard_journal`.
 
 ### Images and blobs (018)
 

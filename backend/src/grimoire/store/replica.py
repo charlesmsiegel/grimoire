@@ -38,7 +38,8 @@ _RECORD_ROOTS = (SOURCES, CAMPAIGNS)
 #: The JSON record kinds this module reads, copies and checks: every kind sync may own except
 #: 018's blobs (binary, listed by name and size in ``CanonicalScan.blobs``); ledgers never are.
 EXACT_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                         "accepted", "wrapup", "holdings", "turn", "image", "placement", "transcript"})
+                         "accepted", "wrapup", "holdings", "turn", "image", "placement", "transcript",
+                         "bookmark"})
 #: 018's image objects and placements: strict-JSON asset records that never pin a revision.
 ASSET_RECORD_KINDS = frozenset({"image", "placement"})
 #: The load problem (and sync blocked reason) of an instance id held by two kinds in one campaign.
@@ -106,7 +107,7 @@ def parse_exact(parts: Parts, data: bytes
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
         elif found[0] in ("scope", "chat", "relation", "accepted", "wrapup", "holdings", "turn",
-                          "transcript"):  # 107/017/021/023/035/036
+                          "transcript", "bookmark"):  # 107/017/021/023/035/036
             envelope = parse_scope_record(document)[0]
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
@@ -358,7 +359,7 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
 
 #: ``turns``: a 035 turn's lines pin the revisions they were spoken under.
 _RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evidence", "accepted", "wrapups",
-                             "holdings", "transcripts", "turns"})
+                             "holdings", "transcripts", "turns", "bookmarks"})
 
 
 def _may_hold_records(access: Access, original: Parts) -> bool:

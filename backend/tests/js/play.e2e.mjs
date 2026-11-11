@@ -1,6 +1,7 @@
 // Sprint 111's pages end to end in the shell (108), against a real app server, in fakedom: Start a chat from a
 // character played as a persona, post with a typed mode, wait for the answer, pause, skip a line, ask again, step
-// through the takes and keep one by its keys, strike, see a reply fail and ask again, pass, add a card, then find
+// through the takes and keep one by its keys, bookmark moments on the Story tab and jump to one, strike, see a
+// reply fail and ask again, pass, add a card, read "Last time" as another day would show it, then find
 // the chat under All and among the chats to continue on Start a chat. A second test mends a chat whose added card is gone.
 // Run by test_app_play_js.py, which serves a synthetic card library with a scripted model and passes
 // GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHARACTER (Mara), GRIMOIRE_PERSONA (Anya) and GRIMOIRE_NEWCOMER (Tamsin),
@@ -82,8 +83,17 @@ const idle = (body) => !body.querySelectorAll("button").some((node) => node.disa
 const takes = (main) => main.querySelectorAll("article.chat-take");
 const kept = (main) => main.querySelectorAll("div.chat-line").filter((node) => !takes(main).some((take) => take.contains(node)));
 
+// What a browser keeps beyond the session: the chat page remembers there where this device left a chat.
+class Kept {
+  constructor() { this.items = new Map(); }
+  getItem(key) { return this.items.has(key) ? this.items.get(key) : null; }
+  setItem(key, value) { this.items.set(key, String(value)); }
+  removeItem(key) { this.items.delete(key); }
+}
+
 async function boot() {
   const window = install(env.GRIMOIRE_APP);
+  window.localStorage = new Kept();
   window.location.hash = "#token=" + encodeURIComponent(env.GRIMOIRE_TOKEN);
   await import("/static/shell/shell.js");
   const body = document.body;
@@ -158,7 +168,22 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   assert.ok(byText(main, "span", "Anya · you").some((node) => node.classList.contains("chat-chip")), "the scene bar marks who you play");
   assert.ok(main.querySelector("label").textContent.endsWith("Playing Anya Rook"), "the composer says who you play");
   assert.equal(body.querySelector("div.g-crumb").textContent, "Chats");
-  assert.ok(!byText(main, "button", "Story").length, "a tab with nothing to show is not there");
+  assert.deepEqual(main.querySelector("div.chat-tabs").querySelectorAll("button").map((node) => node.textContent), ["Cast", "Story", "Details"]);
+  // "Last time" opens the last lines under the scene bar. This device has no last time with this chat yet, so
+  // they are the latest lines, and say so; Hide closes them and gives the button its focus back
+  const lastTime = await until(() => { const node = exact(main, "button", "Last time"); return node && !node.hidden && node; }, 15000, "Last time");
+  const recap = main.querySelector("div.chat-recap");
+  assert.ok(recap.hidden && lastTime.getAttribute("aria-expanded") === "false", "the recap is closed until it is asked for");
+  lastTime.click();
+  assert.ok(!recap.hidden && lastTime.getAttribute("aria-expanded") === "true");
+  assert.ok(byText(recap, "div", "The latest lines so far").length, "the recap says what it is");
+  assert.deepEqual(recap.querySelectorAll("p.chat-recap-line").map((node) => node.textContent), ["Mara Vell: You came back. I didn't think you would."]);
+  exact(recap, "button", "Hide").click();
+  assert.ok(recap.hidden && document.activeElement === lastTime, "Hide closes the recap");
+  exact(main, "button", "Story").click();
+  await until(() => byText(main, "p", "No bookmarks yet.").length, 15000, "the Story tab, empty");
+  assert.ok(exact(main, "button", "Bookmark this moment") && !main.textContent.includes("Last time you played"));
+  exact(main, "button", "Cast").click();
   assert.ok(!byText(main, "div", "No model is set up").length, "a model is set up: no notice says otherwise");
 
   // focus mode hides the page's own scene bar and panel too, and Escape leaves it
@@ -241,13 +266,66 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   press("p");
   assert.ok(label().includes("Take 1 of 2") && takes(main).length, "keys typed in the composer are text");
   body.querySelector("h1").focus();
-  assert.ok(!press("c").defaultPrevented && label().includes("Take 1 of 2"), "a key that is not the take's does nothing");
+  assert.ok(!press("x").defaultPrevented && label().includes("Take 1 of 2"), "a key that is not the take's does nothing");
   // Enter keeps the take on show, not the newest
   press("Enter");
   await until(() => kept(main).some((node) => node.textContent.includes("Gone with the tide.")), 15000, "the kept line");
   await until(() => idle(body), 15000, "the keep");
   assert.ok(!main.textContent.includes("Out with the tide.") && !takes(main).length, "the other take is gone with the turn");
   assert.ok(byText(main, "dd", "2 kept").length, "Details counts the turns kept");
+
+  // the Story tab: bookmark this moment, name it, bookmark a line, jump to one, rename and remove
+  exact(main, "button", "Story").click();
+  const spine = () => main.querySelectorAll("li.chat-spine-item").map((node) => node.querySelector("span.chat-spine-label").textContent + " / " + node.querySelector("span.chat-spine-at").textContent);
+  (await until(() => exact(main, "button", "Bookmark this moment"), 15000, "Bookmark this moment")).click();
+  const naming = await until(() => main.querySelector("input.chat-spine-name"), 15000, "the new bookmark, ready to be named");
+  await until(() => idle(body), 15000, "the bookmark");
+  assert.deepEqual(spine(), ["Bookmark / Turn 2"], "the newest kept turn is marked, by its turn");
+  assert.ok(byText(main, "p", "This moment is bookmarked.").length && !exact(main, "button", "Bookmark this moment"));
+  type(main.querySelector("input.chat-spine-name"), "  The tide ");
+  main.querySelector("input.chat-spine-name").dispatchEvent({ type: "keydown", key: "Enter", preventDefault() {} });
+  await until(() => spine()[0] === "Bookmark: The tide / Turn 2", 15000, "the named bookmark");
+  await until(() => idle(body), 15000, "the name");
+  assert.ok(naming && !main.querySelector("input.chat-spine-name"), "the name field closes once saved");
+  // a kept line has its own Bookmark, and a line of a marked turn says it is
+  const greeting = kept(main).find((node) => node.textContent.includes("You came back."));
+  assert.ok(kept(main).find((node) => node.textContent.includes("Gone with the tide.")).textContent.includes("Bookmarked"));
+  byText(greeting, "button", "Bookmark")[0].click();
+  await until(() => spine().length === 2, 15000, "the line's bookmark");
+  await until(() => idle(body), 15000, "the second bookmark");
+  assert.deepEqual(spine(), ["Bookmark / Turn 1", "Bookmark: The tide / Turn 2"], "the timeline is in the order of the story");
+  // an entry jumps to its turn: its rows are marked, the first takes focus, and the entry is the current one
+  const entries = () => main.querySelectorAll("li.chat-spine-item");
+  entries()[0].querySelector("button.chat-spine-jump").click();
+  const jumped = main.querySelectorAll("div.chat-jumped");
+  assert.ok(jumped.length === 1 && jumped[0].textContent.includes("You came back.") && document.activeElement === jumped[0]);
+  assert.equal(entries()[0].querySelector("button.chat-spine-jump").getAttribute("aria-current"), "true");
+  assert.ok(entries()[0].classList.contains("chat-current") && !entries()[1].classList.contains("chat-current"));
+  entries()[1].querySelector("button.chat-spine-jump").click();
+  assert.ok(main.querySelectorAll("div.chat-jumped").every((node) => node.getAttribute("data-turn") !== jumped[0].getAttribute("data-turn")), "the mark moves with the jump");
+  assert.ok(main.querySelectorAll("div.chat-jumped").some((node) => node.textContent.includes("Gone with the tide.")));
+  // a rename the app refuses (the bookmark changed on another device, say) is said, and the story is read again
+  const refuse = fail("/api/play.bookmark_rename", { error: "changed", message: "the bookmark changed since it was read" });
+  byText(entries()[0], "button", "Rename")[0].click();
+  type(await until(() => main.querySelector("input.chat-spine-name"), 15000, "the rename field"), "First words");
+  byText(entries()[0], "button", "Save")[0].click();
+  await until(() => body.querySelectorAll("div.g-bad").some((node) => node.textContent.includes("changed")), 15000, "the refused rename");
+  await until(() => idle(body) && spine().length === 2, 15000, "the story, read again");
+  assert.deepEqual(spine(), ["Bookmark / Turn 1", "Bookmark: The tide / Turn 2"], "nothing was renamed");
+  refuse();
+  byText(entries()[0], "button", "Rename")[0].click();
+  type(await until(() => main.querySelector("input.chat-spine-name"), 15000, "the rename field again"), "First words");
+  byText(entries()[0], "button", "Save")[0].click();
+  await until(() => spine()[0] === "Bookmark: First words / Turn 1", 15000, "the renamed bookmark");
+  await until(() => idle(body), 15000, "the rename");
+  // remove asks once more before it acts
+  byText(entries()[0], "button", "Remove")[0].click();
+  assert.equal(spine().length, 2, "nothing is removed before the confirmation");
+  byText(entries()[0], "button", "Remove it")[0].click();
+  await until(() => spine().length === 1, 15000, "the removed bookmark");
+  await until(() => idle(body), 15000, "the removal");
+  assert.deepEqual(spine(), ["Bookmark: The tide / Turn 2"]);
+  assert.ok(byText(kept(main).find((node) => node.textContent.includes("You came back.")), "button", "Bookmark").length, "its line can be bookmarked again");
 
   // strike asks once more before it acts
   const line = kept(main).find((node) => node.textContent.includes("Gone with the tide."));
@@ -298,6 +376,25 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   assert.deepEqual(asks.sort(), ["Ask Mara Vell to speak", "Ask Tamsin Hale to speak"]);
   assert.ok(byText(main, "button", "Ask the director").length, "the director can be asked alone");
   assert.equal(byText(main.querySelector("ul.chat-cast"), "button", "Add picture").length, 3, "each of the cast can be given a picture");
+
+  // another day: a new browser session opens the chat, and "Last time" quotes the last lines of the sitting
+  // before, as this device remembers it. A struck line and a take nobody kept are not among them.
+  const chatRef = decodeURIComponent(chatHash.slice("#/chat/".length));
+  window.sessionStorage.removeItem("grimoire.chat.left:" + chatRef);
+  window.location.hash = "#/chats";
+  await until(() => main.querySelectorAll("a.chats-row").length, 15000, "the chat list");
+  window.location.hash = chatHash;
+  const later = await until(() => { const node = exact(main, "button", "Last time"); return node && !node.hidden && node; }, 15000, "Last time, another day");
+  later.click();
+  const said = main.querySelector("div.chat-recap");
+  assert.ok(byText(said, "div", "The last lines from last time").length, "the recap is of the last sitting");
+  assert.deepEqual(said.querySelectorAll("p.chat-recap-line").map((node) => node.textContent), [
+    "Mara Vell: You came back. I didn't think you would.", "Anya Rook · you: Is the cargo safe?", "Anya Rook · you: Then where is it?"]);
+  exact(main, "button", "Story").click();
+  await until(() => main.querySelectorAll("li.chat-spine-item").length === 2, 15000, "the timeline, another day");
+  assert.deepEqual(main.querySelectorAll("li.chat-spine-item").map((node) => node.querySelector("span.chat-spine-label").textContent + " / " + node.querySelector("span.chat-spine-at").textContent),
+    ["Bookmark: The tide / Turn 2", "Last time you played / Turn 3"]);
+  assert.ok(!main.querySelectorAll("li.chat-spine-item")[1].querySelectorAll("button.chat-tool").length, "the last-time entry is not a bookmark");
 
   // the same chat from All, and among the chats to continue on Start a chat for Mara
   window.location.hash = "#/chats?filter=all";
