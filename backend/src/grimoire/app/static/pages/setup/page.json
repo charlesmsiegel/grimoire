@@ -3,7 +3,7 @@
   "id": "setup",
   "route": "setup",
   "title": "Library setup",
-  "slot": "settings",
+  "slot": "hidden",
   "order": 0,
   "owner": "108",
   "entry": "page.js",

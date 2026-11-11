@@ -246,14 +246,15 @@ def test_a_commit_after_the_library_moved_is_stale(store):
 # -- 5. refusals and reports ------------------------------------------------------------------------
 
 @pytest.mark.parametrize("data, reason, detail", [
-    (b"\x89PNG\r\n\x1a\n" + b"tEXtchara", "unsupported_format", "png"),
+    (b"\x89PNG\r\n\x1a\n" + b"tEXtchara", "invalid_png", "truncated"),
     (b"PK\x03\x04charx", "unsupported_format", "charx"),
     (b"{not json", "invalid_json", None),
     (b"[1, 2]", "invalid_card", ""),
     (b'{"a": 1, "a": 2}', "invalid_json", None),
     (b"1e999", "invalid_json", None),  # not finite: not strict JSON at all
     (b'1, "x": 2', "invalid_json", None),
-    (encode({"spec": "chara_card_v2", "data": {"name": "x"}}), "unsupported_format", "chara_card_v2"),
+    (encode({"spec": "chara_card_v2", "data": {"name": "x"}}), "unsupported_format", "chara_card_v2_version"),
+    (encode({"name": "x", "first_mes": "hello"}), "unsupported_format", "chara_card_v1"),
     (b" " * (2 * 1024 * 1024 + 1), "too_large", None),
 ])
 def test_unreadable_inputs_are_refused_before_anything_is_staged(store, data, reason, detail):

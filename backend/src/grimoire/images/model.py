@@ -12,7 +12,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from grimoire.core.identity import SLOT_MAX, ImageRef, InstanceRef, LegacyId, SourceRef, validate_segment
+from grimoire.core.identity import SLOT_MAX, ImageRef, InstanceRef, LegacyId, OwnerRef, SourceRef, validate_segment
 from grimoire.core.json_value import JsonValueError, freeze_object
 
 IMAGE_SCHEMA = "grimoire.image/0"
@@ -25,8 +25,11 @@ MEDIA_TYPES = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif", "web
 #: exactly as no placement at all. The store never deletes a placement (sync never propagates a
 #: deletion either), so taking an override back is a compare-and-swap rewrite to ``inherit``.
 MODES = ("set", "adjust", "hide", "unresolved", "inherit")
-#: the modes a standalone source placement may use: it shows its own picture, or says one is missing
-SOURCE_MODES = ("set", "unresolved")
+#: the modes a standalone source placement may use: it shows its own picture, says one is missing, or
+#: shows nothing (``hide``: the one way to take a picture off a slot, since no placement is ever deleted).
+#: It inherits nothing, so it has nothing to ``adjust`` or to reset to (``inherit``). A source or a play
+#: scope as a whole (``OwnerRef``) inherits nothing either and uses the same modes.
+SOURCE_MODES = ("set", "unresolved", "hide")
 #: the modes a derived portrayal's placement may use (046): it inherits its base's art slot by slot,
 #: so it may also clear (``hide``), re-crop (``adjust``) or reset (``inherit``) an inherited slot
 DERIVED_MODES = ("set", "adjust", "hide", "unresolved", "inherit")
@@ -241,13 +244,14 @@ def slot_expression(slot: str) -> Expression | None:
     return Expression(*slot.split(".")[1:]) if slot_role(slot) == "expression" else None
 
 
-def validate_placement(subject: SourceRef | InstanceRef, slot: str, placement: Placement, *,
+def validate_placement(subject: SourceRef | InstanceRef | OwnerRef, slot: str, placement: Placement, *,
                        derived: bool = False) -> tuple[str, str] | None:
     """``(reason, detail)`` if ``placement`` may not sit in ``slot`` of ``subject``, else ``None``.
 
     ``derived`` (046) says a definition subject's head is a 022 derived portrayal, which inherits its
-    base's art: it may then also ``hide``, ``adjust`` or ``inherit`` (``DERIVED_MODES``). A standalone
-    definition has nothing to inherit, so it may only ``set`` or mark a picture ``unresolved``.
+    base's art: it may then also ``adjust`` or ``inherit`` (``DERIVED_MODES``). A standalone definition,
+    and a source or play scope as a whole, has nothing to inherit, so it may only ``set`` a picture,
+    mark one ``unresolved`` or ``hide`` the slot (``SOURCE_MODES``).
     """
     try:
         validate_segment(slot, "slot")
@@ -258,9 +262,10 @@ def validate_placement(subject: SourceRef | InstanceRef, slot: str, placement: P
     role = slot_role(slot)
     if role is None:
         return "role_slot_mismatch", f"{slot!r} is not expr.<outfit>.<name>"
-    if isinstance(subject, SourceRef) and placement.mode not in (DERIVED_MODES if derived else SOURCE_MODES):
-        return "mode_not_allowed", f"a standalone source placement may only set a picture or mark one " \
-                                   f"unresolved, not {placement.mode}"
+    standalone = isinstance(subject, OwnerRef) or (isinstance(subject, SourceRef) and not derived)
+    if standalone and placement.mode not in SOURCE_MODES:
+        return "mode_not_allowed", f"a placement that inherits nothing may only set a picture, hide its slot " \
+                                   f"or mark a picture unresolved, not {placement.mode}"
     if placement.role is not None and placement.role != role:
         return "role_slot_mismatch", f"slot {slot!r} holds a {role}, not a {placement.role}"
     if placement.expression is not None and placement.expression != slot_expression(slot):

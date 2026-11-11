@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from weakref import WeakKeyDictionary
 
-from grimoire.core.identity import ImageRef, InstanceRef, PlacementRef, SourceRef, paired_instances
+from grimoire.core.identity import ImageRef, InstanceRef, OwnerRef, PlacementRef, SourceRef, paired_instances
 from grimoire.images import (
     IMAGE_SCHEMA, PLACEMENT_SCHEMA, BlobFact, ImageEntry, ImageModelError, PlacementEntry, Problem, image_from_payload,
     placement_from_payload,
@@ -175,12 +175,12 @@ class _Disk:
             return BlobFact(presence, size)
         return self._memo(("blob_fact", key), compute)
 
-    def placements(self, subject: SourceRef | InstanceRef) -> tuple[dict[str, PlacementEntry], tuple[Problem, ...]]:
+    def placements(self, subject: SourceRef | InstanceRef | OwnerRef) -> tuple[dict[str, PlacementEntry], tuple[Problem, ...]]:
         """One subject's placement entries, plus problems; see ``layer`` for the fail-closed view."""
         entries, problems, _ = self.layer(subject)
         return entries, problems
 
-    def layer(self, subject: SourceRef | InstanceRef,
+    def layer(self, subject: SourceRef | InstanceRef | OwnerRef,
               ) -> tuple[dict[str, PlacementEntry], tuple[Problem, ...], bool]:
         """``(entries, problems, trusted)``.
 

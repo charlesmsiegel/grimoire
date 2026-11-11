@@ -54,7 +54,7 @@ def _op(name: str):  # type: ignore[no-untyped-def]
 
 
 #: The ops, called as ``providers.<name>`` (docs/INFERENCE_UI.md).
-OPS = ("models", "check_models", "save_models", "usage", "diagnostics")
+OPS = ("models", "check_models", "save_models", "usage", "diagnostics", "test_call")
 
 ADAPTER = Adapter("providers", owner="112", ops={name: _op(name) for name in OPS})
 

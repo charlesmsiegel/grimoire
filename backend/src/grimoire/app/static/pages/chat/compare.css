@@ -1,0 +1,24 @@
+/* Compare takes side by side (pages/chat/compare.js): the takes as columns of selectable lines. Only chat-
+   classes. At a narrow width the columns keep their width and the row scrolls sideways. */
+.chat-compare-toggle { padding: 5px 10px; background: transparent; font-size: 13px; font-weight: 400; color: var(--g-muted); }
+.chat-compare-toggle:hover { border-color: var(--g-accent); color: var(--g-accent); }
+.chat-compare { display: flex; overflow-x: auto; }
+.chat-compare-col { flex: 1 0 200px; min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px;
+  border-right: 1px solid var(--g-line); }
+.chat-compare-col:last-child { border-right: 0; }
+.chat-compare-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; min-height: 28px; }
+.chat-compare-name { font-weight: 600; }
+.chat-compare-all { padding: 0; font-size: 13px; }
+.chat-pick { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--g-line);
+  border-radius: 10px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.chat-pick:hover { border-color: var(--g-muted); }
+.chat-pick.chat-picked { border-color: var(--g-accent); background: var(--g-accent-soft); }
+.chat-pick:disabled { opacity: .55; cursor: default; }
+.chat-pick-head { display: flex; justify-content: space-between; gap: 8px; font: 600 12px/1.4 var(--g-sans); color: var(--g-muted); }
+.chat-pick-mark { flex: none; }
+.chat-picked .chat-pick-mark { color: var(--g-accent); }
+.chat-pick-text { font-size: 16px; line-height: 1.5; white-space: pre-wrap; text-wrap: pretty; overflow-wrap: anywhere; }
+.chat-compare-notes { display: flex; flex-direction: column; gap: 2px; padding: 0 16px 12px; }
+.chat-compare-notes:empty { display: none; }
+.chat-compare-note { margin: 0; font-size: 13px; color: var(--g-muted); }
+.chat-compare-keep:disabled { opacity: .45; }

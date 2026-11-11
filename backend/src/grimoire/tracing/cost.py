@@ -25,7 +25,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Literal
 
-from grimoire.core.inference import Measurement, UsageTotals
+from grimoire.core.inference import CallAttempt, Measurement, UsageTotals
 
 from .trace import CallSample, Trace, TraceError
 
@@ -177,3 +177,15 @@ def call_costs(trace: Trace, prices: PriceTable | None = None) -> CallCosts:
         groups.setdefault((sample.stage, sample.actor_id), []).append(sample)
     roles = tuple(_role(stage, actor, samples, prices) for (stage, actor), samples in groups.items())
     return CallCosts(roles, _role("all", None, list(trace.calls), prices))
+
+
+def usage_cost(attempts: Iterable[CallAttempt], prices: PriceTable | None) -> tuple[Decimal | None, CostState, bool]:
+    """``(cost, state, exact)`` of booked attempts taken from a ledger, not a trace (112's usage screens): the
+    same sums and states as a role's. ``exact`` is false while the cost is a lower bound (a needed count went
+    unreported), whatever the state, so an ``estimated`` cost can say so too."""
+    if prices is not None and not isinstance(prices, PriceTable):
+        raise TraceError("prices is a PriceTable")
+    samples = [CallSample(attempt, "all", None, "unreported") for attempt in attempts]
+    role = _role("all", None, samples, prices)
+    exact = role.cost is not None and all(_attempt_cost(sample, prices)[1] for sample in samples)
+    return role.cost, role.cost_state, exact

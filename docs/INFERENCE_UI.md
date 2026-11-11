@@ -9,8 +9,9 @@ in the settings slot), and its ops are the shell's `providers` adapter (`provide
 (`grimoire.app.adapters.providers.configure`) before it listens, and runs it under the text API's lock.
 
 `InferenceApi` writes one thing: the app's model configuration file. It lives outside the library, because it is
-per device and names where the provider's key is read from, never the key. Everything else is read from records
-other services own. Nothing in the library is written, and nothing is sent to a provider by these ops.
+per device and names where the provider's key is read from, never the key: it does not sync, so each device keeps
+its own model and its own prices. Everything else is read from records other services own. Nothing in the library
+is written, and one op alone sends anything to a provider: `test_call`, when the person asks for it.
 
 ## Ops
 
@@ -18,15 +19,16 @@ Each is called as `providers.<op>`.
 
 | Op | Arguments | Result |
 |---|---|---|
-| `models` | none | `settings` (the configuration, with `key_set`: whether the key variable is set where the app runs, never its value; `null` when none), `etag` (the file's revision, `null`: no file yet), `file` (`configured`: the app was served with a settings file; `exists`), `generation` (`available`, `problem` with `code` and `message`, `routes`: the route labels in the order attempts use them, `local`), `stages`, `limits`, `unavailable`, `bounds` |
+| `models` | none | `settings` (the configuration, with `key_set`: whether the key variable is set where the app runs, never its value; `null` when none), `etag` (the file's revision, `null`: no file yet), `file` (`configured`: the app was served with a settings file; `exists`), `generation` (`available`, `problem` with `code` and `message`, `routes`: the route labels in the order attempts use them, `local`), `stages`, `limits`, `prices` (`set`: both prices are saved; `route`: the route they price), `test_call` (`available`, `reason` when not, `seconds`: its time limit), `unavailable`, `bounds` |
 | `check_models` | `settings` (a draft) | `ok`, `problems` (each `field`, `message`), `routes`, `local`, `key_set`, `sent: false`. Nothing is saved or sent |
 | `save_models` | `settings`, `expected` (the `etag` `models` gave; `null` when there was no file) | `models`' answer, after the file is written and the runner given what it configures |
 | `usage` | `chat`, `limit` (turns listed, 1 to 1000, default 200), `skip` (the newest turns left out, default 0: how earlier turns are listed); the totals always cover every turn | `turns` (each `turn`, `number`, `set_aside`, `calls`), `skip`, `listed`, `of`, `total`, `by_stage`, `complete`, `problems` |
-| `diagnostics` | none | `available`, `traces`: this process's last runner calls, newest first |
+| `diagnostics` | none | `available`, `traces`: this process's last runner calls and test calls, newest first |
+| `test_call` | `expected` (the `etag` `models` gave) | How one test request to the saved model ended: see [The test call](#the-test-call) |
 
 ### Settings
 
-The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model)) with two more keys:
+The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model)) with these further keys:
 
 - `fallbacks`: other models **on the same endpoint**, at most one fewer than `attempts` (so up to 2). 013's
   adapter gives attempt *i* of a call the *i*-th route, so a fallback is tried only by a retry, and a model no
@@ -34,8 +36,15 @@ The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model))
 - `attempts`: attempts per planned call, 1 to 3 (004's `max_attempts_per_call`, default 1). Every attempt may
   be billed, and retries happen only before any text reached the table (013).
 
+- `price_prompt`, `price_reply` and `price_cached`: optional prices per million prompt tokens, reply tokens and
+  cached prompt tokens ([Prices and costs](#prices-and-costs)).
+
 `director` (0 or more; any count above 0 allows the one director reply a turn may make) is the optional
 `director_generation` stage. `max_output_tokens` is 1 to 32,768.
+
+The file carries no version number: every key beyond the endpoint and the model is optional with a default, and
+a key the app does not know is refused. A file written before the price keys existed loads as it always did, and
+saving a configuration with no prices writes no price key, so it is byte for byte the file it was.
 
 **Saving** writes the whole file atomically, one writer at a time (an OS lock on `FILE.lock` beside it; a save that
 waits more than 2 s for another is refused `busy`), only if it is still at `expected`: a file changed since it was read
@@ -91,7 +100,9 @@ booked: a screen never shows it bare),
 (those of them never sent, so they used nothing; what the rest used is unknown, never free). `listed` and `of` say
 how many turns are listed, of how many, after the `skip` newest.
 
-**No prices ship (013)**, so every `cost` is `null` with `cost_state: "unpriced"`: unknown, never zero.
+Every attempt, `total` and each of `by_stage` also carry a cost at the prices set now (`cost`, `cost_state`,
+`cost_lower_bound`, `unpriced_attempts`), and the answer's `prices` says whether both prices are set and for
+which route: see [Prices and costs](#prices-and-costs).
 
 **What is never shown.** A usage answer holds no prompt, reply, post or line text, and no brief: only what 013
 booked. It names the NPC each call was for, which the owner, who directs the table, already sees in the cast.
@@ -103,30 +114,119 @@ written, and gone when the app stops. Each is the runner call's `operation`, `st
 `breakdown`, and its model calls per role, from 048's `call_costs`: `stage`, `actor` (`npc-1`, `npc-2`... in
 plan order, never an id or a name), attempts, retries, failures, lost calls, `latency` (`measured` only over a
 real provider on the real clock; `synthetic`, `partial` or `unreported` otherwise), `provider_seconds` and
-`first_byte_seconds`, and usage. A trace names no chat, so diagnostics are per device, not per chat.
+`first_byte_seconds`, usage and its cost at the prices set now. A trace names no chat, so diagnostics are per
+device, not per chat. A test call is traced here as the operation `test_call`.
+
+### Prices and costs
+
+**No prices ship (013).** A person may save three with the model, through `check_models` and `save_models` like
+every other setting: `price_prompt`, `price_reply` and `price_cached`, each the price of a million tokens of that
+kind on the configured `model`. No currency is recorded: the number is in whatever the provider bills in.
+
+- A price is **decimal text** (`"3"`, `"0.25"`): up to six digits before the point and up to six after it, so 0
+  to 999999.999999, and nothing else. A JSON number, a sign, an exponent, a space, `NaN` or an empty string is
+  refused, naming the key, so no price ever passes through a float. An empty field in a draft leaves the key out.
+- A cost exists only when **both** `price_prompt` and `price_reply` are set (`prices.set`). `price_cached` is
+  optional: without it a cached prompt token is charged at the prompt price.
+- The prices are the configured model's alone. An attempt booked under another route (a fallback model, or the
+  model configured before) has no price: it is left out of the cost and counted in `unpriced_attempts`.
+
+A cost is worked out when it is asked for, by 048's cost model (`grimoire.tracing.usage_cost`), from the token
+counts 013 booked and the prices **as they are now**. No usage record stores a cost, so changing a price re-prices
+every past call on that model, and removing one makes every cost unknown again. It is an **estimate, never a
+bill**: `Decimal` arithmetic on whole token counts (tokens times price, divided by a million; uncached prompt
+tokens at the prompt price, cached ones at the cached price, reasoning inside the reply), given as decimal text to
+six places and never fewer than two. No record holds a cost a provider itself reported; were one to, it would be
+shown instead of the estimate.
+
+| `cost_state` | `cost` | Meaning |
+|---|---|---|
+| `unpriced` | `null` | Unknown, never zero: no prices are set, or every sent attempt went to a route with no price (`unpriced_attempts` above 0) |
+| `priced` | text | Every count is the provider's own and nothing is missing |
+| `estimated` | text | Some count was not the provider's own (a scripted or test transport, or an estimate) |
+| `partial` | text | A lower bound |
+
+`cost_lower_bound` is true whenever the number is a floor, whatever the state: a needed count went unreported (an
+unknown cache share is charged at the cheaper rate), a call was issued with no attempt booked, or some attempts
+had no price. A floor is rounded down, so it stays one; any other cost is rounded to the nearest millionth.
+
+### The test call
+
+`test_call` sends **one** small request to the saved model, and only when it is called: no other op, and nothing
+the page does by itself, sends one. It goes the way a turn's reply goes, through the same 013 adapter the runner
+plays with (so the same endpoint, key variable, authorization, redaction and booking), over the same routes in the
+same order under the configuration's `attempts`: a retry is made, and a fallback model tried, exactly when a
+turn's call would. It carries a fixed one-line prompt and asks for at most 32 reply tokens.
+
+- It is planned on a turn of its own that belongs to **no chat**. Nothing in the library is read or written: no
+  chat, no turn file, no story state. Its attempts are booked on that turn's meter and handed to 048's tracer, so
+  it is among `diagnostics`' traces with its tokens, timing and cost. It is in no chat's `usage`, because it was
+  no chat's call, and like every trace it is kept in memory only.
+- `expected` must be the `etag` `models` gave (refused `changed` otherwise, nothing sent): what is tested is the
+  saved configuration the screen showed, never a draft.
+- Refused `no_model`, nothing sent, when no model answers (none configured, the key variable not set, or a model
+  the app was started with and does not configure).
+- Refused `key_destination`, nothing sent, when the key variable is one of `OWNED_KEYS` and the endpoint is
+  neither that provider's own host nor this machine. A draft like that cannot be saved from the app at all; a
+  file written by hand keeps its endpoint for turns, and a test call is still not sent there.
+- The whole call, every attempt included, is cancelled after 30 seconds and answered as `status: "timeout"`.
+  On Windows the cancel may not wake a read that is already waiting on the model (the transport's shutdown does
+  not always interrupt a blocked `recv` there), so the answer can come later than the limit: when the read's own
+  timeout or the server ends it. It is still answered as a timeout.
+- Like every op it runs under the text API's lock, so no turn plays while it is under way.
+
+The answer: `ok` (the model answered: `accepted`, or `incomplete` only because the test's own small reply bound
+cut it short), `status` (`accepted`, `incomplete`, `failed`, `cancelled`, `refused`, `timeout`), `reason` (013's
+error kind, the finish reason or the refusal), `http_status`, `code` and `detail` (the provider's own error, with
+the key redacted by the adapter), `sent`, `local`, `model` (the model the provider says answered), `route`,
+`seconds` and `limit_seconds`, `attempts` (each `attempt`, `outcome`, `route`, `measurement`, `reason`, `tokens`),
+`tokens` (`sums`, `unreported`), `recorded` (a trace was kept) and the cost keys above. The reply's text is never
+returned or kept, and the key is never shown, logged or returned.
 
 ## The page
 
-`grimoire/app/static/pages/providers/` is the page: `page.json` and `page.js`, which exports the shell's
-`mount(root, ctx)` and calls `providers.<op>` and the text API's `chats` through `ctx.api`. It
-has five sections: **Model** (the settings form, **Check** and **Save**), **Model calls a turn may make**,
-**Usage by chat** (the 100 most recent chats, **Show more chats** for up to 1,000; `#/providers?chat=<ChatRef>` opens one chat's usage directly; a chat's turns come 200 at a time, newest first, with **Earlier turns** and **Later turns**), **Recent calls on this device** and **Not available yet**. Every library and provider text is
-set as text, never markup. `backend/tests/test_app_inference_page.py` runs the page in Node over a fake DOM and
-fake ops (skipped where Node is not installed); `backend/tests/test_app_inference_shell.py` serves it through
-the shell, from `serve --model FILE` as a process too.
+`grimoire/app/static/pages/providers/` is the page: `page.json`, `page.css` and `page.js`, which exports the
+shell's `mount(root, ctx)` and calls `providers.<op>` and the text API's `chats` through `ctx.api`. From the top:
+
+- A **status card**: "Generating with *model*" or "No model is set up" with the app's reason, whether the endpoint
+  is on this computer (no provider bills it) or hosted (every attempt may be billed, with the key's variable
+  named), and the routes calls go to. **Send a test call** is offered while one can be sent, with a line under it
+  saying it sends one small request to the saved model and that a hosted model may bill it. While the request is
+  under way the button is off and reads "Calling…"; then one line gives the model that answered, the time and
+  the tokens (and the estimate, when prices are set), or the failure with the provider's own reason. When a
+  model answers but may not be tested from here, the card says why and offers no button.
+- **Model**: the settings form with **Check** and **Save**. The presets (**OpenRouter**, **Local (Ollama)**,
+  **Custom**) fill the provider name, the endpoint address and the key variable in the form and nothing else:
+  the model is the person's to name, and a preset saves nothing until **Save**. The form holds no field for a
+  key, only for the name of its environment variable. Three price fields (per million prompt, reply and cached
+  prompt tokens) are sent as the text typed, and left out when empty.
+- **Calls a turn may make**: each stage with its state and its reason.
+- **Usage by chat**: the 100 most recent chats (**Show more chats** for up to 1,000;
+  `#/providers?chat=<ChatRef>` opens one chat's usage directly), a tile for each total (a lower bound is always
+  said to be one) and the chat's turns, 200 at a time, newest first, with **Earlier turns** and **Later turns**.
+  Opening a turn lists its calls and attempts. The **Cost** tile reads "Set prices to see it" until both prices
+  are saved; then the estimate, labelled "Estimate from your prices"; a lower bound reads "at least" with why;
+  and "Unknown" when none of the chat's calls went to the priced model. With prices set, a line under the tiles
+  says the costs are estimates at the prices set now, past calls included, and that the provider's bill is what
+  counts.
+- **Recent calls on this device** and, folded away, **Not available yet**.
+
+Every library and provider text is set as text, never markup. `backend/tests/test_app_inference_page.py` runs the
+page in Node over a stand-in DOM and fake ops (skipped where Node is not installed);
+`backend/tests/test_app_inference_shell.py` serves it through the shell, from `serve --model FILE` as a process too.
 
 ## Not available yet
 
-Each is listed on the page with its reason (`unavailable` in `models`):
+Each is listed on the page with its reason (`unavailable` in `models`; the page leaves out `presets`, since it
+fills its form from its own):
 
-- **A connection test.** 013's adapter sends only a turn's planned calls, and 004 has no job-scoped ledger to bill
-  a call outside a turn, so a test request would be an unbilled, unplanned call. **Check** validates a draft and
-  sends nothing.
 - **A separate director model.** 027's runtime calls one list of models for every call.
 - **Other endpoints.** The app configures one endpoint; fallbacks are other models on it.
-- **Prices and money.** None ship (013).
+- **Prices for fallback models.** The prices are the configured model's; a fallback's attempts are left out of
+  the cost, which is then a lower bound.
+- **A kept record of test calls.** A test call is traced in memory like every runner call; no file keeps it.
 - **Session budgets.** 004 caps calls per turn only.
 - **Prompt and context preview, prompt history.** No V2 service previews a brief or keeps a prompt: briefs are
   built for a call and never stored (013's privacy rule). When one exists it must show only what the table's
   player may read: never another NPC's private evidence.
-- **Provider presets.**
+- **Provider presets** kept by the app. The page's own presets only fill its form.

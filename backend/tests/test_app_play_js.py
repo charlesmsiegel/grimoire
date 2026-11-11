@@ -43,7 +43,7 @@ def _run(device, **env):
     try:
         host, port = app.address
         result = subprocess.run(
-            [NODE, "--test", str(TESTS / "play.e2e.mjs")], capture_output=True, text=True, timeout=240,
+            [NODE, "--test", "--test-reporter=tap", str(TESTS / "play.e2e.mjs")], capture_output=True, text=True, timeout=240,
             check=False, env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token, **env})
     finally:
         app.close()
@@ -56,8 +56,27 @@ def _run(device, **env):
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")
 def test_start_chat_and_play_end_to_end(tmp_path):
     folder = _library(tmp_path)
-    with Device(folder, [say("Safe as the tide."), say("Gone with the tide.")]) as device:
+    replies = ["Safe as the tide.", "Gone with the tide.", "Out with the tide.", "Back with the tide.",
+               "Mara, one.", "Tamsin, one.", "Mara, two.", "Tamsin, two."]  # the last four: two takes of two lines
+    with Device(folder, [say(text) for text in replies]) as device:
         _run(device, GRIMOIRE_CHARACTER=str(MARA_VELL), GRIMOIRE_PERSONA=str(ANYA), GRIMOIRE_NEWCOMER=str(TAMSIN))
+        play = AppApi(device.api)
+        (chat,) = [entry["chat"] for entry in play.call("chats", {})["chats"]]
+        last = play.call("open", {"chat": chat})["turns"][-1]
+        # the page's compare mode kept one line of each take as the turn's one kept take
+        assert [line["text"] for line in last["kept"]["lines"]] == ["Mara, one.", "Tamsin, two."] and not last["open"]
+        assert [item["label"] for item in play.call("play.story", {"chat": chat})["bookmarks"]] == ["The tide"]
+
+
+@pytest.mark.skipif(NODE is None, reason="Node is not installed")
+def test_a_chat_with_no_model_says_so_and_still_takes_a_post(tmp_path):
+    folder = _library(tmp_path)
+    with Device(folder, runtime=False) as device:
+        play = AppApi(device.api)
+        chat = play.call("play.start", {"kind": "character", "ref": str(MARA_VELL), "persona": str(ANYA)})["chat"]
+        _run(device, GRIMOIRE_NOMODEL=chat)
+        scene = play.call("open", {"chat": chat})
+        assert [bool(turn["post"]) for turn in scene["turns"]][-1] is True and scene["state"]["open_turn"] is None
 
 
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")

@@ -298,6 +298,18 @@ def test_new_scenarios_and_lorebooks_are_written_in_their_own_schemas(api):
                    expected="sha256:" + "0" * 64).reason == "not_attachable"
     assert {entry["kind"] for entry in api.call("sources.catalog", {"source": "world:harbor"})["entries"]} == \
         {"lorebook", "scenario", "location"}
+    # every filter is applied before the limit cuts the list: one kind, or every kind but some, stays reachable
+    # however many entries of other kinds come first
+    def kinds(**args):
+        answer = api.call("sources.catalog", {"source": "world:harbor", **args})
+        return [entry["kind"] for entry in answer["entries"]], answer["total"], answer["truncated"]
+    assert kinds(kind="location", limit=1) == (["location"], 1, False)
+    assert kinds(not_kinds=["lorebook", "scenario"], limit=1) == (["location"], 1, False)
+    assert kinds(not_kinds=["character", "scenario", "lorebook"]) == (["location"], 1, False)
+    assert kinds(not_kinds=[]) [1] == 3
+    assert kinds(kind="scenario", not_kinds=["scenario"]) == ([], 0, False)
+    for bad in ("location", ["location", 3], ["k"] * 17):
+        assert refused(api, "sources.catalog", not_kinds=bad).reason == "invalid_field"
     assert refused(api, "sources.create", source="world:harbor", kind="scenario",
                    expected=location["manifest_etag"], fields={"title": "Empty"}).reason == "invalid_field"
 

@@ -23,8 +23,8 @@ from pathlib import Path
 from types import MappingProxyType
 
 from grimoire.core.identity import (
-    AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, ImageRef, InstanceRef, KnowledgeRef, PlacementRef,
-    RelationRef, ScopeRef, SourceRef, TranscriptRef, TurnRef, WrapUpRef,
+    AcceptedRef, BookmarkRef, ChatRef, HoldingsRef, IdentityConflict, ImageRef, InstanceRef, KnowledgeRef, OwnerRef,
+    PlacementRef, RelationRef, ScopeRef, SourceRef, TranscriptRef, TurnRef, WrapUpRef,
     validate_segment,
 )
 from grimoire.core.index import DefinitionIndex, SourceDescriptor
@@ -52,7 +52,8 @@ from .journal import DELETABLE_KINDS, Entry, Journal, is_staging_name
 from .jsonfmt import MAX_FILE_BYTES, JsonError, etag, is_etag, parse_strict, reemitted_imprecise, render
 from .layout import (
     ACCEPTED, CAMPAIGN_LEDGERS, CAMPAIGNS, CHATS, CONFLICTS, DISCARD_MARKER, IMAGES, JOURNAL, LIBRARY_FORMAT, LOCK, MARKER,
-    PLACEMENTS, REPAIR_MARKER, SECRETS, SYNC, TURNS, TXN, WRAPUPS, Parts, address_parts, blob_parts, classify,
+    BOOKMARKS, PLACEMENTS, REPAIR_MARKER, SCOPE_ART, SECRETS, SYNC, TURNS, TXN, WRAPUPS, Parts, address_parts, blob_parts,
+    classify,
     conflict_parts,
     definition_parts, image_parts, is_kept_target, kept_address, ledger_folder, ledger_name,
     SUFFIX, ledger_parts, ledger_seq, logical, manifest_parts, name_key, secret_parts, sync_state_parts,
@@ -416,6 +417,17 @@ class LibraryStore:
     def writable(self) -> bool:
         return self._writable
 
+    def check_root(self) -> None:
+        """Refuse (``LinkRefused``, ``LibraryPathError``) if the root is no longer the directory that was opened.
+        For a companion that reads files of its own under the root (the shelf): the same check every read here
+        makes, so a root swapped for a link is followed by nobody."""
+        self._access.guard.check_root()
+
+    def check_destination(self) -> None:
+        """``check_root``, and the root is still not, inside or around a V1 library: what this store checks
+        before it writes. For a companion that writes files of its own under the root."""
+        self._access.guard.check_session()
+
     def _require_open(self) -> None:
         if self._closed:
             raise StoreError("the library store is closed")
@@ -494,7 +506,7 @@ class LibraryStore:
 
     # -- reading -----------------------------------------------------------------
     def read(self, ref: SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef
-             | PlacementRef | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef | TurnRef
+             | PlacementRef | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef | TurnRef | BookmarkRef
              ) -> StoredRecord | StoredScopeRecord | StoredKnowledgeRecord | StoredAssetRecord:
         """One record by exact address (a definition must be pinned)."""
         if isinstance(ref, SourceRef) and not ref.pinned:
@@ -502,7 +514,7 @@ class LibraryStore:
         with self.lock:  # reads wait for this process's commits, so they never see one half-done
             self._require_consistent()
             if isinstance(ref, (ScopeRef, ChatRef, RelationRef, AcceptedRef, WrapUpRef, HoldingsRef, TranscriptRef,
-                                TurnRef)):
+                                TurnRef, BookmarkRef)):
                 return loader.read_scope_record(self._access, address_parts(ref))
             if isinstance(ref, KnowledgeRef):
                 return loader.read_knowledge_record(self._access, address_parts(ref))
@@ -634,11 +646,11 @@ class LibraryStore:
         folder = image_parts(ImageRef(scope, "x"))[:-1]
         return self._list_assets(folder, "image", ImageRef(scope, "x").source)  # type: ignore[return-value]
 
-    def list_placements(self, subject: SourceRef | InstanceRef,
+    def list_placements(self, subject: SourceRef | InstanceRef | OwnerRef,
                         ) -> tuple[tuple[PlacementRef, ...], tuple[LoadProblem, ...]]:
         """Canonical placement files of one subject, plus problems; contents are not read."""
         folder = address_parts(PlacementRef(subject, "x"))[:-1]
-        source = subject.source if isinstance(subject, SourceRef) else None
+        source = None if isinstance(subject, InstanceRef) else subject.source
         return self._list_assets(folder, "placement", source)  # type: ignore[return-value]
 
     def _list_assets(self, folder: Parts, kind: str, source: str | None) -> tuple[tuple, tuple[LoadProblem, ...]]:
@@ -673,7 +685,7 @@ class LibraryStore:
         """Differently spelled siblings of the asset folders on the way down (``Wren-b`` beside
         ``wren-b``): they may hold records under another spelling, so they are reported."""
         found = []
-        top = next((at for at, part in enumerate(folder) if part in (IMAGES, PLACEMENTS)), len(folder))
+        top = next((at for at, part in enumerate(folder) if part in (IMAGES, PLACEMENTS, SCOPE_ART)), len(folder))
         for depth in range(top + 1, len(folder) + 1):
             parent, name = folder[:depth - 1], folder[depth - 1]
             key = name_key(name)
@@ -749,6 +761,11 @@ class LibraryStore:
         read returned for files whose bytes are unchanged: see ``loader.campaign_family`` (048).
         """
         return self._campaign_family(campaign_id, TURNS, skip=skip, known=known)
+
+    def campaign_bookmarks(self, campaign_id: str, *, skip: Callable[[str], bool] | None = None) -> CampaignRecords:
+        """One campaign's bookmark records and their problems, as ``load()`` would report them. ``skip`` leaves
+        out files by name (another chat's), never read or reported."""
+        return self._campaign_family(campaign_id, BOOKMARKS, skip=skip)
 
     def _campaign_family(self, campaign_id: str, family: str, *, skip: Callable[[str], bool] | None = None,
                          known: Mapping[object, StoredScopeRecord] | None = None) -> CampaignRecords:
@@ -2017,9 +2034,9 @@ def _asset_owner(record: AssetRecord) -> tuple[str, str]:
     if isinstance(address, ImageRef):
         return ("campaign", address.campaign_id) if address.campaign_id is not None else ("source", address.scope)
     subject = address.subject
-    if isinstance(subject, InstanceRef):
-        return ("campaign", subject.campaign_id)
-    return ("source", subject.source)
+    if subject.campaign_id is not None if isinstance(subject, OwnerRef) else isinstance(subject, InstanceRef):
+        return ("campaign", subject.campaign_id)  # type: ignore[return-value]
+    return ("source", subject.source)  # type: ignore[return-value]
 
 
 def _validate_source(access: Access, source_id: str, manifest: SourceManifest | None,

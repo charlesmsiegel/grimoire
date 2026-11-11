@@ -21,7 +21,8 @@ from grimoire.textapi import TextApi
 #: ``media.<op>`` and the adapter op it runs: pictures as ``media.*``, devices and sync as ``sync.*``.
 OPS = {
     "scopes": "media.scopes", "gallery": "media.gallery", "art": "media.art", "upload": "media.upload",
-    "place": "media.place",
+    "place": "media.place", "shown": "media.shown", "entries": "media.entries", "chat": "media.chat",
+    "backdrop_from": "media.backdrop_from",
     "devices": "sync.devices", "identify": "sync.identify", "pair": "sync.pair", "sync": "sync.run",
     "conflicts": "sync.conflicts", "resolve": "sync.resolve", "forks": "sync.forks", "choose": "sync.choose",
 }

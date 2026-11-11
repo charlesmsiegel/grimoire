@@ -8,8 +8,9 @@ one writer lock, with every service's refusal answered as ``ApiRefused`` exactly
 ``appapi.AppApi`` does that dispatch.
 
 Each sprint owns one module of ``grimoire.app.adapters`` (``sources`` 109, ``imports`` 110, ``play`` 111,
-``providers`` 112, ``campaign`` 113, ``media`` 114, ``shell`` 108). The registry imports all seven, so a sprint
-only ever edits its own module and nobody edits a shared list. See docs/APP_SHELL.md.
+``providers`` 112, ``campaign`` 113, ``media`` 114, ``shell`` 108), and ``inbox`` gathers what waits on the person
+from the others' services. The registry imports them all, so a sprint only ever edits its own module and nobody
+edits a shared list. See docs/APP_SHELL.md.
 
 An adapter module imports this module and domain packages only, never ``grimoire.app`` itself, its server or
 ``appapi``: the registry imports every adapter while ``grimoire.app`` is still loading, so such an import would

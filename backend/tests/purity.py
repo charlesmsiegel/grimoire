@@ -75,7 +75,7 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.ar
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.mediaapi", "grimoire.migrate_v1",
                       "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
                       "grimoire.play", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
-                      "grimoire.runtime", "grimoire.scenestore", "grimoire.sourceapi",
+                      "grimoire.runtime", "grimoire.scenestore", "grimoire.shelfstore", "grimoire.sourceapi",
                       "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi"})
 
 
@@ -147,6 +147,8 @@ PURE_PACKAGES = (
                                        "grimoire.graph", "grimoire.holdings"),
                 never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.security", ("grimoire.security",)),
+    # Tags, pins and saved filters: values, tag rules and codec; the files are the adapter ``grimoire.shelfstore``.
+    PurePackage("grimoire.shelf", ("grimoire.shelf", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # World Change Sets (043): values, codec and diffs; reviewing and applying is an adapter.
     PurePackage("grimoire.changesets", ("grimoire.changesets", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),

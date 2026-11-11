@@ -35,7 +35,9 @@ def test_the_shards_partition_every_test_file():
     assert {"test_peersync.py", "test_peersync_resolve.py", "test_peersync_ledger.py"} <= parts["peersync"]
     assert {"test_store_replica.py", "test_imagestore_scenarios.py", "test_store_delete.py"} <= parts["stores"]
     assert {"test_scene_runner.py", "test_scene_staging.py", "test_scene_turn_merge.py"} <= parts["scenes"]
-    assert "test_ci_shards.py" in parts["rest"]
+    assert {"test_app_shell.py", "test_app_play_js.py", "test_library_pages.py", "test_campaign_page.py"} <= parts["app"]
+    assert {"test_app_play_story.py", "test_app_shelf.py"} <= parts["app"], "an app file is not a store's or a scene's by a part of a word"
+    assert {"test_ci_shards.py", "test_import_v1_mapping.py"} <= parts["rest"]
 
 
 @pytest.mark.skipif(bool(os.environ.get("GRIMOIRE_TEST_SHARD")),
@@ -44,6 +46,16 @@ def test_collection_under_each_shard_is_disjoint_and_complete():
     whole = _collected("")
     parts = [_collected(shard) for shard in SHARDS]
     assert all(parts) and set().union(*parts) == whole and sum(len(part) for part in parts) == len(whole)
+
+
+@pytest.mark.skipif(bool(os.environ.get("GRIMOIRE_TEST_SHARD")), reason="checked once, by the unsharded runs")
+def test_shards_joined_by_plus_run_together_and_a_wrong_name_is_refused():
+    assert _collected("peersync+deletion-explorations") == _collected("peersync") | _collected("deletion-explorations")
+    for wrong in ("peersync+nowhere", "peersync+peersync", "+"):
+        env = {**os.environ, "GRIMOIRE_TEST_SHARD": wrong}
+        result = subprocess.run([sys.executable, "-m", "pytest", str(TESTS), "--collect-only", "-q", "-p", "no:cacheprovider"],
+                                capture_output=True, text=True, env=env, cwd=TESTS.parent, check=False)
+        assert result.returncode != 0 and "GRIMOIRE_TEST_SHARD" in result.stderr + result.stdout, wrong
 
 
 def _compat_cells() -> list[tuple[str, str, str | None]]:
@@ -67,19 +79,22 @@ def _compat_cells() -> list[tuple[str, str, str | None]]:
 
 
 def test_the_workflow_runs_every_shard_on_every_sharded_os():
-    """Every sharded OS and Python runs each shard exactly once and is never also run whole; Ubuntu and
-    Windows are sharded and macOS is not; and the compat job's pytest step passes the shard on."""
+    """Every OS and Python runs each shard exactly once and is never also run whole: Ubuntu and Windows one
+    shard to a cell, macOS in two cells of several shards each (joined by ``+``); and the compat job's pytest
+    step passes the shard on."""
     cells = _compat_cells()
     assert len(cells) == len(set(cells))
     runs: dict[tuple[str, str], list[str | None]] = {}
+    jobs: dict[tuple[str, str], int] = {}
     for os_name, python, shard in cells:
-        runs.setdefault((os_name, python), []).append(shard)
+        assert shard is not None, f"{os_name} py{python} runs the whole suite in one job"
+        runs.setdefault((os_name, python), []).extend(shard.split("+"))
+        jobs[(os_name, python)] = jobs.get((os_name, python), 0) + 1
     for (os_name, python), shards in runs.items():
-        assert shards == [None] or sorted(shards) == sorted(SHARDS), f"{os_name} py{python} runs {shards}"
-    sharded = {os_name for (os_name, _), shards in runs.items() if shards != [None]}
-    assert sharded == {"ubuntu-24.04", "windows-latest"}
+        assert sorted(shards) == sorted(SHARDS), f"{os_name} py{python} runs {shards}"
+    assert {os_name for os_name, _ in runs} == {"ubuntu-24.04", "windows-latest", "macos-latest"}
     assert {python for os_name, python in runs if os_name == "ubuntu-24.04"} == {"3.12", "3.13"}
-    assert runs[("macos-latest", "3.11")] == [None]
+    assert jobs[("macos-latest", "3.11")] == 2 and jobs[("windows-latest", "3.11")] == len(SHARDS)
     text = WORKFLOW.read_text(encoding="utf-8")
     compat = text[text.index("\n  compat:"):]
     step = compat[compat.index("run: python -m pytest"):]

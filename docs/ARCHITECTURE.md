@@ -80,9 +80,11 @@ A campaign actor moves to a newer revision of its own entity only through a fiel
     evidence/                         # observations, reports, beliefs, rulings and the knowledge log (020)
     accepted/                         # accepted fictional events and their receipts (021)
     wrapups/                          # retrospective scene summaries; never actor memory (021)
+    bookmarks/                        # a person's bookmarks on a chat's turns; never transcript
     holdings/<kind>/                  # counted stacks per holder instance (023, see HOLDINGS.md)
     images/, placements/              # the campaign's own image objects and placements (018)
   assets/blobs/                       # content-addressed image bytes (018)
+  config/shelf/                       # the person's tags, pins and saved filters (SHELF.md); not synced yet
   .txn/, .conflicts/, .sync/          # writer journal, preserved conflict versions, device-local sync state
 ```
 

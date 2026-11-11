@@ -1,6 +1,7 @@
 // 114's Art and Sync pages end to end in fakedom, against a real app server over a synthetic library: add a
-// picture straight into a character's portrait slot, see it listed in the gallery with where it is used, then
-// name this device and pair it from the Sync page, which says what sync cannot do and lists nothing in conflict.
+// picture straight into a character's portrait slot through the picture picker, re-frame it, see it listed in
+// the gallery with where it is used, then name this device and pair it from the Devices and sync page, which says
+// what sync cannot do and that nothing from sync is waiting.
 // Run by test_media_pages.py, which passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_SCOPE and GRIMOIRE_SUBJECT.
 import assert from "node:assert/strict";
 import { register } from "node:module";
@@ -41,78 +42,115 @@ test("a picture added to a portrait, then this device named and paired", { skip:
   const body = document.body;
   const main = await until(() => body.querySelector("main"), 15000, "the frame");
   await until(() => window.location.hash === "#/home", 15000, "Home");
+  // Art has left the rail (it is reached from a character, and the command palette lists it); sync stays
   const nav = body.querySelector("nav");
-  assert.ok(byText(nav, "a", "Art")[0] && byText(nav, "a", "Sync")[0], "Art and Sync are in the menu");
+  assert.ok(byText(nav, "a", "Devices and sync")[0], "sync is in the menu");
+  assert.ok(!nav.querySelectorAll("a").some((node) => node.textContent.trim() === "Art"), "Art is not in the menu");
+  const listed = (await (await fetch("/shell/pages")).json()).pages.find((page) => page.id === "art");
+  assert.equal(listed.slot, "hidden");
+  assert.ok(!(listed.missing || []).length && !listed.unavailable, "Art still opens");
 
   // one character's slots: nothing placed yet, nothing substituted
   const scope = process.env.GRIMOIRE_SCOPE, subject = process.env.GRIMOIRE_SUBJECT;
   window.location.hash = "#/art?scope=" + encodeURIComponent(scope) + "&subject=" + encodeURIComponent(subject);
-  const portrait = await until(() => section(main, "portrait"), 15000, "the portrait slot");
+  const slot = (name) => main.querySelector('div[data-slot="' + name + '"]');
+  const labelled = (label) => main.querySelectorAll("section").find((node) => node.getAttribute("aria-label") === label);
+  const numbers = (dialog) => dialog.querySelectorAll("input").filter((node) => node.getAttribute("type") === "number");
+  const picked = () => body.querySelector("dialog").querySelectorAll("button.art-pick")
+    .filter((node) => node.getAttribute("aria-pressed") === "true" && !node.hidden).map((node) => node.getAttribute("aria-label"));
+  const portrait = await until(() => slot("portrait"), 15000, "the portrait slot");
   assert.ok(portrait.textContent.includes("Nothing placed"));
   assert.equal(portrait.querySelector("img"), null);
+  assert.ok(portrait.querySelector("div.art-frame").classList.contains("art-aspect-3-4"), "a portrait is framed 3 by 4");
+  assert.ok(slot("avatar").querySelector("div.art-frame").classList.contains("art-aspect-1-1"), "an avatar is framed square");
+  assert.ok(portrait.textContent.includes("On their sheet and on stage"), "the slot says where it shows");
 
-  // add a new picture straight into it: the slot now shows it, from this library's own bytes
-  const form = byText(portrait, "details", "Add a new picture to portrait")[0];
-  const file = form.querySelectorAll("input").find((node) => node.getAttribute("type") === "file");
-  file.files = [{ size: PNG.length, arrayBuffer: async () => PNG.buffer.slice(0) }];
-  type(form.querySelectorAll("input").find((node) => node.getAttribute("type") === "text"), "Mara at the harbor");
-  byText(form, "button", "Add picture")[0].click();
+  // add a new picture straight into it, through the picker: the slot now shows it, from this library's own bytes
+  byText(portrait, "button", "Choose")[0].click();
+  let dialog = await until(() => body.querySelector("dialog"), 15000, "the picker");
+  assert.equal(dialog.getAttribute("aria-label"), "Choose a picture for Mara Vell: portrait");
+  const file = dialog.querySelectorAll("input").find((node) => node.getAttribute("type") === "file");
+  file.files = [{ name: "harbor.png", size: PNG.length, arrayBuffer: async () => PNG.buffer.slice(0) }];
+  file.dispatchEvent({ type: "change" });
+  type(dialog.querySelectorAll("input").find((node) => node.getAttribute("type") === "text"), "Mara at the harbor");
+  byText(dialog, "button", "Use this picture")[0].click();
   const shown = await until(() => {
-    const now = section(main, "portrait");
-    return now && now.textContent.includes("Shown") && now.querySelector("img");
+    const now = slot("portrait");
+    return !body.querySelector("dialog") && now && now.textContent.includes("Shown") && now.querySelector("img");
   }, 15000, "the placed picture");
   assert.ok(shown.getAttribute("src").startsWith("blob:"));
-  assert.ok(section(main, "portrait").textContent.includes("Mara at the harbor"));
+  assert.ok(slot("portrait").textContent.includes("Mara at the harbor"));
 
-  // the slot's picture choice holds the picture shown, so saving a focus alone keeps it; a standalone card's
-  // slot offers no re-crop of an inherited picture, since it inherits none
-  const choose = section(main, "portrait").querySelectorAll("select");
-  const modes = choose[0].querySelectorAll("option").map((node) => node.getAttribute("value"));
-  assert.ok(!modes.includes("adjust"), "no re-crop without an inherited picture");
-  const placed = choose[1].value;
-  assert.ok(placed && choose[1].querySelectorAll("option").find((node) => node.selected).textContent.includes("Mara at the harbor"));
-  const focus = section(main, "portrait").querySelectorAll("input").filter((node) => node.getAttribute("type") === "number").slice(4);
-  type(focus[0], "25");
-  type(focus[1], "40");
-  byText(section(main, "portrait"), "button", "Save")[0].click();
-  await until(() => {
-    const now = section(main, "portrait");
-    return now && now.querySelectorAll("input").filter((node) => node.getAttribute("type") === "number")[4].value === "25";
-  }, 15000, "the saved focus");
-  assert.equal(section(main, "portrait").querySelectorAll("select")[1].value, placed, "the same picture after saving");
+  // a standalone card's slot inherits nothing, so it offers no way back to an inherited picture; its picture can
+  // be hidden (the one way to take it off). Crop opens the picker on the picture shown, so saving a focus alone
+  // keeps that picture
+  assert.ok(byText(slot("portrait"), "button", "Hide").length === 1 && !byText(slot("portrait"), "button", "Use inherited").length);
+  byText(slot("portrait"), "button", "Crop").find((node) => !node.disabled).click();
+  dialog = await until(() => body.querySelector("dialog"), 15000, "the picker for a crop");
+  assert.deepEqual(picked(), ["Mara at the harbor · " + scope]);
+  assert.ok(byText(dialog, "button", "Hide this slot").length === 1 && !byText(dialog, "button", "Use the inherited picture").length);
+  type(numbers(dialog)[4], "25");
+  type(numbers(dialog)[5], "40");
+  byText(dialog, "button", "Use this picture")[0].click();
+  await until(() => !body.querySelector("dialog") && byText(slot("portrait"), "button", "Crop").find((node) => !node.disabled), 15000, "the saved focus");
+  await until(() => slot("portrait").querySelector("img"), 15000, "the picture after saving");
+  assert.ok(slot("portrait").textContent.includes("Mara at the harbor"), "the same picture after saving");
+  byText(slot("portrait"), "button", "Crop").find((node) => !node.disabled).click();
+  dialog = await until(() => body.querySelector("dialog"), 15000, "the picker again");
+  assert.deepEqual([numbers(dialog)[4].value, numbers(dialog)[5].value], ["25", "40"], "the focus was stored");
+  assert.deepEqual(picked(), ["Mara at the harbor · " + scope]);
+  byText(dialog, "button", "Cancel")[0].click();
+  await until(() => !body.querySelector("dialog"), 15000, "the picker closed");
+
+  // the subject's own pictures are listed under its slots, with a tile to add more
+  assert.ok(byText(labelled("All pictures"), "button", "Drop pictures here, or choose files").length);
+  assert.ok(byText(labelled("All pictures"), "span", "Used in portrait").length);
 
   // the scope's gallery lists it with where it is used
   window.location.hash = "#/art?scope=" + encodeURIComponent(scope);
   const pictures = await until(() => {
-    const found = section(main, "Pictures");
-    return found && found.querySelector("li") && found;
+    const found = labelled("Pictures");
+    return found && found.querySelector("div.art-card") && found;
   }, 15000, "the gallery");
-  assert.ok(byText(pictures, "div", "Used in portrait (set)").length);
-  assert.ok(byText(section(main, "Who uses these pictures"), "a", "").length);
+  assert.ok(byText(pictures, "span", "Used in portrait of Mara Vell").length);
+  assert.ok(byText(pictures, "span", "Mara at the harbor").length);
+  assert.ok(byText(labelled("Who uses these pictures"), "a", "Mara Vell").length);
 
-  // Sync: what it cannot do is said plainly, and nothing is in conflict
+  // Devices and sync: what it cannot do is said plainly, and nothing from sync is waiting (one card says so:
+  // conflicts and forks are decided in the inbox, never here)
   window.location.hash = "#/sync";
-  const conflicts = await until(() => section(main, "Conflicts"), 15000, "the Sync page");
-  assert.ok(conflicts.textContent.includes("Nothing is in conflict."));
+  const region = (label) => main.querySelector(`section[aria-label="${label}"]`);
+  const waiting = await until(() => region("Waiting from sync"), 15000, "the Devices and sync page");
+  assert.ok(waiting.textContent.includes("Nothing from sync is waiting"));
+  assert.ok(waiting.textContent.includes("Conflicts and forks are decided in one place"));
+  assert.equal(byText(waiting, "a", "Decide in Needs you").length, 0, "with nothing waiting there is nothing to decide");
+  assert.equal(region("Conflicts"), null);
+  assert.equal(region("Forks"), null);
   assert.ok(main.textContent.includes("not encrypted"));
-  assert.ok(byText(section(main, "Not in this app yet"), "strong", "Unpairing is not available yet").length);
+  assert.ok(byText(region("Not in this app yet"), "strong", "Unpairing is not available yet").length);
+  assert.equal(byText(main, "button", "Pair a device").length, 0, "a device with no name cannot pair yet");
 
-  // name this device, then pair it: the key is shown once
-  const device = section(main, "This device");
+  // name this device in its card, then pair from the dashed card: the form opens, and the key is shown once
+  const device = region("This device");
+  assert.ok(device.classList.contains("sync-device") && device.textContent.includes("Not named yet"));
   type(device.querySelector("input"), "desk-e2e");
   byText(device, "button", "Name it")[0].click();
   await until(() => {
-    const now = section(main, "This device");
-    return now && now.textContent.includes("Named desk-e2e");
+    const now = region("This device");
+    return now && now.querySelector("div.sync-name") && now.querySelector("div.sync-name").textContent === "desk-e2e";
   }, 15000, "the named device");
-  const pairing = byText(section(main, "Devices"), "details", "Pair a device")[0];
+  const open = byText(region("Devices"), "button", "Pair a device")[0];
+  const pairing = region("Pair a device");
+  assert.ok(pairing.hidden && open.getAttribute("aria-expanded") === "false", "the pairing form waits behind its card");
+  open.click();
+  assert.ok(!pairing.hidden && open.getAttribute("aria-expanded") === "true");
   type(pairing.querySelector("input"), "phone");
   byText(pairing, "button", "Pair")[0].click();
-  const key = await until(() => section(main, "Type this key on phone"), 15000, "the new key");
+  const key = await until(() => region("Pairing key"), 15000, "the new key");
+  assert.ok(key.textContent.includes("Type this key on phone"));
   assert.match(key.textContent, /[0-9a-f]{64}/);
-  // the key is shown as soon as the pairing answers; the list of devices follows when the page reloads
-  await until(() => {
-    const peers = section(main, "Devices");
-    return peers && peers.textContent.includes("phone") && peers.textContent.includes("It dials this device.");
-  }, 15000, "the paired device listed");
+  // the key is shown as soon as the pairing answers; the paired device's card follows when the page reloads
+  const peer = await until(() => main.querySelector('section.sync-device[aria-label="phone"]'), 15000, "the paired device's card");
+  assert.ok(peer.textContent.includes("Paired") && peer.textContent.includes("It dials this device."));
+  assert.equal(peer.querySelector("button"), null, "a device this one does not dial has no Sync now");
 });

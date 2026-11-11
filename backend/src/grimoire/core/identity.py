@@ -41,6 +41,7 @@ _TRANSCRIPT_REF_RE = re.compile(
     rf"campaign:(?P<campaign_id>{_SEGMENT})#transcript/(?P<chat_id>{_SEGMENT})/(?P<seq>[0-9]{{10}})"
 )
 _TURN_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#turn/(?P<turn_id>{_SEGMENT})")
+_BOOKMARK_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#bookmark/(?P<bookmark_id>{_SEGMENT})")
 _HOLDINGS_REF_RE = re.compile(
     rf"campaign:(?P<campaign_id>{_SEGMENT})/(?P<kind>{_SEGMENT})/(?P<instance_id>{_SEGMENT})#holdings"
 )
@@ -475,6 +476,37 @@ class TurnRef:
 
 
 @dataclass(frozen=True, slots=True)
+class BookmarkRef:
+    """One bookmark a person put on a moment of one chat: a note about the transcript, never part of it.
+
+    ``campaign:<campaign_id>#bookmark/<bookmark_id>``. Not returned by ``parse_ref``.
+    """
+
+    campaign_id: str
+    bookmark_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.bookmark_id, "bookmark_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#bookmark/{self.bookmark_id}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @classmethod
+    def parse(cls, text: object) -> BookmarkRef:
+        match = _BOOKMARK_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a bookmark reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
 class ImageRef:
     """One picture object, owned by one source or one play scope; never a blob or a file path.
 
@@ -517,22 +549,54 @@ class ImageRef:
 
 
 @dataclass(frozen=True, slots=True)
+class OwnerRef:
+    """A source or a play scope **as a whole**, as the subject of its own pictures: a world's or a
+    campaign's cover, a chat's backdrop. Written exactly as an image scope is: ``<source>`` or
+    ``campaign:<campaign_id>``. It names no entity and no instance, so nothing is inherited through it.
+    Not returned by ``parse_ref``.
+    """
+
+    scope: str
+
+    def __post_init__(self) -> None:
+        if isinstance(self.scope, str) and self.scope.startswith("campaign:"):
+            ScopeRef.parse(self.scope)
+        else:
+            validate_source_id(self.scope, "owner")
+
+    def __str__(self) -> str:
+        return self.scope
+
+    @property
+    def campaign_id(self) -> str | None:
+        return self.scope[len("campaign:"):] if self.scope.startswith("campaign:") else None
+
+    @property
+    def source(self) -> str | None:
+        return None if self.scope.startswith("campaign:") else self.scope
+
+    @classmethod
+    def parse(cls, text: object) -> OwnerRef:
+        return cls(_require_text(text))
+
+
+@dataclass(frozen=True, slots=True)
 class PlacementRef:
     """One slot of one subject's pictures: ``<subject>#placement/<slot>``.
 
-    The subject is an *unpinned* definition (the entity across all its revisions) or a campaign
-    instance. Not returned by ``parse_ref``.
+    The subject is an *unpinned* definition (the entity across all its revisions), a campaign
+    instance, or a source or play scope as a whole (``OwnerRef``). Not returned by ``parse_ref``.
     """
 
-    subject: SourceRef | InstanceRef
+    subject: SourceRef | InstanceRef | OwnerRef
     slot: str
 
     def __post_init__(self) -> None:
         if isinstance(self.subject, SourceRef):
             if self.subject.pinned:
                 raise ValueError(f"a placement subject is an unpinned entity, not {self.subject}")
-        elif not isinstance(self.subject, InstanceRef):
-            raise ValueError("a placement subject must be a SourceRef or an InstanceRef")
+        elif not isinstance(self.subject, (InstanceRef, OwnerRef)):
+            raise ValueError("a placement subject must be a SourceRef, an InstanceRef or an OwnerRef")
         validate_segment(self.slot, "slot")
         if len(self.slot) > SLOT_MAX:
             raise ValueError(f"slot is longer than {SLOT_MAX} characters")
@@ -548,10 +612,14 @@ class PlacementRef:
         subject_text, separator, slot = text.rpartition("#placement/")
         if not separator:
             raise ValueError(f"not a placement reference: {text!r}")
-        subject: SourceRef | InstanceRef
+        subject: SourceRef | InstanceRef | OwnerRef
         try:
-            subject = (InstanceRef.parse(subject_text) if subject_text.startswith("campaign:")
-                       else SourceRef.parse(subject_text))
+            if "/" not in subject_text:  # no kind and id: the owner itself
+                subject = OwnerRef(subject_text)
+            elif subject_text.startswith("campaign:"):
+                subject = InstanceRef.parse(subject_text)
+            else:
+                subject = SourceRef.parse(subject_text)
             return cls(subject, slot)
         except ValueError as error:
             raise ValueError(f"not a placement reference: {text!r} ({error})") from None

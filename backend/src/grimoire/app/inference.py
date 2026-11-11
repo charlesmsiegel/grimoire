@@ -11,8 +11,12 @@ from records other services own, and nothing in the library is written:
 - ``usage`` reads one chat's turn files through 035's ``SceneRunner.open``: every planned call of every take
   and labelling, with each attempt 013 booked (outcome, measurement, route, tokens), and nothing a call said.
 - ``diagnostics`` reads 048's traces of this process's runner calls, held in memory and never persisted.
+- ``test_call`` sends one small request to the saved model when the person asks, the way a turn's reply is
+  sent (``grimoire.app.testcall``). It belongs to no chat, so the library is neither read nor written.
 
-No price ships (013), so every cost is ``unpriced``: unknown, never free. See docs/INFERENCE_UI.md.
+No price ships (013): a cost is an estimate from the prices the person saved with the model, worked out now
+from the booked token counts (``grimoire.app.pricing``), and ``unpriced`` (unknown, never free) until both the
+prompt and the reply price are set. See docs/INFERENCE_UI.md.
 """
 
 from __future__ import annotations
@@ -41,12 +45,18 @@ from .config import (
     MAX_ATTEMPTS,
     MAX_FALLBACKS,
     MAX_OUTPUT_TOKENS,
+    PRICE_KEYS,
     ConfigError,
     ModelConfig,
-    build_runtime,
+    ProviderAccess,
+    build_access,
     config_json,
     parse_model_config,
+    policy_for,
+    runtime_for,
 )
+from .pricing import cost_view, price_table
+from .testcall import TEST_CALL_SECONDS, send_test_call
 
 #: What a key variable the app itself may name looks like. A configuration saved from the app names the
 #: variable a key is read from; were any name allowed, whoever holds the serve's token could send any of the
@@ -97,11 +107,10 @@ _NOT_WIRED = {
 }
 #: Features of the settings screen that have no V2 service behind them, with the reason the screen shows.
 UNAVAILABLE = (
-    ("connection_test", "a test request needs a call outside a turn, and 013's adapter sends only a turn's planned "
-                        "calls; checking a draft sends nothing"),
     ("director_model", "027's runtime calls one list of models for every call, so the director uses the NPC models"),
     ("other_endpoints", "the app configures one endpoint; fallbacks are other models on that endpoint"),
-    ("prices", "no prices ship (013), so every cost is unknown, not free"),
+    ("fallback_prices", "the prices are the configured model's; an attempt a fallback model answered is left "
+                        "out of the cost, which is then a lower bound"),
     ("session_budget", "004 caps calls per turn only; session budgets are a later milestone"),
     ("prompt_preview", "no V2 service previews or keeps a prompt: briefs are built for a call and never stored"),
     ("presets", "no provider presets exist in V2; name the endpoint and model"),
@@ -228,7 +237,7 @@ def settings_usable(path: Path | None, owner: str, *, environ: Mapping[str, str]
         data, _etag = SettingsFile(path).read()
         if data is None:
             return False
-        build_runtime(parse_settings(data), owner, environ=os.environ if environ is None else environ)
+        build_access(parse_settings(data), owner, environ=os.environ if environ is None else environ)
     except (OSError, ConfigError):
         return False
     return True
@@ -242,10 +251,12 @@ class InferenceApi:
     swaps the runner's runtime in the middle of a turn. A runtime
     is built from the file at once (``environ`` and ``transport`` as 044's ``build_runtime`` takes them) and
     given to ``text_api``'s runner; a file that cannot be used leaves the app without a model, with the reason
-    ``models`` shows. ``traces`` holds the runner's 048 traces when it has no tracer of its own."""
+    ``models`` shows. ``traces`` holds the runner's 048 traces when it has no tracer of its own.
+    ``test_seconds`` is how long a test call may take before it is cancelled."""
 
     def __init__(self, text_api, settings: SettingsFile, *, owner: str, lock=None,  # type: ignore[no-untyped-def]
-                 environ: Mapping[str, str] | None = None, transport=None, keep: int = KEEP_TRACES) -> None:
+                 environ: Mapping[str, str] | None = None, transport=None, keep: int = KEEP_TRACES,
+                 test_seconds: float = TEST_CALL_SECONDS) -> None:
         self.text_api = text_api
         self.settings = settings
         self.owner = owner
@@ -254,6 +265,8 @@ class InferenceApi:
         self._lock = lock if lock is not None else text_api.lock  # one lock with the text API's ops: never mid-turn
         self.traces: TraceLog | None = None
         self.keep = keep
+        self.test_seconds = test_seconds
+        self._access: ProviderAccess | None = None  # what sends the configuration's calls: a turn's and a test's
         runner = text_api.runner
         if runner.tracer is None:  # 048's hook: timed in memory only, never written
             self.traces = TraceLog(keep)
@@ -263,7 +276,7 @@ class InferenceApi:
         self._loaded: str | None = None  # the etag of the file the configuration was read from
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "models": self._models, "check_models": self._check, "save_models": self._save,
-            "usage": self._usage, "diagnostics": self._diagnostics,
+            "usage": self._usage, "diagnostics": self._diagnostics, "test_call": self._test_call,
         }
         with self._lock:
             self._load()
@@ -312,14 +325,15 @@ class InferenceApi:
 
     def _build(self, config: ModelConfig) -> None:
         try:
-            runtime, policy = build_runtime(config, self.owner, environ=self.environ, transport=self.transport)
+            access = build_access(config, self.owner, environ=self.environ, transport=self.transport)
         except ConfigError as error:  # the key variable is not set: saved, but nothing can be generated
             self.config = config
             self._give(None, None)
             self.problem = _problem("key_missing", f"{error}: set it where the app runs, then restart the app")
             return
         self.config, self.problem = config, None
-        self._give(runtime, policy)
+        self._give(runtime_for(access, config), policy_for(config))
+        self._access = access
 
     def _apply(self, config: ModelConfig | None, problem: dict | None) -> None:
         self.config, self.problem = config, problem
@@ -327,6 +341,7 @@ class InferenceApi:
 
     def _give(self, runtime, policy) -> None:  # type: ignore[no-untyped-def]
         """The runner plays its next call by these (the text API's calls hold the same lock)."""
+        self._access = None
         runner = self.text_api.runner
         runner.runtime = runtime
         runner.policy = policy if policy is not None else InferencePolicy()
@@ -337,6 +352,8 @@ class InferenceApi:
             return None
         view = config_json(config)
         view.setdefault("key_env", None)
+        for name in PRICE_KEYS:
+            view.setdefault(name, None)
         view["key_set"] = None if config.key_env is None else bool(self.environ.get(config.key_env))
         return view
 
@@ -372,9 +389,51 @@ class InferenceApi:
             "limits": None if config is None else {
                 "attempts_per_call": config.attempts, "max_output_tokens": config.max_output_tokens,
                 "director_calls_per_turn": min(config.director_calls, 1)},
+            "prices": self._prices_view(config), "test_call": self._test_view(config),
             "unavailable": [{"feature": feature, "reason": reason} for feature, reason in UNAVAILABLE],
             "bounds": {"fallbacks": MAX_FALLBACKS, "attempts": MAX_ATTEMPTS, "max_output_tokens": MAX_OUTPUT_TOKENS},
         }
+
+    def _prices_view(self, config: ModelConfig | None) -> dict:
+        """Whether a cost can be shown (both prices set), and the route the prices are for."""
+        priced = config is not None and config.priced
+        return {"set": priced, "route": route_label(config.endpoint, config.model) if priced else None}
+
+    def _test_blocked(self, config: ModelConfig | None) -> tuple[str, str] | None:
+        """Why no test call can be sent now (a refusal's reason and message), or ``None``."""
+        if config is None and self.text_api.runtime is not None:
+            return "no_model", "the app was started with this model: nothing here configures it, so nothing here tests it"
+        if config is None or self._access is None:
+            message = self.problem["message"] if self.problem else "no model is set up"
+            return "no_model", f"no model answers yet ({message}): there is nothing to test"
+        if config.key_env in OWNED_KEYS and not _owned_by(config.endpoint, OWNED_KEYS[config.key_env]):
+            # a file written by hand keeps its endpoint for turns; a test call is never the way to try one out
+            hosts = " or ".join(OWNED_KEYS[config.key_env])
+            return "key_destination", (f"{config.key_env} is sent by a test call only to {hosts} or to this machine: "
+                                       "nothing was sent")
+        return None
+
+    def _test_view(self, config: ModelConfig | None) -> dict:
+        blocked = self._test_blocked(config)
+        return {"available": blocked is None, "reason": None if blocked is None else blocked[1],
+                "seconds": self.test_seconds}
+
+    def _test_call(self, args: Mapping[str, object]) -> dict:
+        """Send one test call to the saved model (``expected``: the ``etag`` ``models`` gave, so what is tested
+        is what the screen showed). One request, which a hosted provider may bill; booked and traced like a
+        turn's call, in no chat."""
+        if "expected" not in args:
+            raise ApiRefused("invalid_field", "expected is the etag models gave (null: no settings file)")
+        shown = self._models({})  # a file edited by hand since it was read is read again first
+        if args["expected"] != shown["etag"]:
+            raise ApiRefused("changed", "the settings changed since they were read; nothing was sent")
+        config = self.config
+        blocked = self._test_blocked(config)
+        if blocked is not None:
+            raise ApiRefused(*blocked)
+        runner = self.text_api.runner
+        return send_test_call(config, self._access, tracer=runner.tracer, clock=runner.clock,  # type: ignore[arg-type]
+                              prices=price_table(config), seconds=self.test_seconds)
 
     def _draft(self, args: Mapping[str, object]) -> tuple[ModelConfig | None, list[dict]]:
         """The draft ``settings`` of ``args`` as a configuration, or the problems that stop it."""
@@ -382,8 +441,9 @@ class InferenceApi:
         if not isinstance(draft, dict):
             return None, [{"field": "settings", "message": "settings must be a JSON object"}]
         raw = {key: value for key, value in draft.items() if key != "key_set"}
-        if raw.get("key_env") in (None, ""):
-            raw.pop("key_env", None)
+        for optional in ("key_env", *PRICE_KEYS):  # an empty field is a setting left out
+            if raw.get(optional) in (None, ""):
+                raw.pop(optional, None)
         unknown = set(raw) - KEYS
         if unknown:
             return None, [{"field": "settings", "message": "the settings have fields this app does not know"}]
@@ -460,6 +520,7 @@ class InferenceApi:
         except StoreError as error:  # nothing was written: reading only
             raise ApiRefused(type(error).__name__, str(error)) from None
         names = {actor.instance_id: name for actor, name in scene.names.items()}
+        prices = price_table(self.config)
         stored = [(item, False) for item in scene.turns.turns] + [(item, True) for item in scene.turns.set_aside]
         stored.sort(key=lambda pair: (pair[0].record.number, pair[1]))
         turns, everything, by_stage, unmetered, unsent = [], [], {}, {}, {}
@@ -468,12 +529,12 @@ class InferenceApi:
             entries = []
             for take in record.takes:
                 for call in take.calls:
-                    entries.append(_call_view(call, names, take=take.take, state=take.state))
+                    entries.append(_call_view(call, names, prices, take=take.take, state=take.state))
                 if take.declined:
                     entries.append({"take": take.take, "state": take.state, "declined": list(take.declined)})
             for label in record.labels:
                 for call in label.calls:
-                    entries.append(_call_view(call, names, label=label.label, state=label.state))
+                    entries.append(_call_view(call, names, prices, label=label.label, state=label.state))
             for entry in entries:
                 attempts = entry.get("_attempts", ())
                 if "stage" in entry:
@@ -490,10 +551,10 @@ class InferenceApi:
         window = turns[max(end - limit, 0):end]
         return {
             "chat": str(chat), "turns": window, "skip": skip, "listed": len(window), "of": len(turns),
-            "total": _totals(everything, sum(unmetered.values()), sum(unsent.values())),
-            "by_stage": [{"stage": stage, **_totals(attempts, unmetered[stage], unsent[stage])}
+            "total": _totals(everything, sum(unmetered.values()), sum(unsent.values()), prices),
+            "by_stage": [{"stage": stage, **_totals(attempts, unmetered[stage], unsent[stage], prices)}
                          for stage, attempts in sorted(by_stage.items())],
-            "complete": scene.turns.complete, "problems": problems,
+            "complete": scene.turns.complete, "problems": problems, "prices": self._prices_view(self.config),
         }
 
     # -- diagnostics ---------------------------------------------------------------------------------------
@@ -501,6 +562,7 @@ class InferenceApi:
         if self.traces is None:
             return {"available": False, "reason": "the runner's traces go to another sink", "traces": []}
         traces = []
+        prices = price_table(self.config)
         for trace in reversed(self.traces.traces):
             costs = call_costs(trace)
             traces.append({
@@ -510,8 +572,8 @@ class InferenceApi:
                 "calls": [{"stage": role.stage, "actor": role.actor_id, "calls": role.calls,
                            "attempts": role.attempts, "retries": role.retries, "failed": role.failed,
                            "lost": role.lost, "latency": role.latency, "provider_seconds": role.provider_seconds,
-                           "first_byte_seconds": role.first_byte_seconds, "cost": None,
-                           "cost_state": role.cost_state, "usage": _usage_totals(role.usage)}
+                           "first_byte_seconds": role.first_byte_seconds, "usage": _usage_totals(role.usage),
+                           **_role_cost(trace, role, prices)}
                           for role in costs.roles],
             })
         return {"available": True, "kept": self.keep, "traces": traces}
@@ -521,7 +583,13 @@ def _tokens(usage) -> dict:  # type: ignore[no-untyped-def]
     return {name: getattr(usage, name) for name in TOKEN_FIELDS}
 
 
-def _call_view(call, names: Mapping[str, str], *, state: str, take: int | None = None,  # type: ignore[no-untyped-def]
+def _role_cost(trace, role, prices) -> dict:  # type: ignore[no-untyped-def]
+    """One trace role's cost at the prices set now. A lost call (sent, nothing booked) makes it a floor."""
+    samples = [sample for sample in trace.calls if (sample.stage, sample.actor_id) == (role.stage, role.actor_id)]
+    return cost_view([sample.attempt for sample in samples if not sample.lost], prices, unknown_calls=role.lost)
+
+
+def _call_view(call, names: Mapping[str, str], prices, *, state: str, take: int | None = None,  # type: ignore[no-untyped-def]
                label: int | None = None) -> dict:
     kind = "baseline" if call.stage is InferenceStage.NPC_GENERATION else "optional"
     return {
@@ -530,7 +598,7 @@ def _call_view(call, names: Mapping[str, str], *, state: str, take: int | None =
         "status": call.status, "reason": call.reason,
         "attempts": [{"attempt": attempt.attempt, "outcome": attempt.outcome, "measurement": attempt.measurement.value,
                       "route": attempt.route, "tokens": _tokens(attempt.usage),
-                      "cost": None, "cost_state": "unpriced"} for attempt in call.attempts],
+                      **cost_view([attempt], prices)} for attempt in call.attempts],
         "_attempts": call.attempts,
     }
 
@@ -541,17 +609,17 @@ def _usage_totals(totals: UsageTotals) -> dict:
             "measurements": sorted(m.value for m in totals.measurements)}
 
 
-def _totals(attempts, unmetered: int, unsent: int) -> dict:  # type: ignore[no-untyped-def]
+def _totals(attempts, unmetered: int, unsent: int, prices=None) -> dict:  # type: ignore[no-untyped-def]
     """Every attempt summed as 004 sums them: an unreported count is counted, never taken as zero. A planned
     call with no attempt booked is unmetered (004); ``not_issued`` of them were never sent, and what the rest used
-    is unknown, not free. No prices: the cost is unknown."""
+    is unknown, not free. The cost is an estimate at ``prices``, unknown without them, and a floor beside a call
+    whose use is unknown."""
     view = _usage_totals(UsageTotals.of(attempts))
     view["unmetered_calls"] = unmetered
     view["not_issued_calls"] = unsent
     if unmetered > unsent:  # a call issued with no attempt booked used something unknown: every sum is a floor
         view["lower_bound"] = {name: True for name in TOKEN_FIELDS}
-    view["cost"] = None
-    view["cost_state"] = "unpriced"
+    view.update(cost_view(attempts, prices, unknown_calls=max(unmetered - unsent, 0)))
     return view
 
 

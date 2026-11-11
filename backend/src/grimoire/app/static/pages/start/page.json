@@ -2,7 +2,7 @@
   "contract": 1,
   "id": "start",
   "route": "start",
-  "title": "Start Chat",
+  "title": "Start a chat",
   "slot": "play",
   "order": 20,
   "owner": "111",

@@ -1,0 +1,37 @@
+/* Home: the card of the chat played last, the chats before it, and the library's characters. */
+.home-page { display: flex; flex-direction: column; gap: 28px; }
+.home-notice { align-items: center; margin: 0; }
+.home-hero { display: flex; flex-wrap: wrap; align-items: center; gap: 28px; }
+.home-hero-text { flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.home-meta { color: var(--g-muted); font-size: 14px; }
+.home-lead { margin: 0; max-width: 60ch; font: 400 18px/1.5 var(--g-serif); text-wrap: pretty; }
+.home-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.home-action { padding: 10px 18px; }
+.home-missing { color: var(--g-muted); font-size: 14px; }
+
+/* the cast of that chat: up to three portraits, overlapping and tilted */
+.home-cast { display: flex; padding: 6px 6px 6px 24px; }
+.home-face { flex: none; display: block; width: 110px; margin-left: -18px; border: 3px solid var(--g-card);
+  border-radius: 12px; overflow: hidden; background: var(--g-card); }
+.home-tilt-0 { transform: rotate(-4deg); }
+.home-tilt-1 { transform: rotate(2deg); }
+.home-tilt-2 { transform: rotate(5deg); }
+
+.home-more { color: var(--g-accent); text-decoration: none; }
+.home-more:hover { text-decoration: underline; }
+.home-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.home-rowtext { display: flex; flex-direction: column; }
+.home-when { flex: none; font-size: 13px; color: var(--g-muted); }
+
+.home-import { align-self: start; display: grid; place-items: center; aspect-ratio: 3 / 4; padding: 12px;
+  border: 1px dashed var(--g-muted); border-radius: 10px; color: var(--g-muted); text-align: center; text-decoration: none; }
+a.home-import:hover { border-color: var(--g-accent); color: var(--g-accent); }
+
+.home-top { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; color: inherit; text-decoration: none; }
+.home-top:hover { color: inherit; background: var(--g-accent-soft); }
+.home-top-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.home-top-where { font-size: 13px; color: var(--g-muted); }
+.home-top-title { text-wrap: balance; overflow-wrap: anywhere; }
+.home-top-foot { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+.home-top-decide { color: var(--g-accent); font-weight: 600; }
+.home-nothing { color: var(--g-muted); text-align: center; }

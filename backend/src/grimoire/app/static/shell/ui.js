@@ -23,12 +23,20 @@ export function el(tag, attrs, ...children) {
   return node;
 }
 
-// A button. kind: "primary", "danger" or plain. A button for an action the app does not have is not made:
-// use unavailable() instead, so nothing on screen pretends to work.
-export function button(label, onclick, { kind = "", title, disabled = false, describedBy } = {}) {
-  return el("button", { type: "button", class: "g-button" + (kind ? " g-" + kind : ""), onclick, title,
+// A button. kind: "primary", "danger", "dashed" (an "add" action), "linklike" (reads as a link) or plain;
+// size: "small" or "large". A button for an action the app does not have is not made: use unavailable()
+// instead, so nothing on screen pretends to work.
+export function button(label, onclick, { kind = "", size = "", title, disabled = false, describedBy } = {}) {
+  return el("button", { type: "button", class: classes("g-button", kind && "g-" + kind, size && "g-" + size), onclick, title,
     disabled, "aria-describedby": describedBy }, label);
 }
+
+// A link that looks like a button: for going somewhere (Start a chat), where a button is for doing something.
+export function buttonLink(label, route, segments = [], query = undefined, { kind = "", size = "" } = {}) {
+  return el("a", { class: classes("g-button", kind && "g-" + kind, size && "g-" + size), href: href(route, segments, query) }, label);
+}
+
+function classes(...names) { return names.filter(Boolean).join(" "); }
 
 // A link to a route of the app (see router.js).
 export function link(label, route, segments = [], query = undefined) {
@@ -111,8 +119,132 @@ export function rowText(title, detail) {
   return [el("span", { class: "g-row-title" }, title), detail ? el("span", { class: "g-muted g-row-detail" }, detail) : null];
 }
 
+// A notice. kind: "soft" (something to know), "bad" (something went wrong: announced) or plain.
 export function notice(text, { kind = "" } = {}) {
   return el("div", { class: "g-notice" + (kind ? " g-" + kind : ""), role: kind === "bad" ? "alert" : "status" }, text);
+}
+
+// -- the shared pieces of the design (see docs/APP_SHELL.md) ----------------------------------------------
+
+// A small uppercase label over a group or a title.
+export function eyebrow(text, { accent = false } = {}) {
+  return el("div", { class: classes("g-eyebrow", accent && "g-accent") }, text);
+}
+
+// A pill: a kind or a state in a word or two. kind: "accent", "bad", "good" or plain.
+export function pill(text, { kind = "" } = {}) {
+  return el("span", { class: classes("g-pill", kind && "g-" + kind) }, text);
+}
+
+// A card. kind: "hero", "accent", "dashed", "flush" (no padding: for a head strip and rows) or plain.
+export function card({ kind = "", tag = "div", label } = {}, ...children) {
+  return el(tag, { class: classes("g-card", ...String(kind).split(" ").filter(Boolean).map((name) => "g-" + name)), "aria-label": label }, ...children);
+}
+
+// A segmented control: a few choices in one strip, one of them chosen. options: [{value, label}]. Choosing
+// one calls onchange(value); `set(value)` moves the choice without calling it.
+export function segments(label, options, { value, onchange } = {}) {
+  let chosen = value === undefined && options.length ? options[0].value : value;
+  const buttons = options.map((option) => el("button", { type: "button", class: "g-segment", "data-value": option.value,
+    "aria-pressed": String(option.value === chosen), onclick: () => { if (option.value !== chosen) { set(option.value); if (onchange) onchange(option.value); } } },
+    option.label));
+  function set(next) {
+    chosen = next;
+    for (const node of buttons) node.setAttribute("aria-pressed", String(node.getAttribute("data-value") === String(next)));
+  }
+  return { node: el("div", { class: "g-segments", role: "group", "aria-label": label }, buttons), set, get value() { return chosen; } };
+}
+
+// One of a set of selectable cards (or chips, with chip: true): the chosen one shows in accent.
+export function selectable(content, { selected = false, onclick, chip = false, title } = {}) {
+  return el("button", { type: "button", class: classes("g-select", chip && "g-chip"), "aria-pressed": String(Boolean(selected)), onclick, title },
+    content);
+}
+
+// The colour of a placeholder picture, one of twelve, always the same for the same key (a ref or a name), so
+// a character keeps its colour everywhere it shows.
+export function hue(key) {
+  let sum = 2166136261;
+  for (const char of String(key || "")) sum = Math.imul(sum ^ char.codePointAt(0), 16777619) >>> 0;
+  sum = (sum ^ (sum >>> 15)) >>> 0;
+  return "g-hue-" + (sum % 12);
+}
+
+function initial(name) {
+  const first = [...String(name || "").trim()][0];
+  return first ? first.toUpperCase() : "?";
+}
+
+// Put a picture in a placeholder once it loads: `picture` is a promise of an image URL (ctx.picture(ref)).
+// A picture that cannot load leaves the placeholder as it is.
+function fill(node, picture) {
+  if (!picture || typeof picture.then !== "function") return node;
+  picture.then((url) => { if (url) node.replaceChildren(el("img", { src: url, alt: "" })); }, () => {});
+  return node;
+}
+
+// A character's avatar: its picture, or its initial on its own colour. size: 22, 30, 36, 40 or 56.
+export function avatar(name, { size = 40, key, picture } = {}) {
+  return fill(el("span", { class: classes("g-avatar", "g-size-" + size, hue(key || name)), "aria-hidden": "true" }, initial(name)), picture);
+}
+
+// A few avatars, overlapping: people: [{name, key, picture}].
+export function avatars(people, { size = 30, limit = 3 } = {}) {
+  return el("span", { class: "g-avatars" }, people.slice(0, limit).map((person) => avatar(person.name, { size, key: person.key, picture: person.picture })));
+}
+
+// A 3:4 portrait: the picture, or the initial on the character's colour.
+export function portrait(name, { key, picture } = {}) {
+  return fill(el("span", { class: classes("g-portrait", hue(key || name)), "aria-hidden": "true" }, initial(name)), picture);
+}
+
+// A tile in a grid: a portrait with a name and a line under it, the whole of it one link.
+export function tile(name, target, { key, picture, detail } = {}) {
+  return el("a", { class: "g-tile", href: target }, portrait(name, { key, picture }),
+    el("span", { class: "g-tile-name" }, name), detail ? el("span", { class: "g-muted" }, detail) : null);
+}
+
+// A cover band: a world's, a campaign's or an entry's picture behind its name, or its colour until it has one.
+export function cover({ key, picture, tall = false } = {}, ...children) {
+  const band = el("div", { class: classes("g-cover", tall && "g-tall", hue(key)) }, ...children);
+  if (picture && typeof picture.then === "function") {
+    picture.then((url) => { if (url) band.prepend(el("img", { src: url, alt: "" })); }, () => {});
+  }
+  return band;
+}
+
+// A search box: a labelled text input with no visible label. oninput gets the text as it is typed.
+export function search(label, { value = "", oninput, placeholder } = {}) {
+  const input = el("input", { type: "search", class: "g-input g-searchbox", "aria-label": label, placeholder: placeholder || label,
+    autocomplete: "off" });
+  input.value = value;
+  if (oninput) input.addEventListener("input", () => oninput(input.value));
+  return input;
+}
+
+// A modal with a fixed head and foot and a body that scrolls. Returns { dialog, body, foot, close }; Escape and
+// the backdrop close it, and `onclose` runs once however it closes.
+export function modal(title, { onclose } = {}) {
+  const returnFocus = document.activeElement;
+  const body = el("div", { class: "g-modal-body" });
+  const foot = el("div", { class: "g-modal-foot" });
+  const dialog = el("dialog", { class: "g-dialog g-modal", "aria-label": title },
+    el("div", { class: "g-modal-head" }, el("h2", {}, title)), body, foot);
+  let closed = false;
+  const close = (left) => {
+    if (closed) return;
+    closed = true;
+    openConfirmations.delete(close);
+    dialog.close(); dialog.remove();
+    if (left !== null && returnFocus && returnFocus.focus) returnFocus.focus();  // null: the page was left
+    if (onclose) onclose();
+  };
+  openConfirmations.add(close);  // left with its page, like a confirmation
+  dialog.addEventListener("cancel", (event) => { event.preventDefault(); close(); });
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) close(); });
+  document.body.append(dialog);
+  dialog.showModal();
+  return { dialog, body, foot, close };
 }
 
 // What a refusal or failure says, with the server's reason so it can be acted on. The draft that was being

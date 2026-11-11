@@ -26,12 +26,15 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   sources/<segs>/_source/placements/<kind>/<entity_id>/<slot>.json   # one placement (018)
   campaigns/<campaign_id>/images/<image_id>.json                  # a campaign's image object (018)
   campaigns/<campaign_id>/placements/<kind>/<instance_id>/<slot>.json  # a campaign placement (018)
+  sources/<segs>/_source/scope-art/<slot>.json                    # a placement of the source itself: its cover
+  campaigns/<campaign_id>/scope-art/<slot>.json                   # a placement of the campaign itself (cover, chat backdrops, post pictures)
   campaigns/<campaign_id>/holdings/<kind>/<instance_id>.json      # one holder's counted holdings (023)
   assets/blobs/<sha256[:2]>/<sha256>.<png|jpg|gif|webp>           # content-addressed bytes (018)
   campaigns/<campaign_id>/accepted/<event_id>.json                # one accepted fictional event (021)
   campaigns/<campaign_id>/wrapups/<wrapup_id>.json                # one scene wrap-up (021)
   campaigns/<campaign_id>/transcripts/<chat_id>/<seq:010d>.json   # one page of a chat's transcript (036)
   campaigns/<campaign_id>/turns/<turn_id>.json                    # one played chat turn (035)
+  campaigns/<campaign_id>/bookmarks/<bookmark_id>.json            # one bookmark on a chat's turn
   .txn/lock, .txn/journal.json, .txn/*.new                        # writer lock, journal, staging
   .txn/discard.json                                               # an unfinished discard_journal
   .conflicts/<hash16>/<name>~<digest12>[.N]                       # preserved versions awaiting a human
@@ -49,7 +52,7 @@ The security audit, grants and approvals, and player sovereignty are persisted a
   - a file name with no room left for `.json` (IDs used as file names are limited to 123 characters);
   - a source ID deeper than 26 segments.
 - **Reserved names for later families**, which the loader skips silently:
-  - at the root: `authority`, `config`, `assets`, `secrets`, and `kept` (never a folder: it is the authorization namespace of kept versions, so no record root may alias it);
+  - at the root: `authority`, `config` (the person's tags, pins and saved filters live under `config/shelf/`, written by `grimoire.shelfstore` and never read by this store: [SHELF](SHELF.md)), `assets`, `secrets`, and `kept` (never a folder: it is the authorization namespace of kept versions, so no record root may alias it);
   - inside a campaign: `scenes`, `events`, `evidence`, `holdings`.
 
   `scope.json` and `chats/` inside a campaign are read since 107 (see the scope record section), and `relations/` since 017 (see relation records). `accepted/` and `wrapups/` (021) are recognised but read only through `campaign_accepted`/`campaign_wrapups` (see accepted events and wrap-ups). `turns/` (035) likewise, only through `campaign_turns` (see played turns). `holdings/` (023) is skipped by `load()` and read only by `campaign_holdings` and `read(HoldingsRef)` (see counted holdings). `transcripts/` (036) is skipped by `load()` and read only by `chat_transcript`, `campaign_transcripts` and `read(TranscriptRef)` (see chat transcripts).
@@ -171,6 +174,18 @@ Fields:
 
 **Rollback:** a pre-035 build reports `turns/` as an `unrecognized` load problem (no crash) and never writes it. Its allocators do not protect the actor ids turns name. It **cannot recover a journal that names a turn**: recover with a 035+ build, or run `LibraryStore.discard_journal`.
 
+### Bookmarks
+
+A person's bookmarks on the moments of a chat. Interpreted by `grimoire.scene.bookmarks`, never by the store; see [CHAT_PLAY](CHAT_PLAY.md#bookmarks).
+
+- The scope-record address union adds `BookmarkRef`, `campaign:<id>#bookmark/<bookmark_id>`, at `campaigns/<id>/bookmarks/<bookmark_id>.json`. `parse_scope_record` dispatches by the exact fragment; `parse_ref` does not return it. The payload schema is `grimoire.chat-bookmark/1`.
+- `classify` recognises exactly the new path (kind `bookmark`), so recovery accepts journals that name it, and the replica treats it as an exact kind.
+- `load()` skips `bookmarks/`. It is read through `campaign_bookmarks(id, *, skip=None)` (`CampaignRecords`, contained per file; `skip` leaves out files by name before reading them) and `read(BookmarkRef)`.
+- A bookmark is created once and then changed by compare-and-swap. It is never deleted (`bookmark` is not in `DELETABLE_KINDS`): a removed bookmark is a record marked `removed`.
+- 019 synchronizes bookmark files as a mutable campaign-local kind, file by file ([SYNC](SYNC.md#what-is-synchronized)).
+
+**Rollback:** a build without bookmarks reports `bookmarks/` as an `unrecognized` load problem (no crash), never writes it and does not sync it. It **cannot recover a journal that names a bookmark**: recover with a build that has them, or run `LibraryStore.discard_journal`.
+
 ### Images and blobs (018)
 
 <a id="images-and-blobs-018"></a>Added by [Image Identity And Placements](roadmap/sprints/image-identity-and-placements.md) as an additive family. Interpreted by [`grimoire.images`](IMAGES.md), never by the store; `record/1`, `source/1` and `scope-record/1` are unchanged.
@@ -195,7 +210,7 @@ Fields:
   - `blob_etag(sha, ext)`: a file over 32 MiB raises `BlobCorrupt` unread;
   - `read_blob(sha, ext)` verifies the digest or raises `BlobCorrupt`;
   - `list_images(scope)` and `list_placements(subject)` return canonical refs plus `LoadProblem`s for stray names and for differently spelled sibling folders on the way down (`Wren-b` beside `wren-b`), without reading contents.
-- **`load()`** recognises `images/` and `placements/` inside `_source/` and inside a campaign, and does not interpret them. Anything else there is `unrecognized` or `name_mismatch`. `assets/` remains a reserved root and is skipped.
+- **`load()`** recognises `images/`, `placements/` and `scope-art/` (the placements of the source or campaign itself, [IMAGES](IMAGES.md#subjects); one flat folder of `<slot>.json`, its own so that no kind or id folder of `placements/` can be mistaken for it) inside `_source/` and inside a campaign, and does not interpret them. Anything else there is `unrecognized` or `name_mismatch`. `assets/` remains a reserved root and is skipped.
 - **Authorization:**
   - `assets/blobs/…` is library-global, so a grant on `sources/<s>` or `campaigns/<c>` never covers it: grant `assets` or approve each blob;
   - the service does not re-stage deduplicated bytes, so they need no new approval;

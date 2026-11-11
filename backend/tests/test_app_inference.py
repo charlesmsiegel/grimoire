@@ -466,7 +466,8 @@ def test_stages_say_which_optional_calls_the_app_can_play_and_why_the_rest_are_u
         assert {"decision", "labelling", "planning", "critique"} <= set(unavailable)
         assert all(stages[name]["note"] and stages[name]["enabled"] is False for name in unavailable)
         features = {item["feature"] for item in inference.call("models")["unavailable"]}
-        assert {"connection_test", "prices", "session_budget", "prompt_preview"} <= features
+        assert {"fallback_prices", "session_budget", "prompt_preview"} <= features
+        assert not {"connection_test", "prices"} & features  # both are offered now
 
 
 # -- the configuration -----------------------------------------------------------------------------------------

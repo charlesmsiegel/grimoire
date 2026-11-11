@@ -15,16 +15,23 @@ It keeps no record of its own. Every write goes through the service that owns th
 | `endorse_effect` | The player's own key on the effect exactly as shown (its `fingerprint`) | 035 runner, 021 |
 | `approve_effect` | The director's key; the last key accepts the effect, once | 035 runner, 021 |
 | `recover_effects` | Settle (or `abort`) acceptances of this chat that were cut short; where 035 needs the player present (an abort of an effect they endorsed, or a completion whose endorsement the authority no longer records), `player_key: true` is the player's own key, given knowingly | 035 runner, 030 |
-| `chats` (app only) | The library's recent chats, grouped by campaign; with `campaign`, that campaign's alone (read only) | none |
+| `chats` (app only) | The library's recent chats, grouped by campaign (each with its `title` and `world`, its chats newest first, each chat with its `label`, `last_activity`, `problem` and `cast`: its bound characters and persona), all as the core `chats` op answers them; with `campaign`, that campaign's alone (read only) | none |
 
 Every op takes `chat` (a `ChatRef` string) and an optional `audience`, checked before anything is written. Write ops return `{"done": ..., "hub": ...}`, the hub as it stands after the write, so a screen never shows a stale situation beside a fresh result. A refusal is an `ApiRefused` with the owning service's own reason (`fingerprint_mismatch`, `already_accepted`, `unknown_effect`, `not_at_table`, `changed` for a stale write, ...) and writes nothing unless that service's refusal says so (035 records a labelling the model refused, so the table sees why). A hub that cannot be read after a committed write comes back as `hub: null` with its problem, never as a refusal of the write.
 
 ## The page
 
-- `#/campaign` lists every campaign with a chat in the library, and `#/campaign/<campaign id>` lists that campaign's chats.
-- `#/campaign/<campaign id>?chat=<ChatRef>` is the hub for one chat. It opens in the table's view; `&audience=director` gives the director's.
-- Each view shows what the hub returns for that audience, and nothing more.
+- `#/campaign` lists every campaign with a chat in the library, in a table (campaign, last interaction, who it waits on, chats, cast) that a search narrows and a click on a column header sorts. The rail shows how many there are.
+- The list asks `campaign.hub`, as the table sees it and never as the director, for the newest chat of each of the 24 campaigns played last. A campaign with an action still open or a change waiting on a key is shown above the table as a scene in progress, those waiting on the player first. Once every listed campaign has answered, the list also filters on **Needs you** and **Paused**. A hub that cannot be read leaves its campaign in the table with no scene.
+- `#/campaign/<campaign id>` is that campaign's hub for the chat played last, under the campaign's cover band (its own cover where the app reads covers, with **Add cover**, **Change cover** and **Remove**: [MEDIA_SYNC_UI](MEDIA_SYNC_UI.md#beyond-character-slots)), with the campaign's chats as chips. `?chat=<ChatRef>` names another of its chats. It opens in the table's view; `&audience=director` gives the director's.
+- The hub is laid out as cards: the open action, cast and stage, holdings and powers, changes waiting on approval, obstacles, knowledge, then turns and effects, sources and what is not available yet. The director's view adds world truth, NPC goals and proposing an effect.
+- Each view shows what the hub returns for that audience, and nothing more. The director's cards are shown only when the director's view was asked for and the hub answered as the director's.
 - Every write is one `campaign.*` call. The page then shows the hub that the write returned.
+- What waits on the table is decided in the inbox ([INBOX](INBOX.md)): where the app has it, the table's view
+  shows a labelling to confirm and a change to endorse in full, with **Decide in Needs you** linking to that item,
+  and the confirming and endorsing are done there, by the same `campaign.confirm` and `campaign.endorse_effect`
+  with the same confirmation. An app without the inbox keeps both buttons in place. The director's view links to
+  nothing: its keys and decisions stay on the hub.
 - The page offers an action only where the hub's `actions` says it is available. Anything else is named under "Not available yet", with what it waits on.
 
 Who acts:
@@ -38,7 +45,8 @@ Who acts:
 - Each effect is shown in full before either key is given: its operations with who acts, and every holdings line with its counts, its source and destination (a `move`'s `target`, an `adjust`'s `seen` and `to`), who acts, and the holdings note.
 - An action confirmed or decided here is narrated in the chat: the chat's own runner (044) reads its frame with the same adjudication key.
 - A character pinned behind its source links to the import and review screen's source-update tab for the chat (110, `#/import?tab=rebase&chat=<ChatRef>`) when that page is in the app, and is otherwise named as unavailable.
-- A perspective is opened per actor and labelled as theirs.
+- A decision's factors and stakes are ticked where they are read, in the open action's card. An effect still waiting on a key is decided under "Changes waiting on approval"; "Turns and effects" keeps the record of every turn.
+- Knowledge shows one perspective at a time, labelled as its actor's: the table's when the hub opens, or one the view may read. A perspective the hub refuses is said in the card with its reason.
 
 Not on the page yet: moving or adjusting holdings, and waiving what an obstacle made due. The API takes both.
 

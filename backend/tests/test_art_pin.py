@@ -264,11 +264,11 @@ def test_a_pin_keeps_only_what_a_slot_shows(store, chats, images):
     assert _portrait(images, pinned).image == OLD
 
 
-def test_a_forged_derived_flag_grants_no_clear(store, chats, images):
+def test_a_forged_derived_flag_grants_no_reset(store, chats, images):
     _, pinned = start(chats, R1)
     layers = thaw(store.read(pinned).envelope.extra[ART_PIN])["layers"]
-    layers[0]["derived"] = True  # Wren is standalone: its own slots may not be cleared
-    layers[0]["placements"]["portrait"] = {"mode": "hide"}
+    layers[0]["derived"] = True  # Wren is standalone: it inherits nothing, so its slots have nothing to reset to
+    layers[0]["placements"]["portrait"] = {"mode": "inherit"}
     _edit_pin(store, pinned, layers=layers)
     portrait = _portrait(images, pinned)
     assert isinstance(portrait, Unavailable) and portrait.reason == "invalid_placement"

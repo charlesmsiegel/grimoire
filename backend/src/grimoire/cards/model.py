@@ -16,11 +16,15 @@ from types import MappingProxyType
 
 #: Character Card V3 (the ``spec`` value of a V3 card)
 CCV3 = "chara_card_v3"
+#: Character Card V2 (``spec`` ``chara_card_v2``): the fields a V3 card's ``data`` has, under an older name
+CCV2 = "chara_card_v2"
 #: Character Card V3's standalone lorebook export
 LOREBOOK_V3 = "lorebook_v3"
 #: Grimoire's own scenario-only document
 SCENARIO_DOC = "grimoire.scenario-card/1"
-FORMATS = frozenset({CCV3, LOREBOOK_V3, SCENARIO_DOC})
+FORMATS = frozenset({CCV3, CCV2, LOREBOOK_V3, SCENARIO_DOC})
+#: the formats whose card is a ``data`` object of character fields
+CHARACTER_FORMATS = frozenset({CCV3, CCV2})
 
 #: what a card import becomes
 CHARACTER, SCENARIO, LOREBOOK = "character", "scenario", "lorebook"
@@ -33,9 +37,10 @@ MAX_KEPT_DEPTH = 48
 class CardError(ValueError):
     """A card this slice cannot import; nothing was staged. ``reason`` is machine-readable.
 
-    Reasons: ``unsupported_format`` (``detail`` names it: ``chara_card_v2``, ``png``, ``charx``,
-    ``unknown``), ``invalid_card`` (``detail`` is the path of the offending field), ``too_large``,
-    ``invalid_json``. Messages never echo card text.
+    Reasons: ``unsupported_format`` (``detail`` names it: ``chara_card_v1``, ``charx``, ``unknown``),
+    ``invalid_card`` (``detail`` is the path of the offending field), ``too_large``, ``invalid_json``,
+    and a PNG card's ``invalid_png`` and ``no_embedded_card`` (``grimoire.cardstore.png``). Messages never
+    echo card text.
     """
 
     def __init__(self, message: str, reason: str, detail: str | None = None) -> None:

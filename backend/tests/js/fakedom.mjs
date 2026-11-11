@@ -195,6 +195,7 @@ export function install(base) {
     addEventListener(type, listener) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(listener); },
     defaultView: window,
   };
+  document.documentElement = new Element(document, "html");
   document.head = new Element(document, "head");
   document.body = new Element(document, "body");
   Object.defineProperty(document.body, "scrollHeight", { get: () => 1000 });

@@ -18,6 +18,9 @@ from grimoire.core.identity import ChatRef, SourceRef
 from grimoire.quickstart import Repair, Selection
 from grimoire.textapi import MAX_POST_CHARS, ApiRefused, parse_ref
 
+from . import play_compare, play_story
+from .play_last import last_played
+
 #: What Start Chat starts from (052's selection kinds), and the definition kind each one's ``ref`` names.
 START_KINDS = {"character": "character", "scenario": "scenario", "bundle": "character", "premise": None}
 #: The kinds the launch picker lists. A persona is a ``character`` definition played by the player.
@@ -136,13 +139,17 @@ def _selection(args: Mapping[str, object]) -> Selection:
 
 def _options(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     """052's ``options``: the pinned sources a selection would bind, its openings, the default one, the card's own
-    lorebook, and the chats already started from it (for Continue). Writes nothing."""
-    options = ctx.quick.options(_selection(args))
+    lorebook, the chats already started from it (for Continue), and who was played the last time (``last``,
+    derived from those chats: see ``play_last``). Writes nothing."""
+    selection = _selection(args)
+    options = ctx.quick.options(selection)
+    related = ctx.api.chat_entries(options.related)
     return {"sources": [str(ref) for ref in options.sources],
             "openings": [_opening_view(opening) for opening in options.openings],
             "default_opening": options.default_opening,
             "lorebook": None if options.lorebook is None else str(options.lorebook),
-            "related": ctx.api.chat_entries(options.related)}
+            "related": related,
+            "last": None if selection.ref is None else last_played(ctx.store, selection.ref, related)}
 
 
 def _start(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
@@ -238,6 +245,8 @@ def _detach(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
 ADAPTER = Adapter("play", owner="111", ops={
     "sources": _sources, "options": _options, "start": _start, "post": _post, "add_card": _add_card,
     "withdraw": _withdraw, "strike": _strike, "repairs": _repairs, "detach": _detach,
+    **play_story.OPS,  # the recap, the Story timeline and bookmarks
+    **play_compare.OPS,  # keeping chosen lines of several takes
 })
 
 __all__ = ["ADAPTER", "ADD_ROLES", "LINE_REQUESTS", "PICKER_KINDS", "POST_MODES", "START_KINDS"]

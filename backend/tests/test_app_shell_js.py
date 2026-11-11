@@ -6,6 +6,7 @@ Skipped where Node is not installed: the Python suite is the gate, and these are
 
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 import subprocess
@@ -13,6 +14,9 @@ import threading
 from pathlib import Path
 
 import pytest
+from card_fixtures import encode
+from png_fixtures import png_card
+from scene_fixtures import VOICED
 from textapi_fixtures import Device, desktop_library, say
 
 from grimoire.app import AppServer
@@ -66,7 +70,9 @@ def test_first_run_end_to_end(tmp_path):
     try:
         host, port = app.address
         result = _node(TESTS / "setup.e2e.mjs", {"GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token,
-                                                     "GRIMOIRE_PLACE": str(place)})
+                                                     "GRIMOIRE_PLACE": str(place),
+                                                     "GRIMOIRE_CARD": encode(VOICED).decode("utf-8"),
+                                                     "GRIMOIRE_CARD_PNG": base64.b64encode(png_card(VOICED)).decode("ascii")})
     finally:
         app.close()
         thread.join(10)

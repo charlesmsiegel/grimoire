@@ -1,10 +1,23 @@
-// One source entry (109): #/source/<SourceRef>. A pinned ref shows exactly that revision; an unpinned one shows
-// the head. It shows what the revision composes to field by field (046), edits the head with drafts that survive
-// a stale write (the etag the page read is named on every save), derives portrayals, overrides, clears and resets
-// their fields, and attaches the exact revision shown to a chat. Every edit writes a new revision: nothing here
-// changes or deletes an old one. What a draft changes, and how it is held over a newer head, is ./drafts.js.
+// One library entry (109): #/source/<SourceRef>?tab=<tab>. A character opens as its character sheet (portrait,
+// name, what it is made of); a scenario, lorebook, location, item or any other entry opens as an entry sheet under
+// a title band. Both have the same tabs, and the tab in view is in the address, so Back and a link land on it:
+//
+//   Sheet      what the revision composes to, field by field (046); a portrayal overrides, clears and resets here
+//   Art        a character's picture slots as the library resolves them, and the way to the Art page
+//   Edit       the structured editor, with drafts that survive a stale write (./editors.js, ./drafts.js)
+//   Revisions  every version, and one of them compared with the current one field by field
+//   Raw        the stored payload, edited exactly as written
+//
+// A pinned ref shows exactly that revision, read-only; an unpinned one shows the current version (the head). Every
+// edit writes a new revision: nothing here changes or deletes an old one.
 
-import { FAMILIES, addedId, changesOf, draftParts, fieldsOf, modelOf, rebase, rebaseRaw, stale, unsafeNumbers } from "./drafts.js";
+import { FAMILIES, modelOf, unsafeNumbers } from "./drafts.js";
+import { askedTab, chatsOn, count, diffRevisions, kindLabel, loreBound, loreEntries, metaParts, nextVersion, opensWith, orderRevisions, tabsFor,
+  versionOf } from "./sheet.js";
+import { draftsOf, editTab, rawTab, staleDrafts, unsaved } from "./editors.js";
+import { attachPanel, deriveForm, portrayalTools } from "./actions.js";
+import { headerMarks } from "./marks.js";
+import { coverBand, entryPictures, lorePictures, shownOf as coverOf } from "../art/covers.js";
 
 const STATES = {
   inherited: "inherited from the base",
@@ -15,6 +28,8 @@ const STATES = {
   cleared: "cleared here",
   missing: "only the base's newer revision has it",
 };
+const STATE_NOTES = ["pinned", "restated", "missing"];
+const STATE_KINDS ={ overridden: "accent", restated: "accent", cleared: "bad", missing: "bad" };
 // How the base's newer revision compares, for this field (046's upstream); "" when there is nothing to compare.
 const UPSTREAM = {
   same: "The base's newer revision has the same value.",
@@ -22,619 +37,475 @@ const UPSTREAM = {
   removed: "The base's newer revision no longer has it.",
   added: "Only the base's newer revision has it; it arrives only with a reviewed rebase.",
 };
-const NATURES = [["individual", "An individual"], ["template", "A template"]];
 const NOT_OFFERED = { delete: "Deleting", art: "Pictures", import: "Importing", relations: "Typed relations",
   abilities: "Abilities and facets with fields", rebase: "Moving a chat to a newer revision", voice: "A voice" };
+const SLOT_STATES = { shown: "Shown", hidden: "Hidden", unavailable: "Unavailable" };
+const SLOT_SHAPES = { avatar: "source-shape-square", portrait: "source-shape-portrait" };
 
 export async function mount(root, ctx) {
   const { ui } = ctx;
   const { el } = ui;
   ctx.styles("page.css");
+  ctx.layout("page");
   const asked = ctx.path[0];
   if (!asked) {
-    ctx.setTitle("Source");
-    root.append(ui.empty("No source is named."), ui.link("Open the library", "sources"));
+    ctx.setTitle("Entry");
+    root.append(ui.empty("No entry is named."), ui.link("Open Characters and lore", "sources"));
     return;
   }
   const read = await ctx.api("sources.read", { ref: asked });
   const pinned = read.entity + "@" + read.revision;
+  const name = read.name || read.id || read.ref;
   ctx.setTitle(read.name || read.ref);
+  const library = ctx.registered("sources");
+  ctx.setCrumb(library ? crumbLink(ctx, "Characters and lore") : "Characters and lore", " / ",
+    library ? crumbLink(ctx, read.source_title || read.source, { source: read.source }) : (read.source_title || read.source));
 
-  root.append(header(ctx, read, pinned));
-  if (read.composition_error) {
-    root.append(ui.notice("This revision does not compose, so it cannot be played: " + describe(read.composition_error), { kind: "bad" }));
+  // a character's picture slots, where the app reads them (114); a failure leaves the sheet without pictures
+  const character = read.kind === "character";
+  let art = null;
+  let artError = null;
+  if (character && ctx.has("media.art")) {
+    try { art = await ctx.api("media.art", { subject: read.entity }); } catch (error) {
+      if (error.reason === "left") throw error;
+      artError = error;
+    }
   }
-  if (read.effective) root.append(effective(ctx, read));
-  else if (!read.is_head) root.append(revisionView(ctx, read));
+  // what a chat with no name of its own is called elsewhere in the app: who or what it was started from
+  const called = new Map();
+  if (read.chats.some((chat) => !chat.label) && ctx.has("chats")) {
+    const filter = ["character", "scenario"].includes(read.kind) ? { filter: read.kind, source: read.entity } : {};
+    try {
+      const answer = await ctx.api("chats", { ...filter, limit: 1000 });
+      for (const chat of answer.chats) called.set(chat.chat, (chat.launch && chat.launch.name) || (chat.scope && chat.scope.title) || null);
+    } catch (error) {
+      if (error.reason === "left") throw error;  // otherwise such a chat is shown by its exact ref
+    }
+  }
+  const titleOf = (chat) => chat.label || called.get(chat.chat) || null;
+  const tabs = tabsFor(read, { art: character && ctx.has("media.art") });
+  const tab = askedTab(ctx.query.get("tab"), tabs);
+  const address = (which, extra = {}) => ctx.href("source", [asked], { tab: which === "sheet" ? undefined : which, ...extra });
+  const page = { read, pinned, name, art, artError, address, tab, titleOf, marks: await headerMarks(ctx, read),
+    cover: character ? null : await coverOf(ctx, read.entity, "cover", { fresh: true }) };  // the entry's cover, where the app reads covers
 
+  const attach = read.actions.attach === null && ctx.has("sources.attach") && ctx.has("sources.chats") ? attachPanel(ctx, read, pinned) : null;
+  const parts = [character ? characterHeader(ctx, page, attach) : entryHeader(ctx, page, attach)];
+  if (attach) parts.push(attach.node);
+  if (!read.is_head) {
+    parts.push(ui.notice("This is " + read.revision + ", shown exactly as it was written. Only the current version, " + read.head
+      + ", is edited; this one can still be attached as it is."),
+    ui.actions(el("a", { class: "g-button", href: ctx.href("source", [read.entity]) }, "Show the current version")));
+  }
+  if (read.composition_error) {
+    parts.push(ui.notice("This revision does not compose, so it cannot be played: " + describe(read.composition_error), { kind: "bad" }));
+  }
   const drafts = draftsOf(ctx, read.entity);
   if (read.is_head) {
-    const stale = staleDrafts(ctx, read, drafts);
-    if (stale) root.append(stale);
-  }
-  const structured = structuredEditor(ctx, read, drafts);
-  if (structured) root.append(structured);
-  const raw = rawEditor(ctx, read, drafts);
-  if (raw) root.append(raw);
-  const derive = deriveForm(ctx, read, pinned);
-  if (derive) root.append(derive);
-  root.append(attachForm(ctx, read, pinned));
-  root.append(related(ctx, read));
-  root.append(notOffered(ctx, read));
-}
-
-// -- what is shown --------------------------------------------------------------------------------------
-
-function header(ctx, read, pinned) {
-  const { ui } = ctx;
-  const { el } = ui;
-  const sourceRow = ctx.registered("sources")
-    ? el("a", { class: "g-link", href: ctx.href("sources", [], { source: read.source }) }, read.source_title || read.source)
-    : el("span", {}, read.source_title || read.source);
-  const facts = el("dl", { class: "source-facts" },
-    el("dt", {}, "Exact ref"), el("dd", { class: "g-ref" }, pinned),
-    el("dt", {}, "Source"), el("dd", {}, sourceRow, " ", el("span", { class: "g-muted" }, read.source)),
-    el("dt", {}, "Kind"), el("dd", {}, read.kind + (read.family ? " (" + read.family + ")" : "") + (read.derived ? ", a derived portrayal" : "")),
-    el("dt", {}, "Revision"), el("dd", {}, read.revision + (read.is_head ? ", the head" : ", an older revision")));
-  const revisions = el("div", { class: "g-actions", role: "group", "aria-label": "Revisions" },
-    read.revisions.map((revision) => {
-      const node = el("a", { class: "g-button", href: ctx.href("source", [read.entity + "@" + revision]),
-        title: read.entity + "@" + revision }, revision);
-      if (revision === read.revision) node.setAttribute("aria-current", "page");
-      return node;
-    }));
-  const box = ui.section(null, facts, revisions);
-  if (!read.is_head) {
-    box.append(ui.notice("This is " + read.revision + ", shown exactly as it was written. Only the head, " + read.head
-      + ", is edited; this revision can still be attached as it is."),
-    ui.actions(el("a", { class: "g-button", href: ctx.href("source", [read.entity]) }, "Show the head")));
-  }
-  if (read.derived && read.base) {
-    box.append(el("p", {}, "Derived from ", ui.sourceLink(read.base, read.base), "."));
-  }
-  return box;
-}
-
-function effective(ctx, read) {
-  const { ui } = ctx;
-  const { el } = ui;
-  const view = read.effective;
-  const editable = read.derived && read.is_head && read.actions.portrayal === null && ctx.has("sources.portrayal");
-  const rows = view.fields.map((item) => {
-    const row = el("div", { class: "source-field" },
-      el("div", { class: "source-field-head" }, el("strong", {}, label(item.field)), " ",
-        el("span", { class: "source-state source-state-" + item.state }, item.state), " ",
-        el("span", { class: "g-muted" }, STATES[item.state] || "")),
-      el("div", { class: "source-value" }, shown(item.value)),
-      item.source ? el("div", { class: "g-muted" }, "From ", ui.sourceLink(item.source, item.source)) : null,
-      UPSTREAM[item.upstream] ? el("div", { class: "g-muted" }, UPSTREAM[item.upstream]) : null);
-    if (editable) {
-      const tools = portrayalTools(ctx, read, item);
-      if (tools) row.append(tools);
+    const held = staleDrafts(ctx, read, drafts, address);
+    if (held) parts.push(held);
+    const open = unsaved(read, drafts).filter((which) => which !== tab);
+    if (open.length) {
+      parts.push(ui.notice(el("span", {}, "You have unsaved changes: ",
+        ...open.flatMap((which, index) => [index ? " and " : "", el("a", { class: "g-link", href: address(which) }, which === "edit" ? "on the Edit tab" : "on the Raw tab")]),
+        "."), { kind: "soft" }));
     }
-    return row;
-  });
-  const box = ui.section(read.derived ? "What this portrayal shows" : "Fields", ...rows);
-  if (view.chain && view.chain.length > 1) {
-    box.append(el("p", { class: "g-muted" }, "Composed from ",
-      ...view.chain.flatMap((link, index) => [index ? " over " : "", ui.sourceLink(link.ref, link.ref)]), "."));
   }
-  if (view.base_head) {
-    box.append(ui.notice("The base has a newer revision, " + view.base_head + ". This portrayal stays pinned to "
-      + view.base + " until a reviewed rebase."));
-  }
-  for (const notice of view.notices || []) box.append(ui.notice(describe(notice)));
-  if (view.uncomposed && view.uncomposed.length) {
-    box.append(el("p", { class: "g-muted" }, "Kept but not composed: "
-      + view.uncomposed.map((item) => item.field).join(", ") + " (kept for provenance; the raw editor shows them)."));
-  }
-  return box;
+  const strip = ui.segments("Views of " + name, tabs, { value: tab, onchange: (which) => ctx.navigate(address(which)) });
+  for (const node of strip.node.querySelectorAll("button")) node.setAttribute("data-focus-key", "source-tab:" + node.getAttribute("data-value"));
+  parts.push(el("div", { class: "source-tabs" }, strip.node));
+
+  let body;
+  if (tab === "edit") body = editTab(ctx, read, drafts, address);
+  else if (tab === "raw") body = rawTab(ctx, read, drafts);
+  else if (tab === "revisions") body = await revisionsTab(ctx, page);
+  else if (tab === "art") body = artTab(ctx, page);
+  else body = sheetTab(ctx, page);
+  body.setAttribute("role", "region");
+  body.setAttribute("aria-label", (tabs.find((item) => item.value === tab) || tabs[0]).label);
+  parts.push(body);
+  root.classList.add("source-page");
+  root.append(...parts);
 }
+
+// A link in the line above the title: it reads as that line does, not as a link in the text.
+function crumbLink(ctx, text, query) {
+  return ctx.ui.el("a", { class: "source-crumb", href: ctx.href("sources", [], query) }, text);
+}
+
+function describe(item) {
+  if (typeof item === "string") return item;
+  if (item && item.reason) return item.reason + (item.detail ? ": " + item.detail : item.message ? ": " + item.message : "");
+  if (item && item.code) return item.code + (item.detail ? ": " + item.detail : "");
+  return JSON.stringify(item);
+}
+
+// -- the two headers ------------------------------------------------------------------------------------
+
+// The picture a character shows: its portrait slot, or its avatar when no portrait is placed.
+function likeness(ctx, art) {
+  if (!art) return undefined;
+  for (const slot of ["portrait", "avatar"]) {
+    const found = art.slots.find((item) => item.slot === slot && item.state === "shown" && item.image);
+    if (found) return ctx.picture(found.image).catch(() => null);
+  }
+  return undefined;
+}
+
+function pills(ctx, read) {
+  const { ui } = ctx;
+  return [ui.pill(kindLabel(read.kind), { kind: "accent" }),
+    read.derived ? ui.pill("Portrayal") : null,
+    read.effective && read.effective.nature === "template" ? ui.pill("Template") : null,
+    read.is_head ? null : ui.pill("Older version"),
+    read.composition_error ? ui.pill("Does not compose", { kind: "bad" }) : null];
+}
+
+// Start a chat, Edit and Attach to a chat: each only where the app can do it for this entry.
+function headerActions(ctx, page, attach) {
+  const { ui } = ctx;
+  const { el } = ui;
+  const { read, address } = page;
+  const nodes = [];
+  if (["character", "scenario"].includes(read.kind) && ctx.registered("start") && !read.composition_error) {
+    nodes.push(ui.buttonLink("Start a chat", "start", [], { source: read.entity }, { kind: "primary" }));
+  }
+  nodes.push(el("a", { class: "g-button", href: address("edit") }, "Edit"));
+  if (attach) {
+    const toggle = ui.button("Attach to a chat", () => { toggle.setAttribute("aria-expanded", String(attach.toggle())); });
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("data-focus-key", "source-attach");
+    nodes.push(toggle);
+  }
+  return el("div", { class: "g-row source-header-actions" }, ...nodes);
+}
+
+function identity(ctx, page) {
+  const { ui } = ctx;
+  const { el } = ui;
+  const { read, pinned } = page;
+  return [el("div", { class: "g-muted source-meta" }, metaParts(read).join(" · ")),
+    el("div", { class: "g-ref g-muted", title: "Its exact ref" }, pinned),
+    read.derived && read.base ? el("div", { class: "g-muted" }, "Derived from ", ui.sourceLink(read.base, read.base), ".") : null];
+}
+
+function characterHeader(ctx, page, attach) {
+  const { ui } = ctx;
+  const { el } = ui;
+  const { read, name, art, address } = page;
+  const picture = ui.portrait(name, { key: read.entity, picture: likeness(ctx, art) });
+  const face = art ? el("a", { class: "source-portrait", href: address("art"), "aria-label": "Pictures of " + name }, picture)
+    : el("span", { class: "source-portrait" }, picture);
+  return el("section", { class: "source-header", "aria-label": name }, face,
+    el("div", { class: "source-header-text g-stack" }, el("div", { class: "g-row source-pills" }, ...pills(ctx, read), page.marks),
+      el("h2", { class: "g-hero-title" }, name), ...identity(ctx, page)),
+    headerActions(ctx, page, attach));
+}
+
+function entryHeader(ctx, page, attach) {
+  const { ui } = ctx;
+  const { el } = ui;
+  const { read, name } = page;
+  const marks = [...pills(ctx, read).slice(1), page.marks].filter(Boolean);
+  return el("section", { class: "source-entry-header g-stack", "aria-label": name },
+    coverBand(ctx, { subject: read.entity, name, tall: true, dashed: true, view: page.cover,
+      use: "Shown across the top of its sheet and on its library tile" }, el("div", { class: "g-stack source-cover-text" },
+      el("div", { class: "g-eyebrow source-cover-kind" }, kindLabel(read.kind)), el("h2", { class: "g-hero-title" }, name))),
+    el("div", { class: "g-row g-between" },
+      el("div", { class: "g-stack source-header-text" }, marks.length ? el("div", { class: "g-row source-pills" }, ...marks) : null, ...identity(ctx, page)),
+      headerActions(ctx, page, attach)));
+}
+
+// -- the Sheet tab --------------------------------------------------------------------------------------
 
 function label(field) {
-  if (field.startsWith("section:")) return "Section " + field.slice(8);
+  if (field.startsWith("section:")) return field.slice(8);
   if (field.startsWith("facet:")) return "Facet " + field.slice(6);
   return field[0].toUpperCase() + field.slice(1);
 }
 
 function shown(value) {
-  if (value === null || value === undefined) return "(nothing)";
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+const labelled = (el, title, ...children) => el("section", { class: "g-stack source-block" }, el("h3", { class: "g-eyebrow source-block-title" }, title), ...children);
 
-function describe(item) {
-  if (typeof item === "string") return item;
-  if (item && item.reason) return item.reason + (item.message ? ": " + item.message : "");
-  return JSON.stringify(item);
-}
-
-function related(ctx, read) {
+function sheetTab(ctx, page) {
   const { ui } = ctx;
   const { el } = ui;
-  const box = ui.section("Where it is used");
-  const chats = read.chats.map((chat) => {
-    const title = chat.label || chat.chat;
-    const detail = "binds " + chat.revisions.join(", ") + (chat.active ? "" : " (detached)") + (chat.problem ? " · " + chat.problem : "");
-    return ctx.registered("chat") ? el("a", { href: ctx.href("chat", [chat.chat]), title: chat.chat }, ui.rowText(title, detail))
-      : el("div", { title: chat.chat }, ui.rowText(title, detail));
-  });
-  box.append(el("h3", {}, "Chats"), ui.list(chats, { empty: "No chat binds it." }));
-  if (read.portrayals.length) {
-    box.append(el("h3", {}, "Portrayals derived from it"), ui.list(read.portrayals.map((ref) => ui.sourceLink(ref, ref))));
+  const { read } = page;
+  const main = el("div", { class: "source-main g-stack g-loose" });
+  const parts = read.effective ? composed(ctx, read) : { top: written(ctx, read), rest: [] };
+  main.append(...parts.top);
+  const opens = opensWith(read);
+  if (opens.length) {
+    main.append(labelled(el, "Opens with", ...opens.map((text) => el("p", { class: "g-quote source-quote" }, text))));
   }
-  if (read.namesakes.length) {
-    box.append(el("h3", {}, "Same name, other entries"),
-      el("p", { class: "g-muted" }, "These share its name and are different entries: a name never decides which one a chat uses."),
-      ui.list(read.namesakes.map((ref) => ui.sourceLink(ref, ref))));
+  const bound = loreBound(read);
+  if (read.kind === "character" && read.payload && read.payload.card) {
+    main.append(labelled(el, "Lorebooks bound", bound.length
+      ? el("div", { class: "g-chips" }, bound.map((ref) => { const chip = ui.sourceLink(ref, ref); chip.classList.add("source-chip"); return chip; }))
+      : el("span", { class: "g-muted" }, "None bound.")));
   }
-  if (read.links.length) {
-    box.append(el("h3", {}, "Links its source declares"), ui.list(read.links.map((link) =>
-      el("span", {}, ui.sourceLink(link.subject, link.subject), " " + link.relation + " ", ui.sourceLink(link.object, link.object),
-        el("span", { class: "g-muted" }, " (declared by " + link.declared_by + ")")))));
-  }
-  return box;
+  main.append(...parts.rest);
+  const pictures = read.kind === "character" ? null : entryPictures(ctx, { subject: read.entity, source: read.source, name: page.name, kind: read.kind });
+  if (pictures) main.append(pictures);
+  return el("div", { class: "source-sheet" }, main, aside(ctx, page));
 }
 
-function notOffered(ctx, read) {
+// One field of what the revision composes to. A portrayal's fields say where each comes from and carry its tools.
+function fieldBlock(ctx, read, item, { lede = false, editable = false } = {}) {
   const { ui } = ctx;
   const { el } = ui;
-  const items = Object.entries(read.unavailable).map(([key, reason]) =>
-    el("div", { class: "g-unavailable", role: "note" }, el("strong", {}, NOT_OFFERED[key] || key), el("div", { class: "g-muted" }, reason)));
-  return ui.section("Not offered here", ...items);
-}
-
-// An older revision with no field list (scenarios, lorebooks, worlds...): what it holds, read-only, so the exact
-// revision can be read before it is attached or derived from.
-const LABELS = { name: "Name", nature: "Nature", description: "Description", title: "Title", premise: "Premise",
-  instructions: "Instructions" };
-
-function revisionView(ctx, read) {
-  const { ui } = ctx;
-  const { el } = ui;
-  const box = ui.section("What " + read.revision + " holds");
-  const model = FAMILIES.includes(read.family) ? modelOf(read) : null;
-  if (model) {
-    const facts = el("dl", { class: "source-facts" });
-    for (const [key, label] of Object.entries(LABELS)) {
-      if (typeof model[key] === "string" && model[key]) facts.append(el("dt", {}, label), el("dd", { class: "source-value" }, model[key]));
-    }
-    box.append(facts);
-    const items = read.family === "entity" ? model.sections.map((item) => ["Section " + item.name, item.text])
-      : read.family === "scenario" ? model.openings.map((item, index) => ["Opening " + (item.slot || index + 1), item.text])
-        : model.entries.map((item, index) => ["Entry " + (index + 1) + (item.keys ? " (" + item.keys.split("\n").join(", ") + ")" : "")
-          + (item.enabled ? "" : ", off") + (item.constant ? ", always on" : ""), item.content]);
-    if (items.length) {
-      box.append(el("div", {}, ...items.map(([label, text]) => el("div", { class: "source-field" },
-        el("strong", {}, label), el("div", { class: "source-value" }, text || "(empty)")))));
-    }
-  }
-  const payload = el("textarea", { class: "g-input source-raw", readonly: true, "aria-label": "The payload of " + read.revision });
-  payload.value = JSON.stringify(read.payload, null, 2);
-  box.append(el("details", {}, el("summary", {}, "The payload as written"), payload));
-  if (unsafeNumbers(read.payload)) box.append(el("p", { class: "g-muted" }, "A number in it is too large for the browser to show exactly."));
-  return box;
-}
-
-// -- drafts ---------------------------------------------------------------------------------------------
-
-// One draft per entity and editor, kept per tab until it is saved or discarded (see ./drafts.js for its shape).
-function draftsOf(ctx, entity) {
-  const keep = (name, valid) => {
-    const store = ctx.draft("source:" + entity + ":" + name);
-    return {
-      get() {
-        let value = null;
-        try { value = JSON.parse(store.get() || "null"); } catch { return null; }
-        return value && typeof value === "object" && typeof value.base === "string" && valid(value) ? value : null;
-      },
-      set(value) { store.set(JSON.stringify(value)); },
-      clear() { store.clear(); },
-      // The draft as stored now, and a clear that happens only if it is still that: what is typed while a save is
-      // on its way is kept, and is held against the new head like any other draft.
-      snapshot() { return store.get(); },
-      clearIf(snapshot) { if (store.get() !== snapshot) return false; store.clear(); return true; },
-    };
-  };
-  return {
-    form: keep("form", (value) => value.start && value.model && typeof value.start === "object" && typeof value.model === "object"),
-    raw: keep("raw", (value) => typeof value.start === "string" && typeof value.text === "string"),
-  };
-}
-
-// Drafts that started from an older head. One whose changes the head already has (it was saved, and the page left
-// before the answer came) is dropped; any other is shown with what changed under it and what it changes, and is
-// kept on the new head (its own changes laid over it) or discarded. A part changed on both sides is a conflict:
-// the draft's text for it is shown to copy, and the draft cannot be kept as it is.
-function staleDrafts(ctx, read, drafts) {
-  const { ui } = ctx;
-  const { el } = ui;
-  const box = ui.section("Your draft started from an older revision");
-  let shown = false;
-  const form = drafts.form.get();
-  if (form && stale(form, read) && FAMILIES.includes(read.family)) {
-    let merged = null;
-    try { merged = rebase(read, form); } catch { merged = null; }
-    let pending = null;
-    try { pending = merged ? fieldsOf(read, merged.model) : null; } catch { pending = { invalid: true }; }
-    if (merged && !merged.conflicts.length && pending && !Object.keys(pending).length) drafts.form.clear();
-    else {
-      shown = true;
-      box.append(...staleParts(ctx, read, "edit", form, merged && merged.changed, merged ? merged.mine : null,
-        merged ? merged.conflicts : null, JSON.stringify(draftParts(read.family, form.start, form.model), null, 2),
-        merged && !merged.conflicts.length
-          ? () => drafts.form.set({ base: read.head, etag: read.etag, start: modelOf(read), model: merged.model }) : null,
-        () => drafts.form.clear()));
-    }
-  } else if (form && stale(form, read)) {
-    drafts.form.clear();  // a draft of an editor this record no longer has
-  }
-  const raw = drafts.raw.get();
-  if (raw && stale(raw, read)) {
-    const merged = rebaseRaw(read, raw);
-    if (!merged.error && !merged.conflicts.length && JSON.stringify(merged.payload) === JSON.stringify(read.payload)) drafts.raw.clear();
-    else {
-      shown = true;
-      if (merged.error) box.append(ui.notice(merged.error, { kind: "bad" }));
-      box.append(...staleParts(ctx, read, "raw edit", raw, merged.changed || null, merged.mine || null,
-        merged.conflicts || null, raw.text,
-        !merged.error && !merged.conflicts.length ? () => drafts.raw.set({ base: read.head, etag: read.etag, start: JSON.stringify(read.payload), text: merged.text }) : null,
-        () => drafts.raw.clear()));
-    }
-  }
-  return shown ? box : null;
-}
-
-function staleParts(ctx, read, what, draft, changed, mine, conflicts, kept, onKeep, onDiscard) {
-  const { ui } = ctx;
-  const { el } = ui;
-  const list = (items) => (items && items.length ? items.join(", ") : "nothing");
-  const parts = [el("p", {}, draft.base === read.head
-    ? "Your " + what + " started from " + read.head + " as it was then; " + read.head + " has been changed in place since."
-    : "Your " + what + " started from " + draft.base + "; the head is now " + read.head + "."),
-    el("p", {}, "Changed since: " + (changed ? list(changed) : "not known") + "."),
-    el("p", { class: "g-muted" }, "Your draft changes: " + (mine ? list(mine) : "not known") + ".")];
-  if (conflicts && conflicts.length) {
-    parts.push(ui.notice("Changed under your draft as well: " + conflicts.join(", ") + ". Everything your draft changes is below to copy; then discard the draft and edit the head.", { kind: "bad" }));
-  }
-  if (!onKeep) {
-    const copy = el("textarea", { class: "g-input source-raw", readonly: true, "aria-label": "Your draft" });
-    copy.value = kept;
-    parts.push(copy);
-  }
-  parts.push(ui.actions(
-    onKeep ? ui.button("Keep my changes on " + read.head, () => { onKeep(); ctx.navigate(ctx.href("source", [read.entity])); }, { kind: "primary" }) : null,
-    ui.button("Discard my draft", async () => {
-      if (!onKeep && !await ui.confirm("Discard your draft? Copy any text you want to keep first.", { confirmLabel: "Discard it", danger: true })) return;
-      onDiscard();
-      ctx.navigate(ctx.href("source", [read.entity]));
-    })));
-  if (onKeep) {
-    parts.push(el("p", { class: "g-muted" }, "Keeping lays only your own changes over " + read.head
-      + "; everything else stays as the head has it. Nothing is saved until you save."));
-  }
-  return parts;
-}
-
-// What a save sends, against the head this page read: a refusal "changed" keeps the draft and reads the head again.
-async function save(ctx, read, op, args, draft, onKept = () => {}) {
-  try {
-    const sent = draft.snapshot ? draft.snapshot() : null;
-    const answer = await ctx.api(op, { ref: read.entity, head: read.head, etag: read.etag, expected: read.manifest_etag, ...args });
-    if (!draft.clearIf) draft.clear();
-    else if (!draft.clearIf(sent)) onKept();
-    ctx.notify("Saved as " + answer.ref.split("@").pop() + ".");
-    ctx.navigate(ctx.href("source", [read.entity]));
-  } catch (error) {
-    if (error.reason === "changed") {
-      ctx.notify("This entry changed since the page read it. Your draft is kept; check what changed and save again.", { bad: true });
-      ctx.navigate(ctx.href("source", [read.entity]));  // the head as it is now, so the draft is held against it
-      return;
-    }
-    throw error;
-  }
-}
-
-// -- the structured editor ------------------------------------------------------------------------------
-
-function structuredEditor(ctx, read, drafts) {
-  const { ui } = ctx;
-  const { el } = ui;
-  if (!FAMILIES.includes(read.family)) return null;
-  if (!read.is_head) return null;
-  if (read.actions.save !== null) return ui.section("Edit", el("p", { class: "g-muted" }, read.actions.save));
-  if (!ctx.has("sources.save")) return ui.section("Edit", ui.unavailable("Editing", "This app does not serve sources.save."));
-  const draft = drafts.form.get();
-  if (draft && stale(draft, read)) return ui.section("Edit", el("p", { class: "g-muted" }, "Keep or discard your draft above first."));
-  const start = draft ? draft.start : modelOf(read);
-  let model = draft ? draft.model : modelOf(read);
-  const keep = () => drafts.form.set({ base: read.head, etag: read.etag, start, model });
-  const body = el("div", {});
-  const box = ui.section(read.derived ? "Edit this portrayal" : "Edit", body);
-  const render = () => {
-    body.replaceChildren(...formFor(ctx, read, model, keep, render));
-  };
-  render();
-  const saveButton = ui.button("Save as a new revision", () => ctx.act(async () => {
-    const fields = fieldsOf(read, model);
-    if (!Object.keys(fields).length) { ctx.notify("Nothing changed."); return; }
-    // the items this save adds, by the draft's own id for each: if the draft is edited again before the answer, it
-    // is kept, and these tell its next rebase that they landed (see ./drafts.js)
-    const list = model.sections || model.openings || model.entries;
-    const adding = Object.fromEntries(list.filter((item) => item.slot === null && item.added).map((item) => [item.added, { ...item }]));
-    await save(ctx, read, "sources.save", { fields }, drafts.form, () => {
-      const kept = drafts.form.get();
-      if (kept && Object.keys(adding).length) drafts.form.set({ ...kept, sent: { ...(kept.sent || {}), ...adding } });
-    });
-  }), { kind: "primary" });
-  const discard = ui.button("Discard my changes", () => { drafts.form.clear(); model = modelOf(read); render(); });
-  box.append(ui.actions(saveButton, discard));
-  if (draft && changesOf(read.family, start, model).length) box.prepend(ui.notice("Your unsaved draft is shown."));
+  const facet = item.field.startsWith("facet:");
+  const head = el("div", { class: "source-field-head" });
+  if (!lede || read.derived) head.append(el("span", { class: "g-eyebrow source-label" }, label(item.field)));
   if (read.derived) {
-    box.append(el("p", { class: "g-muted" }, "A description or section written here overrides the base's; one left blank, or a section"
-      + " removed, inherits again. Clearing an inherited field is done in the list above, never by leaving it blank."));
+    const state = ui.pill(item.state, { kind: STATE_KINDS[item.state] || "" });
+    state.classList.add("source-state");
+    state.title = STATES[item.state] || "";
+    head.append(state);
+    // the states a word does not explain say what they mean beside it
+    if (STATE_NOTES.includes(item.state)) head.append(el("span", { class: "g-muted" }, STATES[item.state]));
   }
-  if (read.family === "entity") {
-    box.append(el("p", { class: "g-muted" }, "Facets are kept as they are; edit them in the raw editor"
-      + (read.derived ? ", or clear and reset inherited ones above." : ".")));
+  const empty = item.value === null || item.value === undefined;
+  const row = el("div", { class: "source-field" + (lede ? " source-field-lede" : "") }, head.childNodes.length ? head : null,
+    el("div", { class: empty ? "g-muted" : lede ? "source-lede" : facet ? "source-value g-mono" : "source-value g-prose" },
+      empty ? "(nothing)" : shown(item.value)),
+    read.derived && item.source && item.source !== read.ref ? el("div", { class: "g-muted" }, "From ", ui.sourceLink(item.source, item.source)) : null,
+    UPSTREAM[item.upstream] ? el("div", { class: "g-muted" }, UPSTREAM[item.upstream]) : null);
+  if (editable) {
+    const tools = portrayalTools(ctx, read, item);
+    if (tools) row.append(tools);
   }
-  return box;
+  return row;
 }
 
-function bound(ctx, labelText, value, onchange, options = {}) {
-  const field = ctx.ui.field(labelText, { value, ...options });
-  field.input.addEventListener("input", () => onchange(field.value));
-  return field.node;
-}
-
-const LOCKED = { entity: "sections", scenario: "openings", lorebook: "entries" };
-
-function formFor(ctx, read, model, keep, render) {
+// An entity that composes: `top` is its description, large, and its sections in two columns; `rest`, shown after
+// what it opens with, is its facets and how it was composed.
+function composed(ctx, read) {
   const { ui } = ctx;
   const { el } = ui;
-  const set = (target, key) => (value) => { target[key] = value; keep(); };
+  const view = read.effective;
+  const editable = read.derived && read.is_head && read.actions.portrayal === null && ctx.has("sources.portrayal");
+  const fields = view.fields;
   const nodes = [];
-  const locked = model.locked
-    ? el("p", { class: "g-muted" }, "Its " + LOCKED[read.family] + " are not all plain text, so they are edited in the raw editor; "
-      + "a save here leaves them exactly as they are.") : null;
-  if (read.family === "entity") {
-    nodes.push(bound(ctx, "Name", model.name, set(model, "name")));
-    const nature = ui.choice("Nature", NATURES.map(([value, labelText]) => ({ value, label: labelText })),
-      { value: model.nature, onchange: set(model, "nature") });
-    nodes.push(nature.node, bound(ctx, "Description", model.description, set(model, "description"), { multiline: true }));
-    if (locked) return [...nodes, locked];
-    model.sections.forEach((item, index) => {
-      const group = el("fieldset", { class: "source-group" }, el("legend", {}, "Section " + (item.name || index + 1)));
-      if (item.slot === null) group.append(bound(ctx, "Section name", item.name, set(item, "name")));
-      group.append(bound(ctx, item.slot === null ? "Section text" : "Text", item.text, set(item, "text"), { multiline: true }),
-        ui.actions(ui.button("Remove this section", () => { model.sections.splice(index, 1); keep(); render(); })));
-      nodes.push(group);
-    });
-    nodes.push(ui.actions(ui.button("Add a section", () => { model.sections.push({ slot: null, added: addedId(), name: "", text: "" }); keep(); render(); })));
-  } else if (read.family === "scenario") {
-    nodes.push(bound(ctx, "Title", model.title, set(model, "title")),
-      bound(ctx, "Premise", model.premise, set(model, "premise"), { multiline: true }),
-      bound(ctx, "Instructions", model.instructions, set(model, "instructions"), { multiline: true,
-        hint: "Private to the narrator: never shown to the players." }));
-    if (locked) return [...nodes, locked];
-    model.openings.forEach((item, index) => {
-      nodes.push(el("fieldset", { class: "source-group" }, el("legend", {}, "Opening " + (index + 1) + (item.slot ? " (" + item.slot + ")" : "")),
-        bound(ctx, "Text", item.text, set(item, "text"), { multiline: true }),
-        ui.actions(ui.button("Remove this opening", () => { model.openings.splice(index, 1); keep(); render(); }))));
-    });
-    nodes.push(ui.actions(ui.button("Add an opening", () => { model.openings.push({ slot: null, added: addedId(), text: "" }); keep(); render(); })));
-  } else if (read.family === "lorebook") {
-    nodes.push(bound(ctx, "Name", model.name, set(model, "name")),
-      bound(ctx, "Description", model.description, set(model, "description"), { multiline: true }));
-    if (locked) return [...nodes, locked];
-    model.entries.forEach((item, index) => {
-      nodes.push(el("fieldset", { class: "source-group" }, el("legend", {}, "Entry " + (index + 1)),
-        bound(ctx, "Keys", item.keys, set(item, "keys"), { multiline: true, hint: "One key per line. Lore reaches play when a key is mentioned." }),
-        bound(ctx, "Content", item.content, set(item, "content"), { multiline: true,
-          hint: item.slot === null ? undefined : "Emptying it removes the entry." }),
-        checkbox(ctx, "Always in context (constant)", item.constant, set(item, "constant")),
-        checkbox(ctx, "Enabled", item.enabled, set(item, "enabled")),
-        ui.actions(ui.button("Remove this entry", () => { model.entries.splice(index, 1); keep(); render(); }))));
-    });
-    nodes.push(ui.actions(ui.button("Add an entry", () => {
-      model.entries.push({ slot: null, added: addedId(), original: null, keys: "", content: "", constant: false, enabled: true }); keep(); render();
-    })));
+  const description = fields.find((item) => item.field === "description");
+  if (description) nodes.push(fieldBlock(ctx, read, description, { lede: true, editable }));
+  else if (!read.derived) nodes.push(el("p", { class: "g-muted" }, "No description yet."));
+  const sections = fields.filter((item) => item.field.startsWith("section:"));
+  if (sections.length) nodes.push(el("div", { class: "source-sections" }, sections.map((item) => fieldBlock(ctx, read, item, { editable }))));
+  const rest = [];
+  const others = fields.filter((item) => item.field.startsWith("facet:") || (read.derived && item.field === "name"));
+  if (others.length) {
+    rest.push(labelled(el, read.derived ? "Name and facets" : "Facets",
+      el("div", { class: "source-sections" }, others.map((item) => fieldBlock(ctx, read, item, { editable })))));
+  }
+  const notes = [];
+  if (view.chain && view.chain.length > 1) {
+    notes.push(el("p", { class: "g-muted" }, "Composed from ",
+      ...view.chain.flatMap((link, index) => [index ? " over " : "", ui.sourceLink(link.ref, link.ref)]), "."));
+  }
+  if (view.base_head) {
+    notes.push(ui.notice("The base has a newer revision, " + view.base_head + ". This portrayal stays pinned to "
+      + view.base + " until a reviewed rebase."));
+  }
+  for (const notice of view.notices || []) notes.push(ui.notice(describe(notice)));
+  if (view.uncomposed && view.uncomposed.length) {
+    notes.push(el("p", { class: "g-muted" }, "Kept but not composed: "
+      + view.uncomposed.map((item) => item.field).join(", ") + " (kept for provenance; the Raw tab shows them)."));
+  }
+  if (notes.length) rest.push(el("div", { class: "g-stack source-notes" }, ...notes));
+  return { top: nodes, rest };
+}
+
+// A scenario, a lorebook, an entity that does not compose, or a record with no layout: what its payload holds.
+function written(ctx, read) {
+  const { ui } = ctx;
+  const { el } = ui;
+  const model = FAMILIES.includes(read.family) ? modelOf(read) : null;
+  if (!model) {
+    return [el("p", { class: "g-muted" }, "This record has no sheet layout. What it stores is on the Raw tab.")];
+  }
+  const nodes = [];
+  const lede = read.family === "scenario" ? model.premise : model.description;
+  nodes.push(lede ? el("p", { class: "source-lede" }, lede)
+    : el("p", { class: "g-muted" }, read.family === "scenario" ? "No premise yet." : "No description yet."));
+  if (read.family === "scenario" && model.instructions) {
+    nodes.push(labelled(el, "Instructions", el("div", { class: "g-muted" }, "Private to the narrator: never shown to the players."),
+      el("div", { class: "source-value g-prose" }, model.instructions)));
+  }
+  if (read.family === "entity" && !model.locked && model.sections.length) {
+    nodes.push(el("div", { class: "source-sections" }, model.sections.map((item) => el("div", { class: "source-field" },
+      el("div", { class: "source-field-head" }, el("span", { class: "g-eyebrow source-label" }, item.name)),
+      el("div", { class: "source-value g-prose" }, item.text || "(empty)")))));
+  }
+  if (read.family === "lorebook") {
+    const entries = loreEntries(read);
+    // each entry's own picture, on the current version (pages/art/covers.js): a slot beside it, filled once read
+    const pictured = read.is_head ? lorePictures(ctx, { subject: read.entity, source: read.source, name: read.name || read.ref,
+      revision: read.revision, reload: () => ctx.navigate(window.location.hash) }) : null;
+    nodes.push(labelled(el, "Entries", entries.length ? el("div", { class: "g-stack" }, entries.map((entry, index) =>
+      ui.card({}, el("div", { class: "source-lore-row" }, pictured ? pictured.slot(index, entry.keys.join(", ") || "entry " + (index + 1)) : null,
+        el("div", { class: "g-stack source-lore" },
+          el("div", { class: "g-row" }, el("span", { class: "g-mono g-muted source-keys" }, entry.keys.length ? entry.keys.join(", ") : "no keys"),
+            entry.enabled ? null : ui.pill("Off"), entry.constant ? ui.pill("Always in context", { kind: "accent" }) : null),
+          el("div", { class: "source-value source-lore-text" }, entry.content || "(empty)"))))), pictured ? pictured.note : null)
+      : el("p", { class: "g-muted" }, model.locked ? "Its entries are not all plain text; the Raw tab shows them." : "No entries yet.")));
+  }
+  if (model.locked && read.family !== "lorebook") {
+    nodes.push(el("p", { class: "g-muted" }, "Part of it is not plain text; the Raw tab shows it as written."));
   }
   return nodes;
 }
 
-function checkbox(ctx, labelText, checked, onchange) {
-  const { el, id } = ctx.ui;
-  const inputId = id("check");
-  const input = el("input", { type: "checkbox", id: inputId });
-  input.checked = !!checked;
-  input.addEventListener("change", () => onchange(input.checked));
-  return el("div", { class: "g-field source-check" }, input, el("label", { for: inputId }, labelText));
-}
-
-// -- the raw editor -------------------------------------------------------------------------------------
-
-function rawEditor(ctx, read, drafts) {
+// The right column: the chats that use it, its portrayals, entries of the same name and the links its source
+// declares.
+function aside(ctx, page) {
   const { ui } = ctx;
   const { el } = ui;
-  if (!read.is_head) return null;
-  if (read.actions.save_raw !== null) return ui.section("Raw payload", el("p", { class: "g-muted" }, read.actions.save_raw));
-  if (!ctx.has("sources.save_raw")) return ui.section("Raw payload", ui.unavailable("The raw editor", "This app does not serve sources.save_raw."));
-  if (unsafeNumbers(read.payload)) {
-    return ui.section("Raw payload", ui.unavailable("The raw editor for this record",
-      "It holds a number too large for the browser to keep exactly, so saving it here would change that number."));
+  const { read, pinned, titleOf } = page;
+  const column = el("aside", { class: "source-aside g-stack g-loose" });
+  const chats = read.chats.map((chat) => {
+    const detail = (chat.active ? "on " + chat.revisions.join(", ") : "detached") + (chat.problem ? " · " + chat.problem : "");
+    const title = titleOf(chat);
+    const body = [el("span", { class: "g-row g-between" }, el("span", { class: title ? "g-title" : "g-ref" }, title || chat.chat),
+      el("span", { class: "g-muted" }, day(chat.last_activity))), el("span", { class: "g-muted" }, detail)];
+    return ctx.registered("chat") ? el("a", { class: "g-rowcard source-chat", href: ctx.href("chat", [chat.chat]), title: chat.chat }, el("span", { class: "g-stack g-grow source-chat-text" }, ...body))
+      : el("div", { class: "g-rowcard source-chat", title: chat.chat }, el("span", { class: "g-stack g-grow source-chat-text" }, ...body));
+  });
+  column.append(labelled(el, "In these chats", ...(chats.length ? chats : [el("span", { class: "g-muted" }, "Not in any chat yet.")])));
+  if (read.family === "entity") {
+    const derive = deriveForm(ctx, read, pinned);
+    column.append(labelled(el, "Portrayals",
+      ...read.portrayals.map((ref) => { const row = ui.sourceLink(ref, ref); row.classList.add("g-rowcard"); return row; }),
+      !read.portrayals.length && !derive ? el("span", { class: "g-muted" }, "None derived from it.") : null, derive));
   }
-  const draft = drafts.raw.get();
-  if (draft && stale(draft, read)) return ui.section("Raw payload", el("p", { class: "g-muted" }, "Keep or discard your draft above first."));
-  const start = draft ? draft.start : JSON.stringify(read.payload);
-  const field = ui.field("Payload (JSON)", { multiline: true, value: draft ? draft.text : JSON.stringify(read.payload, null, 2),
-    hint: "Saved exactly as written, unknown fields included" + (read.schema ? ", in " + read.schema : "") + "." });
-  field.input.classList.add("source-raw");
-  field.input.addEventListener("input", () => drafts.raw.set({ base: read.head, etag: read.etag, start, text: field.value }));
-  const extra = Object.keys((read.envelope && read.envelope.extra) || {}).filter((key) => key !== "schema");
-  const saveButton = ui.button("Save raw as a new revision", () => ctx.act(async () => {
-    let payload;
-    try {
-      payload = JSON.parse(field.value);
-    } catch (error) {
-      field.setError("Not JSON: " + error.message);
-      return;
+  if (read.namesakes.length) {
+    column.append(labelled(el, "Same name, other entries",
+      el("p", { class: "g-muted" }, "These share its name and are different entries: a name never decides which one a chat uses."),
+      ...read.namesakes.map((ref) => { const row = ui.sourceLink(ref, ref); row.classList.add("g-rowcard"); return row; })));
+  }
+  if (read.links.length) {
+    column.append(labelled(el, "Links its source declares", ...read.links.map((link) =>
+      el("div", { class: "source-link" }, ui.sourceLink(link.subject, link.subject), " " + link.relation + " ", ui.sourceLink(link.object, link.object),
+        el("span", { class: "g-muted" }, " (declared by " + link.declared_by + ")")))));
+  }
+  const limits = Object.entries(read.unavailable || {}).map(([key, reason]) =>
+    el("div", { class: "source-limit" }, el("strong", {}, NOT_OFFERED[key] || key), el("div", { class: "g-muted" }, reason)));
+  if (read.actions.attach !== null) limits.unshift(el("div", { class: "source-limit" }, el("strong", {}, "Attaching"), el("div", { class: "g-muted" }, read.actions.attach)));
+  if (limits.length) column.append(el("details", { class: "source-limits" }, el("summary", {}, "Not offered here"), ...limits));
+  return column;
+}
+
+// A moment as a date, in the reader's own form; the text as written when it is not a date.
+function day(text) {
+  const then = Date.parse(text);
+  return Number.isFinite(then) ? new Date(then).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : String(text || "");
+}
+
+// -- the Art tab ----------------------------------------------------------------------------------------
+
+// A character's picture slots as the library resolves them now. Placing, cropping and hiding are the Art page's.
+function artTab(ctx, page) {
+  const { ui } = ctx;
+  const { el } = ui;
+  const { read, art, artError, name } = page;
+  const box = el("div", { class: "source-art g-stack g-loose" });
+  if (artError || !art) {
+    box.append(artError ? ui.errorBox(artError) : ui.empty("This app cannot read its pictures."));
+    return box;
+  }
+  const cards = art.slots.map((slot) => {
+    const frame = el("div", { class: "source-slot-frame " + (SLOT_SHAPES[slot.slot] || "source-shape-picture"), "aria-hidden": "true" },
+      slot.state === "shown" ? "" : slot.state === "hidden" ? "Hidden" : "?");
+    if (slot.state === "shown" && slot.image) {
+      ctx.picture(slot.image).then((url) => { if (url) frame.replaceChildren(el("img", { src: url, alt: "" })); }, () => {});
     }
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) { field.setError("The payload must be a JSON object."); return; }
-    if (unsafeNumbers(payload)) { field.setError("A number here is too large to be kept exactly; write it as text, or leave it as it was."); return; }
-    field.setError("");
-    await save(ctx, read, "sources.save_raw", { payload }, drafts.raw);
-  }));
-  const discard = ui.button("Discard my changes", () => { drafts.raw.clear(); field.input.value = JSON.stringify(read.payload, null, 2); field.setError(""); });
-  const box = ui.section("Raw payload", field.node, ui.actions(saveButton, discard));
-  if (extra.length) box.append(el("p", { class: "g-muted" }, "Kept on every new revision as they are: " + extra.join(", ") + "."));
+    const from = slot.placed_by && slot.placed_by !== read.entity ? "Inherited from " + slot.placed_by : slot.placed_by ? "Placed on this character" : null;
+    return ui.card({}, el("div", { class: "g-stack source-slot" }, frame,
+      el("div", { class: "g-row g-between" }, el("strong", {}, (slot.slot[0].toUpperCase() + slot.slot.slice(1)).replaceAll("_", " ")),
+        el("span", { class: slot.state === "unavailable" ? "source-bad" : "g-muted" }, SLOT_STATES[slot.state] || slot.state)),
+      slot.state === "unavailable" ? el("div", { class: "g-muted" }, [slot.reason, slot.note].filter(Boolean).join(": ")) : null,
+      from ? el("div", { class: "g-muted" }, from) : null));
+  });
+  box.append(labelled(el, "Where these pictures show", cards.length ? el("div", { class: "source-slots" }, cards)
+    : el("p", { class: "g-muted" }, "No picture is placed for " + name + " yet.")));
+  for (const problem of art.problems || []) box.append(ui.notice(describe(problem), { kind: "bad" }));
+  if (art.conflicts && art.conflicts.length) {
+    box.append(ui.notice("Two devices placed different pictures in: " + art.conflicts.join(", ") + ". Devices and sync settles it."));
+  }
+  if (ctx.registered("art")) {
+    box.append(ui.actions(ui.buttonLink("Place, crop or hide pictures on the Art page", "art", [], { scope: read.source, subject: read.entity })));
+  }
   return box;
 }
 
-// -- portrayals -----------------------------------------------------------------------------------------
+// -- the Revisions tab ----------------------------------------------------------------------------------
 
-function portrayalTools(ctx, read, item) {
+// Every version, newest first, and one of them compared with the current version field by field. The one compared
+// is in the address (?tab=revisions&rev=<revision>); an older one can be restored as a new version.
+async function revisionsTab(ctx, page) {
   const { ui } = ctx;
   const { el } = ui;
-  const [kind, name] = item.field.startsWith("section:") ? ["section", item.field.slice(8)]
-    : item.field.startsWith("facet:") ? ["facet", item.field.slice(6)] : [item.field, undefined];
-  if (!["section", "facet", "description"].includes(kind)) return null;
-  const inherited = item.state === "inherited" || item.state === "pinned";
-  const own = item.state === "overridden" || item.state === "restated";
-  const what = (kind === "description" ? "the description" : kind + " " + name) + " of " + (read.name || read.entity);
-  const run = (edit, extra = {}, draft = { clear() {} }) => ctx.act(async () => {
-    const args = { edit, ...extra };
-    if (name !== undefined) args.name = name;
-    await save(ctx, read, "sources.portrayal", args, draft);  // the draft is cleared only once it is saved
-  });
-  const tools = [];
-  if (inherited && kind !== "facet") {
-    const draft = ctx.draft("source:" + read.entity + ":override:" + item.field);
-    const field = ui.field("Override " + (kind === "description" ? "the description" : "section " + name),
-      { multiline: true, draft, value: typeof item.value === "string" ? item.value : "" });
-    tools.push(el("details", { class: "source-override" }, el("summary", {}, "Override"), field.node,
-      ui.actions(ui.button("Save the override", () => {
-        if (!field.value.trim()) { field.setError("An override needs text. To stop showing it, clear it instead."); return; }
-        field.setError("");
-        return run("override_" + kind, { text: field.value }, draft);
-      }, { kind: "primary" }))));
+  const { read, address, name, titleOf } = page;
+  const revisions = orderRevisions(read.revisions);  // as written: the app's own list is sorted as text (r10 before r2)
+  const asked = ctx.query.get("rev");
+  const before = revisions.at(-2);
+  const chosen = revisions.includes(asked) ? asked : !read.is_head ? read.revision : before || read.head;
+  const timeline = el("div", { class: "source-timeline g-stack", role: "list" }, [...revisions].reverse().map((revision) => {
+    const on = chatsOn(read, revision);
+    const row = el("a", { class: "source-rev", role: "listitem", href: address("revisions", { rev: revision }), title: read.entity + "@" + revision },
+      el("span", { class: "source-rev-dot", "aria-hidden": "true" }),
+      el("span", { class: "g-stack source-rev-text" },
+        el("span", { class: "g-mono" }, revision + (revision === read.head ? " · current" : "")),
+        el("span", { class: "source-rev-title" }, "Version " + versionOf(revisions, revision) + (revision === read.head ? ", what plays now" : "")),
+        on.length ? el("span", { class: "g-muted" }, "Chats on it: " + on.map((chat) => titleOf(chat) || chat.chat).join(", ")) : null));
+    if (revision === chosen) row.setAttribute("aria-current", "true");
+    return row;
+  }));
+  const side = el("div", { class: "source-compare g-stack" });
+  const box = el("div", { class: "source-revisions" }, timeline, side);
+  if (chosen === read.head) {
+    side.append(el("h3", { class: "g-heading" }, "Version " + versionOf(revisions, chosen) + " is the current version"),
+      el("p", { class: "g-muted" }, revisions.length > 1 ? "Choose an older version to compare it with this one."
+        : "It is the only version so far. Every save adds one, and none is ever changed."));
+    return box;
   }
-  if (inherited) {
-    tools.push(ui.button("Clear", async () => {
-      const yes = await ui.confirm("Clear " + what + "? The new revision stops showing it; the base keeps it, and Reset brings it back.",
-        { confirmLabel: "Clear it", danger: true });
-      if (yes) await run("clear_" + kind);
-    }));
+  const older = chosen === read.revision ? read : await ctx.api("sources.read", { ref: read.entity + "@" + chosen });
+  const head = read.is_head ? read : await ctx.api("sources.read", { ref: read.entity });
+  const changes = diffRevisions(read.family, older.payload, head.payload);
+  side.append(el("h3", { class: "g-heading" }, "Version " + versionOf(revisions, chosen) + " compared with the current version " + versionOf(revisions, head.head)),
+    el("div", { class: "source-compare-key g-muted" }, el("span", { class: "source-before source-swatch" }, chosen + " had"),
+      el("span", { class: "source-after source-swatch" }, head.head + " has")));
+  const sideOf = (change, value, which) => el("div", { class: "source-diff-side " + which + (value === null ? " g-muted" : "")
+    + (change.stored ? " source-diff-stored" : "") }, value === null ? "(not there)" : value);
+  for (const change of changes) {
+    side.append(el("div", { class: "g-stack source-diff" }, el("span", { class: "g-eyebrow" }, change.field),
+      el("div", { class: "source-diff-pair" }, sideOf(change, change.before, "source-before"), sideOf(change, change.after, "source-after"))));
   }
-  if (own || item.state === "cleared") {
-    tools.push(ui.button("Reset", async () => {
-      const yes = await ui.confirm("Reset " + what + " to inherit from the base again? "
-        + (item.state === "cleared" ? "The clear is lifted." : "The override is dropped from the new revision; " + read.revision + " keeps it."),
-      { confirmLabel: "Reset it" });
-      if (yes) await run("reset_" + kind);
-    }));
-  }
-  return tools.length ? ui.actions(...tools) : null;
-}
-
-function deriveForm(ctx, read, pinned) {
-  const { ui } = ctx;
-  const { el } = ui;
-  if (read.family !== "entity") return null;
-  if (read.actions.derive !== null) return ui.section("Derive a portrayal", el("p", { class: "g-muted" }, read.actions.derive));
-  if (!ctx.has("sources.derive") || !ctx.has("sources.catalog")) return null;
-  const box = ui.section("Derive a portrayal");
-  box.append(el("p", { class: "g-muted" }, "A portrayal inherits every field of exactly " + pinned
-    + " and overrides or clears only what you change. A newer revision of the base reaches it only through a reviewed rebase."));
-  const name = ui.field("Name (optional)", { draft: ctx.draft("source:" + read.entity + ":derive:name") });
-  const holder = el("div", {});
-  box.append(holder, name.node);
-  const load = ui.button("Choose where it goes", () => ctx.act(async () => {
-    const catalog = await ctx.api("sources.catalog", { limit: 1 });
-    const targets = catalog.sources.filter((source) => source.namespace !== "card" && source.namespace !== "import");
-    if (!targets.length) { holder.replaceChildren(ui.notice("Make a source in the library first, such as a world.")); return; }
-    const picked = ui.choice("Source", targets.map((source) => ({ value: source.source, label: (source.title || source.source) + " (" + source.source + ")" })));
-    const go = ui.button("Derive from " + read.revision, () => ctx.act(async () => {
-      const target = targets.find((source) => source.source === picked.value);
-      const args = { base: pinned, source: target.source, expected: target.etag };
-      if (name.value.trim()) args.name = name.value.trim();
+  if (!changes.length) side.append(el("p", { class: "g-muted" }, "Nothing it stores differs from the current version."));
+  const actions = [];
+  const can = changes.length && head.actions.save_raw === null && ctx.has("sources.save_raw") && !unsafeNumbers(older.payload);
+  if (can) {
+    const next = nextVersion(head);
+    actions.push(ui.button("Restore this as a new version", () => ctx.act(async () => {
+      const yes = await ui.confirm("Restore " + name + " as it was in version " + versionOf(revisions, chosen) + " (" + chosen + ")? It is saved as version "
+        + next + ". The current version stays as it is, and chats keep the one they started with.", { confirmLabel: "Restore as version " + next });
+      if (!yes) return;
       try {
-        const answer = await ctx.api("sources.derive", args);
-        name.clear();
-        ctx.navigate(ctx.href("source", [answer.ref]));
+        const answer = await ctx.api("sources.save_raw", { ref: head.entity, head: head.head, etag: head.etag, expected: head.manifest_etag,
+          payload: older.payload });
+        ctx.notify("Restored as " + answer.ref.split("@").pop() + ".");
+        ctx.navigate(ctx.href("source", [head.entity]));
       } catch (error) {
-        if (error.reason === "changed") { ctx.notify("That source changed since it was listed; choose it again.", { bad: true }); holder.replaceChildren(); return; }
-        throw error;
+        if (error.reason !== "changed") throw error;
+        ctx.notify("This entry changed since the page read it, so nothing was restored. It is read again.", { bad: true });
+        ctx.navigate(ctx.href("source", [head.entity], { tab: "revisions", rev: chosen }));
       }
-    }), { kind: "primary" });
-    holder.replaceChildren(picked.node, ui.actions(go));
-  }));
-  box.append(ui.actions(load));
-  return box;
-}
-
-// -- attaching ------------------------------------------------------------------------------------------
-
-function attachForm(ctx, read, pinned) {
-  const { ui } = ctx;
-  const { el } = ui;
-  const box = ui.section("Attach to a chat");
-  if (read.actions.attach !== null) { box.append(el("p", { class: "g-muted" }, read.actions.attach)); return box; }
-  if (!ctx.has("sources.attach") || !ctx.has("sources.chats")) { box.append(ui.unavailable("Attaching", "This app does not serve sources.attach.")); return box; }
-  box.append(el("p", { class: "g-muted" }, "Attaches exactly " + pinned + ". The chat keeps that revision until a reviewed rebase."));
-  const holder = el("div", {});
-  box.append(holder);
-  const load = ui.button("Choose a chat", () => ctx.act(() => listChats(ctx, read, pinned, holder)));
-  box.append(ui.actions(load));
-  return box;
-}
-
-const CHAT_PAGE = 50;
-
-// The chats it can be attached to, newest activity first: a search over every chat's label and ref, and "Show
-// more chats" while more match, so an older chat is as reachable as a recent one.
-async function listChats(ctx, read, pinned, holder, keep, query = "", limit = CHAT_PAGE) {
-  const { ui } = ctx;
-  const { el } = ui;
-  const answer = await ctx.api("sources.chats", { limit, query });
-  const search = ui.field("Find a chat by name or ref", { value: query });
-  const find = el("form", { class: "source-chat-search", role: "search" }, search.node,
-    el("button", { type: "submit", class: "g-button" }, "Find"));
-  find.addEventListener("submit", (event) => {
-    event.preventDefault();
-    ctx.act(() => listChats(ctx, read, pinned, holder, keep, search.value.trim()));
-  });
-  if (!answer.chats.length) {
-    holder.replaceChildren(find, ui.empty(query ? "No chat matches " + JSON.stringify(query) + "." : "No chat to attach it to yet."));
-    return;
+    })));
   }
-  const kept = answer.chats.some((chat) => chat.chat === keep) ? keep : answer.chats[0].chat;
-  const picked = ui.choice("Chat", answer.chats.map((chat) => ({ value: chat.chat, label: (chat.label || chat.chat) + " · " + chat.last_activity })),
-    { value: kept });
-  const more = answer.truncated && limit < 1000
-    ? ui.button("Show more chats", () => ctx.act(() => listChats(ctx, read, pinned, holder, picked.value, query, Math.min(limit + CHAT_PAGE, 1000))))
-    : null;
-  const go = ui.button("Attach " + read.revision, () => ctx.act(async () => {
-    const chat = answer.chats.find((item) => item.chat === picked.value);
-    const joins = read.kind === "character" ? " It joins as a new actor that has witnessed nothing so far." : "";
-    const yes = await ui.confirm("Attach " + (read.name || read.entity) + " at exactly " + pinned + " to " + (chat.label || chat.chat) + "?" + joins,
-      { confirmLabel: "Attach " + read.revision });
-    if (!yes) return;
-    let done;
-    try {
-      done = await ctx.api("sources.attach", { ref: pinned, chat: chat.chat, expected: chat.etag });
-    } catch (error) {
-      if (error.reason === "changed") {
-        await listChats(ctx, read, pinned, holder, chat.chat, query, limit);
-        holder.prepend(ui.notice("That chat changed since it was listed; it is read again. Attach again to use it as it is now.", { kind: "bad" }));
-        return;
-      }
-      throw error;
-    }
-    const where = ctx.registered("chat") ? el("a", { class: "g-link", href: ctx.href("chat", [done.chat]) }, "Open the chat") : null;
-    holder.replaceChildren(ui.notice("Attached " + done.ref + " to " + (chat.label || chat.chat) + " as its " + done.role + "."), where || "");
-    ctx.notify("Attached " + done.ref + ".");
-  }), { kind: "primary" });
-  holder.replaceChildren(find, picked.node, ui.actions(go, more),
-    answer.truncated && !more ? el("p", { class: "g-muted" }, "More chats match; search to narrow them.") : "");
+  if (chosen !== read.revision) actions.push(el("a", { class: "g-button", href: ctx.href("source", [read.entity + "@" + chosen]) }, "Open this version"));
+  if (actions.length) side.append(ui.actions(...actions));
+  return box;
 }

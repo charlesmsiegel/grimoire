@@ -64,18 +64,19 @@ It prints `open http://127.0.0.1:8080/#token=...`. Open that address in the phon
 address is this serve's key: a new one each time, kept only in that browser tab.
 
 - **Sync** brings the desktop's chats over the first time, and every later change both ways.
-- **Chats** lists recent chats, or the chats of one character or scenario. A world-less card chat and an
+- **Chats** lists every chat, latest first, or the chats of one character or scenario. A world-less card chat and an
   imported V1 chat both appear, each once.
 - **Take your seat** is needed once on each device: who plays which character is kept per device.
-- **Post**, **Answer**, **Keep** and **Pass** play a turn. **Add picture** gives a character of the chat a new
-  avatar, from the phone's camera or files.
+- **Post**, **Ask for a reply**, **Keep this take** and **Pass the turn** play a turn. **Cast and details** in
+  the chat's scene bar opens its side panel: **Add picture** there gives a character of the chat a new avatar,
+  from the phone's camera or files, and **Sync** is under Details.
 - A chat that **forked** (both devices played it offline) waits until you keep one branch. A turn or picture
   in **conflict** (both devices changed it) waits until you keep one version. The other device must be
   reachable for that.
 
 ## Answers from a model
 
-Without a model, everything but **Answer** works. To have the cast answer, give `serve` a model file:
+Without a model, everything but asking for a reply works. To have the cast answer, give `serve` a model file:
 
 ```json
 {"provider_id": "openrouter", "base_url": "https://openrouter.ai/api/v1", "model": "your-model",
@@ -90,7 +91,8 @@ Any OpenAI-compatible endpoint works: `https`, or plain `http` on loopback for a
 device (which needs no key, so leave `key_env` out). The key is read from the environment, never from the
 file or the library. `max_output_tokens` (default 1024) caps each reply. `director` (default 1) is how many
 director replies a turn may make, for a scene with no character who can answer. `max_tokens_field` is
-`max_tokens` or `max_completion_tokens`.
+`max_tokens` or `max_completion_tokens`. `price_prompt`, `price_reply` and `price_cached` are optional prices per
+million tokens, written as decimal text ([INFERENCE_UI](INFERENCE_UI.md#prices-and-costs)).
 
 The app's **Models and costs** page (`#/providers`, [INFERENCE_UI](INFERENCE_UI.md)) writes this file too: a
 `--model` file that does not exist yet, or cannot be used, starts the app without a model, and the page says why
@@ -108,4 +110,4 @@ and can set one up.
   few seconds at a time.
 - **Model calls** are allowed by the app's own handle for the configured endpoint. They are not in the
   library's security ledger.
-- **Recent Chats** orders chats by when the chat record last changed, not by the last post.
+- **Chats** sorted by Recent orders chats by when the chat record last changed, not by the last post.

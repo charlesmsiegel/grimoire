@@ -1,0 +1,41 @@
+/* The chat's story (pages/chat/story.js): the recap under the scene bar, the Story tab's timeline and the mark
+   on a turn that was jumped to. Only chat- classes. */
+
+/* -- "Last time": the last lines, on the scene bar's own colour ------------------------------------------- */
+.chat-recap { flex: none; display: flex; align-items: flex-start; gap: 14px; padding: 2px 16px 10px; color: #fff;
+  background: oklch(0.42 0.07 280); }
+.chat-recap[class*="g-hue-"] { background: oklch(0.42 0.07 var(--g-hue)); }
+.chat-recap[hidden] { display: none; }
+.chat-recap-text { flex: 1; min-width: 0; max-height: min(11.5em, 30vh); overflow-y: auto; }
+.chat-recap-head { font: 600 11px/1.6 var(--g-sans); letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
+.chat-recap-line { margin: 2px 0 0; font: 400 15px/1.5 var(--g-serif); text-wrap: pretty; overflow-wrap: anywhere; }
+.chat-recap-speaker { font: 600 13px/1.5 var(--g-sans); }
+.chat-focused .chat-recap { display: none; }
+
+/* -- the Story tab: a dot, a label and a turn for each entry ---------------------------------------------- */
+.chat-spine { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.chat-spine-item { display: flex; flex-direction: column; border-radius: 7px; }
+.chat-spine-item.chat-current { background: var(--g-bg); }
+.chat-spine-jump { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 10px; align-items: baseline;
+  width: 100%; padding: 7px 6px; border: 0; border-radius: 7px; background: transparent; color: inherit; font: inherit;
+  text-align: left; }
+button.chat-spine-jump { cursor: pointer; }
+button.chat-spine-jump:hover { background: var(--g-bg); }
+.chat-spine-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--g-line); }
+.chat-current .chat-spine-dot { background: var(--g-accent); }
+.chat-spine-text { display: flex; flex-direction: column; min-width: 0; }
+.chat-spine-label { line-height: 1.3; overflow-wrap: anywhere; }
+.chat-current .chat-spine-label { font-weight: 600; }
+.chat-spine-at { font-size: 12px; color: var(--g-muted); }
+.chat-spine-gone .chat-spine-label { color: var(--g-muted); }
+.chat-spine-item > .chat-tools { padding: 0 6px 6px 22px; }
+.chat-spine-edit { display: flex; flex-direction: column; gap: 4px; padding: 0 6px 6px 26px; }
+.chat-spine-edit .g-input { width: 100%; padding: 5px 8px; background: var(--g-card); font-size: 14px; }
+.chat-spine-add { align-self: flex-start; }
+.chat-tool-done { cursor: default; }
+.chat-tool-done:hover { color: var(--g-muted); }
+
+/* -- a turn a timeline entry brought into view --------------------------------------------------------- */
+.chat-row.chat-jumped { box-shadow: -3px 0 0 var(--g-accent); scroll-margin-top: 12px; }
+.chat-row.chat-jumped:focus { outline: none; }
+.chat-row.chat-jumped:focus-visible { outline: 2px solid var(--g-accent); outline-offset: 6px; }

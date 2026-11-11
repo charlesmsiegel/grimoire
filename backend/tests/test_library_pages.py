@@ -175,3 +175,17 @@ def test_the_library_pages_end_to_end(tmp_path):
         bound = {item["chat"]: item["revisions"] for item in read["chats"]}
         assert bound == {str(chat): [read["head"]]}
         assert read["payload"]["name"] == "Mara of the lamps" and read["payload"]["description"] == "Pale from the lamps."
+        # the source and the scenario made in their dialogs are there, the source under the title it was renamed to
+        made = AppApi(device.api).call("sources.read", {"ref": "world:harbor/scenario/night-watch"})
+        assert made["source_title"] == "Harbor" and made["payload"]["premise"] == "The lamps are out along the quay."
+        # the lorebook's first version was restored as a third: the rename between them is kept as it was written
+        lore = AppApi(device.api).call("sources.read", {"ref": "card:mara-vell/lorebook/mara-vell-lore"})
+        assert lore["revisions"] == ["r1", "r2", "r3"] and lore["payload"]["name"] == "Harbor lore"
+        renamed = AppApi(device.api).call("sources.read", {"ref": "card:mara-vell/lorebook/mara-vell-lore@r2"})
+        assert renamed["payload"]["name"] == "Mara's lore, renamed"
+        # the tags and pins the pages wrote are on the shelf, by exact ref; the saved filter and the chat's pin are gone
+        shelf = AppApi(device.api).call("shelf.read", {})
+        marks = {item["ref"]: (item["tags"], item["pinned"]) for item in shelf["entries"]}
+        assert marks[MARA] == (["crew"], False) and marks["card:mara-vell/lorebook/mara-vell-lore"] == (["old lore"], False)
+        assert sum(1 for _tags, pinned in marks.values() if pinned) == len(marks) - 3  # Mara, the lorebook, one unpinned
+        assert (shelf["filters"], shelf["chats"], shelf["problems"]) == ([], [], [])

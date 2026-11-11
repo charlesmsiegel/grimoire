@@ -1,11 +1,42 @@
-.art-grid { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-.art-card { border: 1px solid var(--g-line); border-radius: var(--g-radius); padding: 8px; background: var(--g-raised); }
-.art-thumb { display: block; width: 100%; max-height: 220px; object-fit: contain; border-radius: var(--g-radius); }
-.art-none { display: grid; place-items: center; min-height: 96px; border: 1px dashed var(--g-line);
-  border-radius: var(--g-radius); color: var(--g-muted); padding: 6px; text-align: center; }
+/* The Art page: every class starts with "art-" (docs/APP_SHELL.md). Frames, aspect ratios and zoom steps are in
+   picker.css, which this page shares with the picture picker. */
+.art-top .g-field { max-width: 420px; margin: 0; }
+.art-top p { margin: 6px 0 0; }
+.art-flat { margin: 0; }
+.art-block { display: block; }
+.art-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+
+/* slot cards: where a subject's pictures show */
+.art-slots { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+.art-slot { width: 210px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--g-line);
+  border-radius: 12px; background: var(--g-card); }
+.art-slot-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.art-slot-state { font-size: 12px; color: var(--g-muted); }
+.art-slot-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.art-slot-actions > .g-button { flex: 1; padding: 5px 8px; text-align: center; background: var(--g-bg); }
+.art-slot .g-notice { margin: 0; font-size: 13px; }
+.art-good { color: var(--g-good); }
 .art-bad { color: var(--g-bad); }
-.art-meta { font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
-.art-slots { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
-.art-numbers { display: flex; gap: 6px; flex-wrap: wrap; }
-.art-numbers .g-field { width: 6.5em; margin: 0; }
+.art-meta { font-size: 12px; overflow-wrap: anywhere; }
+.art-more > summary { cursor: pointer; color: var(--g-muted); font-size: 14px; }
+.art-more .g-field { max-width: 260px; }
+
+/* every picture, and the tile that adds more */
+.art-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; align-items: start; }
+.art-card { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.art-card-name { font-weight: 500; overflow-wrap: anywhere; }
+.art-add-wrap { display: flex; }
+.art-add { flex: 1; aspect-ratio: 3 / 4; padding: 12px; border: 1.5px dashed var(--g-muted); border-radius: 10px;
+  background: transparent; color: var(--g-muted); cursor: pointer; }
+.art-add:hover, .art-add.art-over { border-color: var(--g-accent); color: var(--g-accent); }
+.art-tray { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border: 1px solid var(--g-accent);
+  border-radius: 12px; background: var(--g-card); }
+.art-tray-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.art-tray-row .g-field { flex: 1 1 220px; margin: 0; }
+.art-tray-name { flex: 0 1 220px; overflow-wrap: anywhere; }
+.art-tray .g-actions { margin: 0; }
+.art-problems { display: block; }
+
+@media (max-width: 520px) {
+  .art-slot { width: 100%; }
+}

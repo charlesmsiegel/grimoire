@@ -1,0 +1,7 @@
+/* The waiting tray above the composer (pages/chat/tray.js): only chat- classes. */
+.chat-tray { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 10px;
+  border: 1px solid var(--g-accent); border-radius: 10px; background: var(--g-accent-soft); }
+.chat-tray-kind { flex: none; background: var(--g-card); color: var(--g-accent); }
+.chat-tray-title { flex: 1 1 180px; min-width: 0; font: 400 15px/1.35 var(--g-serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-tray-more { flex: none; font-size: 13px; color: var(--g-accent); text-decoration: none; }
+.chat-tray-more:hover { text-decoration: underline; }

@@ -1,25 +1,42 @@
-// Art (Sprint 114): a scope's pictures, and one character's or chat actor's picture slots, over the media ops
+// Art (Sprint 114): a scope's pictures, and one subject's picture slots, over the media ops
 // (docs/MEDIA_SYNC_UI.md). The address holds the place: #/art?scope=<scope> lists its pictures and who uses
-// them, and #/art?scope=<scope>&subject=<subject> edits one subject's slots.
+// them, and #/art?scope=<scope>&subject=<subject> shows one subject's slots and every picture it may use. A
+// subject is a character or a chat actor (an avatar, a portrait), any other entry (a cover; a lorebook's entry
+// pictures, a scenario's backdrops), or the source or campaign itself (its cover; a campaign's chat backdrops
+// and the pictures on its posts, with the ones whose post is gone).
 //
 // Everything shown comes from the library (titles, descriptions, provenance) and is only ever set as text. A
 // slot is shown, hidden or unavailable exactly as the library resolves it: a picture that cannot be shown says
-// why, and nothing stands in for it. Every edit names the slot's revision as read, so a slot that changed
-// meanwhile is refused and nothing is written.
+// why, and nothing stands in for it. A slot's picture is chosen and framed in the picture picker (picker.js);
+// every edit names the slot's revision as read, so a slot that changed meanwhile is refused and nothing is
+// written.
 
-const BASIS = 10000;           // 018's crop and focus are integer basis points; the page edits them as percent
-const MAX_UPLOAD = 32 * 1024 * 1024;
-const PAGE = 200, MAX_LIST = 1000;  // pictures listed at first, and the most one gallery request returns
-const SLOTS = ["avatar", "portrait"];
+import { ACCEPT, MAX_LIST, MAX_UPLOAD, base64, describe, frame, openPicker, refusal, reusablePictures, slotAspect,
+  slotKind, slotName, slotUse, zoomOf } from "./picker.js";
+import { forgetSubject } from "./covers.js";
+
+const PAGE = 200;  // pictures listed at first
+// The slots a subject is shown with even before anything is placed there: a character's or a chat actor's
+// avatar and portrait, and the cover of anything else (an entry, a source, a campaign).
+function firstSlots(subject) {
+  const parts = subject.split("/");
+  return parts.length === 3 && parts[1] === "character" ? ["avatar", "portrait"] : ["cover"];
+}
+// What a slot card is called: its slot's name, and for a named slot (a backdrop, an entry or post picture) which one.
+function slotTitle(slot) {
+  const kind = slotKind(slot);
+  return kind && kind !== "cover" ? slotName(slot) + " (" + slot.slice(kind.length + 1) + ")" : slotName(slot);
+}
 const GALLERY_SLOT = /^gallery[0-9]{1,3}$/;
 const STATES = { shown: "Shown", hidden: "Hidden", unavailable: "Unavailable", empty: "Nothing placed" };
 const ORIGINS = { local: "Placed here", replaced: "Replaced here", cleared: "Hidden here", adjusted: "Re-cropped here",
   missing: "Its picture is missing", broken: "Its picture cannot be read" };
-const MODES = { set: "Use a picture", adjust: "Re-crop the inherited picture", hide: "Hide this slot",
-  inherit: "Go back to the inherited picture" };
+const USED = { set: "", adjust: " (re-cropped)" };
 
 export async function mount(root, ctx) {
+  ctx.styles("picker.css");
   ctx.styles("page.css");
+  ctx.layout("page");
   ctx.setTitle("Art");
   const scopes = await ctx.api("media.scopes", {});
   const choices = [
@@ -35,7 +52,7 @@ export async function mount(root, ctx) {
     root.append(ctx.ui.empty("Nothing in this library holds pictures yet. Import a card or start a chat first."));
     return;
   }
-  if (subject) await subjectView(root, ctx, scope, subject);
+  if (subject) await subjectView(root, ctx, scope, subject, choices);
   else await galleryView(root, ctx, scope, choices);
 }
 
@@ -53,32 +70,41 @@ async function galleryView(root, ctx, scope, choices) {
   const picker = ui.choice("Pictures of", choices.filter((item) => !item.excluded || item.value === scope),
     { value: scope, onchange: (value) => ctx.navigate(address(ctx, { scope: value })) });
   const excluded = choices.filter((item) => item.excluded);
-  root.append(...present(picker.node, excluded.length
-    ? el("p", { class: "g-muted" }, excluded.length + " source" + (excluded.length === 1 ? " is" : "s are")
-      + " left out of this library, so " + (excluded.length === 1 ? "it shows" : "they show") + " no art.") : null));
   const gallery = await ctx.api("media.gallery", { scope, limit });
+  const names = new Map(gallery.subjects.map((item) => [item.subject, item.name || item.subject]));
+  const adding = ctx.has("media.upload") ? adder(ctx, [scope], () => ctx.navigate(address(ctx, { scope, limit: ctx.query.get("limit") }))) : null;
 
-  if (ctx.has("media.upload")) root.append(uploadForm(ctx, { scope }, () => ctx.navigate(address(ctx, { scope }))));
-  else root.append(ui.unavailable("Adding pictures", "This app does not serve media.upload."));
+  const page = el("div", { class: "g-stack g-loose" },
+    el("div", { class: "art-top" }, picker.node, excluded.length
+      ? el("p", { class: "g-muted" }, excluded.length + " source" + (excluded.length === 1 ? " is" : "s are")
+        + " left out of this library, so " + (excluded.length === 1 ? "it shows" : "they show") + " no art.") : null),
+    el("section", { class: "g-stack", "aria-label": "Who uses these pictures" },
+      ui.eyebrow("Who uses these pictures"),
+      gallery.subjects.length ? el("div", { class: "art-people" }, gallery.subjects.map((item) =>
+        el("a", { class: "g-rowcard", href: address(ctx, { scope, subject: item.subject }) },
+          ui.avatar(item.name || item.subject, { size: 36, key: item.subject }),
+          el("span", { class: "g-grow" }, el("span", { class: "g-title g-clip art-block" }, item.name || item.subject),
+            el("span", { class: "g-muted g-ref art-block" }, item.subject)))))
+        : ui.empty("Nothing here uses pictures yet.")),
+    el("section", { class: "g-stack", "aria-label": "Pictures" },
+      ui.eyebrow("Pictures"),
+      adding ? adding.tray : ui.unavailable("Adding pictures", "This app does not serve media.upload."),
+      gallery.images.length || adding ? el("div", { class: "art-grid" }, adding ? adding.tile : null,
+        gallery.images.map((image) => pictureCard(ctx, image, usedBy(image, names)))) : null,
+      gallery.images.length ? null : ui.empty("No pictures here yet."),
+      gallery.more ? (limit < MAX_LIST
+        ? el("div", {}, el("a", { class: "g-button", href: address(ctx, { scope, limit: Math.min(limit * 4, MAX_LIST) }) }, "Show more"))
+        : el("p", { class: "g-muted" }, "Only the first " + MAX_LIST + " pictures are listed.")) : null),
+    problems(ui, gallery.problems));
+  root.append(page);
+}
 
-  root.append(ui.section("Who uses these pictures", ui.list(gallery.subjects.map((item) =>
-    el("a", { href: address(ctx, { scope, subject: item.subject }) }, ui.rowText(item.name || item.subject, item.subject))),
-  { empty: "No characters or chat actors here." })));
-
-  const cards = gallery.images.map((image) => el("li", { class: "art-card" },
-    image.state === "readable" ? picture(ctx, image.image, describe(image.provenance))
-      : el("div", { class: "art-none art-bad" }, "Unavailable: " + (image.reason || "unknown")),
-    provenance(el, image.provenance),
-    el("div", { class: "g-muted art-meta" }, image.used_by.length
-      ? "Used in " + image.used_by.map((use) => use.slot + " (" + use.mode + ")").join(", ")
-      : "Not placed anywhere")));
-  root.append(ui.section("Pictures", cards.length ? el("ul", { class: "art-grid" }, cards) : ui.empty("No pictures here yet.")));
-  if (gallery.more) {
-    root.append(limit < MAX_LIST
-      ? el("a", { class: "g-button", href: address(ctx, { scope, limit: Math.min(limit * 4, MAX_LIST) }) }, "Show more")
-      : el("p", { class: "g-muted" }, "Only the first " + MAX_LIST + " pictures are listed."));
-  }
-  root.append(...present(problems(ui, gallery.problems)));
+// Where a picture is placed, by the people of its own scope: "Portrait of Mara Vell".
+function usedBy(image, names, only) {
+  const uses = image.used_by.filter((use) => !only || use.subject === only);
+  if (!uses.length) return "Not placed anywhere";
+  return "Used in " + uses.map((use) => (only ? use.slot : use.slot + " of " + (names.get(use.subject) || use.subject))
+    + (USED[use.mode] === undefined ? " (" + use.mode + ")" : USED[use.mode])).join(", ");
 }
 
 // -- one subject's slots -------------------------------------------------------------------------------------
@@ -86,132 +112,97 @@ async function subjectView(root, ctx, scope, subject) {
   const { ui } = ctx;
   const { el } = ui;
   let art = await ctx.api("media.art", { subject });
-  let reusable = {};  // the readable pictures of each scope this subject may use, by scope
-  const loadReusable = async () => {
-    const next = {};
-    for (const from of art.reusable) {
-      try {
-        next[from] = (await ctx.api("media.gallery", { scope: from, limit: MAX_LIST })).images
-          .filter((image) => image.state === "readable");
-      } catch (error) {
-        if (error.reason === "left") throw error;
-        next[from] = [];
-      }
-    }
-    reusable = next;
-  };
-  await loadReusable();
+  let galleries = await reusablePictures(ctx, art);  // the readable pictures of each scope this subject may use
   // what a placed picture is called, from its gallery; a picture past the listed ones goes unnamed
   const named = (ref) => {
-    for (const images of Object.values(reusable)) {
+    for (const { images } of galleries) {
       const found = images.find((image) => image.image === ref);
       if (found) return describe(found.provenance);
     }
     return null;
   };
   const added = new Set();  // gallery slots added on this page, not yet placed
-  const region = el("div", {});
-  root.append(el("p", {}, ui.link("All pictures of this scope", "art", [], { scope })), region);
-
-  const render = () => {
-    ctx.setTitle("Art: " + (art.name || art.subject));
-    const own = Object.fromEntries(art.own.map((entry) => [entry.slot, entry]));
-    const slots = new Map(art.slots.map((slot) => [slot.slot, slot]));
-    for (const name of [...SLOTS, ...added]) if (!slots.has(name)) slots.set(name, { slot: name, state: "empty" });
-    region.replaceChildren(...present(
-      el("h2", {}, art.name || art.subject),
-      el("p", { class: "g-muted art-meta" }, art.subject),
-      art.inherits ? el("p", { class: "g-muted" }, art.inherits.follows === "pinned"
-        ? "This chat keeps the pictures its character had when the chat started. A picture added to the character later shows here only after the chat moves to that revision."
-        : "This follows its character's pictures as they change.") : null,
-      art.editable ? null : ui.notice("This device's sync records cannot be read, so no slot can be changed here.", { kind: "bad" }),
-      el("div", { class: "art-slots" }, [...slots.values()].map((slot) => slotCard(slot, own[slot.slot]))),
-      art.editable && ctx.has("media.place") ? newSlot() : null,
-      problems(ui, art.problems)));
+  const region = el("div", { class: "g-stack g-loose" });
+  root.append(region);
+  const editable = () => art.editable && (ctx.has("media.place") || ctx.has("media.upload"));
+  const reload = async (next) => {
+    forgetSubject(subject);  // what other pages kept of this subject's cover is out of date after a change here
+    art = next || await ctx.api("media.art", { subject });
+    galleries = await reusablePictures(ctx, art);
+    render();
   };
+
+  // Replace and Crop open the picker on the slot; both end in the same write, the picker's "Use this picture"
+  const pick = (slot, key) => ctx.act(async () => {
+    const done = await openPicker(ctx, { subject, slot: slot.slot, art,
+      target: (art.name || art.subject) + ": " + slotName(slot.slot).toLowerCase() });
+    if (!done) return;
+    await reload(done.art);
+    const back = region.querySelector('button[data-focus-key="' + CSS.escape(key) + '"]');
+    if (back) back.focus();
+  });
+  const place = (slot, mode, mine, said) => ctx.act(async () => {
+    const next = await ctx.api("media.place", { subject, slot: slot.slot, mode, expected: mine ? mine.etag : null });
+    ctx.notify(said);
+    await reload(next);
+  });
 
   const slotCard = (slot, mine) => {
     const conflicted = art.conflicts.includes(slot.slot);
-    const state = STATES[slot.state] || slot.state;
-    const card = ui.section(slot.slot,
-      slot.state === "shown" ? picture(ctx, slot.image, (art.name || "") + " " + slot.slot) : null,
-      slot.state === "shown" && named(slot.image) ? el("div", { class: "art-meta" }, named(slot.image)) : null,
-      el("div", { class: slot.state === "unavailable" ? "art-bad" : "" }, state
-        + (slot.state === "unavailable" ? ": " + slot.reason + (slot.note ? " (" + slot.note + ")" : "") : "")),
+    const title = slotTitle(slot.slot);
+    const label = (art.name || art.subject) + ": " + title.toLowerCase();
+    const use = slotUse(slot.slot);
+    const name = slot.state === "shown" ? named(slot.image) : null;
+    const zoom = slot.state === "shown" ? zoomOf(slot.crop) : null;
+    const card = el("div", { class: "art-slot", "data-slot": slot.slot },
+      frame(ctx, { aspect: slotAspect(slot.slot), image: slot.state === "shown" ? slot.image : null, label,
+        zoom: zoom && zoom > 100 ? zoom : null, empty: STATES[slot.state] || slot.state }),
+      el("div", { class: "art-slot-head" }, el("strong", {}, title),
+        el("span", { class: "art-slot-state" + (slot.state === "unavailable" ? " art-bad" : slot.state === "shown" ? " art-good" : "") },
+          STATES[slot.state] || slot.state)),
+      slot.state === "unavailable" ? el("div", { class: "art-meta art-bad" }, slot.reason + (slot.note ? " (" + slot.note + ")" : "")) : null,
+      use ? el("div", { class: "g-muted art-meta" }, use) : null,
+      name ? el("div", { class: "art-meta" }, name) : null,
       slot.origin ? el("div", { class: "g-muted art-meta" }, slot.origin === "inherited"
         ? "Inherited from " + slot.placed_by : (ORIGINS[slot.origin] || slot.origin)) : null,
-      slot.state === "shown" ? provenance(el, slot.provenance) : null);
-    card.classList.add("art-card");
+      slot.state === "shown" && slot.crop && zoom === null ? el("div", { class: "g-muted art-meta" }, "Shown with an exact crop") : null,
+      slot.state === "shown" ? provenance(el, slot.provenance, !name) : null);
     if (conflicted) {
-      card.append(...present(ui.notice("Two devices changed this slot. Choose which to keep under Sync before changing it again.", { kind: "bad" }),
-        ctx.registered("sync") ? ui.link("Open Sync", "sync") : null));
-    } else if (art.editable) {
-      if (ctx.has("media.place")) card.append(editor(slot, mine));
-      if (ctx.has("media.upload")) {
-        card.append(el("details", {}, el("summary", {}, "Add a new picture to " + slot.slot),
-          uploadForm(ctx, { scopes: art.reusable, subject, slot: slot.slot, expected: mine ? mine.etag : null }, async (answer) => {
-            art = answer.art || art;
-            await loadReusable();  // the new picture is in its gallery now, so it can be chosen and named here
-            render();
-          })));
+      card.append(...present(ui.notice("Two devices changed this slot. Choose which to keep under Devices and sync before changing it again.", { kind: "bad" }),
+        ctx.registered("sync") ? ui.link("Open Devices and sync", "sync") : null));
+    } else if (editable()) {
+      const keys = { replace: "art-replace:" + slot.slot, crop: "art-crop:" + slot.slot };
+      const buttons = [ui.button(slot.state === "shown" ? "Replace" : "Choose", () => pick(slot, keys.replace), { size: "small" })];
+      buttons[0].setAttribute("data-focus-key", keys.replace);
+      buttons[0].setAttribute("aria-label", (slot.state === "shown" ? "Replace " : "Choose a picture for ") + label);
+      if (slot.state === "shown" && ctx.has("media.place")) {
+        const crop = ui.button("Crop", () => pick(slot, keys.crop), { size: "small" });
+        crop.setAttribute("data-focus-key", keys.crop);
+        crop.setAttribute("aria-label", "Crop " + label);
+        buttons.push(crop);
       }
+      if (ctx.has("media.place") && art.modes.includes("hide") && slot.state !== "hidden" && slot.state !== "empty") {
+        // a character's slot is hidden; a cover, a backdrop and the like are taken off once something is there
+        const named = slotKind(slot.slot);
+        if (!named || mine) {
+          const hide = ui.button(named ? "Remove" : "Hide", () => place(slot, "hide", mine, title + (named ? " removed." : " hidden.")), { size: "small" });
+          hide.setAttribute("aria-label", (named ? "Remove " : "Hide ") + label);
+          buttons.push(hide);
+        }
+      }
+      if (ctx.has("media.place") && art.modes.includes("inherit") && mine && mine.mode !== "inherit") {
+        const reset = ui.button("Use inherited", () => place(slot, "inherit", mine, title + " follows its source again."), { size: "small" });
+        reset.setAttribute("aria-label", "Go back to the inherited picture for " + label);
+        buttons.push(reset);
+      }
+      card.append(el("div", { class: "art-slot-actions" }, buttons));
     }
     return card;
   };
 
-  const editor = (slot, mine) => {
-    // the picture this slot inherits, where the art says which: shown as inherited, or named by its own re-crop.
-    // A re-crop names exactly that picture (038), so it is offered only when it is known.
-    const inherited = slot.state === "shown" && slot.origin === "inherited" ? slot.image
-      : mine && mine.mode === "adjust" ? mine.image : null;
-    const modes = art.modes.filter((mode) => mode !== "adjust" || inherited)
-      .map((mode) => ({ value: mode, label: MODES[mode] || mode }));
-    const options = Object.entries(reusable).flatMap(([from, images]) => images.map((image) =>
-      ({ value: image.image, label: describe(image.provenance) + " · " + from })));
-    // the picture shown now stays chosen even when it is not among the listed ones, so saving a crop alone never
-    // swaps it for another; with none shown, a picture must be picked
-    const current = slot.state === "shown" ? slot.image : null;
-    if (current && !options.some((option) => option.value === current)) {
-      options.unshift({ value: current, label: (named(current) || "The picture shown now") + " · shown now" });
-    }
-    if (!current && options.length) options.unshift({ value: "", label: "Choose a picture" });
-    const mode = ui.choice("Change " + slot.slot, modes, { value: modes.length ? modes[0].value : "" });
-    const image = options.length ? ui.choice("Picture", options, { value: current || "" }) : null;
-    const box = ["x", "y", "w", "h"].map((key) => number(ui, "Crop " + key + " %", (slot.crop || {})[key]));
-    const point = ["x", "y"].map((key) => number(ui, "Focus " + key + " %", (slot.focus || {})[key]));
-    const save = async () => {
-      const args = { subject, slot: slot.slot, mode: mode.value, expected: mine ? mine.etag : null };
-      if (mode.value === "set" || mode.value === "adjust") {
-        if (mode.value === "set") {
-          if (!image) throw refusal("A picture is needed: add one first.");
-          if (!image.value) throw refusal("Choose the picture to use first.");
-          args.image = image.value;
-        } else {
-          args.image = inherited;
-        }
-        const crop = box.map(read), focus = point.map(read);
-        if (crop.some((value) => value !== null)) {
-          if (crop.some((value) => value === null)) throw refusal("A crop needs all four of x, y, w and h.");
-          args.crop = { x: crop[0], y: crop[1], w: crop[2], h: crop[3] };
-        }
-        if (focus.some((value) => value !== null)) {
-          if (focus.some((value) => value === null)) throw refusal("A focus needs both x and y.");
-          args.focus = { x: focus[0], y: focus[1] };
-        }
-      }
-      art = await ctx.api("media.place", args);
-      ctx.notify("Saved " + slot.slot + ".");
-      render();
-    };
-    return el("div", {}, mode.node, image ? image.node : el("p", { class: "g-muted" }, "No picture can be placed here yet: add one first."),
-      el("fieldset", {}, el("legend", {}, "Crop and focus, in percent (optional)"),
-        el("div", { class: "art-numbers" }, box.map((item) => item.node), point.map((item) => item.node))),
-      ui.actions(ui.button("Save", () => ctx.act(save), { kind: "primary" })));
-  };
-
   const newSlot = () => {
     const name = ui.field("Gallery slot", { placeholder: "gallery1", hint: "gallery and a number" });
-    return el("details", {}, el("summary", {}, "Add a gallery slot"), name.node, ui.actions(ui.button("Add slot", () => {
+    return el("details", { class: "art-more" }, el("summary", {}, "Add a gallery slot"), name.node, ui.actions(ui.button("Add slot", () => {
       const value = name.value.trim();
       if (!GALLERY_SLOT.test(value)) { name.setError("A gallery slot is gallery and a number, such as gallery1."); return; }
       name.setError("");
@@ -220,43 +211,109 @@ async function subjectView(root, ctx, scope, subject) {
     })));
   };
 
+  function render() {
+    const who = art.name || art.subject;
+    ctx.setTitle(who);
+    ctx.setCrumb(ui.link("Art", "art", [], { scope }), " / " + scope);
+    const own = Object.fromEntries(art.own.map((entry) => [entry.slot, entry]));
+    // the avatar and the portrait first, placed or not; then every other slot the subject has, then new ones
+    const read = new Map(art.slots.map((slot) => [slot.slot, slot]));
+    const slots = new Map(firstSlots(art.subject).map((name) => [name, read.get(name) || { slot: name, state: "empty" }]));
+    for (const [name, slot] of read) slots.set(name, slot);
+    for (const name of added) if (!slots.has(name)) slots.set(name, { slot: name, state: "empty" });
+    const pictures = galleries.flatMap(({ scope: from, images }) => images.map((image) => ({ image, from })));
+    const adding = art.editable && ctx.has("media.upload") ? adder(ctx, art.reusable, () => reload()) : null;
+    region.replaceChildren(...present(
+      el("div", { class: "g-stack" },
+        el("div", { class: "g-row g-between" }, el("span", { class: "g-muted g-ref" }, art.subject),
+          ui.link("All pictures of this scope", "art", [], { scope })),
+        art.inherits ? el("p", { class: "g-muted art-flat" }, art.inherits.follows === "pinned"
+          ? "This chat keeps the pictures its character had when the chat started. A picture added to the character later shows here only after the chat moves to that revision."
+          : "This follows its character's pictures as they change.") : null,
+        art.editable ? null : ui.notice("This device's sync records cannot be read, so no slot can be changed here.", { kind: "bad" })),
+      el("section", { class: "g-stack", "aria-label": "Where these pictures show" },
+        ui.eyebrow("Where these pictures show"),
+        el("div", { class: "art-slots" }, [...slots.values()].map((slot) => slotCard(slot, own[slot.slot]))),
+        art.editable && ctx.has("media.place") ? newSlot() : null),
+      el("section", { class: "g-stack", "aria-label": "All pictures" },
+        el("div", { class: "g-row g-between" }, ui.eyebrow("All pictures of " + who),
+          pictures.length && editable() ? el("span", { class: "g-muted" }, "Use Replace on a slot to place one") : null),
+        adding ? adding.tray : null,
+        pictures.length || adding ? el("div", { class: "art-grid" }, adding ? adding.tile : null,
+          pictures.map(({ image, from }) => pictureCard(ctx, image,
+            usedBy(image, new Map(), subject) + (art.reusable.length > 1 ? " · " + from : "")))) : null,
+        pictures.length ? null : ui.empty("No pictures here yet.")),
+      problems(ui, art.problems)));
+  }
+
   render();
 }
 
 // -- shared pieces -------------------------------------------------------------------------------------------
-function uploadForm(ctx, target, done) {
+
+// Adding pictures to a gallery: a drop tile (drag files onto it, or choose them) and a tray that lists what is
+// waiting, each with its own description, before anything is sent. Returns { tile, tray }.
+function adder(ctx, scopes, done) {
   const { ui } = ctx;
   const { el } = ui;
-  const inputId = ui.id("art-file");
-  const file = el("input", { id: inputId, type: "file", class: "g-input", accept: "image/png,image/jpeg,image/webp,image/gif" });
-  const note = ui.field("Description (optional)", { placeholder: "Mara at the harbor" });
-  const into = target.scopes && target.scopes.length > 1
-    ? ui.choice("Keep it with", target.scopes.map((scope) => ({ value: scope, label: scope })), { value: target.scopes[0] }) : null;
-  const add = async () => {
-    const chosen = file.files && file.files[0];
-    if (!chosen) throw refusal("Choose a picture first.");
-    if (chosen.size > MAX_UPLOAD) throw refusal("A picture is at most 32 MiB.");
-    const args = { scope: target.scope || (into ? into.value : target.scopes[0]), media: await base64(chosen),
-      note: note.value.trim() || null, origin: null };
-    if (target.subject) Object.assign(args, { subject: target.subject, slot: target.slot, expected: target.expected });
-    const answer = await ctx.api("media.upload", args);
-    note.clear();
-    ctx.notify(target.subject ? "Added and placed in " + target.slot + "." : "Added.");
-    await done(answer);
+  let waiting = [];  // [{ file, note }]
+  const input = el("input", { type: "file", accept: ACCEPT, multiple: true, hidden: true, "aria-label": "Picture files" });
+  const tile = el("button", { type: "button", class: "art-add", onclick: () => input.click() }, "Drop pictures here, or choose files");
+  const into = scopes.length > 1 ? ui.choice("Keep them with", scopes.map((scope) => ({ value: scope, label: scope })), { value: scopes[0] }) : null;
+  const tray = el("div", { class: "art-tray", hidden: true });
+  const send = async () => {
+    let sent = 0;
+    try {
+      while (waiting.length) {
+        const { file, note } = waiting[0];
+        if (file.size > MAX_UPLOAD) throw refusal((file.name || "A picture") + " is larger than 32 MiB.");
+        await ctx.api("media.upload", { scope: into ? into.value : scopes[0], media: await base64(file),
+          note: note.value.trim() || null, origin: null });
+        waiting.shift();
+        sent += 1;
+      }
+    } finally {
+      if (sent) ctx.notify(sent === 1 ? "Added." : "Added " + sent + " pictures.");
+      if (sent && waiting.length) show();
+    }
+    await done();
   };
-  return el("div", { class: "g-section" }, el("div", { class: "g-field" }, el("label", { for: inputId }, "Picture to add"), file),
-    note.node, into ? into.node : null, ui.actions(ui.button("Add picture", () => ctx.act(add), { kind: "primary" })));
+  function show() {
+    tray.hidden = !waiting.length;
+    tray.replaceChildren(...present(
+      el("strong", {}, waiting.length === 1 ? "1 picture ready to add" : waiting.length + " pictures ready to add"),
+      ...waiting.map((item) => el("div", { class: "art-tray-row" }, item.note.node,
+        ui.button("Remove", () => { waiting = waiting.filter((other) => other !== item); show(); }, { kind: "linklike", size: "small" }))),
+      into ? into.node : null,
+      ui.actions(ui.button(waiting.length === 1 ? "Add picture" : "Add " + waiting.length + " pictures", () => ctx.act(send), { kind: "primary" }),
+        ui.button("Clear", () => { waiting = []; show(); }))));
+  }
+  const take = (files) => {
+    for (const file of files || []) waiting.push({ file, note: ui.field("Description of " + (file.name || "this picture") + " (optional)", {}) });
+    show();
+  };
+  input.addEventListener("change", () => { take(input.files); input.value = ""; });
+  for (const type of ["dragenter", "dragover"]) tile.addEventListener(type, (event) => { event.preventDefault(); tile.classList.add("art-over"); });
+  tile.addEventListener("dragleave", () => tile.classList.remove("art-over"));
+  tile.addEventListener("drop", (event) => {
+    event.preventDefault();
+    tile.classList.remove("art-over");
+    if (event.dataTransfer) take([...event.dataTransfer.files]);
+  });
+  return { tile: el("div", { class: "art-add-wrap" }, tile, input), tray };
 }
 
-// A picture by its ref, or a plain statement that it cannot be shown here: never another picture in its place.
-function picture(ctx, ref, label) {
+// One picture of a gallery: the picture (or why it cannot be shown), what it is called, where it came from and
+// where it is used.
+function pictureCard(ctx, image, used) {
   const { el } = ctx.ui;
-  const frame = el("div", { class: "art-none", role: "img", "aria-label": label }, "Loading…");
-  ctx.picture(ref).then((url) => {
-    if (url) frame.replaceWith(el("img", { class: "art-thumb", src: url, alt: label }));
-    else frame.textContent = "This picture cannot be shown here.";
-  }, () => { /* the page was left */ });
-  return frame;
+  const label = image.state === "readable" ? describe(image.provenance) : "Unavailable picture";
+  return el("div", { class: "art-card" },
+    image.state === "readable" ? frame(ctx, { aspect: "3/4", image: image.image, label })
+      : el("div", { class: "art-frame art-aspect-3-4" }, el("span", { class: "art-frame-text art-bad" }, "Unavailable: " + (image.reason || "unknown"))),
+    image.state === "readable" ? el("span", { class: "art-card-name" }, label) : null,
+    provenance(el, image.provenance, false),
+    el("span", { class: "g-muted art-meta" }, used));
 }
 
 // The nodes that are there: append() and replaceChildren() would write a missing one out as the text "null".
@@ -264,14 +321,12 @@ function present(...nodes) {
   return nodes.filter((node) => node !== null && node !== undefined);
 }
 
-function describe(provenance) {
-  return (provenance && provenance.note) || "Untitled picture";
-}
-
-function provenance(el, record) {
+// Where a picture came from, as its record says. `withNote` also shows its description (a slot card names its
+// picture from the gallery, and falls back to the record's own note).
+function provenance(el, record, withNote) {
   if (!record) return null;
   const lines = [];
-  if (record.note) lines.push(el("div", { class: "art-meta" }, record.note));
+  if (withNote && record.note) lines.push(el("div", { class: "g-muted art-meta" }, record.note));
   if (record.origin) lines.push(el("div", { class: "g-muted art-meta" }, "Origin: " + record.origin));
   if (record.legacy_id) lines.push(el("div", { class: "g-muted art-meta" }, "V1 record: " + record.legacy_id));
   for (const [key, value] of Object.entries(record.other || {})) lines.push(el("div", { class: "g-muted art-meta" }, key + ": " + value));
@@ -280,36 +335,7 @@ function provenance(el, record) {
 
 function problems(ui, list) {
   if (!list || !list.length) return null;
-  return ui.el("details", { class: "g-notice" },
+  return ui.el("details", { class: "g-notice art-problems" },
     ui.el("summary", {}, list.length + " record" + (list.length === 1 ? "" : "s") + " could not be read"),
     list.map((item) => ui.el("div", { class: "g-muted art-meta" }, (item.path ? item.path + ": " : "") + item.code + (item.detail ? " (" + item.detail + ")" : ""))));
-}
-
-// A crop or focus field: percent with two decimals, read back as basis points (or null when left empty).
-function number(ui, label, value) {
-  const item = ui.field(label, { type: "number", value: value === null || value === undefined ? "" : String(value / (BASIS / 100)) });
-  item.input.setAttribute("min", "0");
-  item.input.setAttribute("max", "100");
-  item.input.setAttribute("step", "0.01");
-  item.input.setAttribute("inputmode", "decimal");
-  return { node: item.node, input: item.input, label };
-}
-
-function read(item) {
-  const text = item.input.value.trim();
-  if (text === "") return null;
-  const value = Number(text);
-  if (!Number.isFinite(value) || value < 0 || value > 100) throw refusal(item.label + " must be 0 to 100.");
-  return Math.round(value * (BASIS / 100));
-}
-
-function refusal(message) {
-  return Object.assign(new Error(message), { reason: "invalid_field" });
-}
-
-async function base64(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let text = "";
-  for (let start = 0; start < bytes.length; start += 0x8000) text += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
-  return btoa(text);
 }

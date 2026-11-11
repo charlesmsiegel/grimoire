@@ -23,7 +23,7 @@ A trace never holds prompt, reply or post text, character or player names, ids o
 | Money | `unpriced` (`None`) unless the caller passes a `PriceTable` with a price for every route the role used; `estimated` when any count was not provider-reported (a test's or scripted transport's, or an estimate), so a made-up bill never reads as a real one; `partial` (a lower bound) when a needed count is unreported, including an unknown cache share (charged at the cheaper rate) and a lost call; otherwise `priced`. An attempt never sent costs nothing. |
 | Retries | `attempts` beyond each call's first; `failed` counts failed or cancelled attempts, never unsent or lost ones; `lost` counts sent calls whose booking failed. |
 
-No prices ship (013). Without a table every cost is `unpriced`.
+No prices ship (013). Without a table every cost is `unpriced`. `usage_cost(attempts, prices)` gives the same cost and state for attempts taken from a ledger instead of a trace, with whether it is exact: the app's Models and costs page prices a chat's usage with it, from the prices the person set ([INFERENCE_UI](INFERENCE_UI.md#prices-and-costs)).
 
 ## The runner's hook
 

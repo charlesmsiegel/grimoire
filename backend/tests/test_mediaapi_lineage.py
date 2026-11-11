@@ -37,7 +37,7 @@ def media(tmp_path):
 def test_a_portrayal_whose_base_is_gone_may_still_hide_or_reset_its_own_picture(media):
     store, api = media
     assert api.call("media.art", {"subject": str(VAMPIRE_ENTITY)})["modes"] == list(EDIT_MODES)
-    assert api.call("media.art", {"subject": str(BASE.unpinned())})["modes"] == ["set"]
+    assert api.call("media.art", {"subject": str(BASE.unpinned())})["modes"] == ["set", "hide"]  # it inherits nothing
     store.root.joinpath(*address_parts(BASE)).unlink()
     art = api.call("media.art", {"subject": str(VAMPIRE_ENTITY)})
     assert art["lineage"] == [str(VAMPIRE_ENTITY)]  # nothing is inherited now

@@ -24,7 +24,7 @@ from dataclasses import replace
 
 from grimoire.chats.codec import ChatCodecError
 from grimoire.chats.navigation import MAX_RECENT
-from grimoire.core.identity import ChatRef, ImageRef, InstanceRef, PlacementRef, ScopeRef, SourceRef, TurnRef
+from grimoire.core.identity import ChatRef, ImageRef, InstanceRef, OwnerRef, PlacementRef, ScopeRef, SourceRef, TurnRef
 from grimoire.devicetag import DeviceIdentityUnusable, device_tag
 from grimoire.images import (
     Crop,
@@ -54,6 +54,7 @@ from grimoire.sync.turns import open_conflicts
 from grimoire.textapi import ApiRefused, TextApi
 from grimoire.textapi.views import fork_view, set_aside_view, turn_view
 
+from .beyond import BeyondSlots
 from .views import image_view, placement_view, report_problems, slot_view, subject_ref
 
 #: 038's own cap on one picture's bytes (W1-W2).
@@ -69,6 +70,8 @@ FORK_CHATS = 50
 #: The placement modes a person may write here. ``unresolved`` is an importer's record of a missing picture,
 #: never something the app writes: a person adds the picture instead.
 EDIT_MODES = ("set", "adjust", "hide", "inherit")
+#: What a subject that inherits nothing may write: a standalone definition, a source or a campaign as a whole.
+STANDALONE_MODES = ("set", "hide")
 #: What the app's sync can and cannot do, said plainly wherever devices are shown (028, 044).
 TRANSPORT = {
     "loopback_only": True,
@@ -122,12 +125,13 @@ def _scope(args: Mapping[str, object]) -> str:
     return text
 
 
-def _subject(args: Mapping[str, object]) -> SourceRef | InstanceRef:
+def _subject(args: Mapping[str, object]) -> SourceRef | InstanceRef | OwnerRef:
     text = _field(args, "subject", str)
     try:
         return subject_ref(text)
     except (ValueError, TypeError):
-        raise ApiRefused("invalid_field", "subject must be an unpinned definition or a campaign instance") from None
+        raise ApiRefused("invalid_field", "subject must be an unpinned definition, a campaign instance, or a "
+                                          "source or campaign as a whole") from None
 
 
 def _media(args: Mapping[str, object]) -> bytes:
@@ -176,7 +180,7 @@ def _expected(args: Mapping[str, object]) -> str | None:
     return value
 
 
-class MediaSyncApi:
+class MediaSyncApi(BeyondSlots):
     """The media and sync ops over the library ``text`` serves, for the same owner. ``new_id`` draws a new
     image id from a prefix (default: random), qualified by this device's tag as 044's ``add_art`` does, so two
     devices adding pictures offline never write one image id with two contents."""
@@ -195,6 +199,8 @@ class MediaSyncApi:
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "media.scopes": self._scopes, "media.gallery": self._gallery, "media.art": self._art,
             "media.upload": self._upload, "media.place": self._place,
+            "media.shown": self._shown, "media.entries": self._entries, "media.chat": self._chat_art,
+            "media.backdrop_from": self._backdrop_from,
             "sync.devices": self._devices, "sync.identify": self._identify, "sync.pair": self._pair,
             "sync.run": self._sync, "sync.conflicts": self._conflict_list, "sync.resolve": self._resolve,
             "sync.forks": self._forks, "sync.choose": self._choose,
@@ -254,9 +260,15 @@ class MediaSyncApi:
                               "world": None if entry is None else entry.world})
         return {"sources": sources, "campaigns": campaigns}
 
-    def _name(self, view, subject: SourceRef | InstanceRef) -> str:  # type: ignore[no-untyped-def]
-        """A subject's display name: a definition's head name, an instance's own name or its derivation's."""
+    def _name(self, view, subject: SourceRef | InstanceRef | OwnerRef) -> str:  # type: ignore[no-untyped-def]
+        """A subject's display name: a definition's head name, an instance's own name or its derivation's, a
+        source's or a campaign's title."""
         try:
+            if isinstance(subject, OwnerRef):
+                if subject.campaign_id is None:
+                    return str(view.sources[subject.scope].manifest.title or subject.scope)
+                entry = self.text.chats.navigation().scope(subject.campaign_id)
+                return str((entry.title if entry is not None else None) or subject.scope)
             if isinstance(subject, SourceRef):
                 return str(view.index.resolve(subject).name)
             payload = view.instances[subject].envelope.payload
@@ -269,21 +281,24 @@ class MediaSyncApi:
                     return str(view.index.resolve(SourceRef.parse(ref).unpinned()).name)
         except Exception:  # noqa: BLE001 -- a name is presentation only; a subject without one shows its id
             pass
+        if isinstance(subject, OwnerRef):
+            return subject.scope
         return subject.entity_id if isinstance(subject, SourceRef) else subject.instance_id
 
-    def _scope_subjects(self, scope: str) -> tuple[list[SourceRef | InstanceRef], list[dict]]:
-        """The subjects whose own placements may name ``scope``'s pictures, and listing problems."""
+    def _scope_subjects(self, scope: str) -> tuple[list[SourceRef | InstanceRef | OwnerRef], list[dict]]:
+        """The subjects whose own placements may name ``scope``'s pictures, and listing problems: the scope
+        itself first (its cover; a campaign's chat backdrops and post pictures), then what it holds."""
         if scope.startswith("campaign:"):
             campaign = ScopeRef.parse(scope).campaign_id
             placed, complete = self.store.campaign_placement_subjects(campaign)
             subjects = set(placed) | set(self.store.campaign_instances(campaign))
             problems = [] if complete else [{"path": f"campaigns/{campaign}", "code": "unlisted",
                                              "detail": "some placement folders could not be listed"}]
-            return sorted(subjects, key=str), problems
+            return [OwnerRef(scope), *sorted(subjects, key=str)], problems
         entities = self.store.source_entities(scope)
-        return [SourceRef(scope, kind, entity) for kind, entity in sorted(entities)], []
+        return [OwnerRef(scope), *(SourceRef(scope, kind, entity) for kind, entity in sorted(entities))], []
 
-    def _own_placements(self, subject: SourceRef | InstanceRef) -> tuple[list[dict], list[dict]]:
+    def _own_placements(self, subject: SourceRef | InstanceRef | OwnerRef) -> tuple[list[dict], list[dict]]:
         """What ``subject`` itself placed, slot by slot, as written (not as resolved), each with its etag;
         an unreadable placement shows its reason (and its etag when it can be replaced)."""
         refs, problems = self.store.list_placements(subject)
@@ -341,10 +356,11 @@ class MediaSyncApi:
                     "subjects": [{"subject": str(subject), "name": self._name(view, subject)} for subject in subjects],
                     "problems": report_problems(problems) + more_problems}
 
-    def _slot_conflicts(self, subject: SourceRef | InstanceRef) -> tuple[set[str], bool]:
-        """The slots of an instance a sync left in a keep-both conflict here, and whether that is known. A
-        definition's placements are a source's files, which the app cannot see in conflict (``complete``)."""
-        if isinstance(subject, SourceRef):
+    def _slot_conflicts(self, subject: SourceRef | InstanceRef | OwnerRef) -> tuple[set[str], bool]:
+        """The slots of an instance, or of a campaign itself, a sync left in a keep-both conflict here, and
+        whether that is known. A definition's and a source's placements are a source's files, which the app
+        cannot see in conflict (``complete``)."""
+        if subject.campaign_id is None if isinstance(subject, OwnerRef) else isinstance(subject, SourceRef):
             return set(), True
         try:
             found, complete = open_conflicts(self.store, f"campaigns/{subject.campaign_id}",
@@ -357,7 +373,7 @@ class MediaSyncApi:
     def _art(self, args: Mapping[str, object]) -> dict:
         return self._art_of(_subject(args))
 
-    def _art_of(self, subject: SourceRef | InstanceRef) -> dict:
+    def _art_of(self, subject: SourceRef | InstanceRef | OwnerRef) -> dict:
         """What ``subject`` shows in every slot, who decided it, what it placed itself (with each slot's etag for
         a compare-and-swap edit), which modes and image scopes an edit may use here, and slots in conflict."""
         with self.store.read_pass():
@@ -373,9 +389,13 @@ class MediaSyncApi:
             if len(resolution.lineage) >= 2 and isinstance(resolution.lineage[-2], SourceRef):
                 reusable.append(resolution.lineage[-2].source)  # the instance's derivation source (W7)
             modes = list(EDIT_MODES)
+        elif isinstance(subject, OwnerRef):  # a source or a campaign as a whole: its own pictures only
+            reusable = [subject.scope]
+            modes = list(STANDALONE_MODES)
         else:
             reusable = [subject.source]
-            modes = list(EDIT_MODES) if self._derived(subject) else ["set"]  # only a portrayal inherits
+            # only a portrayal inherits: a standalone definition shows its own picture or hides the slot
+            modes = list(EDIT_MODES) if self._derived(subject) else list(STANDALONE_MODES)
         problems = report_problems(resolution.problems) + own_problems
         if not complete:
             problems.append({"path": f"campaigns/{subject.campaign_id}", "code": "conflicts_unknown",  # type: ignore[union-attr]
@@ -408,7 +428,7 @@ class MediaSyncApi:
         return {"follows": "pinned" if pinned else "live", "revision": envelope.base}
 
     # -- writing pictures --------------------------------------------------------------------------------
-    def _check_slot(self, subject: SourceRef | InstanceRef, slot: str) -> PlacementRef:
+    def _check_slot(self, subject: SourceRef | InstanceRef | OwnerRef, slot: str, mode: str) -> PlacementRef:
         if slot_role(slot) is None:
             raise ApiRefused("invalid_field", "an expression slot is expr.<outfit>.<name>")
         try:
@@ -419,6 +439,8 @@ class MediaSyncApi:
         if not complete or slot in conflicts:
             # a third version of a slot in conflict would leave neither device a version to resolve against
             raise ApiRefused("art_conflict", f"{subject}'s {slot} is in conflict after a sync: resolve it first")
+        if mode == "set":  # a picture goes only where the slot's name points at something (an entry, a chat, a post)
+            self._check_target(subject, slot)
         return target
 
     def _placement(self, target: PlacementRef, mode: str, image: ImageRef | None, crop: Crop | None,
@@ -468,7 +490,7 @@ class MediaSyncApi:
         if mode in ("hide", "inherit") and (crop is not None or focus is not None):
             raise ApiRefused("invalid_field", f"a {mode} has no crop or focus")
         expected = _expected(args)
-        target = self._check_slot(subject, slot)
+        target = self._check_slot(subject, slot, mode)
         placement = self._placement(target, mode, image, crop, focus, expected)
         batch = self.images.change()
         batch.place(subject, slot, placement, expected)
@@ -492,7 +514,7 @@ class MediaSyncApi:
             expected = _expected(args)
             crop = _basis(args, "crop", Crop, ("x", "y", "w", "h"))
             focus = _basis(args, "focus", Focus, ("x", "y"))
-            target = self._check_slot(subject, slot)
+            target = self._check_slot(subject, slot, "set")
         image_id = self._new_id(f"art{device_tag(self.store)}")
         batch = self.images.change()
         ref = batch.add_image(scope, image_id, data, provenance)

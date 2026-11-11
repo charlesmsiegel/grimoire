@@ -3,7 +3,7 @@
   "id": "art",
   "route": "art",
   "title": "Art",
-  "slot": "media",
+  "slot": "hidden",
   "order": 10,
   "owner": "114",
   "entry": "page.js",

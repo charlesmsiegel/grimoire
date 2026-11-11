@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from grimoire.core.identity import ImageRef, PlacementRef
-from grimoire.images import Expression, Placement, Shown, Unavailable, placement_from_payload, placement_to_payload
+from grimoire.images import Expression, Hidden, Placement, Shown, Unavailable, placement_from_payload, placement_to_payload
 from grimoire.images.model import ImageModelError
 from grimoire.imagestore import ImageLibrary, InvalidPlacement
 from grimoire.store import LibraryStore
@@ -95,10 +95,12 @@ def test_an_unresolved_placement_names_its_role_and_no_picture(build):
         build()
 
 
-def test_a_source_may_mark_a_picture_missing_but_still_never_hide_one(images):
+def test_a_source_may_mark_a_picture_missing_or_hide_one_but_never_reset_one(images):
     with pytest.raises(InvalidPlacement) as caught:
-        images.place(SAILOR, "avatar", Placement("hide"), None)
+        images.place(SAILOR, "avatar", Placement("inherit"), None)
     assert caught.value.reason == "mode_not_allowed"
+    images.place(SAILOR, "gallery_9", Placement("hide"), None).commit()  # a hide shows nothing and is allowed
+    assert isinstance(images.effective_placements(SAILOR).slot("gallery_9"), Hidden)
     with pytest.raises(InvalidPlacement) as caught:
         images.place(SAILOR, "expr.default.frown", missing(), None)  # the slot names another sprite
     assert caught.value.reason == "role_slot_mismatch"

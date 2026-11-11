@@ -168,9 +168,10 @@ def test_only_a_bounded_few_proposals_are_held(desk):
 
 # -- what imports report and refuse ------------------------------------------------------------------
 
-@pytest.mark.parametrize("data, detail", [(b"\x89PNG\r\n\x1a\nrest", "png"), (b"PK\x03\x04rest", "charx"),
+@pytest.mark.parametrize("data, detail", [(b"PK\x03\x04rest", "charx"),
+                                          (encode({"name": "Old", "first_mes": "hello"}), "chara_card_v1"),
                                           (encode({"spec": "chara_card_v2", "data": {"name": "Old"}}),
-                                           "chara_card_v2")])
+                                           "chara_card_v2_version")])
 def test_unsupported_card_formats_are_refused_by_name_before_anything_is_staged(desk, data, detail):
     before = files_of(desk.folder)
     error = refused(lambda: desk("card.preview", card=b64(data)))
@@ -336,7 +337,10 @@ def test_a_rebase_is_reviewed_decided_and_applied_as_one_proposal(tmp_path):
 def test_capabilities_name_what_is_unavailable_and_why(desk):
     found = desk("review.capabilities")
     unavailable = {row["feature"]: row for row in found["unavailable"]}
-    assert "png_and_charx_cards" in unavailable and unavailable["png_and_charx_cards"]["blocked_by"]
+    assert "charx_cards" in unavailable and unavailable["charx_cards"]["blocked_by"]
+    assert "png_and_charx_cards" not in unavailable  # PNG cards are read now
+    card = found["imports"]["card"]
+    assert "chara_card_v2" in card["formats"] and card["png_max_bytes"] > card["max_bytes"]
     assert set(found["ops"]) == set(desk.api.ops)
 
 

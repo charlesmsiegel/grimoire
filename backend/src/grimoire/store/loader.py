@@ -24,7 +24,7 @@ from types import MappingProxyType
 
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef,
-    TranscriptRef, TurnRef, WrapUpRef,
+    BookmarkRef, TranscriptRef, TurnRef, WrapUpRef,
     paired_instances, validate_segment,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
@@ -41,9 +41,9 @@ from .errors import (
 )
 from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
-    ACCEPTED, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, HOLDINGS, IMAGES, INSTANCES, PLACEMENTS,
+    ACCEPTED, BOOKMARKS, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, HOLDINGS, IMAGES, INSTANCES, PLACEMENTS,
     SCOPE, MANIFEST, MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX,
-    SYNC, TRANSCRIPTS,
+    SYNC, SCOPE_ART, TRANSCRIPTS,
     TURNS, TXN, WRAPUPS, Parts, classify, is_noise, manifest_parts, name_key,
 )
 
@@ -151,7 +151,8 @@ class CampaignRecords:
     """One campaign's records of one family (relations, accepted events, wrap-ups, chats, transcript pages or turns)
     and the problems ``load()`` would report under that family's folder."""
 
-    records: Mapping[RelationRef | AcceptedRef | WrapUpRef | ChatRef | TranscriptRef | TurnRef, StoredScopeRecord]
+    records: Mapping[RelationRef | AcceptedRef | WrapUpRef | ChatRef | TranscriptRef | TurnRef | BookmarkRef,
+                     StoredScopeRecord]
     problems: tuple[LoadProblem, ...]
 
 
@@ -398,9 +399,9 @@ def scan_source(access: Access, source_id: str, *, assets: bool = False) -> Sour
     access.guard.check_read(base)  # never list through a linked ancestor (LinkRefused)
     names = _listing(access, base, problems, source_id)  # links are reported here, not entered
     for name in names:
-        if name in (IMAGES, PLACEMENTS):
+        if name in (IMAGES, PLACEMENTS, SCOPE_ART):
             if assets:
-                walk_assets(access, base + (name,), 0 if name == IMAGES else 2,
+                walk_assets(access, base + (name,), 2 if name == PLACEMENTS else 0,
                             "image" if name == IMAGES else "placement", problems, source_id)
         elif name not in (MANIFEST, RECORDS):
             _unrecognized(access, base + (name,), problems, source_id)
@@ -610,6 +611,7 @@ class _Campaigns:
     accepted: dict[AcceptedRef, StoredScopeRecord] = field(default_factory=dict)
     wrapups: dict[WrapUpRef, StoredScopeRecord] = field(default_factory=dict)
     turns: dict[TurnRef, StoredScopeRecord] = field(default_factory=dict)
+    bookmarks: dict[BookmarkRef, StoredScopeRecord] = field(default_factory=dict)
     holdings: dict[HoldingsRef, StoredScopeRecord] = field(default_factory=dict)
 
 
@@ -721,9 +723,10 @@ def _discover_chats(access: Access, base: Parts, found: _Campaigns, problems: li
 
 #: campaign-scoped record families stored one file per record: folder -> (classified kind, ``_Campaigns`` field)
 _FAMILIES = {RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups"),
-             TURNS: ("turn", "turns"), CHATS: ("chat", "chats")}  # ``load()`` reads chats itself (``_discover_chats``); listed for ``campaign_family``
+             TURNS: ("turn", "turns"), BOOKMARKS: ("bookmark", "bookmarks"), CHATS: ("chat", "chats")}  # ``load()`` reads chats itself (``_discover_chats``); listed for ``campaign_family``
 #: families that grow with every played turn (021, 035): like 020's events/evidence, ``load()`` skips them
-_HISTORY = frozenset({ACCEPTED, WRAPUPS, TURNS, TRANSCRIPTS})  # 036's transcript pages too
+#: a chat's bookmarks are read with its chat (``campaign_family``), never by ``load()``
+_HISTORY = frozenset({ACCEPTED, WRAPUPS, TURNS, TRANSCRIPTS, BOOKMARKS})  # 036's transcript pages too
 
 
 def _discover_family(access: Access, base: Parts, family: str, found: _Campaigns,
@@ -1079,6 +1082,9 @@ def _discover_campaign(access: Access, campaign: str, into: _Campaigns, problems
             continue
         if entry == PLACEMENTS:
             walk_assets(access, base + (entry,), 2, "placement", problems, None)
+            continue
+        if entry == SCOPE_ART:  # the campaign's own pictures (its cover, its chats' backdrops)
+            walk_assets(access, base + (entry,), 0, "placement", problems, None)
             continue
         if entry != INSTANCES or not _is_dir(access, base + (entry,)):
             _unrecognized(access, base + (entry,), problems, None)

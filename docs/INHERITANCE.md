@@ -80,7 +80,7 @@ Before this slice, a source placement could only `set` or mark a picture `unreso
   - mark a slot `unresolved`;
   - `inherit`, which resets the slot to whatever its base chain shows. The store has no deletes, so this is how a slot goes back to inheriting.
 
-  A standalone definition still may only `set` or mark `unresolved`. A `hide` or `inherit` there is `mode_not_allowed`.
+  A standalone definition inherits nothing: it may `set`, mark `unresolved` or `hide` its slot. An `adjust` or `inherit` there is `mode_not_allowed`. Its `hide` reaches what inherits from it like any other placement.
 - **Origins.** `Resolution.origin(slot)` gives an `ArtOrigin(slot, origin, placed_by)`:
 
   | `origin` | Meaning |

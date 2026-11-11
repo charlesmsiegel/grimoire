@@ -29,7 +29,10 @@ from datetime import datetime, timezone
 from grimoire.archaeologystore import MAX_EXPORT_BYTES, StImporter, scan_st_export
 from grimoire.archaeologystore import ImportRefused as StRefused
 from grimoire.cards import CardError
-from grimoire.cardstore import MAX_CARD_BYTES, CardImporter, ImportDenied
+from grimoire.cardstore import (
+    MAX_BATCH_CARDS, MAX_CARD_BYTES, MAX_CARD_PNG_BYTES, MAX_LOREBOOK_FILES, PNG_SIGNATURE, CardImporter, ImportDenied,
+    card_facts,
+)
 from grimoire.changesets import ChangeSetError
 from grimoire.changesets import decode as decode_changeset
 from grimoire.changesetstore import ChangeSetLibrary
@@ -50,6 +53,7 @@ from grimoire.store.errors import WriteDenied
 from grimoire.store.layout import classify
 from grimoire.textapi import ApiRefused
 
+from .cardbatch import MAX_BATCH_BYTES, MAX_HELD_BATCHES, BatchFile, BatchRefused, plan_cards, scan_cards
 from .proposals import Proposals, preview_digest
 from .views import bounded, file_views, jsonable
 
@@ -62,11 +66,12 @@ MAX_ROWS = 500
 MAX_TEXT = 1000
 
 NOT_FOUND = frozenset({"unknown_op", "no_proposal", "no_scan", "no_review", "no_chat", "missing_actor",
-                       "no_source"})
+                       "no_source", "no_batch"})
 BAD_REQUEST = frozenset({
     "invalid_field", "too_large", "invalid_json", "invalid_card", "unsupported_format", "invalid_options",
     "invalid_target", "not_a_card_source", "not_a_v1_library", "unsafe_paths", "unknown_speaker", "role_kind",
     "invalid_selection", "unstorable", "unstorable_id", "invalid_portrait", "unsupported_schema", "invalid_message",
+    "invalid_png", "no_embedded_card", "too_many_cards",
 })
 
 
@@ -208,6 +213,7 @@ class ReviewApi:
         self.proposals = Proposals(new_id=lambda: self._new_id("p"))
         self.scans = _Held(MAX_HELD)
         self.reviews = _Held(MAX_HELD)
+        self.batches = _Held(MAX_HELD_BATCHES)
         self.cards = CardImporter(store, self.handle, owner=owner, clock=clock)
         self.cards.handle = _OwnerProposes(self.handle)  # only its plan-time propose check reads this
         self.histories = StImporter(store, self.handle, clock=clock, owner=owner)
@@ -217,7 +223,8 @@ class ReviewApi:
         self._lock = threading.RLock()
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "review.capabilities": self._capabilities,
-            "card.preview": self._card_preview,
+            "card.inspect": self._card_inspect, "card.preview": self._card_preview,
+            "card.batch_scan": self._card_batch_scan, "card.batch_preview": self._card_batch_preview,
             "history.scan": self._history_scan, "history.preview": self._history_preview,
             "v1.scan": self._v1_scan, "v1.preview": self._v1_preview, "v1.receipts": self._v1_receipts,
             "rebase.candidates": self._rebase_candidates, "rebase.review": self._rebase_review,
@@ -246,16 +253,22 @@ class ReviewApi:
         return {
             "ops": list(self._ops),
             "imports": {
-                "card": {"formats": ["chara_card_v3 (JSON)", "grimoire.scenario-card/1", "lorebook_v3"],
-                         "max_bytes": MAX_CARD_BYTES, "portrait_max_bytes": MAX_PORTRAIT_BYTES},
+                "card": {"formats": ["chara_card_v3", "chara_card_v2", "grimoire.scenario-card/1", "lorebook_v3"],
+                         "containers": ["JSON document", "PNG card (a ccv3 or chara text chunk)"],
+                         "max_bytes": MAX_CARD_BYTES, "png_max_bytes": MAX_CARD_PNG_BYTES,
+                         "portrait_max_bytes": MAX_PORTRAIT_BYTES, "lorebook_files_max": MAX_LOREBOOK_FILES,
+                         "batch": {"max_cards": MAX_BATCH_CARDS, "max_bytes": MAX_BATCH_BYTES}},
                 "history": {"formats": ["SillyTavern chat export (JSONL)"], "max_bytes": MAX_EXPORT_BYTES},
                 "v1": {"formats": ["Grimoire 0.2.1 library folder, read only"]},
             },
             "unavailable": [
-                {"feature": "png_and_charx_cards", "blocked_by": "037 later milestone",
-                 "detail": "PNG and CHARX card containers are refused unsupported_format"},
-                {"feature": "card_v1_v2_and_world_info", "blocked_by": "037 later milestone",
-                 "detail": "Character Card V1/V2 and SillyTavern world info are refused unsupported_format"},
+                {"feature": "charx_cards", "blocked_by": "037 later milestone",
+                 "detail": "CHARX card archives are refused unsupported_format"},
+                {"feature": "card_v1_and_world_info", "blocked_by": "037 later milestone",
+                 "detail": "Character Card V1 and SillyTavern world info are refused unsupported_format"},
+                {"feature": "library_lorebook_on_a_card", "blocked_by": "037 (a card record names one lorebook)",
+                 "detail": "a lorebook already in the library is not bound to a card at import; choose it when "
+                           "starting a chat"},
                 {"feature": "remote_card_art", "blocked_by": "037 (nothing is fetched)",
                  "detail": "remote pictures stay unresolved slots"},
                 {"feature": "choose_link_suggestions", "blocked_by": "037 later milestone",
@@ -337,17 +350,44 @@ class ReviewApi:
         return {"proposal": proposal.proposal_id, "kind": proposal.kind, "state": "rejected"}
 
     # -- 037: cards -----------------------------------------------------------------------------
+    def _card_file(self, args: Mapping[str, object], key: str = "card") -> bytes:
+        """A card file: a JSON document of at most ``MAX_CARD_BYTES``, or a PNG card of at most
+        ``MAX_CARD_PNG_BYTES`` (the picture is the portrait; the card inside it has the JSON limit)."""
+        data = _bytes(args, key, MAX_CARD_PNG_BYTES)
+        assert data is not None
+        if len(data) > MAX_CARD_BYTES and not data.startswith(PNG_SIGNATURE):
+            raise ReviewRefused("too_large", f"{key} is larger than {MAX_CARD_BYTES} bytes")
+        return data
+
+    def _card_inspect(self, args: Mapping[str, object]) -> dict:
+        """What a card file says of itself (037's ``card_facts``): reads no library and proposes nothing."""
+        card = self._card_file(args)
+        as_scenario = _field(args, "as_scenario", bool, required=False, default=False)
+        try:
+            return jsonable(card_facts(card, as_scenario=as_scenario))  # type: ignore[return-value]
+        except CardError as error:
+            raise ReviewRefused(error.reason, str(error), details={"detail": getattr(error, "detail", "")}) \
+                from None
+
     def _card_preview(self, args: Mapping[str, object]) -> dict:
-        card = _bytes(args, "card", MAX_CARD_BYTES)
+        card = self._card_file(args)
         portrait = _bytes(args, "portrait", MAX_PORTRAIT_BYTES, required=False)
         lorebook = _bytes(args, "lorebook", MAX_CARD_BYTES, required=False)
         origin = _text(args, "origin", required=False)
         target = _text(args, "target", required=False, limit=256)
         as_scenario = _field(args, "as_scenario", bool, required=False, default=False)
         replace_edits = _field(args, "replace_edits", bool, required=False, default=False)
+        embedded_lorebook = _field(args, "embedded_lorebook", bool, required=False, default=True)
+        update_same_card = _field(args, "update_same_card", bool, required=False, default=False)
+        given = _field(args, "lorebooks", list, required=False, default=[])
+        if len(given) > MAX_LOREBOOK_FILES:
+            raise ReviewRefused("invalid_options", f"a card takes at most {MAX_LOREBOOK_FILES} separate lorebook files")
+        lorebooks = [_bytes({"lorebooks": item}, "lorebooks", MAX_CARD_BYTES) for item in given]
         try:
             planned = self.cards.plan(card, origin=origin, target=target, portrait=portrait, lorebook=lorebook,  # type: ignore[arg-type]
-                                      as_scenario=as_scenario, replace_edits=replace_edits)
+                                      as_scenario=as_scenario, replace_edits=replace_edits,
+                                      embedded_lorebook=embedded_lorebook, lorebooks=lorebooks,  # type: ignore[arg-type]
+                                      update_same_card=update_same_card)
         except CardError as error:
             raise ReviewRefused(error.reason, str(error), details={"detail": getattr(error, "detail", "")}) \
                 from None
@@ -368,6 +408,74 @@ class ReviewApi:
                     "records": [str(ref) for ref in report.records], "written": sorted(result.etags)}
 
         return self._propose("card", planned.preview, commit, jsonable(report))
+
+    # -- 037: several cards, one review ------------------------------------------------------------
+    def _card_batch_scan(self, args: Mapping[str, object]) -> dict:
+        """List a batch of card files: what each is and what importing it would do. Proposes nothing; the
+        files are held (a bounded few batches) so ``card.batch_preview`` needs no second upload."""
+        given = _field(args, "cards", list)
+        if not given:
+            raise ReviewRefused("invalid_field", "cards must list at least one file")
+        if len(given) > MAX_BATCH_CARDS:
+            raise ReviewRefused("too_many_cards", f"a batch takes at most {MAX_BATCH_CARDS} cards, and this one has "
+                                f"{len(given)}; import the rest in another batch")
+        total = 0
+        for row in given:
+            if not isinstance(row, Mapping) or type(row.get("card")) is not str or \
+                    not (row.get("origin") is None or type(row.get("origin")) is str):
+                raise ReviewRefused("invalid_field", "each of cards is {card, origin?}: a base64 file and its name")
+            total += len(row["card"]) // 4 * 3
+        if total > MAX_BATCH_BYTES:
+            raise ReviewRefused("too_large", f"the files of a batch may be {MAX_BATCH_BYTES} bytes together, and "
+                                "these are more; import them in smaller batches")
+        files = []
+        for row in given:
+            try:
+                files.append(BatchFile(row.get("origin"), self._card_file(row)))
+            except ReviewRefused as error:  # one file too large or not base64: a refused row, not a refused batch
+                files.append(BatchFile(row.get("origin"), None, (error.reason, str(error))))
+        try:
+            scanned = scan_cards(self.cards, files)
+        except ImportDenied as error:
+            raise ReviewRefused("denied", str(error), details=[list(item) for item in error.denied]) from None
+        except StaleWrite as error:
+            raise _stale(error) from None
+        batch_id = self._new_id("batch")
+        self.batches.hold(batch_id, scanned)
+        return {"batch": batch_id, **scanned.view()}
+
+    def _card_batch_preview(self, args: Mapping[str, object]) -> dict:
+        """One proposal for the chosen cards of a scanned batch: every file of every card under one digest,
+        committed as one store transaction."""
+        batch_id = _text(args, "batch", limit=128)
+        scanned = self.batches.get(batch_id)
+        if scanned is None:
+            raise ReviewRefused("no_batch", "no such batch here: it was dropped or made before the app restarted. "
+                                "Choose the files again")
+        include = _field(args, "include", list)
+        if not all(type(item) is int for item in include):
+            raise ReviewRefused("invalid_field", "include lists the batch's files by number")
+        try:
+            planned, view = plan_cards(self.cards, scanned, include)
+        except BatchRefused as error:
+            raise ReviewRefused(error.reason, str(error), details=error.details) from None
+        except ImportDenied as error:
+            raise ReviewRefused("denied", str(error), details=[list(item) for item in error.denied]) from None
+        except InvalidImage as error:
+            raise ReviewRefused("invalid_portrait", f"a card's picture is not a supported picture ({error})") from None
+        except StaleWrite as error:
+            raise _stale(error) from None
+        except StoreError as error:
+            raise _refused(error) from None
+
+        def commit() -> dict:
+            result = planned.commit(None)
+            return {"cards": [{"origin": row["origin"], "name": row["name"], "status": card.report.status,
+                               "source": card.report.source, "main": str(card.report.main)}
+                              for row, card in zip(view["cards"], planned.cards)],
+                    "written": sorted(result.etags)}
+
+        return self._propose("cards", planned.preview, commit, view)
 
     # -- 036: chat history ----------------------------------------------------------------------
     def _history_scan(self, args: Mapping[str, object]) -> dict:

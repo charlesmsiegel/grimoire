@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
-from grimoire.core.identity import ImageRef, InstanceRef, SourceRef
+from grimoire.core.identity import ImageRef, InstanceRef, OwnerRef, SourceRef
 from grimoire.images import Crop, Focus, Hidden, ImageObject, Placement, Resolution, Shown, Unavailable
 
 #: The provenance keys 018 defines; any other key an importer kept is shown under ``other``.
@@ -93,8 +93,11 @@ def slot_view(slot: object, resolution: Resolution) -> dict:
     return view
 
 
-def subject_ref(text: str) -> SourceRef | InstanceRef:
-    """A placement subject from its string form: a campaign instance or an unpinned definition."""
+def subject_ref(text: str) -> SourceRef | InstanceRef | OwnerRef:
+    """A placement subject from its string form: a campaign instance, an unpinned definition, or a source or a
+    campaign as a whole (``world:harbor``, ``campaign:q-c-1``: no kind and id)."""
+    if "/" not in text:
+        return OwnerRef(text)
     if text.startswith("campaign:"):
         return InstanceRef.parse(text)
     ref = SourceRef.parse(text)

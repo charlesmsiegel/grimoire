@@ -780,7 +780,8 @@ def _asset_owner(path: str) -> tuple[str, str] | None:
     if isinstance(ref, ImageRef):
         return ("campaign", ref.campaign_id) if ref.campaign_id is not None else ("source", ref.scope)
     subject = ref.subject  # type: ignore[union-attr]
-    return ("campaign", subject.campaign_id) if isinstance(subject, InstanceRef) else ("source", subject.source)
+    campaign = getattr(subject, "campaign_id", None)  # an instance, or a campaign itself (``OwnerRef``)
+    return ("campaign", campaign) if campaign is not None else ("source", subject.source)
 
 
 def _links_out(unit: list[Copy]) -> bool:

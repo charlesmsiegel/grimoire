@@ -13,6 +13,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 from grimoire.core.inference import InferencePolicy
@@ -25,7 +26,14 @@ from grimoire.security import Authorizer, Grant, Permission, ResourcePath
 RUNTIME_PRINCIPAL = "app:runtime"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 KEYS = frozenset({"provider_id", "base_url", "model", "key_env", "max_tokens_field", "max_output_tokens",
-                  "director", "fallbacks", "attempts"})
+                  "director", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
+#: The optional prices, per million tokens, of the configured ``model`` (not of its fallbacks): what one prompt
+#: token, one reply token and one cached prompt token cost. Decimal text, never a JSON number, so no price is
+#: ever a float; no currency is recorded (the number is in whatever currency the provider bills).
+PRICE_KEYS = ("price_prompt", "price_reply", "price_cached")
+#: Up to 999999.999999: at most six digits before the point and six after it, and nothing else (no sign, no
+#: exponent, no spaces), so a price is finite, non-negative and bounded by its form alone.
+PRICE_TEXT = re.compile(r"[0-9]{1,6}(?:\.[0-9]{1,6})?")
 #: Calls a director reply (a scene with no NPC that can answer) may make per turn; 0 turns the stage off.
 DEFAULT_DIRECTOR_CALLS = 1
 #: Attempts per planned call (004's ``max_attempts_per_call``): every one may be billed, so it stays small.
@@ -49,11 +57,40 @@ class ModelConfig:
     director_calls: int
     fallbacks: tuple[str, ...] = ()
     attempts: int = 1
+    price_prompt: Decimal | None = None
+    price_reply: Decimal | None = None
+    price_cached: Decimal | None = None
 
     @property
     def models(self) -> tuple[str, ...]:
         """The primary model, then its fallbacks: attempt *i* of a call uses the *i*-th (013)."""
         return (self.model, *self.fallbacks)
+
+    @property
+    def priced(self) -> bool:
+        """Whether a cost can be worked out: both the prompt and the reply price are set."""
+        return self.price_prompt is not None and self.price_reply is not None
+
+
+@dataclass(frozen=True)
+class ProviderAccess:
+    """What sends a configuration's calls: 013's adapter, the routes attempts use in order, and the app's
+    trusted handle. A turn's replies and a test call both go through these, and nothing else sends."""
+
+    adapter: ProviderAdapter
+    routes: tuple[RouteChoice, ...]
+    handle: object
+
+
+def parse_price(value: object, name: str) -> Decimal | None:
+    """A price as the file holds it: ``None`` (not set) or decimal text. Anything else is refused, a JSON
+    number included: money is never read through a float."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not PRICE_TEXT.fullmatch(value):
+        raise ConfigError(f"{name} must be a price written as text, such as \"3\" or \"0.25\": 0 to 999999.999999, "
+                          "with at most 6 decimal places")
+    return Decimal(value)
 
 
 def load_model_config(path: Path) -> ModelConfig:
@@ -100,7 +137,8 @@ def parse_model_config(raw: object) -> ModelConfig:
     if len(fallbacks) >= attempts:  # attempt i uses model i: a model no attempt reaches would halt every call (013)
         raise ConfigError(f"fallbacks are tried only by retries: with {attempts} attempt(s) per call, name at most "
                           f"{attempts - 1} fallback model(s)")
-    return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts)
+    prices = [parse_price(raw.get(name), name) for name in PRICE_KEYS]
+    return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts, *prices)
 
 
 def config_json(config: ModelConfig) -> dict:
@@ -111,6 +149,10 @@ def config_json(config: ModelConfig) -> dict:
                  "fallbacks": list(config.fallbacks), "attempts": config.attempts}
     if config.key_env is not None:
         raw["key_env"] = config.key_env
+    for name in PRICE_KEYS:  # written only when set, so a configuration with no prices is the file it always was
+        price = getattr(config, name)
+        if price is not None:
+            raw[name] = format(price, "f")
     return raw
 
 
@@ -120,9 +162,9 @@ def policy_for(config: ModelConfig) -> InferencePolicy:
     return InferencePolicy(caps, max_attempts_per_call=config.attempts)
 
 
-def build_runtime(config: ModelConfig, owner: str, *, environ=os.environ, transport=None):  # type: ignore[no-untyped-def]
-    """The 027 runtime and the 012 policy for ``config``. A key variable that is not set is refused now, not
-    at the first turn."""
+def build_access(config: ModelConfig, owner: str, *, environ=os.environ, transport=None) -> ProviderAccess:  # type: ignore[no-untyped-def]
+    """The adapter, routes and handle ``config``'s calls go through. A key variable that is not set is refused
+    now, not at the first call."""
     if config.key_env is not None and not environ.get(config.key_env):
         raise ConfigError(f"the environment variable {config.key_env} is not set")
     authorizer = Authorizer({owner})
@@ -133,9 +175,20 @@ def build_runtime(config: ModelConfig, owner: str, *, environ=os.environ, transp
     adapter = ProviderAdapter(ProviderRegistry([config.endpoint]), credentials, authorizer,
                               transport if transport is not None else HttpTransport())
     routes = tuple(RouteChoice(config.endpoint.provider_id, model) for model in config.models)
-    runtime = GenerationRuntime(adapter, routes, handle, max_output_tokens=config.max_output_tokens)
-    return runtime, policy_for(config)
+    return ProviderAccess(adapter, routes, handle)
 
 
-__all__ = ["ConfigError", "ModelConfig", "build_runtime", "config_json", "load_model_config", "parse_model_config",
-           "policy_for"]
+def runtime_for(access: ProviderAccess, config: ModelConfig) -> GenerationRuntime:
+    """027's runtime over ``access``: the turn's replies go where a test call goes."""
+    return GenerationRuntime(access.adapter, access.routes, access.handle, max_output_tokens=config.max_output_tokens)
+
+
+def build_runtime(config: ModelConfig, owner: str, *, environ=os.environ, transport=None):  # type: ignore[no-untyped-def]
+    """The 027 runtime and the 012 policy for ``config``. A key variable that is not set is refused now, not
+    at the first turn."""
+    access = build_access(config, owner, environ=environ, transport=transport)
+    return runtime_for(access, config), policy_for(config)
+
+
+__all__ = ["ConfigError", "ModelConfig", "PRICE_KEYS", "ProviderAccess", "build_access", "build_runtime", "config_json",
+           "load_model_config", "parse_model_config", "parse_price", "policy_for", "runtime_for"]

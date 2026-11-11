@@ -76,6 +76,19 @@ def test_the_app_serves_every_hub_op_and_lists_chats_by_campaign(desk):
         by_campaign = {item["campaign"]: [chat["chat"] for chat in item["chats"]] for item in listed["campaigns"]}
         assert by_campaign[card_chat.campaign_id] == [str(card_chat)]
         assert len(by_campaign) == 2  # the card chat's campaign and the imported V1 campaign
+        # what the list shows of each: only what the core ``chats`` op says of the same chats
+        core = {item["chat"]: item for item in device("chats", limit=1000)["chats"]}
+        for found in listed["campaigns"]:
+            for item in found["chats"]:
+                entry = core[item["chat"]]
+                assert (found["title"], found["world"]) == (entry["scope"]["title"], entry["scope"]["world"])
+                assert item["last_activity"] == entry["last_activity"]
+                assert item["cast"] == [source for source in entry["sources"] if source["role"] in ("character", "persona")]
+        (card,) = [found for found in listed["campaigns"] if found["campaign"] == card_chat.campaign_id]
+        assert {member["name"] for member in card["chats"][0]["cast"]} == {"Anya Rook", "Mara Vell"}
+        (imported,) = [found for found in listed["campaigns"] if found["campaign"] != card_chat.campaign_id]
+        assert imported["title"] and imported["world"]  # an imported campaign has a title and a world; a card chat's has neither
+        assert (card["title"], card["world"]) == (None, None)
         one = app.call("campaign.chats", {"campaign": card_chat.campaign_id})
         assert [item["campaign"] for item in one["campaigns"]] == [card_chat.campaign_id]
         assert app.call("campaign.chats", {"campaign": "no-such-campaign"})["campaigns"] == []

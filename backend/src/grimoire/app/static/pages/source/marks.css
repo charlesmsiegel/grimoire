@@ -1,0 +1,8 @@
+/* An entry's tags and pin in its header (marks.js). */
+.source-marks { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.source-tag { text-decoration: none; }
+.source-tag:hover { color: var(--g-accent); }
+.source-marks .g-button.g-linklike { padding: 2px 4px; }
+.source-pin { padding: 2px 10px; border-radius: 6px; font-size: 12px; color: var(--g-muted); }
+.source-pin[aria-pressed="true"] { border-color: var(--g-accent); color: var(--g-accent); }
+.source-marks-note { font-size: 13px; }

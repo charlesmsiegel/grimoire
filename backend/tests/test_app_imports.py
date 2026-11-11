@@ -7,6 +7,7 @@ ops the app serves. Every fixture is synthetic; no model is called.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -15,6 +16,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from card_fixtures import V3, card
 from changeset_fixtures import move_the_guild, seed_world
 from grimoire.app import AppServer
 from grimoire.app.adapters.imports import OPS, review_api
@@ -24,6 +26,7 @@ from grimoire.app.server import STATIC
 from grimoire.changesets import encode as encode_changeset
 from grimoire.changesetstore import ChangeSetLibrary
 from grimoire.textapi import ApiRefused
+from png_fixtures import png, png_card
 from review_fixtures import secured
 from store_helpers import owner_handle
 from test_reviewapi import files_of
@@ -110,3 +113,75 @@ def test_the_import_page_reviews_approves_and_writes_a_change_set_end_to_end(app
     assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
     assert "# pass 1" in result.stdout
     assert files_of(folder) != before  # the page's approval wrote into the library
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is not installed")
+def test_the_import_page_lists_a_folder_of_cards_and_approves_them_in_one_review(app, tmp_path):
+    api, device, folder = app
+    mara = json.dumps(V3).encode("utf-8")
+    held = api.call("imports.card_preview", {"card": base64.b64encode(mara).decode("ascii"), "origin": "mara.json"})
+    api.call("imports.proposal_apply", {"proposal": held["proposal"], "digest": held["digest"]})
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    (cards / "mara.png").write_bytes(png_card(mara))                       # the card the library holds, with its picture
+    (cards / "ilse.png").write_bytes(png_card(card(name="Ilse Dorn", character_book=None), shade=30))
+    (cards / "tobin.json").write_text(json.dumps(card(name="Tobin Marsh")), encoding="utf-8")
+    (cards / "picture.png").write_bytes(png())
+    # a card elsewhere of the same name as one in the batch: a name is reported, never an identity
+    other = api.call("imports.card_preview", {"card": base64.b64encode(json.dumps(card(
+        name="Tobin Marsh", description="Another Tobin, already in the library.")).encode("utf-8")).decode("ascii"),
+        "target": "card:another-tobin"})
+    api.call("imports.proposal_apply", {"proposal": other["proposal"], "digest": other["digest"]})
+    before = files_of(folder)
+    server = AppServer(device.api)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.address
+        result = subprocess.run([shutil.which("node"), "--test", "--test-reporter=tap", str(JS / "import_batch.e2e.mjs")],
+                                capture_output=True, text=True, timeout=240, check=False,
+                                env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": server.token,
+                                     "GRIMOIRE_BATCH": str(cards)})
+    finally:
+        server.close()
+        thread.join(10)
+    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
+    assert "# pass 1" in result.stdout
+    after = files_of(folder)
+    written = {path for path in after if before.get(path) != after[path]}
+    # the one approval wrote both cards of the first review: the new card, and the picture onto the card already here
+    assert any(path.startswith("sources/card/ilse-dorn/_source/records/character/") for path in written)
+    assert "sources/card/mara-vell/_source/placements/character/mara-vell/avatar.json" in written
+    assert sum(path.startswith("assets/blobs/") for path in written) == 2
+    # the stale second review wrote nothing: the only Tobin card besides the seeded one is the one imported beside it
+    assert {path.split("/")[2] for path in after if path.startswith("sources/card/") and "tobin" in path} == \
+        {"another-tobin", "tobin-marsh"}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is not installed")
+def test_the_import_page_finds_a_card_and_says_every_review_state(app, tmp_path):
+    _api, device, folder = app
+    card = tmp_path / "mara.json"
+    card.write_text(json.dumps(V3), encoding="utf-8")
+    (tmp_path / "mara.png").write_bytes(png_card(V3))
+    (tmp_path / "picture.png").write_bytes(png())
+    before = files_of(folder)
+    server = AppServer(device.api)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.address
+        result = subprocess.run([shutil.which("node"), "--test", "--test-reporter=tap", str(JS / "import_card.e2e.mjs")],
+                                capture_output=True, text=True, timeout=180, check=False,
+                                env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": server.token,
+                                     "GRIMOIRE_CARD": str(card), "GRIMOIRE_CARD_PNG": str(tmp_path / "mara.png"),
+                                     "GRIMOIRE_PNG": str(tmp_path / "picture.png")})
+    finally:
+        server.close()
+        thread.join(10)
+    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
+    assert "# pass 1" in result.stdout
+    # the page wrote nothing itself: only the approval made beside it (the stale case) reached the library
+    written = set(files_of(folder)) - set(before)
+    cards = {path for path in written if path.startswith("sources/card")}
+    assert cards and all(path == "sources/card" or path.startswith("sources/card/mara-vell") for path in cards)

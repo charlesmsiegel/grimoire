@@ -41,6 +41,7 @@ from .authoring import (
 )
 
 MAX_LIMIT = 1000
+MAX_NOT_KINDS = 16
 #: the chat role a definition of each kind is attached under (107); other kinds are not attachable
 ATTACH_ROLE = {"character": "character", "scenario": "scenario", "lorebook": "lorebook"}
 #: what this slice cannot do, and why; shown, never faked
@@ -165,11 +166,16 @@ class SourceApi:
     # -- reading -----------------------------------------------------------------------------------------
     def _catalog(self, args: Mapping[str, object]) -> dict:
         """Every source and its entities, newest name first within a source; ``query`` matches names and
-        refs (case-insensitive), ``kind`` and ``source`` filter. Same-named entities of different sources
-        are listed apart, each with its qualified ref: a name is never an identity."""
+        refs (case-insensitive), ``kind`` and ``source`` filter, and ``not_kinds`` leaves out the kinds it
+        lists (every kind but a few: the entries a library shows that are no character, scenario or
+        lorebook). Every filter is applied before ``limit`` cuts the list. Same-named entities of different
+        sources are listed apart, each with its qualified ref: a name is never an identity."""
         query = _field(args, "query", str, required=False, default="")
         kind = _field(args, "kind", str, required=False)
         only = _field(args, "source", str, required=False)
+        left_out = _field(args, "not_kinds", list, required=False, default=[])
+        if len(left_out) > MAX_NOT_KINDS or any(type(name) is not str for name in left_out):
+            raise ApiRefused("invalid_field", f"not_kinds must be at most {MAX_NOT_KINDS} kind names")
         limit = _field(args, "limit", int, required=False, default=200)
         if not 1 <= limit <= MAX_LIMIT:
             raise ApiRefused("invalid_field", f"limit must be 1 to {MAX_LIMIT}")
@@ -187,7 +193,7 @@ class SourceApi:
                             "namespace": source_id.split(":", 1)[0], "etag": stored.etag,
                             "entities": sum(1 for key in entities if key[0] != IMPORT_KIND)})
             for (entity_kind, entity_id), revisions in sorted(entities.items()):
-                if entity_kind == IMPORT_KIND or (kind is not None and entity_kind != kind):
+                if entity_kind == IMPORT_KIND or (kind is not None and entity_kind != kind) or entity_kind in left_out:
                     continue
                 ref = SourceRef(source_id, entity_kind, entity_id)
                 entry = self._entry(view, ref, revisions, dropped)

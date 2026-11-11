@@ -30,14 +30,16 @@ Action = Literal["agreed", "copy", "conflict", "delete"]
 #: and archive and pending documents accept exactly these paths. ``scope`` and ``chat`` are
 #: 107's campaign-local play-scope and chat records; ``relation`` is 017's typed relation record;
 #: ``blob``, ``image`` and ``placement`` are 018's art; ``transcript`` is 036's chat transcript pages; ``turn`` is
-#: 035's played chat turns (028's turn merge: mutable, so ordinary rows; ``sync.turns`` names what one needs).
+#: 035's played chat turns (028's turn merge: mutable, so ordinary rows; ``sync.turns`` names what one needs);
+#: ``bookmark`` is a person's bookmark on a chat's turn (one file each, mutable, ordinary rows; it names its chat).
 SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
-                          "blob", "image", "placement", "transcript", "turn", "accepted", "wrapup", "holdings"})
+                          "blob", "image", "placement", "transcript", "turn", "accepted", "wrapup", "holdings",
+                          "bookmark"})
 #: 018's art: own units, never source-coarse, never grouped with a definition. A blob is binary and
 #: content-addressed (listed by name and size, hashed only when copied or first seen).
 ASSET_KINDS = frozenset({"blob", "image", "placement"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
-CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript", "turn"})
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript", "turn", "bookmark"})
 #: 028's ledger: 021's accepted events and wrap-ups and 023's holder files, which their own stores commit
 #: several at a time. They are never decided file by file: a campaign's ledger files (with its 017
 #: relations, see ``HOLDS_RELATIONS``) are one unit that ``grimoire.ledgermerge`` merges (``units``).

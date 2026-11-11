@@ -48,4 +48,10 @@ def device_tag(store: LibraryStore) -> str:
     device = parse_device(data)
     if device is None:
         raise DeviceIdentityUnusable("this library's device identity is damaged; repair .sync/device.json")
-    return "-" + sha256(device.encode()).hexdigest()[:8]
+    return "-" + tag_of(device)
+
+
+def tag_of(device: str) -> str:
+    """The eight hex digits a device of that name tags its new ids with (a turn's ``device``, say), so a screen
+    can say which paired device a tagged record came from. Naming only: nothing is decided by it."""
+    return sha256(device.encode()).hexdigest()[:8]
