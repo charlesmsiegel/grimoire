@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 import struct
 import zlib
 from collections.abc import Iterator
@@ -30,6 +31,7 @@ MAX_PNG_BYTES = 32 * 1024 * 1024
 MAX_PNG_CHUNKS = 65536
 #: the text-chunk keywords that hold a card, the preferred one first
 CARD_KEYWORDS = ("ccv3", "chara")
+_BASE64 = re.compile(rb"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
 _LETTERS = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 
 
@@ -115,6 +117,9 @@ def read_png_card(data: bytes, *, max_card_bytes: int) -> EmbeddedCard:
         text = found[name].strip(b" \t\r\n")
         if len(text) > (max_card_bytes + 2) // 3 * 4 + 4:
             raise CardError(f"the card in this PNG is larger than {max_card_bytes} bytes", "too_large", name)
+        # The shape is checked here, not left to b64decode: before Python 3.13 it accepts padding past the end.
+        if not _BASE64.fullmatch(text):
+            raise _bad(f"the card under {name} is not base64", "base64")
         try:
             card = base64.b64decode(text, validate=True)
         except (binascii.Error, ValueError):
