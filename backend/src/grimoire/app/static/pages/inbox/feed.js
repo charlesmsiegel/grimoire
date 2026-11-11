@@ -74,7 +74,15 @@ export function feedNotes(feed) {
 export async function perform(ctx, item, action) {
   const ask = action.confirm;
   if (ask && !(await ctx.ui.confirm(ask.message, { confirmLabel: ask.label, danger: Boolean(ask.danger) }))) return null;
-  const result = await ctx.api(action.op, action.args);
+  let result;
+  try { result = await ctx.api(action.op, action.args); }
+  catch (error) {
+    // the op refused before writing anything, and the item says what to ask instead (a scene with no NPC who
+    // can speak is answered by the director, as the chat page asks)
+    const otherwise = action.otherwise;
+    if (!otherwise || error.reason !== otherwise.reason) throw error;
+    result = await ctx.api(action.op, otherwise.args);
+  }
   // a resolve that could not reach the other device answers, with nothing changed: the item still waits
   const decided = action.op !== "media.resolve" || result.status === "resolved";
   return { decided, text: decided ? action.done : "Not decided: " + result.status + (result.reason ? " (" + result.reason + ")" : "") + ". Nothing changed.", result };

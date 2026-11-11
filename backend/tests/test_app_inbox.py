@@ -68,7 +68,7 @@ def listed(app: AppApi, **args) -> dict:
         assert ITEM_KEYS <= set(item) and item["label"] == KINDS[item["kind"]]
         assert set(item["route"]) == {"route", "path", "query", "label"}
         for action in item["actions"]:
-            assert set(action) == {"id", "label", "op", "args", "confirm", "done", "kind", "quick"}
+            assert set(action) == {"id", "label", "op", "args", "confirm", "done", "kind", "quick", "otherwise"}
             assert action["op"] in app.ops, "an item is decided by an op the app already serves"
     return answer
 
@@ -351,6 +351,10 @@ def test_a_reply_cut_off_is_listed_with_the_chats_own_ways_on(desk):
         assert [(action["label"], action["op"], action["args"]) for action in item["actions"]] == [
             ("Ask again", "generate", {"chat": str(chat)}),
             ("Pass the turn", "pass", {"chat": str(chat), "turn": crashed.turn_id})]
+        # asked again as the chat page asks: where no NPC can speak, of the director alone
+        assert item["actions"][0]["otherwise"] == {
+            "reason": "nothing_to_generate", "args": {"chat": str(chat), "director": True, "speakers": []}}
+        assert item["actions"][1]["otherwise"] is None
         do(app, item, "Pass the turn")
         assert listed(app)["items"] == []
     with Device(folder, runtime=False) as device:  # no model: asking again is not offered

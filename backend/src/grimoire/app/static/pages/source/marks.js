@@ -23,7 +23,7 @@ export async function headerMarks(ctx, read) {
     const fresh = await readShelf(ctx);
     if (fresh) shelf = fresh;
     draw();
-    const again = focus && node.querySelectorAll("button").find((button) => button.getAttribute("data-focus-key") === focus);
+    const again = focus && Array.from(node.querySelectorAll("button")).find((button) => button.getAttribute("data-focus-key") === focus);
     if (again) again.focus();
   }
 

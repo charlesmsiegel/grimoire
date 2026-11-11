@@ -417,6 +417,17 @@ class LibraryStore:
     def writable(self) -> bool:
         return self._writable
 
+    def check_root(self) -> None:
+        """Refuse (``LinkRefused``, ``LibraryPathError``) if the root is no longer the directory that was opened.
+        For a companion that reads files of its own under the root (the shelf): the same check every read here
+        makes, so a root swapped for a link is followed by nobody."""
+        self._access.guard.check_root()
+
+    def check_destination(self) -> None:
+        """``check_root``, and the root is still not, inside or around a V1 library: what this store checks
+        before it writes. For a companion that writes files of its own under the root."""
+        self._access.guard.check_session()
+
     def _require_open(self) -> None:
         if self._closed:
             raise StoreError("the library store is closed")

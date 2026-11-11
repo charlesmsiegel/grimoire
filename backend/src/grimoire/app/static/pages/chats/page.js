@@ -94,7 +94,7 @@ export async function mount(root, ctx) {
     const fresh = await readShelf(ctx);
     if (fresh) shelf = fresh;
     render();
-    const again = results.querySelectorAll("button.chats-pin").find((node) => node.getAttribute("data-focus-key") === "chats:pin:" + chat.chat);
+    const again = Array.from(results.querySelectorAll("button.chats-pin")).find((node) => node.getAttribute("data-focus-key") === "chats:pin:" + chat.chat);
     if (again) again.focus();
   }
 

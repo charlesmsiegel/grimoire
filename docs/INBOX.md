@@ -40,10 +40,13 @@ refused `invalid_field`, an unknown chat `no_chat`.
 | `route` | "open where it happened": a page's `route`, `path` and `query`, and the link's `label` |
 | `actions` | the ways to decide it, the first being the usual one |
 
-An action is `{id, label, op, args, confirm, done, kind, quick}`: the op to call with exactly those arguments;
-the question to ask first (`confirm`: `message`, `label`, `danger`), the same one the op's own screen asks; what
-the item reads once decided (`done`); `kind: danger` for a choice that discards; and `quick`, whether it may be
-offered where the item is not shown in full (a chat's tray). An item with no action still waits: its `notes` say
+An action is `{id, label, op, args, confirm, done, kind, quick, otherwise}`: the op to call with exactly those
+arguments; the question to ask first (`confirm`: `message`, `label`, `danger`), the same one the op's own screen
+asks; what the item reads once decided (`done`); `kind: danger` for a choice that discards; `quick`, whether it
+may be offered where the item is not shown in full (a chat's tray); and `otherwise` (`{reason, args}` or `null`):
+when the op refuses with that reason, having written nothing, the same op is asked once more with those
+arguments. Only a cut-off reply's **Ask again** has one: `generate` refuses `nothing_to_generate` in a scene where
+no NPC can speak, and is then asked for the director alone, as the chat page asks. An item with no action still waits: its `notes` say
 why nothing can be done yet.
 
 | Kind | Read from | Decided by | Also carries |

@@ -80,9 +80,17 @@ def _temp(name: str) -> bool:
 class ShelfStore:
     """The shelf of the library at ``root``. Holds no state between calls: every call reads the files."""
 
-    def __init__(self, root: str | os.PathLike[str], *, ops: FileOps | None = None) -> None:
+    def __init__(self, root: str | os.PathLike[str], *, ops: FileOps | None = None,
+                 check_read: Callable[[], None] | None = None, check_write: Callable[[], None] | None = None) -> None:
+        """``check_read`` and ``check_write`` are the open library's own root guards (``LibraryStore.check_root``
+        and ``check_destination``): called before this store reads and before it changes anything, they refuse
+        when the root is no longer the directory that was opened (a root swapped for a link would otherwise be
+        followed, since the link checks below start under it). Without them only the links under the root are
+        refused, which is all a bare folder can promise."""
         self.root = Path(root)
         self.ops: FileOps = ops if ops is not None else DiskOps()
+        self._check_read = check_read or (lambda: None)
+        self._check_write = check_write or (lambda: None)
 
     # -- paths -------------------------------------------------------------------------------------------
     def _folder(self, folder: str) -> Path:
@@ -107,6 +115,7 @@ class ShelfStore:
     # -- reading -----------------------------------------------------------------------------------------
     def _bytes(self, folder: str, stem: str) -> bytes | None:
         """One record file's exact bytes, or ``None`` when there is none."""
+        self._check_read()
         linked = self._linked(folder, stem + SUFFIX)
         if linked is not None:
             raise ShelfError("link", f"{linked} is a link; the shelf does not follow links")
@@ -139,6 +148,7 @@ class ShelfStore:
 
     def _scan(self, folder: str, problems: list[Problem]) -> dict[str, Stored]:  # type: ignore[type-arg]
         found: dict[str, Stored] = {}  # type: ignore[type-arg]
+        self._check_read()
         linked = self._linked(folder)
         if linked is not None:
             problems.append(Problem(linked, "link", "a link is not followed"))
@@ -212,6 +222,9 @@ class ShelfStore:
         self._check(folder, stem, current, expected)
         directory = self._folder(folder)
         target = directory / (stem + SUFFIX)
+        if data is not None and data == current:
+            return etag(data)
+        self._check_write()  # before anything is made, removed or replaced: the root is still the library's own
         if data is None:
             if current is not None:
                 self.ops.remove(target, durable=True)
@@ -227,6 +240,7 @@ class ShelfStore:
         try:
             self.ops.write_bytes(temp, data)
             self._check(folder, stem, self._bytes(folder, stem), expected)  # an edit made meanwhile wins: refused
+            self._check_write()
             self.ops.replace(temp, target)
         except Exception:  # an I/O error or a refusal; a dead process cleans nothing (``recover`` sweeps)
             try:
@@ -246,6 +260,7 @@ class ShelfStore:
 
     def recover(self) -> None:
         """Remove what a write that died left behind: its temp file. Records are never touched."""
+        self._check_write()
         if any(is_link(self.root / name) for name in (CONFIG, f"{CONFIG}/{SHELF}")):
             return
         for folder in FOLDERS:

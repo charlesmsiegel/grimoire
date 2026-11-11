@@ -30,7 +30,8 @@ _ABSENT = object()
 
 
 def _shelf(ctx: AdapterContext) -> ShelfStore:
-    return ShelfStore(ctx.store.root)
+    # the open library's own root guards: a root swapped for a link after it was opened is followed by no op here
+    return ShelfStore(ctx.store.root, check_read=ctx.store.check_root, check_write=ctx.store.check_destination)
 
 
 def _refuse(error: ShelfError) -> ApiRefused:

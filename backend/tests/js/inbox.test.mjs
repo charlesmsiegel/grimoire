@@ -88,6 +88,22 @@ test("an item is decided by its own op and arguments, after its own question; a 
   // a refusal rejects, as any call does
   const refusing = context(() => { throw Object.assign(new Error("moved on"), { reason: "changed" }); });
   await assert.rejects(feed.perform(refusing.ctx, item("action", "a", []), action()), { reason: "changed" });
+
+  // an action may name what to ask when its op refuses for one reason, having written nothing: a reply asked
+  // again in a scene where no NPC can speak is asked of the director, as the chat page asks it
+  const again = action({ op: "generate", args: { chat: CHAT }, done: "Asked again.",
+    otherwise: { reason: "nothing_to_generate", args: { chat: CHAT, director: true, speakers: [] } } });
+  const alone = context((op, args) => { if (!args.director) throw Object.assign(new Error("nobody can speak"), { reason: "nothing_to_generate" }); return {}; });
+  const asked = await feed.perform(alone.ctx, item("reply", "r", []), again);
+  assert.deepEqual(alone.seen.calls, [["generate", { chat: CHAT }], ["generate", { chat: CHAT, director: true, speakers: [] }]]);
+  assert.deepEqual([asked.decided, asked.text], [true, "Asked again."]);
+  // any other refusal is the op's own answer, and the second ask's refusal is too
+  const failing = context(() => { throw Object.assign(new Error("the model did not answer"), { reason: "provider_failed" }); });
+  await assert.rejects(feed.perform(failing.ctx, item("reply", "r", []), again), { reason: "provider_failed" });
+  assert.equal(failing.seen.calls.length, 1);
+  const never = context(() => { throw Object.assign(new Error("nobody can speak"), { reason: "nothing_to_generate" }); });
+  await assert.rejects(feed.perform(never.ctx, item("reply", "r", []), again), { reason: "nothing_to_generate" });
+  assert.equal(never.seen.calls.length, 2);
 });
 
 test("a list that stopped early says so", () => {

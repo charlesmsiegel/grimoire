@@ -53,9 +53,17 @@ export async function mount(root, ctx) {
 
   const args = { limit: MAX_LIST };
   if (query) args.query = query;
-  const [catalog, chats, read] = await Promise.all([ctx.api("sources.catalog", args), ctx.has("chats")
+  // The whole catalog gives the shelves and their counts. One source's shelf is asked for by itself as well, so the
+  // app filters by source before it cuts the list at its limit: in a library of more than MAX_LIST entries, a source
+  // that sorts after the first MAX_LIST would otherwise open empty.
+  const [catalog, chats, read, own] = await Promise.all([ctx.api("sources.catalog", args), ctx.has("chats")
     ? ctx.api("chats", { limit: MAX_CHATS }).catch((error) => { if (error.reason === "left") throw error; return null; }) : null,
-  readShelf(ctx)]);
+  readShelf(ctx), only ? ctx.api("sources.catalog", { ...args, source: only }) : null]);
+  const listed = own || catalog;  // the entries this view lists
+  if (own) {  // a namesake in another source is still said: the whole catalog knows it where it reaches
+    const elsewhere = new Map(catalog.entries.map((entry) => [entry.ref, entry.namesakes || []]));
+    for (const entry of own.entries) entry.namesakes = [...new Set([...(entry.namesakes || []), ...(elsewhere.get(entry.ref) || [])])];
+  }
   const sources = catalog.sources;
   const titles = new Map(sources.map((source) => [source.source, source.title || source.source]));
   const plays = playsOf(chats && chats.chats, MAX_CHATS);
@@ -89,20 +97,26 @@ export async function mount(root, ctx) {
     ctx.registered("import") ? ui.buttonLink("Import", "import") : null,
     ctx.has("sources.create") ? focusKey(ui.button("New entry", () => newEntry(ctx, sources, chosen), { kind: "primary" }), "sources-new") : null);
   const live = el("div", { class: "sources-live" });
+  // The control last focused under the search row, by its key. A button that is switched off while its action
+  // runs loses focus to the page in a browser, so the control in focus at redraw is not always the one acted on.
+  let lastKey = null;
+  live.addEventListener("focusin", (event) => { lastKey = event.target && event.target.getAttribute ? event.target.getAttribute("data-focus-key") : null; });
   root.classList.add("sources-page");
   root.append(top, live);
   draw();
 
   function draw() {
     const marks = view.shelf && !view.shelf.failed ? view.shelf : null;  // a shelf that could not be read shows nothing of itself
-    const held = document.activeElement && live.contains(document.activeElement) ? document.activeElement.getAttribute("data-focus-key") : null;
+    const active = document.activeElement;
+    const held = active && live.contains(active) ? active.getAttribute("data-focus-key")
+      : !active || active === document.body ? lastKey : null;  // focus fell to the page: back to where the person was
     if (selecting) {
       selecting.textContent = view.picks.on ? "Done selecting" : "Select";
       selecting.setAttribute("aria-pressed", String(view.picks.on));
     }
-    const onThisShelf = catalog.entries.filter((entry) => onShelf(entry, shelf, marks));
+    const onThisShelf = listed.entries.filter((entry) => onShelf(entry, shelf, marks));
     const counts = countRoles(filterEntries(onThisShelf, { tags, marks }));
-    const found = sortEntries(filterEntries(catalog.entries, { role, shelf, tags, marks }), sort, plays);
+    const found = sortEntries(filterEntries(listed.entries, { role, shelf, tags, marks }), sort, plays);
     const shown = found.slice(0, limit);
     view.shown = shown;
 
@@ -124,8 +138,10 @@ export async function mount(root, ctx) {
     const unread = problemText(view.shelf);
     if (unread) notes.push(ui.notice(unread, { kind: "bad" }));
     for (const reason of catalog.excluded || []) notes.push(ui.notice(describeExcluded(reason), { kind: "bad" }));
-    if (catalog.truncated) {
-      notes.push(ui.notice("Only the first " + catalog.entries.length + " of " + catalog.total + " entries are listed and counted here. Search to narrow them."));
+    if (listed.truncated) {
+      notes.push(ui.notice("Only the first " + listed.entries.length + " of " + listed.total + " entries are listed and counted here. Search to narrow them."));
+    } else if (catalog.truncated) {
+      notes.push(ui.notice("The other shelves are counted from the first " + catalog.entries.length + " of " + catalog.total + " entries in the library."));
     }
     if (only) notes.push(chosen ? sourceHead(ctx, chosen, sources, address) : el("div", {}, ui.notice("No source " + only + " is in this library.", { kind: "bad" }),
       ui.actions(el("a", { class: "g-button", href: address({ source: "", limit: "" }) }, "Show every source"))));
@@ -156,7 +172,7 @@ export async function mount(root, ctx) {
     live.replaceChildren(...[controls, chips, ...notes, el("div", { class: "sources-body" }, side, results),
       view.picks.on ? bulkBar(view) : null].filter(Boolean));
     if (held) {
-      const again = live.querySelectorAll("[data-focus-key]").find((node) => node.getAttribute("data-focus-key") === held);
+      const again = Array.from(live.querySelectorAll("[data-focus-key]")).find((node) => node.getAttribute("data-focus-key") === held);
       if (again) again.focus();
     }
   }

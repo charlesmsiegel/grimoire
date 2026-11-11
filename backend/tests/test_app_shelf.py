@@ -231,3 +231,36 @@ def test_device_sync_leaves_the_shelf_on_its_own_device_and_says_it_skipped_it(t
             assert MARA in {entry["ref"] for entry in carried.call("sources.catalog", {"limit": 1000})["entries"]}
             assert carried.call("shelf.read", {})["entries"] == []
         assert api.call("shelf.read", {})["entries"] == [tagged]
+
+
+def test_a_library_root_swapped_for_a_link_is_followed_by_no_shelf_op(app, tmp_path):
+    """The shelf writes files of its own under the library's folder, so it asks the open library's root guard
+    first, as every store read and write does: a root replaced by a link after it was opened is not followed."""
+    from grimoire.library.paths import LibraryPathError
+
+    api, desk, _chat = app
+    kept = api.call("shelf.pin_entry", {"ref": MARA, "pinned": True, "expected": None})
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    root = desk / "v2" if (desk / "v2").is_dir() else desk  # the folder the store opened
+    moved = tmp_path / "moved"
+    root.rename(moved)
+    try:
+        root.symlink_to(elsewhere, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        moved.rename(root)
+        pytest.skip("this platform cannot make a directory link here")
+    try:
+        with pytest.raises((ApiRefused, LibraryPathError)):
+            api.call("chats", {})  # the library's own refusal, for comparison
+        for op, args in (("shelf.save_filter", {"name": "Crew", "tags": []}),
+                         ("shelf.pin_entry", {"ref": MARA, "pinned": False, "expected": kept["etag"]}),
+                         ("shelf.set_tags", {"ref": MARA, "tags": ["crew"], "expected": kept["etag"]}),
+                         ("shelf.read", {})):
+            with pytest.raises((ApiRefused, LibraryPathError)):
+                api.call(op, args)
+        assert list(elsewhere.iterdir()) == [], "nothing was written through the link"
+    finally:
+        root.unlink()
+        moved.rename(root)
+    assert _entry(api, MARA)["pinned"] is True, "the library itself is as it was"

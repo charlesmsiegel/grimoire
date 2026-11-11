@@ -90,13 +90,15 @@ def _route(route: str, path: list[str] | None = None, query: dict | None = None,
 
 
 def _action(action_id: str, label: str, op: str, args: dict, done: str, *, confirm: dict | None = None,
-            kind: str = "", quick: bool = False) -> dict:
+            kind: str = "", quick: bool = False, otherwise: dict | None = None) -> dict:
     """One way to decide an item: the existing ``op`` and its exact ``args``. ``confirm`` is what is asked first
     (the same question the op's own screen asks), ``done`` what the item reads once it is decided. ``quick``
     says the action may be offered where the item is not shown in full (a chat's tray): never for a choice
-    whose versions, operations or factors must be read first."""
+    whose versions, operations or factors must be read first. ``otherwise`` is ``{"reason", "args"}``: when the
+    op refuses with that reason, having written nothing, the same op is asked once more with those args (as
+    the op's own screen does)."""
     return {"id": action_id, "label": label, "op": op, "args": args, "confirm": confirm, "done": done, "kind": kind,
-            "quick": quick}
+            "quick": quick, "otherwise": otherwise}
 
 
 # -- sync: forks and conflicts ---------------------------------------------------------------------------
@@ -301,8 +303,12 @@ def reply_item(chat: str, title: str, campaign: str | None, turn: Mapping[str, A
         return None
     actions = []
     if generates:
+        # as the chat page asks: whoever answers, and in a scene where no NPC can speak (generate refuses
+        # nothing_to_generate before anything is written) the director alone
         actions.append(_action("again", "Ask again", "generate", {"chat": chat},
-                               "Asked again. The reply waits in the chat.", quick=True))
+                               "Asked again. The reply waits in the chat.", quick=True,
+                               otherwise={"reason": "nothing_to_generate",
+                                          "args": {"chat": chat, "director": True, "speakers": []}}))
     actions.append(_action("pass", "Pass the turn", "pass", {"chat": chat, "turn": turn["turn"]}, "Passed", quick=True))
     return {
         "id": f"reply:{chat}:{turn['turn']}", "kind": "reply", "label": KINDS["reply"],

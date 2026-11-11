@@ -203,6 +203,12 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
 
   // a new source, made in its dialog; a refusal is shown there and nothing is lost
   page = await go("#/sources", library, "the whole library again");
+  const catalogAsks = [];  // what the page asks sources.catalog for, from here to the new source's shelf
+  const plainFetch = globalThis.fetch;
+  globalThis.fetch = (url, options) => {
+    if (String(url).endsWith("/api/sources.catalog")) catalogAsks.push(JSON.parse(options.body));
+    return plainFetch(url, options);
+  };
   byText(page, "button", "New source")[0].click();
   let asked = await dialog("the new source dialog");
   type(asked.querySelectorAll("input")[0], "card:harbor");
@@ -216,6 +222,11 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   assert.equal(body.querySelector("dialog"), null);
   assert.ok(window.location.hash.includes("source=world%3Aharbor"));
   assert.equal(page.querySelector("section.sources-source-cover").querySelector("h2").textContent, "Harbour");
+  // a source's shelf asks for that source's own entries besides the whole catalog: the app filters by source
+  // before it cuts the list at its limit, so a source past the first thousand entries does not open empty
+  globalThis.fetch = plainFetch;
+  assert.ok(catalogAsks.some((args) => args.source === "world:harbor" && args.limit === 1000), "the shelf's own entries are asked for");
+  assert.ok(catalogAsks.some((args) => args.source === undefined), "and the whole catalog, for the shelves and their counts");
   assert.ok(byText(page, "p", "Nothing here yet.").length);
 
   // renamed from its shelf
