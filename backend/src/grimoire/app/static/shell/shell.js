@@ -5,7 +5,8 @@
 
 import * as api from "./api.js";
 import { Drafts } from "./drafts.js";
-import { THEMES, isPaletteKey, isTyping, openPalette, openShortcuts, opensPalette, rank, readTheme, setTheme, shownTheme } from "./palette.js";
+import { LINE_MAX, LINE_MIN, LINE_WAIT, THEMES, characterItems, isPaletteKey, isTyping, lineItems, lineNote, openPalette, openShortcuts, opensPalette,
+  readTheme, setTheme, shownTheme } from "./palette.js";
 import { href, pageFor, parse, reserved as reservedRoute, takeToken } from "./router.js";
 import * as ui from "./ui.js";
 
@@ -228,33 +229,58 @@ function blocker(page) {
 function paletteItems() {
   const opens = (page) => page.slot !== "hidden" || (reservedRoute(page.route) || { segments: "x" }).segments === "";
   const pages = state.registry.pages.filter((page) => opens(page) && !blocker(page))
-    .map((page) => ({ label: page.title, detail: "page", keywords: page.route, run: () => go(href(page.route)) }));
-  const themes = THEMES.map((theme) => ({ label: "Theme: " + theme, detail: theme === readTheme(safeLocalStorage()) ? "current" : "",
+    .map((page) => ({ label: page.title, detail: "page", group: "page", keywords: page.route, run: () => go(href(page.route)) }));
+  const themes = THEMES.map((theme) => ({ label: "Theme: " + theme, detail: theme === readTheme(safeLocalStorage()) ? "current" : "", group: "command",
     keywords: "appearance dark light mode colours colors", run: () => { setTheme(theme, document.documentElement, safeLocalStorage()); showTheme(); } }));
-  return [...pages, ...themes, { label: "Keyboard shortcuts", keywords: "help keys", run: openShortcuts }];
+  return [...pages, ...themes, { label: "Keyboard shortcuts", group: "command", keywords: "help keys", run: openShortcuts }];
 }
 
-// Chats by name, read once per palette from the app's own list (the most recent first, up to its largest).
-function chatSearch() {
-  const chatPage = pageFor(state.registry.pages, "chat");
-  if (!state.ops.has("chats") || !chatPage || blocker(chatPage)) return undefined;
+// Whether a route's page is in this app and can open now.
+function canOpen(route) {
+  const page = pageFor(state.registry.pages, route);
+  return Boolean(page) && !blocker(page);
+}
+
+// A list the app is asked for once per palette, however much is typed; a failed read is asked again next time.
+function once(read) {
   let listed = null;
-  return async (query) => {
-    listed = listed || api.call("chats", { filter: "recent", limit: 1000 }).then((answer) => answer.chats);
-    const chats = (await listed).map((chat) => ({
-      label: chatTitle(chat),
+  return () => {
+    listed = listed || read().catch((error) => { listed = null; throw error; });
+    return listed;
+  };
+}
+
+// What the palette finds by asking the app, each only where the app serves it and its page can open: chats and
+// characters by name (each list read once per palette), and the lines that were said (asked as the typing rests).
+function paletteSources() {
+  const sources = [];
+  if (state.ops.has("chats") && canOpen("chat")) {
+    const chats = once(() => api.call("chats", { filter: "recent", limit: 1000 }));
+    sources.push({ name: "Chats", search: async () => (await chats()).chats.map((chat) => ({
+      label: chatTitle(chat), group: "chat",
       detail: "chat" + (chat.scope && chat.scope.title ? " · " + chat.scope.title : ""),
       keywords: (chat.launch && chat.launch.name) || "",
       run: () => go(href("chat", [chat.chat])),
-    }));
-    return rank(query, chats);
-  };
+    })) });
+  }
+  if (state.ops.has("sources.catalog") && canOpen("source")) {
+    const catalog = once(() => api.call("sources.catalog", { kind: "character", limit: 1000 }));
+    sources.push({ name: "Characters", search: async () => characterItems(await catalog(), (ref) => go(href("source", [ref]))) });
+  }
+  if (state.ops.has("shell.search_lines") && canOpen("chat")) {
+    sources.push({ name: "What was said", lines: true, min: LINE_MIN, wait: LINE_WAIT, search: async (query) => {
+      const answer = await api.call("shell.search_lines", { query: query.slice(0, LINE_MAX), limit: 12 });
+      return { items: lineItems(answer, (line) => go(href("chat", [line.chat], { turn: String(line.turn) }))),
+        note: lineNote(answer), again: answer.stopped === "time" };
+    } });
+  }
+  return sources;
 }
 
 function palette() {
   if (document.body.querySelector("dialog.g-palette")) return;
   setMenu(false);
-  openPalette({ items: paletteItems, more: chatSearch() });
+  openPalette({ items: paletteItems, sources: paletteSources() });
 }
 
 function go(target) {

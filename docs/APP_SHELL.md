@@ -158,7 +158,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `home`, `setup` | 108 | |
 | `inbox` | 108 | `?item=<item id>` (the item to open on, as `inbox.list` names it) |
 | `chats` | 111 | `?filter=character\|scenario&source=<SourceRef>`, `?filter=pinned` |
-| `chat` | 111 | `/<ChatRef>` |
+| `chat` | 111 | `/<ChatRef>?turn=<number>` (open at a turn) |
 | `start` | 111 | `?source=<SourceRef>` |
 | `sources` | 109 | `?role=character\|persona\|scenario\|lore\|world&source=<source>&shelf=cards\|pinned&tags=<tag>,<tag>&q=<text>` |
 | `source` | 109 | `/<SourceRef>?tab=art\|edit\|revisions\|raw` |
@@ -244,9 +244,56 @@ character the library already has; **Begin** shows the openings `play.options` a
 not before the library op exists; the core `library` op answers only once a library is open.
 
 The header's **Search** button, or Ctrl+K, Cmd+K or `/` outside a text box, opens the **command palette**: every
-page that can open, every chat by its name (from the `chats` op), the themes and the shortcuts. Before anything is
-typed it lists every page and command; a typed search shows the best 12 matches. `?` lists the
-shortcuts. The theme (system, light or dark) is kept per browser and switches the `--g-` tokens.
+page that can open, every chat by its name (from the `chats` op), every character by its name (from
+`sources.catalog`, with the source it is in; it opens the character's sheet), the themes and the shortcuts, and the
+**lines that were said** (below). Before anything is typed it lists every page and command; a typed search shows
+the best 12 matches. Equal matches are listed pages, chats, characters, commands; lines come after them, in serif
+italic, each with "speaker · chat · turn N", and keep four of the twelve places when there is more of both. The
+chat and character lists are read once per palette. A source that fails is named under the box ("Characters could
+not be searched: ...") and the others' results stay. `?` lists the shortcuts. The theme (system, light or dark) is
+kept per browser and switches the `--g-` tokens.
+
+### Search over what was said (`shell.search_lines`)
+
+`shell.search_lines {query, limit}` finds lines of the library's chats by their words. It is plain text matching:
+no model is called and nothing is embedded. Case and accents do not count (NFKD, combining marks U+0300 to U+036F
+dropped, lower case: the same folding the palette ranks names with), and every word of the query must be in the
+one line, anywhere in it.
+
+- **What can be found** is what opening the chat shows of its played turns, read through the same code: 035's
+  `SceneLibrary.turns` and the text API's `turn_view`. That is each turn's post and the shown lines of the take
+  that was kept. A take on offer or not kept, a withdrawn or struck line, the direction given with a redirect, a
+  turn a fork choice set aside and a staged line the table did not hear are in no view and in no result. A chat's
+  imported history (its pages from before turn 1) is not searched.
+- **`query`** is text of 2 to 200 characters (counted folded, without spaces) in at most 8 words. **`limit`** is 1
+  to 50 lines (20 when left out). Anything else is refused `invalid_field`.
+- **The answer** is `{query, lines, complete, stopped, more, chats, searched, unread}`. Each of `lines` is
+  `{chat, title, turn, turn_id, kind, speaker, text}`: the chat's ref and its title (its label, else the name of
+  what it was started from, else its ref), the turn's number and id, `post` or `line`, who said it (the name of
+  the character that posted, or the line's speaker; `null` is the narrator) and the text, cut to about 160
+  characters around the first match with `…` at a cut end. Chats come in the `chats` op's order (the most recent first) and, in a
+  chat, from the latest turn first, at most 3 from one chat. `more` is true when there were more matches than
+  were answered.
+- **Caps.** One search looks at the 2000 most recent chats, and reads chats it does not hold yet for 1.5 seconds
+  (at least 8 of them, so asking again always gets further). `complete` is false when a cap stopped it, and
+  `stopped` says which: `time` (`unread` chats were not reached; the next search goes on from there), `chats`
+  (the library has more than 2000) or `unreadable` (a chat's turns could not be read). The chats it did not reach
+  were not searched.
+- **The index** is a derivative, kept in memory only, per open library: each chat's lines with a stamp of its
+  turn files (each file's name, size, modification time and inode). It is never written to disk, never synced
+  and never canonical; it is gone when the app stops and is rebuilt as searches ask for it. A chat whose stamp
+  differs is read again before it is searched. Before a line is answered, its turn file's bytes are checked
+  against the content etag the line was read at, and the chat is read again when they differ, so a change the
+  stamp missed cannot put a stale line in an answer. It holds at most 32 million characters; past that a chat is
+  read, searched and not kept.
+- **Cost**, measured on a synthetic library of 301 chats of 31 turns each (9,331 turn files, 7 MB of lines): a
+  search that holds every chat takes 0.5 to 0.8 s, nearly all of it the one read of the library's records that
+  the `chats` op also makes (1.0 to 1.4 s there); reading the chats the first time takes seven searches of about
+  1.5 s each. A chat that changed costs its own turns again (about 25 ms for 31 turns).
+
+The palette asks from 2 characters up, 250 ms after the typing rests, and shows only the answer to what is typed
+now. While the answer is `stopped: time` it asks again (up to 12 times) and says how far the search got. Choosing
+a line opens `#/chat/<ChatRef>?turn=<number>`: the chat scrolls to that turn and marks it for a moment.
 
 ## Tests
 

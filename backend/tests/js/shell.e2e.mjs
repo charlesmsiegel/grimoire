@@ -205,10 +205,15 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   await until(() => byText(body.querySelector("dialog"), "div", "Nothing matches.").length, 15000, "no results");
   assert.equal(box.getAttribute("aria-activedescendant"), null, "nothing is active with no results");
   assert.equal(box.getAttribute("aria-expanded"), "false");
+  assert.equal(box.getAttribute("placeholder"), "Search pages, chats, characters and anything that was said");
+  const options = () => body.querySelector("dialog").querySelectorAll("li");
+  // a character of the library is found by its name, with the source it is in
+  type(box, "anya");
+  await until(() => options().some((node) => node.textContent.startsWith("Anya Rook character · ")), 15000, "a character in the results");
   type(box, name.split(/\s+/)[0]);
-  await until(() => byText(body.querySelector("dialog"), "li", "chat").length, 15000, "a chat in the results");
-  const option = byText(body.querySelector("dialog"), "li", name).at(-1);
-  assert.ok(option, "the chat is found by its name");
+  const option = await until(() => options().find((node) => node.textContent.startsWith(name + " chat")), 15000, "a chat in the results");
+  const namesake = options().findIndex((node) => node.textContent.startsWith(name + " character · "));
+  assert.ok(namesake === -1 || options().indexOf(option) < namesake, "a chat comes before a character of the same name");
   option.click();
   await until(() => window.location.hash === chatHash && !body.querySelector("dialog"), 15000, "the chat from the palette");
   const composer = await until(() => main.querySelector("textarea"), 15000, "the chat");
@@ -268,6 +273,35 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   assert.ok(send.disabled, "nothing is posted while a take is pending");
   assert.equal(main.querySelector("textarea").value, "");
   assert.equal(window.sessionStorage.getItem("grimoire-draft:chat:composer:" + decodeURIComponent(chatHash.split("/")[2])), null);
+
+  // the palette opens a character's sheet by its exact ref
+  const openPalette = async (what) => {
+    body.querySelector("button.g-search").click();
+    return until(() => body.querySelector("dialog") && body.querySelector("dialog").querySelector("input"), 15000, what);
+  };
+  const results = () => body.querySelector("dialog").querySelectorAll("li");
+  type(await openPalette("the palette over the chat"), "rook anya");
+  (await until(() => results().find((node) => node.textContent.startsWith("Anya Rook character · ")), 15000, "the character")).click();
+  await until(() => window.location.hash.startsWith("#/source/") && !body.querySelector("dialog"), 15000, "the character's sheet");
+  assert.ok(decodeURIComponent(window.location.hash).includes("/character/"), "opened by its ref, not its name");
+
+  // it finds a line that was said by its words, whatever their case or accents. The reply still on offer was not
+  // kept, so nothing of it is found; one character asks the app nothing
+  const finder = await openPalette("the palette over the sheet");
+  type(finder, "heard you");
+  await until(() => byText(body.querySelector("dialog"), "div", "Nothing matches.").length, 15000, "an unkept take is not found");
+  assert.ok(!body.querySelector("dialog").querySelector("span.g-palette-line"));
+  type(finder, "HELLO shéll");
+  const said = await until(() => results().find((node) => node.querySelector("span.g-palette-line")), 15000, "a line that was said");
+  assert.equal(said.querySelector("span.g-palette-line").textContent, "“Hello over the shell.”");
+  assert.match(said.textContent, / · turn \d+$/, "who said it, in which chat, at which turn");
+  assert.equal(results().at(-1), said, "lines come after everything else");
+  const turn = /turn (\d+)$/.exec(said.textContent)[1];
+  said.click();
+  await until(() => window.location.hash === chatHash + "?turn=" + turn && !body.querySelector("dialog"), 15000, "the chat at the line's turn");
+  const marked = await until(() => main.querySelectorAll("div.chat-found").length && main.querySelectorAll("div.chat-found"), 15000, "the turn marked");
+  assert.ok(marked.every((node) => node.getAttribute("data-turn") === turn));
+  assert.ok(marked.some((node) => node.classList.contains("chat-post") && node.textContent.includes("Hello over the shell.")));
 
   // an address no page owns says so; a reserved one names its sprint
   if (waiting.length) {

@@ -30,6 +30,8 @@
 .chat-rows { max-width: 700px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
 .chat-row { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 14px; }
 .chat-post { margin-left: -16px; padding: 14px 16px; background: var(--g-accent-soft); border-radius: 12px; }
+/* the turn an address asked for (find.js), marked for a moment */
+.chat-found { outline: 2px solid var(--g-accent); outline-offset: 6px; border-radius: 12px; }
 .chat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .chat-speaker { font: 600 13px/1.4 var(--g-sans); color: var(--g-muted); }
 .chat-post .chat-speaker { color: var(--g-accent); }

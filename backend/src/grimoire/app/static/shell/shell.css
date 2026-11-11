@@ -279,8 +279,11 @@ a.g-rowcard:hover { border-color: var(--g-accent); color: inherit; }
 .g-palette-status { padding: 0 18px; }
 .g-palette-status:not(:empty) { padding: 10px 18px; }
 .g-palette-results { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
-.g-palette-option { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; border-radius: 7px; cursor: pointer; }
+.g-palette-option { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 8px 12px; border-radius: 7px; cursor: pointer; }
 .g-palette-option[aria-selected="true"], .g-palette-option:hover { background: var(--g-raised); }
-.g-palette-line { font: italic 400 15px/1.4 var(--g-serif); }
+.g-palette-name, .g-palette-line { min-width: 0; overflow-wrap: anywhere; }
+/* a line that was said: story text, at most three rows of it */
+.g-palette-line { font: italic 400 15px/1.4 var(--g-serif); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.g-palette-detail { flex: none; max-width: 46%; font-size: 13px; text-align: right; overflow-wrap: anywhere; }
 .g-shortcuts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; }
 .g-shortcuts dd { margin: 0; }

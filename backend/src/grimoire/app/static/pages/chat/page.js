@@ -7,6 +7,7 @@
 import { makeTray } from "./tray.js";
 import { makeBackdrop } from "./backdrop.js";
 import { makeAttach } from "./attach.js";
+import { showTurn, wantedTurn } from "./find.js";
 import { composerState, isCorrectable, isStopped, replyState, shownTake, stepTake, takeKey, takeLabel } from "./turn.js";
 
 const MODE_LABELS = { auto: "Auto", speech: "Speech", action: "Action" };
@@ -326,6 +327,7 @@ export async function mount(root, ctx) {
       out.push(divider("Played here"));
     }
     for (const turn of scene.turns) {
+      const first = out.length;
       if (turn.post) {
         const to = turn.post.to && turn.post.to.length ? " to " + turn.post.to.join(", ") : "";
         const mine = scene.persona && turn.post.actor === scene.persona.actor;
@@ -340,6 +342,7 @@ export async function mount(root, ctx) {
         }
       }
       if (turn.passed && !turn.kept) out.push(note("The turn was passed."));
+      for (const row of out.slice(first)) row.setAttribute("data-turn", String(turn.number));  // find.js opens a chat at a turn
     }
     if (scene.set_aside && scene.set_aside.length) {
       out.push(note(scene.set_aside.length + " turn(s) set aside by a fork choice; nobody heard them."));
@@ -707,6 +710,8 @@ export async function mount(root, ctx) {
   drawModes();
   render(await call("open", {}), { bottom: true });
   if (scrolls.has(chat)) log.scrollTop = scrolls.get(chat);  // back where the person left it
+  const wanted = wantedTurn(ctx.query);  // ?turn=<number>: a line the palette's search found
+  if (wanted !== null) showTurn(rows, wanted);
   loadEntry();
   return leave;
 }
