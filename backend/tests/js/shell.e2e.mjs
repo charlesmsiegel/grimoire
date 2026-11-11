@@ -65,6 +65,12 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   await until(() => byText(nav, "div", "Jump back in").length, 15000, "the chats played last");
   assert.ok(nav.querySelectorAll("a.g-nav-recent").some((node) => node.getAttribute("href") === "#/chat/" + encodeURIComponent(process.env.GRIMOIRE_CHAT)));
   assert.ok(byText(nav, "div", "Model ready").length || byText(nav, "div", "No model set up").length);
+  // the menu button opens the rail, and the rail's own button closes it (on a phone the open rail covers the header)
+  const menu = body.querySelector("button.g-menu");
+  menu.click();
+  assert.ok(nav.classList.contains("g-open") && menu.getAttribute("aria-expanded") === "true");
+  nav.querySelector("button.g-nav-close").click();
+  assert.ok(!nav.classList.contains("g-open") && menu.getAttribute("aria-expanded") === "false");
   // the header's theme button names the theme it switches to, and switches
   const theme = body.querySelector("button.g-theme");
   assert.equal(theme.textContent, "Dark");

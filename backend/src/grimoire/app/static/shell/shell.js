@@ -50,10 +50,15 @@ function buildFrame() {
   frame.theme = el("button", { type: "button", class: "g-button g-theme" });
   frame.theme.addEventListener("click", toggleTheme);
   frame.nav = el("nav", { id: "g-nav", class: "g-nav", "aria-label": "Main" });
+  frame.menu.addEventListener("click", () => setMenu(frame.menu.getAttribute("aria-expanded") !== "true"));
+  // A tap on any link of the open rail closes it, the current page's too (its address does not change).
+  frame.nav.addEventListener("click", (event) => { if (event.target && event.target.closest && event.target.closest("a")) setMenu(false); });
   frame.notices = el("div", { class: "g-notices", "aria-live": "polite" });
   frame.main = el("main", { id: "g-main", class: "g-main", tabindex: "-1" });
   frame.scroll = el("div", { class: "g-scroll" }, frame.notices, frame.main);
   frame.scroll.addEventListener("scroll", recordScroll);
+  // A tap on the page beside the open rail closes it.
+  frame.scroll.addEventListener("click", () => { if (frame.menu.getAttribute("aria-expanded") === "true") setMenu(false); });
   frame.leaveFocus = el("button", { type: "button", class: "g-button g-small g-leave-focus", hidden: true, onclick: () => setFocusMode(false) },
     "Leave focus · Esc");
   frame.app = el("div", { class: "g-app" },
@@ -128,7 +133,9 @@ function setMenu(open) {
 
 function buildNav() {
   const usable = (route) => { const page = pageFor(state.registry.pages, route); return page && !blocker(page) ? page : null; };
-  const parts = [el("a", { class: "g-wordmark", href: "#/", "aria-label": "Grimoire, version 2: home" },
+  // On a phone the open rail covers the header and its Menu button, so it carries its own way out.
+  const parts = [el("button", { type: "button", class: "g-button g-small g-nav-close", onclick: () => { setMenu(false); frame.menu.focus(); } }, "Close menu"),
+    el("a", { class: "g-wordmark", href: "#/", "aria-label": "Grimoire, version 2: home" },
     el("span", { class: "g-wordmark-name" }, "Grimoire"), el("span", { class: "g-wordmark-tag" }, "v2"))];
   if (usable(NEW_CHAT)) parts.push(el("a", { class: "g-button g-primary g-nav-new", href: href(NEW_CHAT), "data-route": NEW_CHAT }, "New chat"));
   for (const [label, slots] of GROUPS) {
@@ -268,7 +275,8 @@ function context(location, page, controller, root) {
     api: (op, args) => settle(api.call(op, args, signal)),
     picture: (ref) => settle(api.picture(ref)),
     get library() { return state.library; },
-    async refreshLibrary() { await settle(loadLibrary()); return state.library; },
+    // The rail's foot (model, device) is drawn from the library, so it is drawn again with it.
+    async refreshLibrary() { await settle(loadLibrary()); buildNav(); markNav(location.route); return state.library; },
     // Load the app again (its pages, ops and library) and open `target`: after first run opens a library, the
     // pages that waited on it become usable.
     async restart(target) {
