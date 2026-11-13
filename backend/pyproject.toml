@@ -3,7 +3,7 @@ name = "grimoire-v2"
 version = "0.0.1"
 description = "Grimoire V2 fiction-first domain core (pre-alpha)"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["pyluach>=2.2,<3"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

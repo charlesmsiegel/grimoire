@@ -2,6 +2,8 @@
 
 **Snapshot:** [`92144e17ccea819e5e760bccd77286d019b3fc9e`](https://github.com/charlesmsiegel/grimoire/commit/92144e17ccea819e5e760bccd77286d019b3fc9e), branch `v2`, audited 2026-11-13.
 
+The 055 and 113 entries have since been updated with their implementation and executable first-proof evidence; the other entries retain the snapshot above.
+
 This is a code-and-test audit of the 119 scheduled **first-useful slices**, including inherited first-proof additions. Requirements were not narrowed to match the code. A check does not close later milestones, certify a live model, or prove physical-phone/browser accessibility. Unchecked entries distinguish missing implementation from a proof not yet established. The [ordered roadmap](README.md#implementation-checkmarks) carries the same checkmarks.
 
 ## Wave results
@@ -15,7 +17,7 @@ This is a code-and-test audit of the 119 scheduled **first-useful slices**, incl
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 5/6 | ☐ | 047 lacks the independent prose-claim extraction required by its inherited first-proof addition. Physical-phone validation also remains unverified. |
 | [7](#wave-7) | 6/7 | ☐ | 112 retains production UI integration gaps. 113 has a real CLI/Chromium follow-up proof. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it. |
-| [8](#wave-8) | 1/24 | ☐ | Only 066 is complete at its narrow first-proof boundary. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 2/24 | ☐ | 055 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -454,7 +456,7 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="wave-8"></a>
 ## Wave 8
 
-Only 066 is complete at its narrow first-proof boundary. Other domain slices and UI exit 115 remain incomplete or unverified.
+055 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -494,9 +496,9 @@ Only 066 is complete at its narrow first-proof boundary. Other domain slices and
 <a id="slice-055"></a>
 ### 055 — Calendar And Clocks
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/calendar-and-clocks.md)).
-- Evidence: [`campaignapi/api.py`](../../backend/src/grimoire/campaignapi/api.py) marks clocks unavailable; [`migrate_v1/_layout.py`](../../backend/src/grimoire/migrate_v1/_layout.py) recognizes but does not import calendar data.
-- Scope / gap: No campaign-local clock advancement or deadlines.
+- [x] Scheduled first-useful slice ([requirements](sprints/calendar-and-clocks.md)).
+- Evidence: [`calendarstore/library.py`](../../backend/src/grimoire/calendarstore/library.py) and [`CALENDARS.md`](../CALENDARS.md); [`test_calendarstore.py`](../../backend/tests/test_calendarstore.py)::test_twenty_day_proof_preserves_old_scene_and_retries_after_reopen proves explicit 20-day advancement, one deadline flag and unchanged old transcript dates; arithmetic, offline conflict and crash/I/O retry proofs are in `test_calendars.py`, `test_calendarstore_sync.py` and `test_calendarstore_recovery.py`.
+- Scope / gap: Headless Gregorian/Hebrew/fixed-year custom chronology with explicit uncertainty resolution and retained-lineage operation receipts. No calendar UI (115), V1 plugin/data import, complex fictional leap rules, parallel schedule engine, automatic trigger effects, downtime or offscreen simulation. Existing campaign UI still reports clocks unavailable.
 
 <a id="slice-056"></a>
 ### 056 — Catalog Composition
