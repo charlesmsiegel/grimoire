@@ -28,7 +28,7 @@ def configure(api: TextApi, path: Path | None, *, environ: Mapping[str, str] | N
     with api.lock:
         if getattr(api, _ATTRIBUTE, None) is not None:
             raise ValueError("this library's model settings are already configured")
-        made = InferenceApi(api, SettingsFile(path), owner=api.owner, environ=environ, transport=transport)
+        made = InferenceApi(api, SettingsFile(path, protected=api.store.root), owner=api.owner, environ=environ, transport=transport)
         setattr(api, _ATTRIBUTE, made)
         return made
 
@@ -54,7 +54,7 @@ def _op(name: str):  # type: ignore[no-untyped-def]
 
 
 #: The ops, called as ``providers.<name>`` (docs/INFERENCE_UI.md).
-OPS = ("models", "check_models", "save_models", "usage", "diagnostics", "test_call")
+OPS = ("models", "check_models", "save_models", "usage", "diagnostics", "test_call", "context", "save_agenda")
 
 ADAPTER = Adapter("providers", owner="112", ops={name: _op(name) for name in OPS})
 

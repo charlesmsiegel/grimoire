@@ -140,9 +140,9 @@ for (const op of ["models", "chats", "diagnostics", "usage", "save_models"]) ass
 const sent = calls.filter((c) => c[0] === "save_models").pop()[1];
 assert.deepEqual(sent.expected, "sha256:x");
 assert.deepEqual(sent.settings, { provider_id: "local", base_url: "http://127.0.0.1:1/v1", model: "edited-model", fallbacks: ["n"],
-  max_output_tokens: 99, attempts: 2, director: 1, key_env: "OPENROUTER_API_KEY", max_tokens_field: "max_tokens" },
+  max_output_tokens: 99, attempts: 2, director: 1, decision: 0, agendas: [], key_env: "OPENROUTER_API_KEY", max_tokens_field: "max_tokens" },
   "the key goes only as the name of its variable, and nothing else is added: an empty price is left out");
-assert.ok(!ops.some((op) => !["models", "chats", "diagnostics", "usage", "save_models", "check_models"].includes(op)));
+assert.ok(!ops.some((op) => !["models", "chats", "diagnostics", "usage", "save_models", "check_models", "context"].includes(op)));
 assert.ok(root.querySelector("div.providers-live").textContent.startsWith("Saved."));
 
 // the prices: three labelled fields in the Model card, saved as the text typed, never as a number

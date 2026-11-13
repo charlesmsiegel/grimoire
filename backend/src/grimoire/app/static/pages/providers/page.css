@@ -58,3 +58,6 @@
   .providers-test-note { text-align: left; }
   .providers-fields, .providers-prices { grid-template-columns: minmax(0, 1fr); }
 }
+
+.providers-context-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; max-width: 100%; }
+.providers-card li { overflow-wrap: anywhere; }

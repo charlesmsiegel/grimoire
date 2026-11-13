@@ -1,6 +1,6 @@
 # Sprint 112: UI Inference, Prompts and Costs
 
-> **Planned Wave 7 P0 UI sprint, not a completed feature.** [Roadmap](../README.md) · [UI coverage](../UI_COVERAGE.md).
+> **Scheduled first-useful slice implemented; full Wave 7 accessibility/device acceptance remains separate.** [Roadmap](../README.md) · [UI coverage](../UI_COVERAGE.md).
 
 **Outcome:** UI Inference, Prompts and Costs makes the corresponding Wave 1–6 functionality usable from the graphical app.
 **Owner:** frontend/models-and-observability. **Required earlier contracts:** 004, 005, 013, 014, 015, 027, 031, 044; 045/048 when integrated.
@@ -36,3 +36,17 @@ Own only the named frontend module and its domain-specific API adapters. Consume
 
 - Which existing headless operations need new UI adapters and authorization checks?
 - Which later milestone controls must remain explicitly unavailable?
+
+
+## Implemented evidence and limits
+
+[Models and costs](../../INFERENCE_UI.md) now includes current actor-scoped context with source provenance
+and budget omissions, plus opt-in 045 decisions through the real app's runner and decision ledger.
+`test_app_inference_browser.py` launches the CLI and exercises model/tactics settings, separate NPC calls,
+usage, optional-stage disabling, reroll replay, restart, keyboard submission, narrow layout and failed-request
+recovery in Chromium with synthetic fixtures. Backend tests cover authority, private evidence, no-write
+inspection, stale settings and metering/replay failures. No paid provider or private library is used.
+
+The simple tactics editor is device-local model configuration; richer authored conditional policies are
+preserved read-only. No campaign UI is changed. Historical snapshots, unsaved-draft context retrieval,
+session budgets, physical-phone and full screen-reader validation remain outside this evidence.
