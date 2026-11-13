@@ -51,6 +51,7 @@ from grimoire.sync import NoDeviceIdentity, SyncError, SyncInterrupted, device_o
 from grimoire.sync.turns import open_conflicts
 
 from .errors import ApiRefused
+from .workspace import workspace
 from .views import (
     FILTER_ROLES,
     art_view,
@@ -159,7 +160,7 @@ class TextApi:
         self._new_image = new_id
         self._lock = threading.RLock()
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
-            "library": self._library, "chats": self._chats, "open": self._open, "continue": self._continue,
+            "library": self._library, "chats": self._chats, "chats.workspace": lambda args: workspace(self, args), "open": self._open, "continue": self._continue,
             "post": self._post, "generate": self._generate, "keep": self._keep, "pass": self._pass,
             "pause": self._pause, "resume": self._resume, "choose": self._choose, "add_art": self._add_art,
             "sync": self._sync, "resolve": self._resolve,
@@ -258,12 +259,12 @@ class TextApi:
         if isinstance(limit, bool) or not 1 <= limit <= MAX_LIMIT:
             raise ApiRefused("invalid_field", f"limit must be 1 to {MAX_LIMIT}")
         view = self.store.load()
-        index = self.chats.navigation()
+        index = self.chats.navigation(view=view)
         if which == "recent":
             found = index.recent(limit)
         elif which in FILTER_ROLES:
             source = parse_ref(SourceRef.parse, args, "source")
-            if source.pinned:  # a pinned ref would find only the chats bound to that one revision
+            if source.pinned and args.get("match") != "exact":  # legacy callers retain unpinned matching
                 source = source.unpinned()
             matched = {ref for role in FILTER_ROLES[which] for ref in index.by_source(source, role=role)}
             found = tuple(ref for ref in index.all_chats() if ref in matched)[:limit]  # newest first, uncapped
@@ -295,7 +296,7 @@ class TextApi:
         """``refs`` as the ``chats`` op lists them, in the order given; a ref the library does not know is left out.
         For the app's ``play.options`` (111), whose Continue list shows the chats 052 says a selection started."""
         view = self.store.load()
-        index = self.chats.navigation()
+        index = self.chats.navigation(view=view)
         known = set(index.all_chats())
         found = [ref for ref in refs if ref in known]
         return self._entries(view, index, found, self._mention_names(view, [index.entry(ref) for ref in found]))
