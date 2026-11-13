@@ -55,6 +55,38 @@ in-process through FastAPI's `TestClient` (lifespan entered, as 0.2.1's own test
 
 Prompt assembly, provider adapters, retry and the usage meter are 0.2.1's own.
 
+## Capture prerequisites and spending approval
+
+The first slice remains **baseline capture pending** until a real provider-reported capture
+is obtained and reviewed. Passing replay or dry-run tests does not close that gate.
+Before running the live command, the operator needs:
+
+- An explicitly approved supported provider (`openrouter` or `anthropic`) and exact model/route.
+  A credential or a model name alone does not establish a no-additional-cost route; establish
+  that the selected route incurs no incremental charge before treating it as free.
+- A named credential environment variable configured through secure environment settings,
+  with network access permitted to the selected provider endpoint. Never paste the credential
+  into chat, commands, documentation or PR logs, or recover one from a private V1 library.
+- For a paid route, explicit approval of the maximum spend and currency for this capture,
+  backed by a provider-enforced limit that covers the credential's requests. If that bound
+  cannot be established, do not start the capture. `--confirm-billing` acknowledges billing;
+  it does **not** enforce a monetary cap.
+
+The approved scenario is `guild_betrayal`: four NPCs present, two speakers per turn, three
+turns and **six planned contributions**. The transport permits at most
+`6 × (1 + llm_retries)` requests, using the pinned V1 configuration's retry count. That request
+ceiling and the recorded `max_tokens` response budget are not monetary spending limits.
+Failed or incomplete captures can still incur charges; missing usage is never counted as free.
+
+Use the pinned clean checkout and isolated interpreter described below. Keep raw outputs
+outside the repository and all libraries, verify the evidence with the scoring command, and
+review counts-only publication before changing the pending status. Consistent evidence is not
+an authenticated provider billing receipt. Existing fixtures must remain labelled synthetic
+or dry-run; no replay can substitute for the missing live measurement.
+
+This baseline does not depend on V2 provider execution (013) or the generation runtime (027).
+Those interfaces are needed for the later matched V2 comparison, which remains separate.
+
 ## Running it
 
 The capture needs a separate Python environment with 0.2.1 installed from a clean checkout of
