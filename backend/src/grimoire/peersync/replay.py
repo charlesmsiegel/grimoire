@@ -20,7 +20,8 @@ from pathlib import Path
 from grimoire.core.identity import validate_segment
 from grimoire.store import LibraryStore, StaleWrite, StoreError, WriteConflict, WriteDenied, etag
 from grimoire.store.layout import conflict_parts
-from grimoire.sync import Step, deletion, device_of, syncable
+from grimoire.store.jsonfmt import is_etag
+from grimoire.sync import Step, deletion, device_of, syncable, semantic
 from grimoire.sync import keeps as kept_record
 from grimoire.sync import units as ledger_units
 from grimoire.sync.bookkeeping import is_shard, listed_shards, root_name
@@ -49,6 +50,8 @@ def send_step(channel: Channel, step: Step, blob_reader: Callable[[str, int], by
     (``Step.units``): the peer refuses the step (``stale``) when its own unit differs, read under its
     lock just before it commits."""
     def ops() -> Iterator[Op]:
+        for listing in step.semantic:
+            yield {"op": "semantic"}, json.dumps(listing, sort_keys=True).encode("utf-8"), None, None
         for listing in step.units:
             yield {"op": "unit"}, json.dumps(listing, sort_keys=True).encode("utf-8"), None, None
         for copy in step.copies:
@@ -259,9 +262,10 @@ class StepBuffer:
                                          and header.get("hold", False) is False
                                          and type(header.get("path")) is str and isinstance(body, bytes)])
             units = _unit_checks(ops)
+            semantic_checks = _semantic_checks(ops)
             for header, body in ops:
                 op, path = header.get("op"), header.get("path")
-                if op == "unit":
+                if op in ("unit", "semantic"):
                     continue  # checked under the lock, just before the commit
                 if isinstance(body, Path):  # a spooled blob: read back only when staged
                     if op != "blob" or type(path) is not str or type(header.get("size")) is not int:
@@ -319,6 +323,14 @@ class StepBuffer:
                 stage_states(early, elsewhere)
                 early.commit(None)
             with store.lock:  # 028: a merged ledger lands only over the unit the client's plan read here
+                for campaign, files, blocked in semantic_checks:
+                    why = ledger_units.stale_listing(semantic.listing(store, campaign), files, blocked)
+                    if why is not None:
+                        raise PeerRefused('stale', f'campaign {campaign} semantic sources changed: {why}')
+                replacements = {h['path']: b for h, b in ops if h.get('op') == 'put' and isinstance(b, bytes)}
+                removed = [h['path'] for h, _ in ops if h.get('op') == 'delete']
+                if (replacements or removed) and semantic.validate_transition(store, replacements, removed):
+                    raise PeerRefused('semantic_review', 'scene or ledger requires semantic review')
                 for campaign, relations, files, blocked in units:
                     try:
                         why = ledger_units.stale_listing(ledger_units.unit_listing(store, campaign, relations),
@@ -538,3 +550,31 @@ def _reader(store: LibraryStore, path: str) -> Callable[[], bytes | None]:
         except (StoreError, OSError):
             return None
     return read
+
+
+def _semantic_checks(ops):
+    checks = []
+    for header, body in ops:
+        if header.get('op') != 'semantic':
+            continue
+        try:
+            value = json.loads(body)
+            if (set(header) - {'t', 'op'} or set(value) != {'campaign', 'files', 'blocked'}
+                    or type(value['campaign']) is not str or not _segment(value['campaign'])
+                    or not isinstance(value['files'], dict) or not isinstance(value['blocked'], list)
+                    or any(not semantic.relevant(p, value['campaign']) or not is_etag(t)
+                           for p, t in value['files'].items())
+                    or any(type(p) is not str or not semantic.relevant(p, value['campaign']) for p in value['blocked'])):
+                raise ValueError()
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            raise PeerRefused('invalid', 'a semantic check this device does not accept') from None
+        checks.append((value['campaign'], value['files'], value['blocked']))
+    required = set()
+    for h, _ in ops:
+        p = h.get('path')
+        if h.get('op') in ('put', 'delete') and type(p) is str and p.startswith('campaigns/'):
+            if syncable(p) in ('turn', 'accepted', 'wrapup', 'holdings', 'continuity', 'relation'):
+                required.add(p.split('/')[1])
+    if required - {c for c, _, _ in checks}:
+        raise PeerRefused('unsupported', 'scene and ledger writes require semantic snapshot checks')
+    return checks
