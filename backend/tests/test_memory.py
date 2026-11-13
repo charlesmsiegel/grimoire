@@ -38,7 +38,7 @@ def test_unavailable_replacement_never_revives_old_and_limit_is_bounded():
     selection = MemorySelection('one', actor, 'recap', ('old',), Moment(2))
     correction = MemoryCorrection('fix', actor, ('old',), ('missing',), Moment(3), 'authored')
     view = consolidate_view(knowledge, 'recap', (selection,), (correction,), limit=1)
-    assert view.current == () and view.history[0].evidence.evidence_id == 'old'
+    assert view.current == () and view.unavailable == ('missing',) and view.history == ()
     assert view.omitted == 1
 
 
@@ -51,6 +51,7 @@ def test_many_scenes_and_long_chain_are_bounded_without_recursion():
     result = consolidate_view(knowledge, 'recap', selections, corrections, limit=1000)
     assert len(result.current) + len(result.history) + len(result.unavailable) == 1000
     assert result.omitted == 201
+    assert any(item.evidence.evidence_id == 'e1100' for item in result.current)
 
 
 def test_missing_replacement_is_unavailable_without_reviving_old():
@@ -68,3 +69,13 @@ def test_non_character_actor_memory_uses_qualified_identity():
     knowledge = ActorKnowledge(actor, 2, (KnownEvidence('seen', 'perception', 'sight', Moment(1), 'a visitor'),), (), (), ())
     selection = MemorySelection('sel', actor, 'recap', ('seen',), Moment(2))
     assert consolidate_view(knowledge, 'recap', (selection,), ()).current[0].evidence.content == 'a visitor'
+
+
+def test_limit_prioritizes_terminal_replacement_over_history():
+    actor = InstanceRef('camp', 'character', 'alice')
+    evidence = (KnownEvidence('old', 'perception', 'sight', Moment(1), 'old'), KnownEvidence('new', 'perception', 'sight', Moment(2), 'new'))
+    selection = MemorySelection('sel', actor, 'recap', ('old',), Moment(2))
+    correction = MemoryCorrection('fix', actor, ('old',), ('new',), Moment(3), 'authored')
+    view = consolidate_view(ActorKnowledge(actor, 3, evidence, (), (), ()), 'recap', (selection,), (correction,), limit=1)
+    assert [item.evidence.evidence_id for item in view.current] == ['new']
+    assert view.history == () and view.omitted == 1

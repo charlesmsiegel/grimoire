@@ -50,7 +50,9 @@ class MemoryLibrary:
         if actor not in present or actor in paired_instances(present):
             raise AuthorityError('unknown_actor')
         controller = controller_of(actor.campaign_id, actor.instance_id, SovereigntyLedger(self.authority).load(actor.campaign_id).controls)
-        if controller is None or requested_by != controller or (controller != DIRECTOR and (not is_human(h.principal) or h.principal != controller)):
+        if (controller is None or requested_by != controller
+                or (controller == DIRECTOR and not h.principal.startswith('app:'))
+                or (controller != DIRECTOR and (not is_human(h.principal) or h.principal != controller))):
             raise AuthorityError('wrong_controller')
         return controller
 
@@ -67,7 +69,7 @@ class MemoryLibrary:
                         raise ValueError()
                     data = exact(entry, kind, {'editor', 'principal', 'value'})
                     editor, principal = data['editor'], data['principal']
-                    if type(editor) is not str or not editor or not is_valid_principal(principal) or (editor != DIRECTOR and (not is_human(principal) or editor != principal)):
+                    if type(editor) is not str or not editor or not is_valid_principal(principal) or (editor == DIRECTOR and not principal.startswith('app:')) or (editor != DIRECTOR and (not is_human(principal) or editor != principal)):
                         raise ValueError()
                     value = decode(kind, data['value'])
                     if value.actor.campaign_id != campaign:
@@ -138,6 +140,6 @@ class MemoryLibrary:
     def inspect(self, campaign_id, *, requested_by):
         with self.authority.lock:
             h = self.handle
-            if requested_by != DIRECTOR or not (self.authority.issued(h) and getattr(h, 'trusted', False) ):
+            if requested_by != DIRECTOR or not (self.authority.issued(h) and getattr(h, 'trusted', False) is True and h.principal.startswith('app:')):
                 raise AuthorityError('director_required')
             return tuple(self._load(campaign_id)[0])

@@ -34,7 +34,7 @@ def consolidate_view(knowledge, collection_id, selections, corrections, *, limit
                 pending.append(replacement)
     _check_acyclic(links, reachable)
     evidence = {e.evidence_id: e for e in knowledge.evidence if e.moment.sequence <= knowledge.as_of}
-    ordered = sorted(reachable, key=lambda i: (evidence[i].moment.sequence, i) if i in evidence else (float('inf'), i))
+    ordered = sorted(reachable, key=lambda i: (i in links, evidence[i].moment.sequence if i in evidence else float('inf'), i))
     shown = ordered[:limit]
     current = tuple(MemoryItem(evidence[i], selection_ids=origins.get(i, ())) for i in shown if i in evidence and i not in links)
     history = tuple(MemoryItem(evidence[i], links[i], origins.get(i, ()), correction_ids[i]) for i in shown if i in evidence and i in links)

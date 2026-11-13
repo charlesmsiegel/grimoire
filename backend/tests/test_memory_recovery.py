@@ -26,10 +26,10 @@ def test_crash_at_ledger_publication_reopen_and_retry(tmp_path, when):
     with pytest.raises(BaseException):
         with LibraryStore.open(root, ops=ops, locker=locker) as store:
             with open_authority(store) as authority:
-                MemoryLibrary(store, authority, authority.handle_for(OWNER, trusted=True)).select(selection, requested_by=DIRECTOR)
+                MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True)).select(selection, requested_by=DIRECTOR)
     with LibraryStore.open(root, locker=locker) as store:
         with open_authority(store) as authority:
-            library = MemoryLibrary(store, authority, authority.handle_for(OWNER, trusted=True))
+            library = MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
             library.select(selection, requested_by=DIRECTOR)
             assert len(library.inspect(C, requested_by=DIRECTOR)) == 1
             assert library.view(MARA, 'recap', as_of=8, requested_by=DIRECTOR).current[0].evidence.evidence_id == 'v-mara'

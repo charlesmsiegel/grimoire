@@ -19,13 +19,13 @@ def test_retry_and_reopen(tmp_path):
         with open_authority(store) as authority:
             handle = authority.handle_for(OWNER, trusted=True)
             SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), handle)
-            library = MemoryLibrary(store, authority, handle)
+            library = MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
             selection = MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8))
             library.select(selection, requested_by=DIRECTOR)
             library.select(selection, requested_by=DIRECTOR)
     with LibraryStore.open(root) as store:
         with open_authority(store) as authority:
-            library = MemoryLibrary(store, authority, authority.handle_for(OWNER, trusted=True))
+            library = MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
             assert library.view(MARA, 'recap', as_of=8, requested_by=DIRECTOR).current[0].evidence.evidence_id == 'v-mara'
 
 
@@ -38,7 +38,7 @@ def test_transfer_keeps_previous_editor_material_out_of_pc_view(tmp_path):
             owner = authority.handle_for(OWNER, trusted=True)
             controls = SovereigntyLedger(authority)
             controls.record(C, ControlChange(C, 'mara', DIRECTOR), owner)
-            director = MemoryLibrary(store, authority, owner)
+            director = MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
             director.select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
             controls.record(C, ControlChange(C, 'mara', 'human:player'), owner)
             player = MemoryLibrary(store, authority, authority.handle_for('human:player', trusted=True))
@@ -55,7 +55,7 @@ def test_conflicting_retry_and_foreign_evidence_are_rejected(tmp_path):
         with open_authority(store) as authority:
             handle = authority.handle_for(OWNER, trusted=True)
             SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), handle)
-            library = MemoryLibrary(store, authority, handle)
+            library = MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
             library.select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
             with pytest.raises(ValueError, match='operation_conflict'):
                 library.select(MemorySelection('sel', MARA, 'other', ('v-mara',), m(8)), requested_by=DIRECTOR)
@@ -71,7 +71,7 @@ def test_actor_ids_remain_reserved_after_instance_deletion(tmp_path):
         with open_authority(store) as authority:
             handle = authority.handle_for(OWNER, trusted=True)
             SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), handle)
-            MemoryLibrary(store, authority, handle).select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
+            MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True)).select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
         (store.root / 'campaigns' / C / 'instances' / 'character' / 'mara.json').unlink()
         assert 'mara' in memory_actor_ids(store, C)
 
@@ -85,13 +85,13 @@ def test_damaged_ledger_fails_closed_on_reopen(tmp_path):
         with open_authority(store) as authority:
             handle = authority.handle_for(OWNER, trusted=True)
             SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), handle)
-            MemoryLibrary(store, authority, handle).select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
+            MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True)).select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
     batch = next((root / 'authority' / 'memory' / C).glob('*.json'))
     batch.write_text('{}')
     with LibraryStore.open(root) as store:
         with open_authority(store) as authority:
             with pytest.raises((LedgerBroken, LedgerInvalid)):
-                MemoryLibrary(store, authority, authority.handle_for(OWNER, trusted=True)).view(MARA, 'recap', as_of=8, requested_by=DIRECTOR)
+                MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True)).view(MARA, 'recap', as_of=8, requested_by=DIRECTOR)
 
 
 def test_trusted_service_can_direct_npc_but_cannot_edit_pc(tmp_path):
@@ -119,7 +119,7 @@ def test_correction_chains_and_competing_correction(tmp_path):
         with open_authority(store) as authority:
             handle = authority.handle_for(OWNER, trusted=True)
             SovereigntyLedger(authority).record(C, ControlChange(C, 'sam', DIRECTOR), handle)
-            library = MemoryLibrary(store, authority, handle)
+            library = MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
             library.select(MemorySelection('sel', SAM, 'recap', ('v-sam',), m(5)), requested_by=DIRECTOR)
             correction = MemoryCorrection('fix', SAM, ('v-sam',), ('v-sam-member',), m(6), 'authored')
             library.correct(correction, requested_by=DIRECTOR)
@@ -141,7 +141,7 @@ def test_unconfirmed_future_and_foreign_scope_evidence_are_refused(tmp_path):
             controls = SovereigntyLedger(authority)
             for actor in (ORRIN, SAM):
                 controls.record(C, ControlChange(C, actor.instance_id, DIRECTOR), handle)
-            library = MemoryLibrary(store, authority, handle)
+            library = MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
             for selection in (MemorySelection('unconfirmed', ORRIN, 'recap', ('v-orrin',), m(8)),
                               MemorySelection('future', SAM, 'recap', ('v-sam-member',), m(4))):
                 with pytest.raises(ValueError, match='unavailable_evidence'):
@@ -167,3 +167,33 @@ def test_long_existing_correction_chain_admission_avoids_recursion():
     MemoryLibrary._check_record(rows, MemoryCorrection('join', MARA, ('start',), ('e0',), m(1200), 'authored'), DIRECTOR)
     with pytest.raises(ValueError, match='cyclic_correction'):
         MemoryLibrary._check_record(rows, MemoryCorrection('loop', MARA, ('e1100',), ('e0',), m(1200), 'authored'), DIRECTOR)
+
+
+def test_trusted_human_cannot_claim_director_service_privileges(tmp_path):
+    from grimoire.core import AuthorityError
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as authority:
+            owner = authority.handle_for(OWNER, trusted=True)
+            SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), owner)
+            human = MemoryLibrary(store, authority, authority.handle_for('human:unrelated', trusted=True))
+            with pytest.raises(AuthorityError):
+                human.select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
+            with pytest.raises(AuthorityError):
+                human.view(MARA, 'recap', as_of=8, requested_by=DIRECTOR)
+            with pytest.raises(AuthorityError):
+                human.inspect(C, requested_by=DIRECTOR)
+
+
+def test_replay_rejects_director_record_authored_by_human(tmp_path):
+    from grimoire.ledgers.codec import envelope
+    from grimoire.memory.codec import encode
+    from grimoire.store.errors import LedgerInvalid
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        with open_authority(store) as authority:
+            kind, value = encode(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)))
+            authority._append(f'memory/{C}', [envelope(kind, authority.now(), editor=DIRECTOR, principal='human:unrelated', value=value)], None)
+            service = MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
+            with pytest.raises(LedgerInvalid, match='invalid_memory_ledger'):
+                service.inspect(C, requested_by=DIRECTOR)
