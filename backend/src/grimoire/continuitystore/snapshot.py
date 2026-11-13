@@ -7,32 +7,14 @@ from grimoire.continuity import Dependency, Pin, scene_revision
 from grimoire.core.identity import AcceptedRef, RelationRef, KnowledgeRef, HoldingsRef
 from grimoire.core.knowledge import Perception, Report, Proposition, Ruling
 from grimoire.effects import accepted_from_payload, wrapup_from_payload
-from grimoire.effectstore.continuity import decode_scene_sources
+from grimoire.continuity.provenance import decode_scene_sources
+from grimoire.continuity.declarations import DEPENDENCY_SCHEMA, decode_dependency
 from grimoire.evidence import decode_batch, decode_claimed
 from grimoire.graph.codec import relation_from_payload
 from grimoire.holdings import holdings_from_payload
 from grimoire.scene import turn_from_payload
 from grimoire.store.layout import address_parts
 
-DEPENDENCY_SCHEMA = 'grimoire.continuity-dependency/1'
-
-
-def decode_dependency(schema, payload):
-    """Strict immutable declaration wire; archives are a different schema."""
-    if schema != DEPENDENCY_SCHEMA:
-        raise ValueError('unsupported continuity schema')
-    if not isinstance(payload, Mapping) or set(payload) != {'source', 'dependent', 'reason', 'certainty'}:
-        raise ValueError('malformed dependency')
-    pins = []
-    for key in ('source', 'dependent'):
-        value = payload[key]
-        if not isinstance(value, Mapping) or set(value) != {'path', 'revision'}:
-            raise ValueError('malformed dependency endpoint')
-        pins.append(Pin(value['path'], value['revision']))
-    edge = Dependency(*pins, payload['reason'], payload['certainty'])
-    if edge.certainty != 'known' or edge.source.campaign_id != edge.dependent.campaign_id:
-        raise ValueError('declarations require known same-campaign dependence')
-    return edge
 
 
 @dataclass(frozen=True)

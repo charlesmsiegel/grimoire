@@ -562,9 +562,9 @@ def _semantic_checks(ops):
             if (set(header) - {'t', 'op'} or set(value) != {'campaign', 'files', 'blocked'}
                     or type(value['campaign']) is not str or not _segment(value['campaign'])
                     or not isinstance(value['files'], dict) or not isinstance(value['blocked'], list)
-                    or any(not semantic.relevant(p, value['campaign']) or not is_etag(t)
+                    or any(not semantic.premise_path(p, value['campaign']) or not is_etag(t)
                            for p, t in value['files'].items())
-                    or any(type(p) is not str or not semantic.relevant(p, value['campaign']) for p in value['blocked'])):
+                    or any(type(p) is not str or not semantic.premise_path(p, value['campaign']) for p in value['blocked'])):
                 raise ValueError()
         except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
             raise PeerRefused('invalid', 'a semantic check this device does not accept') from None
