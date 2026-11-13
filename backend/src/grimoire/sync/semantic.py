@@ -28,6 +28,7 @@ class SemanticReview:
     scenes: tuple[str, ...]
     reasons: tuple[str, ...]
     token: str
+    endpoints: tuple[str, ...] = ()
 
 
 def relevant(path: str, campaign: str) -> bool:
@@ -74,7 +75,7 @@ def reviews(plan):
     campaigns = {p.split('/')[1] for p in plan.paths if p.startswith('campaigns/') and len(p.split('/')) > 2}
     found = []
     for campaign in sorted(campaigns):
-        scenes, reasons = set(), set()
+        scenes, reasons, endpoints = set(), set(), set()
         turns, events = {}, {}
         for device in plan.devices:
             turns[device], events[device] = {}, {}
@@ -143,15 +144,18 @@ def reviews(plan):
                             if raw is None:
                                 if endpoint.path in plan.bases and plan.bases[endpoint.path].kind == 'agreed':
                                     reasons.add('missing_dependency_endpoint')
+                                    endpoints.add(endpoint.path)
                                 continue
                             present = True
                             actual = (turns[side][endpoint.path][1] if endpoint.path in turns[side] else etag(raw))
                             if actual != endpoint.revision:
                                 reasons.add('stale_dependency_endpoint')
+                                endpoints.add(endpoint.path)
                                 if syncable(endpoint.path) == 'turn':
                                     scenes.add(endpoint.path)
                         if not present:
                             reasons.add('missing_dependency_endpoint')
+                            endpoints.add(endpoint.path)
                     source = edge.source.path
                     if source not in turns[device] and source not in turns[other]:
                         continue
@@ -186,13 +190,14 @@ def reviews(plan):
                for d in plan.devices for p in plan.scans[d].blocked):
             reasons.add('unreadable_semantic_sources')
         if reasons:
-            found.append(SemanticReview(campaign, tuple(sorted(scenes)), tuple(sorted(reasons)), token(plan, campaign)))
+            found.append(SemanticReview(campaign, tuple(sorted(scenes)), tuple(sorted(reasons)), token(plan, campaign),
+                                        tuple(sorted(endpoints))))
     return tuple(found)
 
 
 def guard(plan):
     for review in reviews(plan):
-        implicated = {p for p in review.scenes if p in plan.sides} | {
+        implicated = {p for p in (*review.scenes, *review.endpoints) if p in plan.sides} | {
             p for p, c in plan.units.items() if c == review.campaign}
         if 'missing_dependency_endpoint' in review.reasons:
             implicated.update(p for p in plan.paths if premise_path(p, review.campaign))
@@ -201,7 +206,7 @@ def guard(plan):
         for path in implicated:
             plan.held.add(path)
             plan.agreed.discard(path)
-            if path in review.scenes or not units._same(plan, path):
+            if path in review.scenes or path in review.endpoints or not units._same(plan, path):
                 native = plan.conflicts.get(path)
                 plan.conflicts[path] = Conflict(path, 'semantic_review', ', '.join(review.reasons),
                                                 review=native.review if native is not None else (), token=review.token)
@@ -221,7 +226,7 @@ def guard(plan):
 
 def campaigns_for(plan, copies, deletes=()):
     return {c.path.split('/')[1] for c in (*copies, *deletes) if c.path.startswith('campaigns/') and
-            (syncable(c.path) == 'turn' or getattr(c, 'unit', None) is not None or syncable(c.path) in ('continuity', 'relation'))}
+            (syncable(c.path) == 'turn' or getattr(c, 'unit', None) is not None or syncable(c.path) in ('continuity', 'relation', 'image', 'placement'))}
 
 
 def changed(plan, copies, published, deletes=(), deleted=None):
@@ -303,6 +308,8 @@ def resolution_risk(store, path, peer):
                     continue
                 edge = decode_dependency(record.schema, record.payload)
                 if path in (edge.source.path, edge.dependent.path): return True
+        if syncable(path) in ('image', 'placement'):
+            return False  # Only an explicit declaration binds artwork; relation proximity does not.
         pair = tuple(sorted((peer, device_of(store))))
         archive = bookkeeping.read_document(store, 'archive', peer, pair)
         # Direct editorial facts only implicate a peer's reviewed agreed scene when

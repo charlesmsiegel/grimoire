@@ -573,8 +573,8 @@ def _semantic_checks(ops):
     for h, _ in ops:
         p = h.get('path')
         if h.get('op') in ('put', 'delete') and type(p) is str and p.startswith('campaigns/'):
-            if syncable(p) in ('turn', 'accepted', 'wrapup', 'holdings', 'continuity', 'relation'):
+            if syncable(p) in ('turn', 'accepted', 'wrapup', 'holdings', 'continuity', 'relation', 'image', 'placement'):
                 required.add(p.split('/')[1])
     if required - {c for c, _, _ in checks}:
-        raise PeerRefused('unsupported', 'scene and ledger writes require semantic snapshot checks')
+        raise PeerRefused('unsupported', 'campaign writes require semantic snapshot checks')
     return checks

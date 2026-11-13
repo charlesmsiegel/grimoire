@@ -326,7 +326,7 @@ class _RelayedTransaction(Transaction):
         checks = []
         campaigns = {make()[0]['path'].split('/')[1] for kind, make in self._ops
                      if kind == 'put' and make()[0]['path'].startswith('campaigns/')
-                     and syncable(make()[0]['path']) in ('turn', 'accepted', 'relation', 'holdings', 'wrapup', 'continuity')}
+                     and syncable(make()[0]['path']) in ('turn', 'accepted', 'relation', 'holdings', 'wrapup', 'continuity', 'image', 'placement')}
         for campaign in sorted(campaigns):
             current = semantic.listing(self._mirror, campaign)
             payload = json.dumps({'campaign': campaign, 'files': {p: t for p, t in current.items() if t is not None},
@@ -382,7 +382,8 @@ class ResolveRequest:
         Anything else would let a paired device write chosen bytes over a record. The deletion
         (``keep=None``) is admitted only where this device lacks the record: it is the winner.
         """
-        if syncable(self.path) in ('turn', 'relation'):
+        if (syncable(self.path) in ('turn', 'relation') or
+                (self.path.startswith('campaigns/') and syncable(self.path) in ('image', 'placement'))):
             if semantic.resolution_risk(store, self.path, self.peer):
                 raise PeerRefused('semantic_review', 'semantic scene resolution requires the continuity owner operation')
         found = _current(store, self.path)
@@ -445,7 +446,8 @@ class ResolveRequest:
         those bytes. When this device is the winner, its record's step (deliveries cleared) finds
         the chosen version already here, as every later step does.
         """
-        if syncable(self.path) in ('turn', 'relation') and semantic.resolution_risk(store, self.path, self.peer):
+        if (syncable(self.path) in ('turn', 'relation', 'image', 'placement')
+                and self.path.startswith('campaigns/') and semantic.resolution_risk(store, self.path, self.peer)):
             raise PeerRefused('semantic_review', 'semantic sources changed during resolution')
         writes = [(header, body) for header, body in ops if header.get("path") == self.path]
         found = _current(store, self.path)
