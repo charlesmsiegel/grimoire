@@ -537,8 +537,8 @@ Only 066 is complete at its narrow first-proof boundary. Other domain slices and
 ### 061 — Private And Local Voice
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/private-and-local-voice.md)).
-- Evidence: [`voice/__init__.py`](../../backend/src/grimoire/voice/__init__.py) and [`voice/profile.py`](../../backend/src/grimoire/voice/profile.py) are prose characterization, explicitly not TTS; intent provides speech-origin guards.
-- Scope / gap: No selectable local/private STT/TTS providers, audio privacy controls or leakage proof.
+- Evidence (061 boundary added after the audit snapshot): [`speech`](../../backend/src/grimoire/speech), [`test_speech_privacy.py`](../../backend/tests/test_speech_privacy.py), and [speech contract](../SPEECH.md) provide separate STT/TTS selection, explicit unsupported local fallback, upload/spending refusal, bounded ephemeral retention/export/deletion and duplicate suppression.
+- Scope / gap: No installed acoustic backend validated, device resource measurements or UI controls. The unsupported-state branch is executable; live speech and 115 integration remain unverified, so this audit checkbox stays open.
 
 <a id="slice-062"></a>
 ### 062 — Ruleset Action Contracts
@@ -579,8 +579,8 @@ Only 066 is complete at its narrow first-proof boundary. Other domain slices and
 ### 067 — Voice Accessibility And Testing
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/voice-accessibility-and-testing.md)).
-- Evidence: [`test_intent_voice.py`](../../backend/tests/test_intent_voice.py) covers low ASR confidence/alternatives, ambiguous destructive commands and typed reentry.
-- Scope / gap: No voice accessibility corpus, synthetic acoustic noise/simultaneous speech evaluation or false-command metrics. These are earlier 008 intent safety tests.
+- Evidence (067 boundary added after the audit snapshot): [`speech_corpus.py`](../../backend/tests/speech_corpus.py), [`test_speech_evaluation.py`](../../backend/tests/test_speech_evaluation.py) and [`test_speech_control.py`](../../backend/tests/test_speech_control.py) add synthetic transcript/event noise and simultaneous-speaker cases, false-command/attribution/task metrics, safe confirmation and typed recovery; unsafe and all-blocked mutants fail evaluation. See [speech contract](../SPEECH.md).
+- Scope / gap: This is transcript/event evidence, not acoustic noise/simultaneous-audio recognition. Real backend/audio evaluation, playback/caption UI, hands-free operation and accessibility-user testing remain unverified; checkbox stays open.
 
 <a id="slice-068"></a>
 ### 068 — Actor Specific Inference
