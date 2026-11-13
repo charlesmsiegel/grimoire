@@ -86,11 +86,9 @@ def snapshot(runner, context, *, choices=()) -> Snapshot:
 
 
 def authority_for(record, scene) -> Authority:
-    contributions = ()
-    if record.post is not None:
-        post = record.post
-        contributions = (PlayerContribution(record.chat.campaign_id, record.turn_id, record.chat.chat_id,
-                                             record.turn_id, post.actor.instance_id, post.submitted_by,
-                                             post.kind, post.text),)
+    contributions = tuple(PlayerContribution(record.chat.campaign_id, record.contribution_id(index),
+                                             record.chat.chat_id, record.turn_id, post.actor.instance_id,
+                                             post.submitted_by, post.kind, post.text)
+                          for index, post in enumerate(record.posts))
     return Authority(NarrationContext(record.chat.campaign_id, record.chat.chat_id, record.turn_id),
                      scene.controls, contributions=contributions)

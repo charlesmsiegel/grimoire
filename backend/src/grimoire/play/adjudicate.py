@@ -70,6 +70,8 @@ def _action(runner, chat: ChatRef, by):
     principal = runner._principal(scene, by)
     runner._ready(scene)
     record = scene.pending
+    if record is not None and record.extra_posts:
+        raise _refuse("combined_adjudication_unsupported", "combined actions require multi-action adjudication")
     post = record.post if record is not None else None
     if post is None or post.kind != "action":
         raise _refuse("not_an_action", "only the open turn's action post is framed")

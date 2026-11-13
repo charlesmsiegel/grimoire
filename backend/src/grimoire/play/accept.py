@@ -106,11 +106,10 @@ def _sequence(moment: object) -> int:
 
 def contributions_of(record: TurnRecord) -> tuple[PlayerContribution, ...]:
     """The player's own 003 contribution a turn's post is (its id is the turn id), as 021 checks it."""
-    post, chat = record.post, record.chat
-    if post is None:
-        return ()
-    return (PlayerContribution(chat.campaign_id, record.turn_id, chat.chat_id, record.turn_id,
-                               post.actor.instance_id, post.submitted_by, post.kind, post.text),)
+    chat = record.chat
+    return tuple(PlayerContribution(chat.campaign_id, record.contribution_id(i), chat.chat_id, record.turn_id,
+                                    post.actor.instance_id, post.submitted_by, post.kind, post.text)
+                 for i, post in enumerate(record.posts))
 
 
 def _turn(scene, turn: object) -> StoredTurn:
@@ -119,6 +118,8 @@ def _turn(scene, turn: object) -> StoredTurn:
     stored = next((each for each in scene.turns.turns if each.record.turn_id == turn), None)
     if stored is None:
         raise _refuse("unknown_turn", "this chat has no turn with that id")
+    if stored.record.extra_posts:
+        raise _refuse("combined_adjudication_unsupported", "combined turns cannot propose effects yet")
     return stored
 
 

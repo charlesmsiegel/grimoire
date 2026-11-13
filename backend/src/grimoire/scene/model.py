@@ -10,12 +10,16 @@ present player characters), never by an NPC. Withdrawn and struck lines are show
 
 from __future__ import annotations
 
+
 import hashlib
 import re
 from .review import LineReview, REVIEW_STATES, valid_digest
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+
+from .identity import contribution_id
+from .composition import validate_composition
 
 from grimoire.adjudication import MAX_FACTORS, MAX_STAKES, Factor, Stake
 from grimoire.comms import CHANNELS
@@ -792,9 +796,22 @@ class TurnRecord:
     intentions: tuple[Intention, ...] = ()
     extras: dict[str, object] = field(default_factory=dict, compare=False)
 
+    extra_posts: tuple[Post, ...] = ()
+    acceptance_id: str | None = None
+    acceptance_epoch: int | None = None
+    acceptance_digest: str | None = None
+
+    @property
+    def posts(self) -> tuple[Post, ...]:
+        return (() if self.post is None else (self.post,)) + self.extra_posts
+
+    def contribution_id(self, index: int) -> str:
+        return contribution_id(self.turn_id, index)
+
     def __post_init__(self) -> None:
         if type(self.chat) is not ChatRef:
             raise _fail("invalid_field", "a turn's chat is a ChatRef")
+        validate_composition(self, post_type=Post, fail=_fail, text=_text)
         turn_id(self.chat, self.number, self.device)
         if self.origin not in ORIGINS:
             raise _fail("invalid_field", f"a turn's origin is one of {ORIGINS}")

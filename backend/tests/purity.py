@@ -78,7 +78,7 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.ar
                       "grimoire.actor_inference", "grimoire.ensemble",
                       "grimoire.import_v1", "grimoire.judgepanel", "grimoire.ledgers", "grimoire.library", "grimoire.mediaapi", "grimoire.migrate_v1",
                       "grimoire.memorystore", "grimoire.rumorledger", "grimoire.rumorstore", "grimoire.narration_review", "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
-                      "grimoire.play", "grimoire.preparation", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
+                      "grimoire.localplay", "grimoire.play", "grimoire.preparation", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
                       "grimoire.runtime", "grimoire.scenestore", "grimoire.shelfstore", "grimoire.sourceapi", "grimoire.speech",
                       "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi",
                       "grimoire.topologystore"})

@@ -82,6 +82,13 @@ class _Builder:
     def apply(self, value: object, recorded_by: str) -> None:
         self.count += 1
         if type(value) is ControlChange:
+            if self.controllers.get(value.actor_id) != value.controller_id:
+                revoked = {(r.delegation_id, r.revoked_by) for r in self.revocations}
+                # Derived termination, keyed to the grantor as core policy requires. The ledger
+                # retains the owner's actual ControlChange provenance; no grantor entry is forged.
+                self.revocations.extend(Revocation(self.campaign_id, d.delegation_id, d.granted_by)
+                                        for d in self.delegations
+                                        if d.actor_id == value.actor_id and (d.delegation_id, d.granted_by) not in revoked)
             if value.controller_id is None:
                 self.controllers.pop(value.actor_id, None)
             else:

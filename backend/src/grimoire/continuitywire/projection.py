@@ -5,7 +5,7 @@ from collections.abc import Mapping
 
 # Keep all authored line/source/audience fields. Calls, labels, intentions and effect receipts
 # advance independently during acceptance and cannot invalidate the source they just accepted.
-TURN_FIELDS = ('chat', 'number', 'origin', 'post', 'paused', 'paused_by', 'passed_by', 'device', 'follows', 'set_aside')
+TURN_FIELDS = ('chat', 'number', 'origin', 'post', 'extra_posts', 'paused', 'paused_by', 'passed_by', 'device', 'follows', 'set_aside')
 
 
 def _plain(value):
