@@ -39,6 +39,7 @@ A closed registry, `grimoire.graph.PREDICATES`. Every predicate's domain is `wor
 | `has_met` | symmetric | the two have met |
 | `kin_of` | symmetric | the two are family |
 | `allied_with` | symmetric | the two are allied |
+| `trained_by` | directed | creature is associated with trainer; no control or presence grant ([COMPANIONS](COMPANIONS.md), 050) |
 | `in_party` | directed | subject travels in object's active party (object is the party anchor; [PARTY](PARTY.md), 033) |
 | `in_reserve` | directed | subject is stored in object's party reserve: available, not travelling ([PARTY](PARTY.md), 033) |
 
