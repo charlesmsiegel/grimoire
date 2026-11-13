@@ -10,7 +10,7 @@ No text reaches a consumer before it is accepted and screened.
 from __future__ import annotations
 
 import weakref
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -22,6 +22,7 @@ from grimoire.generation import (
     DirectorBrief, GenerationError, HeardLine, NpcBrief, checked_controls, controller, director_messages,
     decision_messages, decision_options, npc_messages, read_pick, require_director, screen_reply,
 )
+from grimoire.generation.delivery import ContributionMode
 from grimoire.goals import Choice
 from grimoire.providers.adapter import Approvals, CallResult, ProviderAdapter
 from grimoire.providers.cancel import CancelToken
@@ -331,7 +332,8 @@ class GenerationRuntime:
     def run_turn(self, meter: TurnMeter, briefs: Iterable[NpcBrief], *, controls: Iterable[ControlAssignment],
                  director: DirectorBrief | None = None, token: FenceToken | None = None,
                  cancel: CancelToken | None = None, scene_voices: Iterable[ResolvedVoice] = (),
-                 hears: Callable[[InstanceRef | None, InstanceRef | None], bool] | None = None) -> TurnOutcome:
+                 hears: Callable[[InstanceRef | None, InstanceRef | None], bool] | None = None,
+                 modes: Mapping[InstanceRef, ContributionMode] | None = None) -> TurnOutcome:
         """Issue every planned call in order; see the module docstring and docs/GENERATION.md.
 
         Refused before any call: a ``decision`` call ``decide`` has not run on ``meter``
@@ -364,6 +366,12 @@ class GenerationRuntime:
         scene_voices = tuple(scene_voices)
         if not all(isinstance(voice, ResolvedVoice) for voice in scene_voices):
             raise GenerationError("bad_voice", "scene_voices must be ResolvedVoice values")
+        modes = {} if modes is None else modes
+        if (not isinstance(modes, Mapping)
+                or not set(modes) <= {brief.actor for brief in briefs}
+                or not all(isinstance(mode, ContributionMode) for mode in modes.values())):
+            raise GenerationError("bad_mode", "modes must name only planned actors and fixed contribution modes")
+        modes = dict(modes)
         voices = tuple(brief.voice for brief in briefs) + scene_voices
         cancel = cancel if cancel is not None else CancelToken()
         unwatch = cancel_when_stale(token, cancel)
@@ -388,7 +396,7 @@ class GenerationRuntime:
                 spoken = tuple(HeardLine(line.speaker, line.text, line.actor) for line in lines
                                if hears is None or hears(listener, line.actor) is True)
                 if isinstance(brief, NpcBrief):
-                    messages = npc_messages(brief, spoken)
+                    messages = npc_messages(brief, spoken, mode=modes.get(brief.actor))
                 else:
                     messages = director_messages(brief, spoken)
                 # No on_delta: nothing is shown before acceptance, and a consumer would block retries.
