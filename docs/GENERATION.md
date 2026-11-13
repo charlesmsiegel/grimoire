@@ -188,3 +188,13 @@ By default every present actor hears every spoken line (no whispering), so a sec
 | Building each speaker's pack and the director's lore every turn, with the transcript window as scene text | 035 (done in its first slice, [SCENES](SCENES.md)) |
 | Other optional stages in a generation turn (`planning`, `summary`, ...) | later sprints; 045's `select`/`decision` phase is [DECISIONS](DECISIONS.md) |
 | Choosing an NPC's intention every turn and giving the turn to an NPC that acts on its goals | 035 M2 |
+
+## Native manually authored characters
+
+Complete native character definitions also derive bounded voice anchors from their own description and
+personality section, using the same deterministic extraction as imported text, without fake import metadata.
+No private sections or other actors supply voice. Empty text refuses; explicit profiles win. Imported metadata
+(even malformed) never falls through to native interpretation. Derived portrayals retain pinned inheritance,
+overrides and explicit clears. Profiles are rebuilt from immutable revisions, with no migration or model call.
+The Library character template supplies speaking-agent facets on creation only when traits are omitted.
+Existing non-agent records need explicit authoring and reviewed rebase, never a runtime authority shortcut.
