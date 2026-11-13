@@ -5,7 +5,7 @@ from grimoire.ledgers import ControlChange, SovereigntyLedger
 from grimoire.memory import MemorySelection
 from grimoire.memorystore import MemoryLibrary
 from grimoire.store import LibraryStore, ProcessLocker
-from grimoire.testing import Crash, RootedFileOps, Target
+from grimoire.testing import Crash, RootedFileOps, SimulatedCrash, Target
 from ledger_helpers import OWNER, open_authority
 from evidence_fixtures import C, MARA, m
 from test_evidencestore_scenarios import seed_actors, append_u
@@ -23,7 +23,7 @@ def test_crash_at_ledger_publication_reopen_and_retry(tmp_path, when):
             SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), authority.handle_for(OWNER, trusted=True))
     selection = MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8))
     ops = RootedFileOps(tmp_path, plan=[Crash(Target('replace', target='lib/authority/memory/c1/*'), when)], record=False)
-    with pytest.raises(BaseException):
+    with pytest.raises(SimulatedCrash):
         with LibraryStore.open(root, ops=ops, locker=locker) as store:
             with open_authority(store) as authority:
                 MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True)).select(selection, requested_by=DIRECTOR)
