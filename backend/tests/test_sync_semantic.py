@@ -501,3 +501,39 @@ def test_uninspectable_declaration_wire_holds_actual_native_asset(pair, malforma
     with pytest.raises(ResolveRefused, match='semantic'):
         resolve(desk.store, phone.store, path, expected[DESKTOP], expected, H)
     assert {name: d.store.read_exact(path) for name, d in pair.items()} == before
+
+
+def corrupt_accepted_wire(store, malformation):
+    import json
+    ref = next(iter(store.campaign_accepted('c').records))
+    path = '/'.join(address_parts(ref))
+    file = store.root / path
+    value = json.loads(file.read_text())
+    if malformation == 'schema':
+        value['schema'] = 'future.accepted/99'
+    else:
+        value['payload'] = {'uninspectable': True}
+    file.write_text(json.dumps(value))  # native envelope stays valid; event ancestry is undecodable
+    return path
+
+
+@pytest.mark.parametrize('source_device', [DESKTOP, PHONE])
+@pytest.mark.parametrize('malformation', ['schema', 'payload'])
+def test_undecodable_accepted_event_holds_source_scene_and_generic_resolution(pair, source_device, malformation):
+    from ledger_fixtures import pay
+    source = pair[source_device]
+    edited = pair[PHONE if source_device == DESKTOP else DESKTOP]
+    source.accept(pay(chat=CHAT))
+    event_path = corrupt_accepted_wire(source.store, malformation)
+    write_turn(edited.store, edited.handles, text='Edited while accepted ancestry cannot be decoded.')
+    path = 'campaigns/c/turns/t-1.000001.json'
+    before = {name: d.store.read_exact(path) for name, d in pair.items()}
+    report = sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert {name: d.store.read_exact(path) for name, d in pair.items()} == before
+    assert report.conflict(path).code == 'semantic_review'
+    assert any(item.reason == 'unreadable' and item.subject == event_path
+               for c in report.conflicts for item in c.review)
+    expected = {name: etag(data) for name, data in before.items()}
+    with pytest.raises(ResolveRefused, match='semantic'):
+        resolve(pair[DESKTOP].store, pair[PHONE].store, path, expected[edited.name], expected, handles())
+    assert {name: d.store.read_exact(path) for name, d in pair.items()} == before
