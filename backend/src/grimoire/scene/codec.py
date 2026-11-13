@@ -80,6 +80,11 @@ def turn_to_payload(record: TurnRecord) -> dict[str, object]:
         "set_aside": None if record.set_aside is None else {"chosen": record.set_aside.chosen,
                                                              "by": record.set_aside.by},
     })
+    if record.extra_posts:
+        payload["extra_posts"] = [_post(post) for post in record.extra_posts]
+    if record.acceptance_id is not None:
+        payload.update(acceptance_id=record.acceptance_id, acceptance_epoch=record.acceptance_epoch,
+                       acceptance_digest=record.acceptance_digest)
     if record.labels:
         payload["labels"] = [_label(label) for label in record.labels]
     if record.effects:
@@ -226,7 +231,8 @@ def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRec
         raise _invalid("device must be a device tag or null")
     if turn_id(chat, number, device) != address.turn_id:  # type: ignore[arg-type]
         raise SceneRefused("address_mismatch", "a turn's chat, number and device must spell its address")
-    extras = {key: value for key, value in data.items() if key not in _TURN_KEYS | _OPTIONAL_TURN_KEYS}
+    extras = {key: value for key, value in data.items() if key not in _TURN_KEYS | _OPTIONAL_TURN_KEYS |
+              {"extra_posts", "acceptance_id", "acceptance_epoch", "acceptance_digest"}}
     follows = data.get("follows")
     if follows is not None and type(follows) is not str:
         raise _invalid("follows must be a turn id or null")
@@ -241,7 +247,10 @@ def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRec
                           tuple(_decode_label(item, address) for item in _list(data.get("labels", []), "labels")),
                           tuple(_decode_effect(item, address) for item in _list(data.get("effects", []), "effects")),
                           tuple(_decode_intention(item) for item in _list(data.get("intentions", []), "intentions")),
-                          extras=extras)
+                          extras=extras,
+                          extra_posts=tuple(_decode_post(p) for p in _list(data.get("extra_posts", []), "extra_posts")),
+                          acceptance_id=data.get("acceptance_id"), acceptance_epoch=data.get("acceptance_epoch"),
+                          acceptance_digest=data.get("acceptance_digest"))
     except SceneRefused:
         raise
     except (ValueError, TypeError) as error:

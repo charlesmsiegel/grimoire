@@ -516,8 +516,8 @@ Only 066 is complete at its narrow first-proof boundary. Other domain slices and
 ### 058 — Local Multi PC
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/local-multi-pc.md)).
-- Evidence: [`textapi/api.py`](../../backend/src/grimoire/textapi/api.py) enforces a trusted library-owner player; [`test_textapi.py`](../../backend/tests/test_textapi.py)::test_only_the_owner_plays_in_this_slice verifies rejection of others.
-- Scope / gap: No independent local PC controllers/drafts and combined accepted contribution.
+- Evidence: [`localplay.py`](../../backend/src/grimoire/localplay.py) supplies guarded local drafts and independent controller consent; [`test_localplay.py`](../../backend/tests/test_localplay.py) proves atomic combined SceneRunner ingestion, one fake narrator call, per-NPC prompt filtering, restart/ack-loss idempotence and control-regain safety. See [contract](../LOCAL_MULTI_PC.md).
+- Scope / gap: Headless local composition and combined runtime seam exist. The user-facing local controller adapter/review flow remains sprint 115; application views explicitly refuse combined rendering. TextApi remains owner-only. Combined adjudication/effects remain refused pending reviewed multi-action policy. Checklist stays unchecked until the UI integration is delivered.
 
 <a id="slice-059"></a>
 ### 059 — Location Topology

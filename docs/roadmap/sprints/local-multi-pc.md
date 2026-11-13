@@ -26,7 +26,9 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 - Map routed intents to contributions with the actual speaker as submitter ([intent routing](../../intent-routing.md#handing-a-pc-intent-to-the-authority-policy)), and reconcile authority `controller_id`s with `grimoire.security` principals (003, 007, 008).
 - Record control history, or end delegations explicitly on a control change. Today a delegation revives when its grantor regains control ([player sovereignty](../../PLAYER_SOVEREIGNTY.md)).
 
-## Open questions
-- Should drafts survive restart?
-- How is ordering determined?
-- When is one versus multiple narrator responses appropriate?
+## Current headless slice
+See [the accepted local composition contract](../../LOCAL_MULTI_PC.md). Drafts survive restart;
+confirmations require the current session's issued handles. The owner controls ordering, every
+controller confirms the exact revision, and one combined turn advances through SceneRunner with
+one explicitly requested director response. Per-NPC generation remains separate. Sprint 115 owns
+the remaining application UI/adapter; combined adjudication and effects require a reviewed policy.

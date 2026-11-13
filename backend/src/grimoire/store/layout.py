@@ -490,6 +490,15 @@ def secret_parts(name: str) -> Parts:
             pass
         else:
             return (SECRETS, *pieces)
+    if len(pieces) == 4 and pieces[0] == "local-pc" and pieces[3].endswith(SUFFIX):
+        try:
+            for piece in (*pieces[1:3], pieces[3][:-len(SUFFIX)]):
+                validate_segment(piece, "local-pc segment")
+                ResourcePath((piece,))
+        except (ValueError, InvalidResourcePath):
+            pass
+        else:
+            return (SECRETS, *pieces)
     raise ValueError(f"not a secret name: {name!r}")
 
 

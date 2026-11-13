@@ -88,7 +88,7 @@ A correction does not revoke a delegation. The player revokes it separately so t
 
 Both are labelling errors, so the remedy is a labeller and a mislabel-review path, not a wider correction right that could strike claims about other actors. The review path exists: the referee routes both shapes from the labeller's `voiced_by`, and only that PC's controller may flag one, which strikes nothing ([REFEREE](REFEREE.md#authorship-claims-and-mislabel-review)). The labeller itself is still 047's next milestone.
 
-**Delegations and control changes.** Control assignments are a snapshot, with no history. A delegation is therefore honored whenever its grantor controls the PC again: one granted by P1 is suspended while P2 controls the PC, and it applies again when control returns to P1. Ending it for good takes a revocation by the grantor. Control history is now persisted (see [Persistence](#persistence-010b)); using it in review belongs to [Local Multi PC](roadmap/sprints/local-multi-pc.md).
+**Delegations and control changes.** The pure policy consumes the control snapshot and revocations supplied by its caller. The durable sovereignty replay now derives permanent revocations for outstanding delegations on each actual control transition (058): a grant does not revive when its grantor regains control. Repeating the same control assignment does not terminate grants. Derived revocations are keyed to the original grantor for policy matching; the canonical ledger retains the owner-authored control change and its actual provenance unchanged. Local drafts snapshot the control-history epoch, so moving control away and back also invalidates pending consent. See [Local Multi PC](LOCAL_MULTI_PC.md).
 
 ## Deferred
 

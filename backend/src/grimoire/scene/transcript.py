@@ -172,9 +172,10 @@ def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[In
     if before is not None and actor in before.listeners:
         heard.extend(before.heard)
     for turn in _ordered(turns):
-        if turn.post is not None and actor in turn.post.audience:
-            heard.append(_post_line(turn.post, names))
-            heard.append((outcomes or {}).get(turn.turn_id))
+        for post in turn.posts:
+            if actor in post.audience:
+                heard.append(_post_line(post, names))
+                heard.append((outcomes or {}).get(turn.turn_id))
         heard.extend(_heard(line.speaker, line.text, line.actor) for line in turn.visible(actor)
                      if narration or line.actor is not None)
     found = [line for line in heard if line is not None]
@@ -192,9 +193,10 @@ def table_lines(turns: Iterable[TurnRecord], names: Mapping[InstanceRef, str], *
     recorded no players gives none (fail closed). A take with no stage, or without ``as_heard``, gives every line."""
     seen: list[HeardLine | None] = list(before.table) if before is not None else []
     for turn in _ordered(turns):
-        if turn.post is not None and not turn.post.private:
-            seen.append(_post_line(turn.post, names))
-            seen.append((outcomes or {}).get(turn.turn_id))
+        for post in turn.posts:
+            if not post.private:
+                seen.append(_post_line(post, names))
+                seen.append((outcomes or {}).get(turn.turn_id))
         kept = turn.kept
         staged = as_heard and kept is not None and kept.on_stage is not None
         table = frozenset(kept.players or ()) if staged else None

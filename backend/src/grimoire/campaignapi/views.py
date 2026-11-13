@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 
 from grimoire.core.identity import InstanceRef
+from grimoire.scene import SceneRefused
 
 Names = Callable[[InstanceRef | None], str | None]
 
@@ -102,6 +103,8 @@ def turn_view(record, names: Names, player: str | None = None) -> dict:  # type:
     """A turn's adjudication and effects only: its transcript is the chat page's (111). With ``player`` (the
     table's view), only the effects that player holds a key on: an effect is world truth once accepted, and one
     no character of theirs acts in is the director's alone."""
+    if record.extra_posts:
+        raise SceneRefused("combined_view_unsupported", "combined turn rendering requires the local multi-PC adapter (115)")
     post = record.post
     effects = [effect for effect in record.effects
                if player is None or any(who == player for _, who in effect.endorsers)]

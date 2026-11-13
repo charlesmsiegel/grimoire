@@ -62,6 +62,8 @@ def label_action(runner, chat: ChatRef, by, obstacle: str | None = None) -> Labe
     # 016, as for generation and before any call: the labeller's stakes are model text the table reads
     check_presented(runner, chat, _table_audience(scene, principal), complete=_table_known(scene))
     record = scene.pending
+    if record is not None and record.extra_posts:
+        raise _refuse("combined_adjudication_unsupported", "combined actions require multi-action adjudication")
     post = record.post if record is not None else None
     if post is None or post.kind != "action":
         raise _refuse("not_an_action", "only the open turn's action post is labelled")

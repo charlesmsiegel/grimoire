@@ -13,7 +13,9 @@ it holds every key (``play/accept.py``); nothing writes events, evidence or ruli
 
 from __future__ import annotations
 
+import json
 import time
+from hashlib import sha256
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 
@@ -70,6 +72,7 @@ from grimoire.scene import (
     MAX_TAKES, NARRATOR, CallRecord, Intention, IntentionOption, Label, Post, SceneLine, SceneRefused, Take, TurnRecord,
     audible, heard_for, render, segments, table_lines, turn_id,
 )
+from grimoire.scene.identity import contribution_id
 from grimoire.scenestore import MAX_TURN_BYTES, SceneLibrary, StoredTurn
 from grimoire.security import is_human
 from grimoire.staging import Stage, StagingRefused, check_cast
@@ -493,6 +496,20 @@ class SceneRunner:
         number = 1 if last is None else last.number + 1
         device = self.scenes.tag_for(scene.turns, number)
         tid = turn_id(chat, number, device)
+        post = self._prepare_post(scene, persona, principal, text, mode, tid, number)
+        if last is not None and last.open:
+            if last.post == post and not last.takes:
+                return last  # the same post retried: it is already saved
+            raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it")
+        record = TurnRecord(chat, number, "post", post, device=device, follows=_follows(last))
+        self._write(record, None, after=scene.turns.last)
+        return record
+
+    def _prepare_post(self, scene, persona, principal, text, mode, tid, number, *, contribution=None):
+        """Route and interpret one contribution, preserving its own transmission audience."""
+        chat = scene.chat
+        if persona not in scene.on_stage:
+            raise _refuse("not_your_character", "a present PC must be controlled by its submitting human")
         if not isinstance(text, str) or not text.strip():
             raise _refuse("no_content", "a post needs text")
         try:
@@ -510,14 +527,14 @@ class SceneRunner:
             intent = replace(intent, reason="quoted")
         kind = "speech" if intent.kind == "pc_speech" else "action"
         try:
-            submit_contribution(PlayerContribution(chat.campaign_id, tid, chat.chat_id, tid, persona.instance_id,
+            submit_contribution(PlayerContribution(chat.campaign_id, contribution or tid, chat.chat_id, tid, persona.instance_id,
                                                    principal, kind, intent.text), scene.controls)
         except AuthorityError:
             raise _refuse("not_your_character", f"{principal} does not control {persona}") from None
         except ValueError as error:
             raise _refuse("invalid_field", str(error)[:200]) from None
         try:
-            read = read_message(intent, persona, _name_index(scene), message_id=tid)
+            read = read_message(intent, persona, _name_index(scene), message_id=contribution or tid)
         except TransmissionError as error:
             raise _refuse(error.reason, "the post cannot be read") from None
         if isinstance(read, Unread):
@@ -531,17 +548,57 @@ class SceneRunner:
             post = Post(principal, persona, "action", intent.text, (persona,) if withheld else _seen(scene, persona),
                         withheld=withheld)
         else:
-            post = Post(principal, persona, kind, read.text, _audience(read, scene, chat, tid, number),
+            post = Post(principal, persona, kind, read.text, _audience(read, scene, chat, contribution or tid, number),
                         read.channel, read.addressees)
         if not audible(post):  # as clipped and shown
             raise _refuse("no_content", "a post needs words someone could hear")
-        if last is not None and last.open:
-            if last.post == post and not last.takes:
-                return last  # the same post retried: it is already saved
-            raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it")
-        record = TurnRecord(chat, number, "post", post, device=device, follows=_follows(last))
-        self._write(record, None, after=scene.turns.last)
-        return record
+        return post
+
+    def submit_combined(self, chat, by, acceptance_id, contributions, *, epoch):
+        """Trusted-host ingestion: one atomic turn, no generation. Use LocalPlay for consent.
+
+        Contributions are ordered (actor, issued human handle, text, mode) tuples.
+        Receipt lookup precedes live control checks: an already committed receipt has no new effects.
+        """
+        contributions = tuple(contributions)
+        if not 1 <= len(contributions) <= 16 or len({str(c[0]) for c in contributions}) != len(contributions):
+            raise _refuse("invalid_field", "one to sixteen contributions required")
+        with self.authority.lock, self.store.lock:
+            scene = self._context(chat).scene
+            if self._principal(scene, by) not in self.authority.owners:
+                raise _refuse("not_owner", "only the owner submits a combined envelope")
+            for actor, handle, text, mode in contributions:
+                if not (self.authority.issued(handle) and getattr(handle, "trusted", False) is True
+                        and is_human(getattr(handle, "principal", None))):
+                    raise _refuse("not_authenticated", "contributions need issued human handles")
+            digest = sha256(json.dumps([(str(a), h.principal, t, m) for a, h, t, m in contributions],
+                                       ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+            for stored in scene.turns.turns:
+                record = stored.record
+                if record.acceptance_id == acceptance_id:
+                    if record.acceptance_digest != digest or record.acceptance_epoch != epoch:
+                        raise _refuse("acceptance_mismatch", "receipt content does not match")
+                    return record
+            self._ready(scene)
+            current = self.sovereignty.load(chat.campaign_id)
+            if epoch != max((e.seq for e in current.control_history), default=0):
+                # Hosts pass the history snapshot, never just the current controller.
+                raise _refuse("controls_changed", "control history changed; compose again")
+            epoch_number = max((e.seq for e in current.control_history), default=0)
+            last = scene.last
+            if last is not None and last.open:
+                raise _refuse("turn_open", "close the previous turn first")
+            number = 1 if last is None else last.number + 1
+            device = self.scenes.tag_for(scene.turns, number)
+            tid = turn_id(chat, number, device)
+            posts = tuple(self._prepare_post(scene, a, h.principal, t, m,
+                                            tid, number, contribution=contribution_id(tid, i))
+                          for i, (a, h, t, m) in enumerate(contributions))
+            record = TurnRecord(chat, number, "post", posts[0], device=device, follows=_follows(last),
+                                extra_posts=posts[1:], acceptance_id=acceptance_id,
+                                acceptance_epoch=epoch_number, acceptance_digest=digest)
+            self._write(record, None, after=scene.turns.last)
+            return record
 
     @traced("generate")
     def generate(self, chat: ChatRef, by, *, speakers: Iterable[InstanceRef] | None = None,
@@ -557,6 +614,10 @@ class SceneRunner:
         scene = context.scene
         principal = self._principal(scene, by)
         self._ready(scene)
+        if scene.pending is not None and scene.pending.acceptance_id is not None:
+            current = self.sovereignty.load(chat.campaign_id)
+            if scene.pending.acceptance_epoch != max((e.seq for e in current.control_history), default=0):
+                raise _refuse("controls_changed", "accepted turn predates a control transition")
         if self.runtime is None:
             raise _refuse("no_runtime", "no model is configured")
         # 016, before any call is billed: a held table gets no narration

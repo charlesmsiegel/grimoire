@@ -10,10 +10,13 @@ present player characters), never by an NPC. Withdrawn and struck lines are show
 
 from __future__ import annotations
 
+
 import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+
+from .identity import contribution_id
 
 from grimoire.adjudication import MAX_FACTORS, MAX_STAKES, Factor, Stake
 from grimoire.comms import CHANNELS
@@ -779,9 +782,37 @@ class TurnRecord:
     intentions: tuple[Intention, ...] = ()
     extras: dict[str, object] = field(default_factory=dict, compare=False)
 
+    extra_posts: tuple[Post, ...] = ()
+    acceptance_id: str | None = None
+    acceptance_epoch: int | None = None
+    acceptance_digest: str | None = None
+
+    @property
+    def posts(self) -> tuple[Post, ...]:
+        return (() if self.post is None else (self.post,)) + self.extra_posts
+
+    def contribution_id(self, index: int) -> str:
+        return contribution_id(self.turn_id, index)
+
     def __post_init__(self) -> None:
         if type(self.chat) is not ChatRef:
             raise _fail("invalid_field", "a turn's chat is a ChatRef")
+        object.__setattr__(self, "extra_posts", tuple(self.extra_posts))
+        if len(self.extra_posts) > 15 or any(type(p) is not Post for p in self.extra_posts):
+            raise _fail("invalid_field", "at most sixteen valid posts per turn")
+        if self.extra_posts and self.post is None:
+            raise _fail("invalid_field", "additional posts require a primary post")
+        if any(p.actor.campaign_id != self.chat.campaign_id for p in self.extra_posts):
+            raise _fail("invalid_field", "additional posts belong to this campaign")
+        if self.extra_posts and (self.labels or self.effects):
+            raise _fail("combined_adjudication_unsupported", "combined turns cannot carry adjudication or effects")
+        if self.acceptance_id is not None:
+            _text(self.acceptance_id, "acceptance_id", limit=100)
+            if (type(self.acceptance_epoch) is not int or self.acceptance_epoch < 0
+                    or type(self.acceptance_digest) is not str or len(self.acceptance_digest) != 64):
+                raise _fail("invalid_field", "acceptance requires epoch and digest")
+        elif self.acceptance_epoch is not None or self.acceptance_digest is not None:
+            raise _fail("invalid_field", "acceptance metadata requires an id")
         turn_id(self.chat, self.number, self.device)
         if self.origin not in ORIGINS:
             raise _fail("invalid_field", f"a turn's origin is one of {ORIGINS}")

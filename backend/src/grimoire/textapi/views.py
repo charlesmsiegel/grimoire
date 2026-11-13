@@ -13,7 +13,7 @@ from grimoire.chats.model import ChatRecord
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import InstanceRef, SourceRef
 from grimoire.images import Hidden, Resolution, Shown, Unavailable
-from grimoire.scene import Take, TurnRecord
+from grimoire.scene import SceneRefused, Take, TurnRecord
 from grimoire.scenestore import StoredTurn
 
 #: The source roles navigation filters by: a chat is found by its character or by its scenario.
@@ -125,6 +125,8 @@ def turn_view(stored: StoredTurn, names: Mapping[InstanceRef, str]) -> dict:
     turn is open, every take still on offer (proposed, running, halted)."""
     record: TurnRecord = stored.record
     post = None
+    if record.extra_posts:
+        raise SceneRefused("combined_view_unsupported", "combined turn rendering requires the local multi-PC adapter (115)")
     if record.post is not None:
         post = {"speaker": _speaker(record.post.actor, names, "Player"), "actor": str(record.post.actor),
                 "kind": record.post.kind, "channel": record.post.channel, "text": record.post.text,
