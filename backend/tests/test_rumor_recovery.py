@@ -1,6 +1,7 @@
 import pytest
 from grimoire.core import DIRECTOR, Event
 from grimoire.evidencestore import EvidenceLibrary
+from grimoire.evidencestore.library import KnowledgeChange
 from grimoire.ledgers import ControlChange, SovereigntyLedger
 from grimoire.security import Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore
@@ -28,13 +29,13 @@ def test_disk_recovery_around_evidence_append(tmp_path, monkeypatch, phase, afte
             lib = service(store, a)
             if phase == 'delivery':
                 lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
-            original = EvidenceLibrary.append
+            original = KnowledgeChange.commit
             def interrupted(self, *args, **kwargs):
                 if after:
-                    original(self, *args, **kwargs).commit()
+                    original(self, *args, **kwargs)
                 raise OSError('simulated crash')
             with monkeypatch.context() as patch:
-                patch.setattr(EvidenceLibrary, 'append', interrupted)
+                patch.setattr(KnowledgeChange, 'commit', interrupted)
                 with pytest.raises(OSError):
                     if phase == 'enqueue':
                         lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
@@ -69,12 +70,12 @@ def test_committed_delivery_reconciles_even_when_route_is_now_blocked(tmp_path, 
             SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
             lib = service(store, a)
             lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
-            original = EvidenceLibrary.append
+            original = KnowledgeChange.commit
             def interrupted(self, *args, **kwargs):
-                original(self, *args, **kwargs).commit()
+                original(self, *args, **kwargs)
                 raise OSError('crash')
             with monkeypatch.context() as patch:
-                patch.setattr(EvidenceLibrary, 'append', interrupted)
+                patch.setattr(KnowledgeChange, 'commit', interrupted)
                 with pytest.raises(OSError):
                     lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
     with LibraryStore.open(root) as store:
@@ -98,7 +99,7 @@ def test_conflicting_existing_output_fails_closed(tmp_path, monkeypatch):
             with monkeypatch.context() as patch:
                 def interrupted(*args, **kwargs):
                     raise OSError('crash')
-                patch.setattr(EvidenceLibrary, 'append', interrupted)
+                patch.setattr(KnowledgeChange, 'commit', interrupted)
                 with pytest.raises(OSError):
                     lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
             EvidenceLibrary(store, a.handle_for('app:adjudicator', trusted=True)).append(C, [Proposition(C, _id(C, 'news', 'proposition'), 'different', m(9), 'authored')]).commit()
@@ -120,7 +121,7 @@ def test_staged_request_refuses_deleted_recipient(tmp_path, monkeypatch):
             with monkeypatch.context() as patch:
                 def interrupted(*args, **kwargs):
                     raise OSError('crash')
-                patch.setattr(EvidenceLibrary, 'append', interrupted)
+                patch.setattr(KnowledgeChange, 'commit', interrupted)
                 with pytest.raises(OSError):
                     lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
         (store.root / 'campaigns' / C / 'instances' / 'character' / 'ines.json').unlink()
@@ -172,3 +173,78 @@ def test_disk_recovery_at_authority_journal_boundaries(tmp_path, monkeypatch, ph
             knowledge = ev.read(C, requested_by=DIRECTOR).knowledge
             assert sum(p.text == 'a distorted account' for p in knowledge.propositions) == 1
             assert sum(e.evidence_id.startswith('rumor-') for e in knowledge.evidence) == (phase == 'delivery')
+
+
+def test_invalid_initial_attempts_do_not_poison_request_or_delivery(tmp_path):
+    from dataclasses import replace
+    root = tmp_path / 'lib'
+    with LibraryStore.create(root) as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as a:
+            a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
+            SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
+            lib = service(store, a)
+            with pytest.raises(ValueError):
+                lib.enqueue(replace(rumor(), text='x' * 20001), moment=m(9), requested_by=DIRECTOR)
+            with pytest.raises(ValueError):
+                lib.enqueue(rumor(), moment=m(2_000_000), requested_by=DIRECTOR)
+            assert lib.trace(C, requested_by=DIRECTOR)[0] == {}
+    with LibraryStore.open(root) as store:
+        with open_authority(store) as a:
+            lib = service(store, a)
+            assert lib.trace(C, requested_by=DIRECTOR)[0] == {}
+            lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
+            with pytest.raises(ValueError):
+                lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(2_000_000), conditions=ALL, requested_by=DIRECTOR)
+            assert lib.trace(C, requested_by=DIRECTOR)[0]['news']['attempts']['delivery'] == []
+    with LibraryStore.open(root) as store:
+        with open_authority(store) as a:
+            lib = service(store, a)
+            assert lib.trace(C, requested_by=DIRECTOR)[0]['news']['attempts']['delivery'] == []
+            lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
+            assert lib.trace(C, requested_by=DIRECTOR)[0]['news']['delivered']
+            lib.enqueue(replace(rumor(), communication_id='maximum', text='x' * 20000), moment=m(11), requested_by=DIRECTOR)
+            assert lib.trace(C, requested_by=DIRECTOR)[0]['maximum']['enqueued']
+
+
+@pytest.mark.parametrize('phase,target,nth', [('enqueue', 'ledger', 1), ('enqueue', 'ledger', 2), ('enqueue', 'ledger', 3), ('enqueue', 'evidence', 1), ('delivery', 'ledger', 2), ('delivery', 'ledger', 3), ('delivery', 'evidence', 1)])
+@pytest.mark.parametrize('when', ['before', 'after'])
+def test_real_file_crash_reopens_and_reconciles(tmp_path, phase, target, nth, when):
+    from grimoire.store import ProcessLocker
+    from grimoire.testing import Crash, RootedFileOps, SimulatedCrash, Target
+    root = tmp_path / 'lib'
+    locker = ProcessLocker()
+    with LibraryStore.create(root, locker=locker) as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as a:
+            a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
+            SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
+            if phase == 'delivery':
+                service(store, a).enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
+    family = 'proposition' if phase == 'enqueue' else 'evidence'
+    pattern = 'lib/authority/rumors/c1/*' if target == 'ledger' else f'lib/campaigns/c1/evidence/{family}/*'
+    ops = RootedFileOps(tmp_path, plan=[Crash(Target('replace', target=pattern, nth=nth), when)], record=False)
+    with pytest.raises(SimulatedCrash):
+        with LibraryStore.open(root, ops=ops, locker=locker) as store:
+            with open_authority(store) as a:
+                if phase == 'enqueue':
+                    service(store, a).enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
+                else:
+                    service(store, a).advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
+    with LibraryStore.open(root, locker=locker) as store:
+        with open_authority(store) as a:
+            ev = EvidenceLibrary(store, a.handle_for('app:adjudicator', trusted=True))
+            ev.append(C, [Event(C, 'intervening', 'bell', m(20), 'authored')]).commit()
+            lib = service(store, a)
+            if phase == 'enqueue':
+                lib.enqueue(rumor(), moment=m(21), requested_by=DIRECTOR)
+            else:
+                lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(21), conditions=ALL, requested_by=DIRECTOR)
+            row = lib.trace(C, requested_by=DIRECTOR)[0]['news']
+            assert row['enqueued'] and (row['delivered'] if phase == 'delivery' else True)
+            knowledge = ev.read(C, requested_by=DIRECTOR)
+            assert not knowledge.quarantined and not knowledge.problems
+            assert sum(p.text == 'a distorted account' for p in knowledge.knowledge.propositions) == 1
+            assert sum(e.evidence_id.startswith('rumor-') for e in knowledge.knowledge.evidence) == (phase == 'delivery')

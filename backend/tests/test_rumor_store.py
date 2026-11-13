@@ -29,18 +29,18 @@ def test_delay_outbox_and_stable_projection_survive_reopen(tmp_path):
             lib = RumorLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
             lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
             outbox = lib.outbox(MARA, requested_by=DIRECTOR)
-            before = lib.actor_knowledge(C, MARA, as_of=20)
-            assert not any(x.content == 'a distorted account' for x in lib.actor_knowledge(C, INES, as_of=20).evidence)
+            before = lib.actor_knowledge(C, MARA, as_of=20, requested_by=DIRECTOR)
+            assert not any(x.content == 'a distorted account' for x in lib.actor_knowledge(C, INES, as_of=20, requested_by=DIRECTOR).evidence)
             lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=BLOCK, requested_by=DIRECTOR)
-            assert lib.actor_knowledge(C, MARA, as_of=20) == before
+            assert lib.actor_knowledge(C, MARA, as_of=20, requested_by=DIRECTOR) == before
             lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
-            assert lib.actor_knowledge(C, MARA, as_of=20) == before
+            assert lib.actor_knowledge(C, MARA, as_of=20, requested_by=DIRECTOR) == before
             assert lib.outbox(MARA, requested_by=DIRECTOR) == outbox
-            assert any(x.content == 'a distorted account' for x in lib.actor_knowledge(C, INES, as_of=20).evidence)
+            assert any(x.content == 'a distorted account' for x in lib.actor_knowledge(C, INES, as_of=20, requested_by=DIRECTOR).evidence)
     with LibraryStore.open(root) as store:
         with open_authority(store) as authority:
             lib = RumorLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
-            assert lib.actor_knowledge(C, MARA, as_of=20) == before
+            assert lib.actor_knowledge(C, MARA, as_of=20, requested_by=DIRECTOR) == before
             assert lib.outbox(MARA, requested_by=DIRECTOR) == outbox
 
 
@@ -106,12 +106,12 @@ def test_two_hops_belief_does_not_change_truth_and_limit_order(tmp_path):
             lib.enqueue(second, moment=m(11), requested_by=DIRECTOR)
             result = lib.advance(C, clock_id='calendar', clock_unit='day', tick=5, moment=m(12), conditions=ALL, requested_by=DIRECTOR, limit=1)
             assert result == {'delivered': ('second',), 'pending': 1}
-            view = lib.actor_knowledge(C, TAVI, as_of=12)
+            view = lib.actor_knowledge(C, TAVI, as_of=12, requested_by=DIRECTOR)
             assert [x.content for x in view.evidence] == ['a misleading account']
             assert not view.current
             belief = Belief(C, 'tavi-belief', TAVI, _id(C, 'second', 'proposition'), 'believed', m(12), DIRECTOR, (_id(C, 'second', 'report'),))
             ev.append(C, [belief], controls=[__import__('grimoire.core', fromlist=['ControlAssignment']).ControlAssignment(C, 'tavi', DIRECTOR)]).commit()
-            assert lib.actor_knowledge(C, TAVI, as_of=12).current[0].stance == 'believed'
+            assert lib.actor_knowledge(C, TAVI, as_of=12, requested_by=DIRECTOR).current[0].stance == 'believed'
             after = ev.read(C, requested_by=DIRECTOR).knowledge
             assert after.events == original.events and after.rulings == original.rulings
 
@@ -152,3 +152,41 @@ def test_actor_id_reservation_and_damaged_ledger_fail_closed(tmp_path):
         with open_authority(store) as a:
             with pytest.raises((LedgerBroken, LedgerInvalid)):
                 RumorLibrary(store, a, a.handle_for('app:adjudicator', trusted=True)).trace(C, requested_by=DIRECTOR)
+
+
+def test_actor_projection_requires_issued_current_controller_and_matching_scope(tmp_path):
+    from grimoire.core import AuthorityError, InstanceRef
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as a:
+            owner = a.handle_for(OWNER, trusted=True)
+            SovereigntyLedger(a).record(C, ControlChange(C, 'mara', OWNER), owner)
+            human = RumorLibrary(store, a, owner)
+            assert human.actor_knowledge(C, MARA, as_of=8, requested_by=OWNER).actor == MARA
+            with pytest.raises(AuthorityError):
+                human.actor_knowledge(C, INES, as_of=8, requested_by=OWNER)
+            with pytest.raises(AuthorityError):
+                human.actor_knowledge(C, MARA, as_of=8, requested_by=DIRECTOR)
+            stranger = RumorLibrary(store, a, a.handle_for('human:stranger', trusted=True))
+            with pytest.raises(AuthorityError):
+                stranger.actor_knowledge(C, MARA, as_of=8, requested_by='human:stranger')
+            untrusted = RumorLibrary(store, a, a.handle_for(OWNER, trusted=False))
+            with pytest.raises(AuthorityError):
+                untrusted.actor_knowledge(C, MARA, as_of=8, requested_by=OWNER)
+            with LibraryStore.create(tmp_path / 'foreign') as other_store:
+                with open_authority(other_store) as other_authority:
+                    foreign = RumorLibrary(store, a, other_authority.handle_for(OWNER, trusted=True))
+                    with pytest.raises(AuthorityError):
+                        foreign.actor_knowledge(C, MARA, as_of=8, requested_by=OWNER)
+            SovereigntyLedger(a).record(C, ControlChange(C, 'mara', 'human:new'), owner)
+            with pytest.raises(AuthorityError):
+                human.actor_knowledge(C, MARA, as_of=8, requested_by=OWNER)
+            new_controller = RumorLibrary(store, a, a.handle_for('human:new', trusted=True))
+            assert new_controller.actor_knowledge(C, MARA, as_of=8, requested_by='human:new').actor == MARA
+            director = RumorLibrary(store, a, a.handle_for('app:adjudicator', trusted=True))
+            assert director.actor_knowledge(C, MARA, as_of=8, requested_by=DIRECTOR).actor == MARA
+            with pytest.raises(AuthorityError):
+                director.actor_knowledge('other', MARA, as_of=8, requested_by=DIRECTOR)
+            with pytest.raises(AuthorityError):
+                director.actor_knowledge(C, InstanceRef('other', 'character', 'mara'), as_of=8, requested_by=DIRECTOR)

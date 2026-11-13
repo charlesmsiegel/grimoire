@@ -111,6 +111,8 @@ class RumorLibrary:
                 if clock is not None and clock != (r.clock_id, r.clock_unit):
                     raise ValueError('clock_mismatch')
                 self._source(r, r.authored_at)
+                # Reject unstorable or invalid output before reserving the communication id.
+                EvidenceLibrary(self.store, self.handle).append(c, [_output(r, 'enqueue', moment)])
                 head = self._write(c, head, 'request', value=encode(r), principal=self.handle.principal, contribution=asdict(contribution) if contribution else None)
             return self._resume(c, r.communication_id, 'enqueue', moment, head)
 
@@ -148,11 +150,11 @@ class RumorLibrary:
                 raise ValueError('fresh_moment_required')
             if supplied.sequence < assembly.high_water:
                 raise ValueError('fresh_moment_required')
+            change = evidence.append(campaign, [output(supplied)])
             head = self._write(campaign, head, 'attempt', id=rid, phase=phase, moment=asdict(supplied), reason='stale' if attempts else 'initial', expected=_expected(output(supplied)))
-            at = supplied
         else:
-            at = attempts[-1]
-        evidence.append(campaign, [output(at)]).commit()
+            change = evidence.append(campaign, [output(attempts[-1])])
+        change.commit()
         self._write(campaign, head, 'complete', id=rid, phase=phase)
         return True
 
@@ -179,14 +181,23 @@ class RumorLibrary:
                     delivered.append(r.communication_id)
             return {'delivered': tuple(delivered), 'pending': sum(not v['delivered'] for v in self._load(campaign)[0][0].values())}
 
+    def _actor_reader(self, campaign, actor, requested_by):
+        self._trusted()
+        if type(actor) is not InstanceRef or actor.campaign_id != campaign:
+            raise AuthorityError('campaign_mismatch')
+        present = set(self.store.campaign_instances(campaign))
+        if actor not in present or actor in paired_instances(present):
+            raise AuthorityError('unknown_actor')
+        if requested_by == DIRECTOR:
+            self._director(requested_by)
+        elif (requested_by != self.handle.principal or not is_human(requested_by)
+              or controller_of(campaign, actor.instance_id, SovereigntyLedger(self.authority).load(campaign).controls) != requested_by):
+            raise AuthorityError('wrong_controller')
+
     def outbox(self, actor, *, requested_by):
         with self.authority.lock:
-            self._trusted()
+            self._actor_reader(actor.campaign_id, actor, requested_by)
             rows = self._load(actor.campaign_id)[0][0]
-            if requested_by == DIRECTOR:
-                self._director(requested_by)
-            elif requested_by != self.handle.principal or not is_human(requested_by) or controller_of(actor.campaign_id, actor.instance_id, SovereigntyLedger(self.authority).load(actor.campaign_id).controls) != requested_by:
-                raise AuthorityError('wrong_controller')
             return tuple(AuthoredSend(r.communication_id, r.recipient, r.source_evidence_id, r.text, r.channel, r.attributed_to, r.confidence, r.authored_at) for _, row in sorted(rows.items()) if (r := row['rumor']).sender == actor and row['enqueued'])
 
     def trace(self, campaign, *, requested_by):
@@ -194,8 +205,9 @@ class RumorLibrary:
         with self.authority.lock:
             return self._load(campaign)[0]
 
-    def actor_knowledge(self, campaign, actor, *, as_of):
+    def actor_knowledge(self, campaign, actor, *, as_of, requested_by):
         with self.authority.lock:
+            self._actor_reader(campaign, actor, requested_by)
             rows = self._load(campaign)[0][0]
             view = EvidenceLibrary(self.store).actor_knowledge(campaign, actor, as_of=as_of)
             ids = {_id(campaign, rid, 'report') for rid in rows}
