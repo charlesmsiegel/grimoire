@@ -14,7 +14,7 @@ def record(value="original", campaign="c", record_id="review"):
 
 
 def dependency_record(value='dialogue', record_id='review'):
-    from grimoire.continuity import scene_revision
+    from grimoire.continuitywire.projection import scene_revision
     from grimoire.continuity.declarations import DEPENDENCY_SCHEMA
     from grimoire.scene import turn_to_payload
     rows = dependency_turns()

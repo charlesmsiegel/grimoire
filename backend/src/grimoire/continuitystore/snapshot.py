@@ -3,8 +3,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from grimoire.continuity import Dependency, Pin, scene_revision
-from grimoire.continuity.archive import FORK_SCHEMA, decode_fork
+from grimoire.continuity import Dependency, Pin
+from grimoire.continuitywire.projection import scene_revision
+from grimoire.continuitywire.archive import FORK_SCHEMA, decode_fork
 from grimoire.core.identity import AcceptedRef, RelationRef, KnowledgeRef, HoldingsRef, OwnerRef, InstanceRef
 from grimoire.core.knowledge import Perception, Report, Proposition, Ruling
 from grimoire.effects import accepted_from_payload, wrapup_from_payload

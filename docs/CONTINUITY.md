@@ -12,6 +12,8 @@ Historical events without pins remain readable but cannot establish exact scene 
 
 The pure impact API uses revision-pinned `Pin` and `Dependency` values and deterministic direct/transitive explanations. Recorded causal dependencies and potential chronology are distinguished. Missing/stale records, malformed declarations, cycles and bounds prevent a clean report. The graph is bounded to 2048 nodes and 8192 edges by default. Graph connectivity does not confer knowledge.
 
+The `grimoire.continuity` package contains the pure graph and strict provenance/declaration values. Native scene serialization and historical archive envelope validation live in the low-level `grimoire.continuitywire` adapter: `continuitywire.projection.scene_revision` and `continuitywire.archive`. This boundary uses the existing native value codecs without invoking storage services or sync orchestration. The projection algorithm and persisted archive bytes are unchanged. The higher-level `continuitystore` archive exports remain available.
+
 `ContinuityLibrary(store, handle, *, issued=None, owners=None)` requires a trusted owner handle issued by that library's bound authority. For an unbound store, the trusted application must supply the verified issuer and owner set; the handle cannot vouch for itself. Bound authority takes precedence over those fallback arguments. Every read rechecks the owner and requires `requested_by='director'`.
 
 - `snapshot(campaign)` returns native pins, dependencies, record metadata and explicit problems, with `coverage='recorded_dependencies_only'`.

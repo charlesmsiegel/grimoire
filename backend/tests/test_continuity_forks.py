@@ -5,8 +5,8 @@ from dataclasses import replace
 import pytest
 
 import grimoire.continuitystore.forks as forks
-from grimoire.continuity import scene_revision
-from grimoire.continuity.archive import FORK_SCHEMA, fingerprint
+from grimoire.continuitywire.projection import scene_revision
+from grimoire.continuitywire.archive import FORK_SCHEMA, fingerprint
 from grimoire.continuitystore import ContinuityLibrary, resolve_fork
 from grimoire.core.authority import AuthorityError
 from grimoire.core.identity import ContinuityRef

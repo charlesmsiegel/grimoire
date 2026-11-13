@@ -4,9 +4,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from grimoire.continuity import scene_revision
-from grimoire.continuity.archive import FORK_SCHEMA, MAX_ARCHIVE_BYTES, archived_turn, decode_fork, fingerprint
-from grimoire.continuity.projection import TURN_FIELDS
+from grimoire.continuitywire.archive import FORK_SCHEMA, MAX_ARCHIVE_BYTES, archived_turn, decode_fork, fingerprint
+from grimoire.continuitywire.projection import TURN_FIELDS, scene_revision
 from grimoire.continuity.provenance import decode_scene_sources
 from grimoire.core.authority import AuthorityError
 from grimoire.core.identity import ContinuityRef

@@ -6,8 +6,8 @@ import json
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from grimoire.continuity import scene_revision
-from grimoire.continuity.archive import FORK_SCHEMA, decode_fork
+from grimoire.continuitywire.projection import scene_revision
+from grimoire.continuitywire.archive import FORK_SCHEMA, decode_fork
 from grimoire.continuity.declarations import decode_dependency
 from grimoire.effects import accepted_from_payload
 from grimoire.continuity.provenance import decode_scene_sources
