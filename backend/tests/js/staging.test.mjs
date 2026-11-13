@@ -300,3 +300,51 @@ test("scene redraw preserves unsaved cue note, choices and focused editor field"
   byText(stage.node, "button", "Save cue")[0].click();
   assert.match(stage.node.textContent, /Authored cue: Unsaved note/);
 });
+
+test("mounted cue actions and turn changes retain a useful focus target", () => {
+  install();
+  const log = ui.el("section", {}, "Canonical transcript");
+  const stage = makeStaging(
+    {
+      ui,
+      styles() {},
+      has() {
+        return false;
+      },
+      signal: new AbortController().signal,
+    },
+    "action-focus",
+    { log },
+  );
+  document.body.append(log, stage.node);
+  stage.update({ turns: [turn, { ...turn, turn: "t2", number: 2 }], cast: [] });
+  const mode = stage.node.querySelector('[name="stage-mode"]');
+  mode.value = "vn";
+  mode.dispatchEvent({ type: "change" });
+  const press = (name) => {
+    const control = byText(stage.node, "button", name)[0];
+    control.focus();
+    control.click();
+  };
+  for (const action of [
+    "Save cue",
+    "Cancel cue",
+    "Reset cue",
+    "Reset local cues",
+  ]) {
+    if (action === "Save cue" || action === "Cancel cue") press("Edit cue");
+    press(action);
+    assert.equal(
+      document.activeElement.textContent,
+      action === "Save cue" || action === "Cancel cue" ? "Edit cue" : action,
+    );
+    assert.ok(stage.node.contains(document.activeElement));
+  }
+  const turnChoice = stage.node.querySelector('[name="Kept turn"]');
+  turnChoice.focus();
+  turnChoice.value = "t1";
+  turnChoice.dispatchEvent({ type: "change" });
+  assert.equal(document.activeElement.getAttribute("name"), "Kept turn");
+  assert.ok(stage.node.contains(document.activeElement));
+  assert.equal(log.textContent, "Canonical transcript");
+});
