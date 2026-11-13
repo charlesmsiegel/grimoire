@@ -6,7 +6,7 @@ from grimoire.evidencestore import EvidenceLibrary
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import envelope, exact
 from grimoire.memory import MemorySelection, MemoryCorrection, consolidate_view
-from grimoire.memory.codec import encode, decode
+from grimoire.memorystore.codec import encode, decode
 from grimoire.memory.view import _check_acyclic
 from grimoire.security import is_human
 from grimoire.security.policy import is_valid_principal

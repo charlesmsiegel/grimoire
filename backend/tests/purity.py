@@ -73,7 +73,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.archaeologystore", "grimoire.campaignapi", "grimoire.capture", "grimoire.cardstore", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.mediaapi", "grimoire.migrate_v1",
-                      "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
+                      "grimoire.memorystore", "grimoire.rumorstore", "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
                       "grimoire.play", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
                       "grimoire.runtime", "grimoire.scenestore", "grimoire.shelfstore", "grimoire.sourceapi",
                       "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi"})
@@ -116,6 +116,11 @@ PURE_PACKAGES = (
     PurePackage("grimoire.graph", ("grimoire.graph", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Party membership and scene casts (033): pure state over 017 relations; the service is an adapter.
     PurePackage("grimoire.party", ("grimoire.party", "grimoire.graph", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    # Evidence-linked memory and authored rumors (053/063); filesystem codecs stay in their adapters.
+    PurePackage("grimoire.memory", ("grimoire.memory", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    PurePackage("grimoire.rumors", ("grimoire.rumors", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     # Stored events and evidence (020): codec and assembly; the store-backed service is an adapter.
     # It reads 017's claim-shape value type, stored with the propositions it shapes.

@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from grimoire.core.identity import InstanceRef
 from grimoire.core.knowledge import Moment
 from grimoire.store.errors import LedgerInvalid
-from .model import MemorySelection, MemoryCorrection
+from grimoire.memory.model import MemorySelection, MemoryCorrection
 
 
 def encode(value):

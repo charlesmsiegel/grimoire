@@ -151,7 +151,7 @@ def test_unconfirmed_future_and_foreign_scope_evidence_are_refused(tmp_path):
 
 
 def test_codec_rejects_malformed_payload_without_echoing_content():
-    from grimoire.memory.codec import decode, encode
+    from grimoire.memorystore.codec import decode, encode
     from grimoire.store.errors import LedgerInvalid
     kind, payload = encode(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)))
     payload['unexpected'] = 'SECRET-TEXT'
@@ -188,7 +188,7 @@ def test_trusted_human_cannot_claim_director_service_privileges(tmp_path):
 
 def test_replay_rejects_director_record_authored_by_human(tmp_path):
     from grimoire.ledgers.codec import envelope
-    from grimoire.memory.codec import encode
+    from grimoire.memorystore.codec import encode
     from grimoire.store.errors import LedgerInvalid
     with LibraryStore.create(tmp_path / 'lib') as store:
         with open_authority(store) as authority:
