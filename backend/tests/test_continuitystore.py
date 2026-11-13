@@ -251,3 +251,101 @@ def test_native_ruling_and_belief_recorded_dependencies(world):
     assert report.complete, report.problems
     assert paths['key-belief'] in {item.target.path for item in report.impacts}
     assert paths['unrelated'] not in {item.target.path for item in report.impacts}
+
+
+def add_art(store):
+    from grimoire.core.identity import ImageRef, OwnerRef, PlacementRef
+    from grimoire.images import Placement
+    from grimoire.imagestore import ImageLibrary
+    from image_fixtures import PNG, handle
+    image = ImageRef('campaign:c', 'scene-image')
+    placement = PlacementRef(TAM, 'portrait')
+    scope_art = PlacementRef(OwnerRef('campaign:c'), 'portrait')
+    batch = ImageLibrary(store, handle(), owner=OWNER).change()
+    batch.add_image('campaign:c', image.image_id, PNG)
+    batch.place(TAM, 'portrait', Placement('set', role='portrait', image=image), None)
+    batch.place(scope_art.subject, 'portrait', Placement('set', role='portrait', image=image), None)
+    batch.commit()
+    return image, placement, scope_art
+
+
+def test_actual_asset_endpoints_declarations_reopen_and_readonly_preview(world):
+    store, handles, library, source, dialogue, unused, event = world
+    refs = add_art(store)
+    snap = library.snapshot('c')
+    paths = ['/'.join(address_parts(ref)) for ref in refs]
+    assert not snap.problems, snap.problems
+    for path, ref in zip(paths, refs):
+        assert snap.pins[path] == Pin(path, store.read(ref).etag)
+    library.declare_dependency('scene-art', snap.pins[source], snap.pins[paths[0]], 'asset')
+    library.declare_dependency('art-placement', snap.pins[paths[0]], snap.pins[paths[1]], 'asset')
+    library.declare_dependency('art-cover', snap.pins[paths[1]], snap.pins[paths[2]], 'asset')
+    before = snapshot(store.root)
+    report = library.preview('c', (snap.pins[source],), 'replace')
+    assert report.complete, report.problems
+    assert set(paths) <= {item.target.path for item in report.impacts}
+    assert snapshot(store.root) == before
+    root = store.root
+    store.close()
+    with LibraryStore.open(root) as reopened:
+        review = ContinuityLibrary(reopened, handles.app, issued=handles.authorizer.issued, owners={OWNER})
+        before = snapshot(root)
+        report = review.preview('c', (snap.pins[source],), 'cut')
+        assert report.complete, report.problems
+        assert set(paths) <= {item.target.path for item in report.impacts}
+        assert snapshot(root) == before
+
+
+@pytest.mark.parametrize('target', ['image', 'placement', 'scope_art'])
+def test_asset_stale_malformed_and_cross_scope_refusal(world, target):
+    from dataclasses import replace
+    from grimoire.store.jsonfmt import thaw
+    store, handles, library, source, dialogue, unused, event = world
+    refs = add_art(store)
+    ref = refs[['image', 'placement', 'scope_art'].index(target)]
+    path = '/'.join(address_parts(ref))
+    pins = library.snapshot('c').pins
+    cross = Pin(path.replace('campaigns/c/', 'campaigns/other/'), pins[path].revision)
+    with pytest.raises(ValueError): library.declare_dependency('cross-art', pins[source], cross, 'asset')
+    library.declare_dependency('art', pins[source], pins[path], 'asset')
+    stored = store.read(ref)
+    # A valid metadata update changes the endpoint's exact revision, never silently repins.
+    payload = thaw(stored.record.payload)
+    payload['provenance'] = {'note': 'changed synthetic art'}
+    def external_image_payload(value):
+        import json
+        file = store.root / path
+        document = json.loads(file.read_text())
+        document['payload'] = value
+        file.write_text(json.dumps(document))
+    if target == 'image':
+        # Images are create-only; a manual/offline byte edit must still invalidate a pin.
+        external_image_payload(payload)
+    else:
+        put(store, handles, replace(stored.record, payload=payload), stored.etag)
+    assert not library.preview('c', (pins[source],), 'edit').complete
+    with pytest.raises(ValueError): library.declare_dependency('stale-art', pins[source], pins[path], 'asset')
+    current = store.read(ref)
+    if target == 'image':
+        external_image_payload({'invalid': True})
+    else:
+        put(store, handles, replace(current.record, payload={'invalid': True}), current.etag)
+    report = library.preview('c', (pins[source],), 'edit')
+    assert not report.complete and any('undecodable' in p for p in report.problems)
+
+
+@pytest.mark.parametrize('family', ['images', 'placements', 'scope-art'])
+def test_malformed_asset_family_remains_incomplete_after_reopen(world, family):
+    import shutil
+    store, handles, library, source, dialogue, unused, event = world
+    add_art(store)
+    pin = library.snapshot('c').pins[source]
+    root = store.root
+    folder = root / 'campaigns/c' / family
+    shutil.rmtree(folder)
+    folder.write_text('malformed asset family')
+    assert not library.preview('c', (pin,), 'edit').complete
+    store.close()
+    with LibraryStore.open(root) as reopened:
+        review = ContinuityLibrary(reopened, handles.app, issued=handles.authorizer.issued, owners={OWNER})
+        assert not review.preview('c', (pin,), 'edit').complete
