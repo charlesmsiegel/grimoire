@@ -83,6 +83,7 @@ def reviews(plan):
     for campaign in sorted(campaigns):
         scenes, reasons, endpoints = set(), set(), set()
         turns, events = {}, {}
+        uncertain_events = False
         for device in plan.devices:
             turns[device], events[device] = {}, {}
             for path, data in plan.scans[device].files.items():
@@ -101,6 +102,10 @@ def reviews(plan):
                     reasons.add('malformed_semantic_record')
                     if syncable(path) == 'turn':
                         scenes.add(path)
+                    elif syncable(path) == 'accepted':
+                        # A valid envelope with undecodable event content hides its
+                        # ancestry just as an unreadable accepted family does.
+                        uncertain_events = True
         for device in plan.devices:
             other = plan.other(device)
             for path, event in events[device].items():
@@ -201,8 +206,8 @@ def reviews(plan):
             # artwork. Their absence from this snapshot is never evidence of safety.
             endpoints.update(p for p in plan.paths if premise_path(p, campaign))
             reasons.add('unreadable_semantic_sources')
-        if any(family_unknown(plan.scans[d], campaign, family)
-               for d in plan.devices for family in ('accepted', 'turns')):
+        if (uncertain_events or any(family_unknown(plan.scans[d], campaign, family)
+                                    for d in plan.devices for family in ('accepted', 'turns'))):
             scenes.update(p for p in turns[a].keys() | turns[b].keys()
                           if turns[a].get(p) != turns[b].get(p))
             reasons.add('unreadable_semantic_sources')

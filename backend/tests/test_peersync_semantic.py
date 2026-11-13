@@ -365,3 +365,53 @@ def test_peer_snapshot_keeps_asset_when_declarations_and_ledger_are_unreadable(p
                                       path, expected[DESKTOP], expected)
         assert resolution.status == 'refused', resolution
     assert {name: d.store.read_exact(path) for name, d in pair.items()} == before
+
+
+@pytest.mark.parametrize('source_device', [DESKTOP, PHONE])
+@pytest.mark.parametrize('malformation', ['schema', 'payload'])
+def test_peer_undecodable_accepted_event_preserves_source_scene(pair, source_device, malformation):
+    from test_sync_semantic import corrupt_accepted_wire
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    scene(desk)
+    with serving(phone) as server:
+        assert transfer(desk.store, desk.authority, PHONE, server.address).status == 'synced'
+    source = pair[source_device]
+    edited = pair[PHONE if source_device == DESKTOP else DESKTOP]
+    _accept(source, pay(chat=CHAT))
+    corrupt_accepted_wire(source.store, malformation)
+    scene(edited, 'Offline edit versus undecodable accepted ancestry.')
+    before = {name: d.store.read_exact(PATH) for name, d in pair.items()}
+    with serving(source) as server:
+        report = transfer(edited.store, edited.authority, source.name, server.address)
+        assert report.status == 'conflicts', report
+        assert any(c.path == PATH and c.code == 'semantic_review' for c in report.conflicts)
+        expected = {name: etag(data) for name, data in before.items()}
+        resolution = resolve_conflict(edited.store, edited.authority, source.name, server.address,
+                                      PATH, expected[edited.name], expected)
+        assert resolution.status == 'refused', resolution
+    assert {name: d.store.read_exact(PATH) for name, d in pair.items()} == before
+
+
+@pytest.mark.parametrize('malformation', ['schema', 'payload'])
+def test_serving_replay_refuses_scene_change_over_undecodable_event(pair, malformation):
+    import json
+    from grimoire.sync import semantic
+    from grimoire.peersync.errors import PeerRefused
+    from test_sync_semantic import corrupt_accepted_wire
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    scene(desk)
+    with serving(phone) as server:
+        assert transfer(desk.store, desk.authority, PHONE, server.address).status == 'synced'
+    _accept(phone, pay(chat=CHAT))
+    corrupt_accepted_wire(phone.store, malformation)
+    scene(desk, 'Manual client tries to replace accepted source.')
+    before = phone.store.read_exact(PATH)
+    found = semantic.listing(phone.store, 'c')
+    check = {'campaign': 'c', 'files': {p: t for p, t in found.items() if t is not None},
+             'blocked': [p for p, t in found.items() if t is None]}
+    step = StepBuffer(DESKTOP)
+    step.add({'op': 'semantic'}, json.dumps(check).encode())
+    step.add({'op': 'put', 'path': PATH, 'expected': etag(before)}, desk.store.read_exact(PATH))
+    with pytest.raises(PeerRefused, match='semantic'):
+        step.commit(phone.store, phone.handle)
+    assert phone.store.read_exact(PATH) == before
