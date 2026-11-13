@@ -17,6 +17,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from grimoire.core.inference import InferencePolicy
+from grimoire.goals import Agenda
+
+from .agendas import agendas_json, parse_agendas
 from grimoire.providers import EnvironmentCredentials, ProviderEndpoint, ProviderRegistry, RouteChoice
 from grimoire.providers.adapter import ProviderAdapter
 from grimoire.providers.transport import HttpTransport
@@ -26,7 +29,7 @@ from grimoire.security import Authorizer, Grant, Permission, ResourcePath
 RUNTIME_PRINCIPAL = "app:runtime"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 KEYS = frozenset({"provider_id", "base_url", "model", "key_env", "max_tokens_field", "max_output_tokens",
-                  "director", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
+                  "director", "decision", "agendas", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
 #: The optional prices, per million tokens, of the configured ``model`` (not of its fallbacks): what one prompt
 #: token, one reply token and one cached prompt token cost. Decimal text, never a JSON number, so no price is
 #: ever a float; no currency is recorded (the number is in whatever currency the provider bills).
@@ -60,6 +63,9 @@ class ModelConfig:
     price_prompt: Decimal | None = None
     price_reply: Decimal | None = None
     price_cached: Decimal | None = None
+
+    decision_calls: int = 0
+    agendas: tuple[Agenda, ...] = ()
 
     @property
     def models(self) -> tuple[str, ...]:
@@ -117,8 +123,9 @@ def parse_model_config(raw: object) -> ModelConfig:
     tokens = raw.get("max_output_tokens", 1024)
     director = raw.get("director", DEFAULT_DIRECTOR_CALLS)
     attempts = raw.get("attempts", 1)
+    decision = raw.get("decision", 0)
     for name, value, low, high in (("max_output_tokens", tokens, 1, MAX_OUTPUT_TOKENS), ("director", director, 0, 1_000),
-                                   ("attempts", attempts, 1, MAX_ATTEMPTS)):
+                                   ("attempts", attempts, 1, MAX_ATTEMPTS), ("decision", decision, 0, 16)):
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
             # a director reply is at most one per turn whatever the cap (004); 044 took any count
             raise ConfigError(f"{name} must be a whole number from {low} to {high}")
@@ -138,7 +145,11 @@ def parse_model_config(raw: object) -> ModelConfig:
         raise ConfigError(f"fallbacks are tried only by retries: with {attempts} attempt(s) per call, name at most "
                           f"{attempts - 1} fallback model(s)")
     prices = [parse_price(raw.get(name), name) for name in PRICE_KEYS]
-    return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts, *prices)
+    try:
+        agendas = parse_agendas(raw.get("agendas", []))
+    except ValueError as error:
+        raise ConfigError(str(error)) from None
+    return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts, *prices, decision, agendas)
 
 
 def config_json(config: ModelConfig) -> dict:
@@ -147,6 +158,10 @@ def config_json(config: ModelConfig) -> dict:
                  "model": config.model, "max_tokens_field": config.endpoint.max_tokens_field,
                  "max_output_tokens": config.max_output_tokens, "director": config.director_calls,
                  "fallbacks": list(config.fallbacks), "attempts": config.attempts}
+    if config.decision_calls:
+        raw["decision"] = config.decision_calls
+    if config.agendas:
+        raw["agendas"] = agendas_json(config.agendas)
     if config.key_env is not None:
         raw["key_env"] = config.key_env
     for name in PRICE_KEYS:  # written only when set, so a configuration with no prices is the file it always was
@@ -159,6 +174,8 @@ def config_json(config: ModelConfig) -> dict:
 def policy_for(config: ModelConfig) -> InferencePolicy:
     """The 004 policy a configuration plays turns under: a director reply only when enabled, and its attempts."""
     caps = {"director_generation": config.director_calls} if config.director_calls else {}
+    if config.decision_calls:
+        caps["decision"] = config.decision_calls
     return InferencePolicy(caps, max_attempts_per_call=config.attempts)
 
 

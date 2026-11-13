@@ -23,6 +23,8 @@ Each is called as `providers.<op>`.
 | `check_models` | `settings` (a draft) | `ok`, `problems` (each `field`, `message`), `routes`, `local`, `key_set`, `sent: false`. Nothing is saved or sent |
 | `save_models` | `settings`, `expected` (the `etag` `models` gave; `null` when there was no file) | `models`' answer, after the file is written and the runner given what it configures |
 | `usage` | `chat`, `limit` (turns listed, 1 to 1000, default 200), `skip` (the newest turns left out, default 0: how earlier turns are listed); the totals always cover every turn | `turns` (each `turn`, `number`, `set_aside`, `calls`), `skip`, `listed`, `of`, `total`, `by_stage`, `complete`, `problems` |
+| `context` | `chat`, optional `actor` (full InstanceRef) | Present director-controlled NPCs; for the selected NPC, current brief, selected items/provenance, budget omissions/estimate, effective routes and editable tactics. No model call or write |
+| `save_agenda` | `chat`, `actor`, `expected`, `aim`, `actions` (1–8 lines), or `remove: true` | Saves only this NPC’s simple tactics in the settings file; returns `models`. Refuses player/foreign actors and advanced policies |
 | `diagnostics` | none | `available`, `traces`: this process's last runner calls and test calls, newest first |
 | `test_call` | `expected` (the `etag` `models` gave) | How one test request to the saved model ended: see [The test call](#the-test-call) |
 
@@ -36,6 +38,8 @@ The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model))
 - `attempts`: attempts per planned call, 1 to 3 (004's `max_attempts_per_call`, default 1). Every attempt may
   be billed, and retries happen only before any text reached the table (013).
 
+- `decision`: optional decision calls per turn, 0–16 (default 0, off). A call is requested only for a speaking NPC with an authored agenda and no recorded decision for this scene turn.
+- `agendas`: at most 64 actor-qualified, director-authored policies on this device. Each has `actor`, `goals` (`id`, `aim`, `priority`, `approaches` with `id`, `action`, `needs`, `tags`) and `limits` (`id`, `rule`, `forbids`, `when`). Conditions are `{"present": "<InstanceRef>"}` or `{"holds": "<proposition id>", "stances": [...]}`; existing 039 validation applies. The UI edits one simple goal with ordered actions and preserves unrelated policies. Policies with typed conditions/limits or custom priorities remain read-only in this simple editor, so no authored constraint is silently dropped.
 - `price_prompt`, `price_reply` and `price_cached`: optional prices per million prompt tokens, reply tokens and
   cached prompt tokens ([Prices and costs](#prices-and-costs)).
 
@@ -46,7 +50,7 @@ The file carries no version number: every key beyond the endpoint and the model 
 a key the app does not know is refused. A file written before the price keys existed loads as it always did, and
 saving a configuration with no prices writes no price key, so it is byte for byte the file it was.
 
-**Saving** writes the whole file atomically, one writer at a time (an OS lock on `FILE.lock` beside it; a save that
+**Saving** refuses a configuration over 64 KiB and paths inside V1 or the served V2 library, including aliases. It writes the whole file atomically, one writer at a time (an OS lock on `FILE.lock` beside it; a save that
 waits more than 2 s for another is refused `busy`), only if it is still at `expected`: a file changed since it was read
 (by another tab or by hand) is refused `changed`, and nothing is written. The revision is checked again just before the new file replaces the
 old, so a hand edit made while it was written is refused too, not overwritten. A file edited or removed by hand while
@@ -79,7 +83,7 @@ is never echoed. Without `--model` the settings are read-only (`file.configured:
 
 One entry per 004 stage: `stage`, `kind` (`baseline` or `optional`), `enabled`, `cap`, `available` and a `note`.
 `npc_generation` is the baseline: one call per speaking NPC, never switched off. `director_generation` is the one
-optional stage the app plays. Every other optional stage is listed `available: false`, with the reason, because
+optional narrator stage. `decision` is independently opt-in and capped; its recorded choice is replayed on rerolls and after restart. Every remaining optional stage is listed `available: false`, with the reason, because
 the app wires no service that would make the call: a switch that changes nothing is never offered.
 
 ### Usage
@@ -209,6 +213,7 @@ shell's `mount(root, ctx)` and calls `providers.<op>` and the text API's `chats`
   and "Unknown" when none of the chat's calls went to the priced model. With prices set, a line under the tiles
   says the costs are estimates at the prices set now, past calls included, and that the provider's bill is what
   counts.
+- **Current context**: choose a chat and an NPC, then inspect its current brief, authorized source provenance and budget omissions. **Refresh context** rebuilds from saved state; it neither generates nor retains a prompt. Failed requests and changed selections clear the previous context. The **NPC tactics** form sets one goal and ordered candidate actions for the selected actor on this device.
 - **Recent calls on this device** and, folded away, **Not available yet**.
 
 Every library and provider text is set as text, never markup. `backend/tests/test_app_inference_page.py` runs the
@@ -226,7 +231,33 @@ fills its form from its own):
   the cost, which is then a lower bound.
 - **A kept record of test calls.** A test call is traced in memory like every runner call; no file keeps it.
 - **Session budgets.** 004 caps calls per turn only.
-- **Prompt and context preview, prompt history.** No V2 service previews a brief or keeps a prompt: briefs are
-  built for a call and never stored (013's privacy rule). When one exists it must show only what the table's
-  player may read: never another NPC's private evidence.
+- **Historical prompt snapshots and draft retrieval preview.** The inspector rebuilds current saved context only. It cannot reconstruct what an earlier call saw or preview an unsaved draft. Each inspected NPC sees its own evidence; withheld evidence and its identifiers/counts are not exposed.
 - **Provider presets** kept by the app. The page's own presets only fill its form.
+
+
+## Runner integration and boundaries
+
+`TextApi` constructs a `DecisionLibrary` on its trusted `app:decisions` handle and passes it to
+`SceneRunner`. The additive `agendas=()` constructor input and `SceneRunner.set_agendas()` accept trusted
+039 policies; production `providers.configure` loads them from the model settings. No campaign page is changed.
+`SceneRunner.inspect_context(chat, actor)` shares generation's actor assembly, returning an explicit safe
+view rather than serializing the snapshot or hidden/held secret markers. Source-wide diagnostics are omitted.
+It refuses damaged knowledge and player/foreign actors, and works without a provider.
+
+For generation, the runner plans a select phase only for undecided actors with agendas, sends bounded
+`GenerationRuntime.decide` calls on the same meter as narration, records choices in the existing decision
+ledger, and briefs each NPC with its own choice. Disabling the cap uses the deterministic policy on the next
+new turn; a reroll retains its recorded choice. Removing or changing that choice's agenda refuses replay,
+so finish/pass the pending turn or restore its policy. Invalid picks fall back to the deterministic choice;
+no choice writes world facts or beliefs. Paid attempts remain in usage after a recoverable ledger failure when the store and authority remain writable.
+A stale/paused/passed/replaced take cannot record a new decision. The store's existing exclusive process
+lease and shared authority/store lock protect the current-turn check and append.
+
+A process crash or unusable storage/authority can leave a running take with planned calls and unknown usage; this does not promise exactly-once
+billing. Historical snapshots, general goal editing, probability policies and scene-wide policy comparisons
+remain later work. These device-local settings are not synchronized campaign canon.
+
+Executable proofs include `test_app_inference_context.py`, `test_app_inference_decisions.py`,
+`test_play_decisions.py` and `test_app_inference_browser.py` (actual CLI, AppServer and Chromium,
+with synthetic fixtures and a loopback model). Browser coverage includes keyboard submission, narrow
+viewport, restart and failed-request recovery; it is not a physical-phone or screen-reader certification.

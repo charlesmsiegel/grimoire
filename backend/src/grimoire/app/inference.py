@@ -29,8 +29,11 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from dataclasses import replace
 
-from grimoire.core.identity import ChatRef
+from grimoire.core.identity import ChatRef, InstanceRef
+from grimoire.core import DIRECTOR
+from grimoire.library import LibraryPathError, check_report_destination, check_write_destination
 from grimoire.core.inference import InferencePolicy, InferenceStage, UsageTotals
 from grimoire.core.inference.usage import TOKEN_FIELDS
 from grimoire.providers.config import ProviderEndpoint, route_label
@@ -55,6 +58,7 @@ from .config import (
     policy_for,
     runtime_for,
 )
+from .agendas import simple_agenda, simple_view
 from .pricing import cost_view, price_table
 from .testcall import TEST_CALL_SECONDS, send_test_call
 
@@ -97,7 +101,6 @@ _LOCKER = OsLocker()
 #: The optional stages, and why the app plays none but the director's reply yet. A stage is shown as it is:
 #: the app never offers a switch that would change nothing.
 _NOT_WIRED = {
-    InferenceStage.DECISION: "045 decisions run only for NPCs with a 039 agenda, and the app configures none yet",
     InferenceStage.LABELLING: "035's labelling needs a labeller runtime and handle the app does not set up yet",
     InferenceStage.PLANNING: "no V2 service plans an NPC with a model yet",
     InferenceStage.EPISTEMIC_INFERENCE: "no V2 service infers perception with a model yet",
@@ -112,7 +115,7 @@ UNAVAILABLE = (
     ("fallback_prices", "the prices are the configured model's; an attempt a fallback model answered is left "
                         "out of the cost, which is then a lower bound"),
     ("session_budget", "004 caps calls per turn only; session budgets are a later milestone"),
-    ("prompt_preview", "no V2 service previews or keeps a prompt: briefs are built for a call and never stored"),
+    ("prompt_history", "historical prompt snapshots are not retained; current context is rebuilt on request"),
     ("presets", "no provider presets exist in V2; name the endpoint and model"),
 )
 
@@ -123,8 +126,9 @@ class SettingsFile:
     ``path`` is ``None`` when the app was served without one: settings are then read-only. The file need not
     exist yet: the app starts without a model, and the first save creates it."""
 
-    def __init__(self, path: Path | None) -> None:
+    def __init__(self, path: Path | None, *, protected: Path | None = None) -> None:
         self.path = None if path is None else Path(path)
+        self.protected = protected
         self._lock = threading.Lock()
 
     @property
@@ -135,6 +139,7 @@ class SettingsFile:
         """(the file's bytes, their etag); ``(None, None)`` when it does not exist (or none is configured)."""
         if self.path is None:
             return None, None
+        self._destination()
         try:
             with open(self.path, "rb") as handle:
                 data = handle.read(MAX_CONFIG_BYTES + 1)
@@ -148,9 +153,13 @@ class SettingsFile:
         if self.path is None:
             raise ApiRefused("read_only", "this app was served without a settings file (serve --model FILE)")
         data = (json.dumps(config_json(config), indent=2, sort_keys=True) + "\n").encode("utf-8")
+        if len(data) > MAX_CONFIG_BYTES:
+            raise ApiRefused("settings_too_large", "the configuration file is too large")
         with self._lock:
+            self._destination()
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
+                self._destination()
                 held = self._hold()
             except OSError as error:
                 raise ApiRefused("settings_unwritable", f"the settings file cannot be written ({error.strerror})") from None
@@ -164,6 +173,7 @@ class SettingsFile:
                             out.flush()
                             os.fsync(out.fileno())
                         self._check(expected)  # a hand edit while the new file was written wins: refused, not lost
+                        self._destination()
                         os.replace(temporary, self.path)
                     except BaseException:
                         try:
@@ -177,6 +187,23 @@ class SettingsFile:
             finally:
                 _LOCKER.release(held)
         return etag(data)
+
+    def _destination(self) -> None:
+        if self.path is None:
+            return
+        try:
+            if self.protected is not None:
+                resolved = self.path.resolve()
+                if resolved == self.protected.resolve() or self.protected.resolve() in resolved.parents:
+                    raise LibraryPathError("settings belong outside the library")
+            if self.path.parent.exists():
+                check_report_destination(self.path, overwrite=True)
+            else:
+                # No parent exists yet: check the final path, not its ancestor (a safe
+                # sibling of V1 is allowed). Validate as a file again after mkdir.
+                check_write_destination(self.path)
+        except LibraryPathError:
+            raise ApiRefused("settings_path", "choose a settings file outside V1 and the V2 library") from None
 
     def _check(self, expected: str | None) -> None:
         try:
@@ -238,7 +265,7 @@ def settings_usable(path: Path | None, owner: str, *, environ: Mapping[str, str]
         if data is None:
             return False
         build_access(parse_settings(data), owner, environ=os.environ if environ is None else environ)
-    except (OSError, ConfigError):
+    except (OSError, ConfigError, ApiRefused):
         return False
     return True
 
@@ -277,6 +304,7 @@ class InferenceApi:
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "models": self._models, "check_models": self._check, "save_models": self._save,
             "usage": self._usage, "diagnostics": self._diagnostics, "test_call": self._test_call,
+            "context": self._context, "save_agenda": self._save_agenda,
         }
         with self._lock:
             self._load()
@@ -310,6 +338,9 @@ class InferenceApi:
         self._loaded = None
         try:
             data, self._loaded = self.settings.read()
+        except ApiRefused as error:
+            self._apply(None, _problem(error.reason, str(error)))
+            return
         except OSError as error:
             self._apply(None, _problem("settings_unreadable", f"the settings file cannot be read ({error.strerror})"))
             return
@@ -324,6 +355,7 @@ class InferenceApi:
         self._build(config)
 
     def _build(self, config: ModelConfig) -> None:
+        self.text_api.runner.set_agendas(config.agendas)
         try:
             access = build_access(config, self.owner, environ=self.environ, transport=self.transport)
         except ConfigError as error:  # the key variable is not set: saved, but nothing can be generated
@@ -337,6 +369,7 @@ class InferenceApi:
 
     def _apply(self, config: ModelConfig | None, problem: dict | None) -> None:
         self.config, self.problem = config, problem
+        self.text_api.runner.set_agendas(())
         self._give(None, None)
 
     def _give(self, runtime, policy) -> None:  # type: ignore[no-untyped-def]
@@ -365,6 +398,10 @@ class InferenceApi:
         stages.append({"stage": InferenceStage.DIRECTOR_GENERATION.value, "kind": "optional",
                        "enabled": director > 0, "cap": min(director, 1) if director else None, "available": True,
                        "note": "one director or narrator reply when asked for, at most one per turn"})
+        decisions = 0 if config is None else config.decision_calls
+        stages.append({"stage": "decision", "kind": "optional", "enabled": decisions > 0,
+                       "cap": decisions, "available": self.text_api.runner.decisions is not None,
+                       "note": "optional bounded choices for NPCs with authored tactics; recorded once per turn"})
         for stage, reason in _NOT_WIRED.items():
             stages.append({"stage": stage.value, "kind": "optional", "enabled": False, "cap": None,
                            "available": False, "note": reason})
@@ -373,7 +410,7 @@ class InferenceApi:
     def _models(self, args: Mapping[str, object]) -> dict:
         try:
             _data, found = self.settings.read()
-        except OSError:
+        except (OSError, ApiRefused):
             found = None
         if found != self._loaded:  # edited (or removed) by hand since it was read: the file is what holds
             self._load()
@@ -388,10 +425,10 @@ class InferenceApi:
             "stages": self._stages(config),
             "limits": None if config is None else {
                 "attempts_per_call": config.attempts, "max_output_tokens": config.max_output_tokens,
-                "director_calls_per_turn": min(config.director_calls, 1)},
+                "director_calls_per_turn": min(config.director_calls, 1), "decision_calls_per_turn": config.decision_calls},
             "prices": self._prices_view(config), "test_call": self._test_view(config),
             "unavailable": [{"feature": feature, "reason": reason} for feature, reason in UNAVAILABLE],
-            "bounds": {"fallbacks": MAX_FALLBACKS, "attempts": MAX_ATTEMPTS, "max_output_tokens": MAX_OUTPUT_TOKENS},
+            "bounds": {"fallbacks": MAX_FALLBACKS, "attempts": MAX_ATTEMPTS, "max_output_tokens": MAX_OUTPUT_TOKENS, "decisions": 16},
         }
 
     def _prices_view(self, config: ModelConfig | None) -> dict:
@@ -495,6 +532,70 @@ class InferenceApi:
         if config is None:
             raise ApiRefused("invalid_settings", problems[0]["message"])
         self._loaded = self.settings.write(config, expected)
+        self._build(config)
+        return self._models({})
+
+    # -- current context and authored tactics --------------------------------------------------------------
+    def _selected(self, args: Mapping[str, object]):
+        try:
+            chat = ChatRef.parse(args.get("chat"))
+            actor = InstanceRef.parse(args["actor"]) if args.get("actor") is not None else None
+        except (ValueError, TypeError, AttributeError):
+            raise ApiRefused("invalid_field", "choose a valid chat and NPC") from None
+        try:
+            scene = self.text_api.runner.open(chat)
+        except Exception as error:
+            # Context errors can contain actor/source ids; this boundary returns no private diagnostics.
+            if isinstance(error, (SceneRefused, StoreError, ValueError)):
+                raise ApiRefused("context_unavailable", "this chat's current context cannot be read") from None
+            raise
+        actors = [a for a in scene.on_stage if scene.controller(a) == DIRECTOR]
+        if actor is not None and actor not in actors:
+            raise ApiRefused("not_npc", "choose a director-controlled NPC present in this chat")
+        return chat, actor, scene, actors
+
+    def _context(self, args: Mapping[str, object]) -> dict:
+        shown = self._models({})
+        chat, actor, scene, actors = self._selected(args)
+        result = {"chat": str(chat), "current": True, "routes": shown["generation"]["routes"],
+                  "actors": [{"actor": str(a), "name": scene.names.get(a, a.instance_id)} for a in actors],
+                  "context": None, "agenda": None, "etag": shown["etag"],
+                  "writable": shown["file"]["configured"] and self.config is not None}
+        if actor is not None:
+            try:
+                result["context"] = self.text_api.runner.inspect_context(chat, actor)
+            except (ValueError, StoreError, SceneRefused):
+                raise ApiRefused("context_unavailable", "this NPC's current context cannot be safely built") from None
+            agenda = next((a for a in self.config.agendas if a.actor == actor), None) if self.config else None
+            result["agenda"] = simple_view(agenda)
+        return result
+
+    def _save_agenda(self, args: Mapping[str, object]) -> dict:
+        shown = self._models({})
+        if "expected" not in args or args["expected"] != shown["etag"]:
+            raise ApiRefused("changed", "the settings changed; reload before saving tactics")
+        chat, actor, _scene, _actors = self._selected(args)
+        if actor is None:
+            raise ApiRefused("invalid_field", "choose an NPC for these tactics")
+        if self.config is None:
+            raise ApiRefused("not_configured", "save model settings before configuring tactics")
+        existing = next((a for a in self.config.agendas if a.actor == actor), None)
+        if not simple_view(existing)["editable"]:
+            raise ApiRefused("advanced_agenda", "this policy needs its authored conditions and limits; edit its settings file")
+        agendas = tuple(a for a in self.config.agendas if a.actor != actor)
+        remove = args.get("remove", False)
+        if type(remove) is not bool:
+            raise ApiRefused("invalid_field", "remove must be true or false")
+        if not remove:
+            try:
+                made = simple_agenda(actor, args.get("aim"), args.get("actions"))
+            except ValueError as error:
+                raise ApiRefused("invalid_agenda", str(error)) from None
+            agendas = (*agendas, made)
+        if len(agendas) > 64:
+            raise ApiRefused("invalid_agenda", "at most 64 NPC policies may be configured")
+        config = replace(self.config, agendas=agendas)
+        self._loaded = self.settings.write(config, args["expected"])
         self._build(config)
         return self._models({})
 

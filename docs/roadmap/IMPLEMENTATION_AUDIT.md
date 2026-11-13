@@ -14,7 +14,7 @@ This is a code-and-test audit of the 119 scheduled **first-useful slices**, incl
 | [4](#wave-4) | 9/10 | ☐ | 033 still rejects non-character actors in chat rosters, despite supporting creature scene casts. |
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 5/6 | ☐ | 047 lacks the independent prose-claim extraction required by its inherited first-proof addition. Physical-phone validation also remains unverified. |
-| [7](#wave-7) | 6/7 | ☐ | 112 retains production UI integration gaps. 113 has a real CLI/Chromium follow-up proof. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it. |
+| [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 1/24 | ☐ | Only 066 is complete at its narrow first-proof boundary. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
@@ -374,7 +374,7 @@ All eight scheduled first slices are present, including both persistent text-pla
 
 - [x] Scheduled first-useful slice ([requirements](sprints/decision-policies.md)).
 - Evidence: [`backend/src/grimoire/decisionstore`](../../backend/src/grimoire/decisionstore); [`backend/tests/test_decision_store.py`](../../backend/tests/test_decision_store.py).
-- Scope / gap: Bounded optional capped decision with evidence and retry replay; default app integration is separately incomplete in 112.
+- Scope / gap: Bounded optional capped decision with evidence and retry replay; 112 now wires the service into the real app, with opt-in per-turn caps and reroll replay.
 
 <a id="slice-046"></a>
 ### 046 — Live Inheritance And Overrides
@@ -400,7 +400,7 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="wave-7"></a>
 ## Wave 7
 
-112 retains production UI integration gaps. 113 now has a real CLI/Chromium follow-up proof. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it.
+All seven scheduled first-useful slices are checked, including real CLI/Chromium follow-up proofs for 112 and 113. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate.
 
 <a id="slice-108"></a>
 ### 108 — UI Shell, Onboarding and Navigation
@@ -433,9 +433,10 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="slice-112"></a>
 ### 112 — UI Inference, Prompts and Costs
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/ui-inference-prompts-costs.md)).
-- Evidence: [`backend/src/grimoire/app/static/pages/providers/page.js`](../../backend/src/grimoire/app/static/pages/providers/page.js); [`backend/tests/test_app_inference_page.py`](../../backend/tests/test_app_inference_page.py); [`backend/src/grimoire/app/inference.py`](../../backend/src/grimoire/app/inference.py); [`backend/src/grimoire/generation/brief.py`](../../backend/src/grimoire/generation/brief.py); [`docs/roadmap/UI_COVERAGE.md`](../../docs/roadmap/UI_COVERAGE.md).
-- Scope / gap: real endpoint/model/fallback/test/cost/latency UI, but no current authorized-context inspector despite 031 context pack and generation brief code; 045 optional decisions delivered but not app-wired. Historical prompt snapshots absent is legitimate later/conditional limitation; browser smoke separately unverified.
+- [x] Scheduled first-useful slice ([requirements](sprints/ui-inference-prompts-costs.md)); follow-up implementation and synthetic browser evidence below supersede the original snapshot's two integration gaps.
+- Evidence: [`app/inference.py`](../../backend/src/grimoire/app/inference.py), [`play/runner.py`](../../backend/src/grimoire/play/runner.py), [`providers/context.js`](../../backend/src/grimoire/app/static/pages/providers/context.js); [`test_app_inference_context.py`](../../backend/tests/test_app_inference_context.py), [`test_app_inference_decisions.py`](../../backend/tests/test_app_inference_decisions.py), [`test_play_decisions.py`](../../backend/tests/test_play_decisions.py), and [`test_app_inference_browser.py`](../../backend/tests/test_app_inference_browser.py).
+- Outcome: current actor-authorized brief, provenance and budget omissions through shared context assembly; optional bounded 045 choices in the production app with metering, durable replay and default-off settings. Actual CLI/Chromium proof configures a local model and tactics, runs separate NPC calls, disables optional calls, rerolls, recovers a failed inspection request and reopens after restart.
+- Limits: device-local authored tactics; advanced conditional policies are preserved but not edited by the simple form. Historical snapshots and unsaved-draft retrieval remain later milestones. Chromium keyboard/narrow-viewport proof does not certify physical-phone or screen-reader acceptance for the full wave.
 
 <a id="slice-113"></a>
 ### 113 — UI Campaign State and Canon Review
@@ -717,8 +718,8 @@ Scheduled domain slices and UI exit 116 are not complete.
 ### 085 — Live Context Preview
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/live-context-preview.md)).
-- Evidence: [`app/inference.py`](../../backend/src/grimoire/app/inference.py) explicitly returns prompt_preview unavailable; [`test_app_inference.py`](../../backend/tests/test_app_inference.py) asserts this.
-- Scope / gap: No on-demand draft retrieval/context preview without generation/writes.
+- Evidence: [`app/inference.py`](../../backend/src/grimoire/app/inference.py) offers current saved actor context after the 112 follow-up; unsaved-draft retrieval is not offered. [`test_app_inference_context.py`](../../backend/tests/test_app_inference_context.py) proves the saved-state inspection boundary.
+- Scope / gap: No on-demand unsaved-draft retrieval/context preview. The 112 saved-state inspector does not implement that draft input.
 
 <a id="slice-086"></a>
 ### 086 — Mechanics Module Authoring
@@ -786,7 +787,7 @@ Scheduled domain slices and UI exit 116 are not complete.
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/prompt-inspection-and-evals.md)).
 - Evidence: [`backend/src/grimoire/context/model.py`](../../backend/src/grimoire/context/model.py); [`backend/src/grimoire/app/inference.py`](../../backend/src/grimoire/app/inference.py); [`backend/tests/test_app_inference.py`](../../backend/tests/test_app_inference.py)::test_stages_say_which_optional_calls_the_app_can_play_and_why_the_rest_are_unavailable.
-- Scope / gap: ContextPack is explicitly disposable; InferenceApi marks prompt_preview unavailable because no service keeps prompts. Thus historical selected/omitted evidence cannot be inspected after world changes.
+- Scope / gap: ContextPack is explicitly disposable; InferenceApi offers current context but marks prompt_history unavailable because no service keeps prompts. Thus historical selected/omitted evidence cannot be inspected after world changes.
 
 <a id="slice-094"></a>
 ### 094 — Provenance And Impact

@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 
 from grimoire.adjudicationstore import AdjudicationLibrary
+from grimoire.decisionstore import DecisionLibrary
 from grimoire.chats import NavEntry
 from grimoire.chats.codec import ChatCodecError, chat_from_payload
 from grimoire.chatstore import ChatLibrary, InvalidBinding
@@ -147,8 +148,10 @@ class TextApi:
         self.owner_handle = self.player_handle = authority.handle_for(owner, trusted=True)
         # one adjudication key for the app: a turn framed at the hub is read here with the key it was framed under
         self.adjudication = AdjudicationLibrary(store, authority, authority.handle_for(ADJUDICATOR, trusted=True))
+        self.decisions = DecisionLibrary(store, authority, authority.handle_for("app:decisions", trusted=True))
         self.runner = SceneRunner(store, authority, self.owner_handle, owner=owner, runtime=runtime, policy=policy,
-                                  voices=voices, adjudication=self.adjudication, stages=stages, agendas=agendas)
+                                  voices=voices, adjudication=self.adjudication, stages=stages, agendas=agendas,
+                                  decisions=self.decisions)
         self.chats = ChatLibrary(store, self.owner_handle, clock=clock, new_id=new_id, owner=owner)
         self.quick = QuickStart(self.chats, self.runner)
         self.images = ImageLibrary(store, self.owner_handle, owner=owner)
