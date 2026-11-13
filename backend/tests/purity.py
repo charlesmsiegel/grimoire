@@ -99,6 +99,9 @@ class PurePackage:
 
 
 PURE_PACKAGES = (
+    # Rules-family proposals (062): recorded arithmetic only, no resolution or I/O.
+    PurePackage("grimoire.rulesets", ("grimoire.rulesets", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # The fiction domain. `core.inference` is a separate vocabulary that core does not import.
     PurePackage("grimoire.core", ("grimoire.core",), never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.core.inference", ("grimoire.core.inference",)),
