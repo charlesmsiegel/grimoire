@@ -3,6 +3,7 @@
 **Status:** first slice of [Party And Presence](roadmap/sprints/party-and-presence.md) (Sprint 033, Wave 4). It is implemented as:
 - `grimoire.party`: pure membership state, scene casts and presence;
 - `grimoire.partystore`: the store-backed `PartyLibrary`;
+- `grimoire.chatstore`: explicit existing-actor chat bindings, including multiple creatures from one species ([CHATS](CHATS.md#non-character-actors-033));
 - two predicates added to 017's [relation registry](GRAPH.md#predicates). There is **no new record family**.
 
 There is no app and no model call. 035's runner ([SCENES](SCENES.md)) reads reserves from this party state; the scenarios here are synthetic.
@@ -143,3 +144,7 @@ A release only ends a relation. The member's instance file, its other relations,
 | Physical positions within a scene, and who can still reach whom | 041 ([STAGING](STAGING.md); its first slice checks a stage against a `SceneCast`) |
 | An **audience**: individuals who perceive a scene without being on stage | 032 (who receives what) and 041 (who can see and hear, [STAGING](STAGING.md)); the cast here is only who is present |
 | Cross-device merge of memberships. Relation files sync one at a time as 017's do, so a move's end could land on a device without its add (for example if the new anchor's instance file is refused there), leaving the member in no party on that device until the add follows. Not reproduced in tests | 019/028 |
+
+## Persistent chat roster proof
+
+`test_chatstore_actors.py` exercises public creation, attach, exact-instance detach and reopen with two individualized creatures in one chat. The actual `SceneRunner` excludes the boxed creature and refuses its requested speech with `not_present`; withdrawal restores cast eligibility. Human/director assignments, membership history and private evidence survive release, detach and reopen. Roster membership is not a voice-generation capability: species-backed voice and the separate controller-knowledge projection retain their existing limitations.

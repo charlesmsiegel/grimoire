@@ -22,10 +22,10 @@ from dataclasses import dataclass, field, replace
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, validate_segment, validate_source_id
 from grimoire.core.json_value import JsonObject, JsonValueError, freeze_object
 
-#: role -> the definition kind it binds. Only character and persona roles create actors.
-ROLE_KINDS: Mapping[str, str] = {"character": "character", "persona": "character", "scenario": "scenario",
-                                 "lorebook": "lorebook"}
-ACTOR_ROLES = frozenset({"character", "persona"})
+#: role -> definition kind; None is an explicit existing actor of any source kind (033).
+ROLE_KINDS: Mapping[str, str | None] = {"character": "character", "persona": "character", "scenario": "scenario",
+                                      "lorebook": "lorebook", "actor": None}
+ACTOR_ROLES = frozenset({"character", "persona", "actor"})
 LAUNCH_KINDS = frozenset({"character", "scenario", "lorebook", "premise"})
 NOT_WITNESSED = "not_witnessed"  # a new actor saw none of the chat's earlier history
 CAMPAIGN_CONTINUITY = "campaign_continuity"  # a reused campaign actor keeps only its own history
@@ -155,7 +155,7 @@ class SourceBinding:
             raise _fail("a binding needs a SourceRef")
         if type(self.role) is not str or self.role not in ROLE_KINDS:
             raise _fail(f"unknown role {self.role!r}", "role_kind")
-        if self.ref.kind != ROLE_KINDS[self.role]:
+        if ROLE_KINDS[self.role] is not None and self.ref.kind != ROLE_KINDS[self.role]:
             raise _fail(f"role {self.role} binds {ROLE_KINDS[self.role]} definitions, not {self.ref}", "role_kind")
         try:
             validate_segment(self.resolved_revision, "resolved_revision")
@@ -167,8 +167,9 @@ class SourceBinding:
         check_timestamp(self.introduced_at, "introduced_at")
         if (self.actor is not None) != (self.role in ACTOR_ROLES):
             raise _fail(f"a {self.role} binding {'needs' if self.role in ACTOR_ROLES else 'has no'} actor")
-        if self.actor is not None and (not isinstance(self.actor, InstanceRef) or self.actor.kind != "character"):
-            raise _fail("a binding's actor is a character instance")
+        if self.actor is not None and (not isinstance(self.actor, InstanceRef) or
+                                       (self.role != "actor" and self.actor.kind != "character")):
+            raise _fail("a binding needs an instance of the permitted kind")
         if (self.detached_seq is None) != (self.detached_at is None):
             raise _fail("detached_seq and detached_at come together")
         if self.detached_seq is not None:
@@ -185,6 +186,11 @@ class SourceBinding:
     def key(self) -> tuple[str, tuple[str, str, str]]:
         return (self.role, self.ref.entity_key)
 
+    @property
+    def identity_key(self) -> tuple[object, ...]:
+        """033: same-species individuals bind independently; legacy roles stay source-keyed."""
+        return (*self.key, self.actor) if self.role == "actor" else self.key
+
 
 @dataclass(frozen=True, slots=True)
 class RosterEntry:
@@ -198,8 +204,8 @@ class RosterEntry:
     prior_history: str = NOT_WITNESSED
 
     def __post_init__(self) -> None:
-        if not isinstance(self.actor, InstanceRef) or self.actor.kind != "character":
-            raise _fail("a roster actor is a character instance")
+        if not isinstance(self.actor, InstanceRef) or (self.role != "actor" and self.actor.kind != "character"):
+            raise _fail("a roster actor is an instance of the permitted kind")
         if type(self.role) is not str or self.role not in ACTOR_ROLES:
             raise _fail(f"a roster entry's role is one of {sorted(ACTOR_ROLES)}", "role_kind")
         if self.source is not None and not isinstance(self.source, SourceRef):
@@ -274,16 +280,16 @@ class ChatRecord:
             if entry.actor.campaign_id != campaign:
                 raise _fail(f"{entry.actor} belongs to another campaign", "foreign_actor")
             roster[entry.actor] = entry
-        active: set[tuple[str, tuple[str, str, str]]] = set()
+        active: set[tuple[object, ...]] = set()
         active_actors: set[InstanceRef] = set()
         personas = 0
         latest = 0
         for binding in self.bindings:
             latest = max(latest, binding.introduced_seq, binding.detached_seq or 0)
             if binding.active:
-                if binding.key in active:
+                if binding.identity_key in active:
                     raise _fail(f"{binding.ref.unpinned()} is already bound as {binding.role}", "duplicate_binding")
-                active.add(binding.key)
+                active.add(binding.identity_key)
                 personas += binding.role == "persona"
             if binding.actor is not None:
                 entry = roster.get(binding.actor)
@@ -330,9 +336,14 @@ class ChatRecord:
     def attach(self, new: NewBinding, at: str) -> ChatRecord:
         return self._advance(at)._bind(new, at, self.seq + 1)
 
-    def detach(self, ref: SourceRef, role: str, at: str) -> ChatRecord:
+    def detach(self, ref: SourceRef, role: str, at: str, *, actor: InstanceRef | None = None) -> ChatRecord:
+        if role == "actor" and not isinstance(actor, InstanceRef):
+            raise _fail("detaching an actor binding needs its exact instance", "actor_required")
+        if role != "actor" and actor is not None:
+            raise _fail("instance-targeted detach is for actor bindings", "role_kind")
         key = (role, ref.entity_key)
-        position = next((i for i, b in enumerate(self.bindings) if b.active and b.key == key), None)
+        position = next((i for i, b in enumerate(self.bindings) if b.active and b.key == key
+                         and (role != "actor" or b.actor == actor)), None)
         if position is None:
             raise _fail(f"{ref.unpinned()} is not bound as {role}", "not_bound")
         seq = self.seq + 1
