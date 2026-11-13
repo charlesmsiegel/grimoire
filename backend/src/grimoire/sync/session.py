@@ -276,6 +276,18 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
                                               _current(sides[path][dest])))
     _held_families(plan)
     ledger_units.plan_units(plan)
+    for device in pair:
+        candidates = plan.copies[device]
+        if any(syncable(copy.path) == 'turn' and any(
+                semantic.family_unknown(scan, copy.path.split('/')[1], 'turns') for scan in scans.values())
+               for copy in candidates):
+            # The semantic guard will hold uncertain scenes before admission. Keep
+            # the native dependency owner's refusal, including legacy ancestry,
+            # without admitting or removing copies in this diagnostic-only pass.
+            _, dependencies = _dependencies(plan, device, candidates)
+            for copy in candidates:
+                if syncable(copy.path) == 'turn' and copy.path in dependencies:
+                    plan.conflicts[copy.path] = Conflict(copy.path, 'head_dependency', dependencies[copy.path])
     semantic.guard(plan)
     for device in pair:
         _admit(plan, device)
