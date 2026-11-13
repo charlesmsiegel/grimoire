@@ -31,6 +31,12 @@ One metered provider call per speaking NPC, each brief built only from that acto
 
 A derived portrayal names its pinned base in its own payload and composes over it with explicit inherit/replace/clear and field provenance. A chat or selection is frozen for one operation from one loaded library, with or without a world. See [EFFECTIVE_VIEWS.md](EFFECTIVE_VIEWS.md).
 
+### Optional catalogs (headless first slice: `grimoire.catalogs`)
+
+Pinned catalog records compose qualified members and dependencies with local exclusions,
+return bounded discovery and require explicit selections before chat/context use.
+See [CATALOGS.md](CATALOGS.md) for provenance, limits and integration dependencies.
+
 ### Context packing (first slice implemented: `grimoire.context`, `grimoire.contextstore`)
 
 One actor's bounded context from its own card, its own knowledge and the triggered common lore of the chat's bound sources, deterministic and model-free, with provenance and omissions beside each line. See [CONTEXT.md](CONTEXT.md).
