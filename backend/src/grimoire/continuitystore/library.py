@@ -6,6 +6,7 @@ from grimoire.core.authority import AuthorityError
 from grimoire.core.identity import ContinuityRef, validate_segment
 from grimoire.graph.index import require_director
 from grimoire.store import ScopeRecord
+from grimoire.continuity.archive import decode_fork
 
 from .snapshot import DEPENDENCY_SCHEMA, native_snapshot
 
@@ -51,6 +52,17 @@ class ContinuityLibrary:
             if self.store.campaign_presence(campaign) != 'present':
                 raise ValueError('missing campaign')
             return native_snapshot(self.store, campaign)
+
+    def inspect_fork(self, campaign, record_id, *, requested_by='director'):
+        """Read retained exact historical variants; never actor-visible knowledge."""
+        require_director(requested_by)
+        self._require_owner()
+        with self.store.lock:
+            stored = self.store.read(ContinuityRef(campaign, record_id))
+            archive = decode_fork(stored.record.schema, stored.record.payload, campaign)
+            if archive['operation_id'] != record_id:
+                raise ValueError('fork archive identity differs from envelope')
+            return archive
 
     def preview(self, campaign, roots, action, *, requested_by='director'):
         require_director(requested_by)

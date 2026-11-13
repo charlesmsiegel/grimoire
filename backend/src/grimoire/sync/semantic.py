@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from grimoire.continuity import scene_revision
+from grimoire.continuity.archive import FORK_SCHEMA, decode_fork
 from grimoire.continuity.declarations import decode_dependency
 from grimoire.effects import accepted_from_payload
 from grimoire.continuity.provenance import decode_scene_sources
@@ -129,12 +130,19 @@ def reviews(plan):
                     continue
                 try:
                     record = _record(data)
+                    if record.schema == FORK_SCHEMA:
+                        archive = decode_fork(record.schema, record.payload, campaign)
+                        if archive['operation_id'] != record.address.record_id:
+                            raise ValueError('fork archive identity differs from envelope')
+                        continue
                     edge = decode_dependency(record.schema, record.payload)
                     for endpoint in (edge.source, edge.dependent):
                         present = False
                         for side in plan.devices:
                             raw = plan.scans[side].files.get(endpoint.path)
                             if raw is None:
+                                if endpoint.path in plan.bases and plan.bases[endpoint.path].kind == 'agreed':
+                                    reasons.add('missing_dependency_endpoint')
                                 continue
                             present = True
                             actual = (turns[side][endpoint.path][1] if endpoint.path in turns[side] else etag(raw))
@@ -170,7 +178,11 @@ def reviews(plan):
         if edited and direct:
             scenes.update(edited)
             reasons.add('potential_direct_relation_impact')
-        if any(relevant(p, campaign) or p in ('', 'campaigns', f'campaigns/{campaign}')
+        # Unreadable editorial relations belong to the existing relation/ledger
+        # owner unless edited fiction creates an actual cross-domain uncertainty.
+        # Turns, accepted provenance and declarations always remain fail-closed.
+        if any((relevant(p, campaign) or p in ('', 'campaigns', f'campaigns/{campaign}'))
+               and (not p.startswith(f'campaigns/{campaign}/relations') or edited)
                for d in plan.devices for p in plan.scans[d].blocked):
             reasons.add('unreadable_semantic_sources')
         if reasons:
@@ -182,17 +194,23 @@ def guard(plan):
     for review in reviews(plan):
         implicated = {p for p in review.scenes if p in plan.sides} | {
             p for p, c in plan.units.items() if c == review.campaign}
+        if 'missing_dependency_endpoint' in review.reasons:
+            implicated.update(p for p in plan.paths if premise_path(p, review.campaign))
         implicated.update(p for p in plan.paths if syncable(p) in ('relation', 'continuity')
                           and p.split('/')[1] == review.campaign)
         for path in implicated:
             plan.held.add(path)
             plan.agreed.discard(path)
             if path in review.scenes or not units._same(plan, path):
-                plan.conflicts[path] = Conflict(path, 'semantic_review', ', '.join(review.reasons), token=review.token)
+                native = plan.conflicts.get(path)
+                plan.conflicts[path] = Conflict(path, 'semantic_review', ', '.join(review.reasons),
+                                                review=native.review if native is not None else (), token=review.token)
         if not any(p in plan.conflicts and plan.conflicts[p].code == 'semantic_review' for p in implicated):
             anchor = next((p for p in plan.paths if relevant(p, review.campaign)), None)
             if anchor is not None:
-                plan.conflicts[anchor] = Conflict(anchor, 'semantic_review', ', '.join(review.reasons), token=review.token)
+                native = plan.conflicts.get(anchor)
+                plan.conflicts[anchor] = Conflict(anchor, 'semantic_review', ', '.join(review.reasons),
+                                                  review=native.review if native is not None else (), token=review.token)
                 plan.agreed.discard(anchor)
                 plan.held.add(anchor)
                 implicated.add(anchor)
@@ -206,10 +224,12 @@ def campaigns_for(plan, copies, deletes=()):
             (syncable(c.path) == 'turn' or getattr(c, 'unit', None) is not None or syncable(c.path) in ('continuity', 'relation'))}
 
 
-def changed(plan, copies, published):
-    for campaign in sorted(campaigns_for(plan, copies)):
+def changed(plan, copies, published, deletes=(), deleted=None):
+    for campaign in sorted(campaigns_for(plan, copies, deletes)):
         for device in plan.devices:
             files, blocked = expected_listing(plan, device, campaign, published.get(device, ()))
+            for removed in (deleted or {}).get(device, ()):
+                files.pop(removed.path, None)
             why = units.stale_listing(listing(plan.stores[device], campaign), files, blocked)
             if why is not None: return f'campaign {campaign} semantic sources changed on {device}: {why}'
     return None
@@ -276,6 +296,11 @@ def resolution_risk(store, path, peer):
                 elif target_chat == event.chat:
                     return True
             elif syncable(p) == 'continuity':
+                if record.schema == FORK_SCHEMA:
+                    archive = decode_fork(record.schema, record.payload, campaign)
+                    if archive['operation_id'] != record.address.record_id:
+                        raise ValueError('fork archive identity differs from envelope')
+                    continue
                 edge = decode_dependency(record.schema, record.payload)
                 if path in (edge.source.path, edge.dependent.path): return True
         pair = tuple(sorted((peer, device_of(store))))

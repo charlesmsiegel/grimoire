@@ -21,4 +21,3 @@ def decode_dependency(schema, payload):
     if edge.certainty != 'known' or edge.source.campaign_id != edge.dependent.campaign_id:
         raise ValueError('declarations require known same-campaign dependence')
     return edge
-

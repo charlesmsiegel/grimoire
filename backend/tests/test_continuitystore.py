@@ -60,7 +60,8 @@ def test_native_transfer_dialogue_wrapup_and_readonly_rehearsal(world):
         assert impacted[dialogue].certainty == 'known'
         assert any('/relations/' in path for path in impacted)
         assert any('/wrapups/' in path for path in impacted)
-        assert unused not in impacted
+        assert impacted[unused].certainty == 'potential'
+        assert impacted[unused].reason == 'chronological'
     rehearsal = library.rehearse('c', (snap.pins[source],), 'replace', ('Wren keeps the key.',))
     assert rehearsal.rehearsal.status == 'speculative' and rehearsal.rehearsal.model_cost == 0
     assert library.corrections('c', (snap.pins[source],), 'edit')

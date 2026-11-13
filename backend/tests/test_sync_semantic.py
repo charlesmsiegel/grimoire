@@ -1,4 +1,11 @@
 """Actual accepted relationship and scene changes cannot silently combine offline."""
+from grimoire.continuity import scene_revision
+from grimoire.core.identity import ContinuityRef
+from grimoire.store import ScopeRecord
+from grimoire.store.layout import address_parts
+from grimoire.sync import apply_sync, SyncInterrupted
+from store_helpers import OWNER
+
 import pytest
 
 from grimoire.sync import plan_sync, sync, sync_until_quiet, resolve, resolve_ledger, ResolveRefused, MERGE
@@ -202,3 +209,59 @@ def test_declared_holder_endpoint_changes_token_and_stops_scene_apply(pair, chan
     with pytest.raises(SyncInterrupted, match='semantic'):
         apply_sync(plan, handles())
     assert desk.store.read_exact('campaigns/c/turns/t-1.000002.json') is None
+
+
+@pytest.mark.parametrize('declare_before', [False, True])
+def test_relation_endpoint_deletion_cannot_bypass_dependency_guard(pair, declare_before):
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    relation = next(iter(desk.store.campaign_relations('c').records.values()))
+    source = '/'.join(address_parts(relation.record.address))
+    turn = next(iter(desk.store.campaign_turns('c').records.values()))
+    dependent = '/'.join(address_parts(turn.record.address))
+    payload = {'source': {'path': source, 'revision': relation.etag},
+               'dependent': {'path': dependent, 'revision': scene_revision(turn.record.payload)},
+               'reason': 'causal_action', 'certainty': 'known'}
+    def declare(d):
+        tx = d.store.transaction()
+        tx.put(ScopeRecord(ContinuityRef('c', 'relation-use'), 'grimoire.continuity-dependency/1', payload, owner=OWNER), None)
+        tx.commit(d.handles.app)
+    if declare_before:
+        declare(desk)
+        declare(phone)
+    (desk.store.root / source).unlink()
+    plan = plan_sync(desk.store, phone.store, handles())
+    before = phone.store.read_exact(source)
+    if declare_before:
+        assert any(c.code == 'semantic_review' for c in plan.conflicts.values())
+        apply_sync(plan, handles())
+        assert phone.store.read_exact(source) == before
+    else:
+        declare(phone)
+        with pytest.raises(SyncInterrupted, match='semantic'):
+            apply_sync(plan, handles())
+        assert phone.store.read_exact(source) == before
+
+
+def test_unrelated_relation_deletions_on_both_devices_converge(pair):
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    refs = sorted(desk.store.campaign_relations('c').records, key=str)
+    paths = ['/'.join(address_parts(ref)) for ref in refs[:2]]
+    assert len(paths) == 2
+    (desk.store.root / paths[0]).unlink()
+    (phone.store.root / paths[1]).unlink()
+    report = sync(desk.store, phone.store, handles())
+    assert not report.conflicts
+    assert all(d.store.read_exact(p) is None for d in pair.values() for p in paths)
+
+
+def test_semantic_overlay_preserves_native_unreadable_ledger_evidence(pair):
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    desk.accept(give())
+    write_turn(phone.store, phone.handles, text='Offline edit with an unreadable relation.')
+    relation = next(iter(phone.store.campaign_relations('c').records))
+    path = '/'.join(address_parts(relation))
+    (phone.store.root / path).write_text('{broken')
+    plan = plan_sync(desk.store, phone.store, handles())
+    conflicts = tuple(plan.conflicts.values())
+    assert any(c.code == 'semantic_review' for c in conflicts)
+    assert any(item.reason == 'unreadable' and item.subject == path for c in conflicts for item in c.review)

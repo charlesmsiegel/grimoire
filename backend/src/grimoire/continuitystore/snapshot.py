@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from grimoire.continuity import Dependency, Pin, scene_revision
+from grimoire.continuity.archive import FORK_SCHEMA, decode_fork
 from grimoire.core.identity import AcceptedRef, RelationRef, KnowledgeRef, HoldingsRef
 from grimoire.core.knowledge import Perception, Report, Proposition, Ruling
 from grimoire.effects import accepted_from_payload, wrapup_from_payload
@@ -86,7 +87,17 @@ def native_snapshot(store, campaign):
         return None
 
     for name, (kind, value) in decoded.items():
-        if kind == 'accepted':
+        if kind == 'turn':
+            # Recorded follows establishes potential impact; legacy number order is
+            # conservative when a turn predates explicit branch ancestry.
+            parents = [(p, t) for p, (k, t) in decoded.items() if k == 'turn' and t.chat == value.chat
+                       and t.number == value.number - 1
+                       and (value.follows is None or t.turn_id == value.follows)]
+            if value.follows is not None and not parents:
+                problems.append(f'{name}: missing follows turn')
+            for parent, _ in parents:
+                link(parent, name, 'chronological', 'potential')
+        elif kind == 'accepted':
             try:
                 sources = decode_scene_sources(value.extras.get('continuity_sources'), value.chat)
                 if not sources: problems.append(f'{name}: empty limited scene provenance')
@@ -136,6 +147,11 @@ def native_snapshot(store, campaign):
     problems.extend(f'{p.path}: {p.code}' for p in declarations.problems)
     for ref, stored in declarations.records.items():
         try:
+            if stored.record.schema == FORK_SCHEMA:
+                archive = decode_fork(stored.record.schema, stored.record.payload, campaign)
+                if archive['operation_id'] != ref.record_id:
+                    raise ValueError('fork archive identity differs from envelope')
+                continue
             edge = decode_dependency(stored.record.schema, stored.record.payload)
             if edge.source.campaign_id != campaign: raise ValueError('cross-campaign declaration')
             if edge in edges: problems.append(f'{path(ref)}: duplicate dependency')
