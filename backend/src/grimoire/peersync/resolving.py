@@ -424,6 +424,9 @@ class ResolveRequest:
         if self.keep is not None or not isinstance(absent, list) or self.path not in absent:
             raise PeerRefused("invalid", "a check confirms that the paths a deletion removes are absent here")
         absent_here(store, absent)
+        if (self.path.startswith('campaigns/') and syncable(self.path) in ('turn', 'relation', 'image', 'placement')
+                and semantic.resolution_risk(store, self.path, self.peer)):
+            raise PeerRefused('semantic_review', 'semantic sources changed before deletion confirmation')
 
     def check_step(self, store: LibraryStore, ops: list[tuple[dict, bytes | Path]]) -> str | None:  # type: ignore[type-arg]
         """Refuse a step of this resolve that does not do what the request said; return the etag of

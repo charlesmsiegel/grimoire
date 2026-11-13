@@ -240,3 +240,94 @@ def test_unrelated_asset_generic_resolution_remains_available_with_accepted_even
         result = resolve_conflict(phone.store, phone.authority, DESKTOP, server.address,
                                   path, expected[PHONE], expected)
     assert result.status == 'resolved', result
+
+
+@pytest.mark.parametrize('target', ['placement', 'scope_art', 'relation'])
+@pytest.mark.parametrize('initiator', [DESKTOP, PHONE])
+@pytest.mark.parametrize('declare_late', [False, True])
+def test_serving_explicit_delete_confirmation_rechecks_late_declaration(pair, monkeypatch, target, initiator, declare_late):
+    from dataclasses import replace
+    from grimoire.peersync.resolving import ResolveRequest
+    from grimoire.store.layout import address_parts
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    scene(desk)
+    if target == 'relation':
+        ref = next(iter(desk.store.campaign_relations('c').records))
+    else:
+        refs = peer_art(desk)
+        ref = refs[1 if target == 'placement' else 2]
+    with serving(phone) as server:
+        assert transfer(desk.store, desk.authority, PHONE, server.address).status == 'synced'
+    client = pair[initiator]
+    remote = pair[PHONE if initiator == DESKTOP else DESKTOP]
+    path = '/'.join(address_parts(ref))
+    restored = remote.store.read_exact(path)
+    (remote.store.root / path).unlink()
+    if target == 'relation':
+        stored = client.store.read(ref)
+        tx = client.store.transaction()
+        tx.put(replace(stored.record, owner='human:synthetic-editor'), stored.etag)
+        tx.commit(client.handle)
+    else:
+        peer_edit_placement(client, ref)
+    before = client.store.read_exact(path)
+    expected = {client.name: etag(before), remote.name: None}
+    original = ResolveRequest.confirm_absent
+    injected = []
+    def late(request, store, absent):
+        if declare_late and not injected:
+            # A serving owner restores its previously held bytes, records a real
+            # dependency through the owner API, then removes the endpoint again.
+            file = remote.store.root / path
+            file.write_bytes(restored)
+            peer_declare_art(remote, ref)
+            file.unlink()
+            injected.append(True)
+        return original(request, store, absent)
+    monkeypatch.setattr(ResolveRequest, 'confirm_absent', late)
+    with serving(remote) as server:
+        report = resolve_conflict(client.store, client.authority, remote.name, server.address,
+                                  path, None, expected)
+    if declare_late:
+        assert injected and report.status != 'resolved', report
+        assert client.store.read_exact(path) == before
+    else:
+        assert report.status == 'resolved', report
+        assert client.store.read_exact(path) is None
+
+
+@pytest.mark.parametrize('target', ['placement', 'scope_art', 'relation'])
+@pytest.mark.parametrize('initiator', [DESKTOP, PHONE])
+def test_serving_sync_delete_confirmation_rechecks_late_declaration(pair, monkeypatch, target, initiator):
+    from grimoire.store.layout import address_parts
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    scene(desk)
+    if target == 'relation':
+        ref = next(iter(desk.store.campaign_relations('c').records))
+    else:
+        refs = peer_art(desk)
+        ref = refs[1 if target == 'placement' else 2]
+    with serving(phone) as server:
+        assert transfer(desk.store, desk.authority, PHONE, server.address).status == 'synced'
+    client = pair[initiator]
+    remote = pair[PHONE if initiator == DESKTOP else DESKTOP]
+    path = '/'.join(address_parts(ref))
+    before = client.store.read_exact(path)
+    (remote.store.root / path).unlink()
+    original = server_module.absent_here
+    injected = []
+    def late(store, absent):
+        if path in absent and not injected:
+            # The owner creates a dangling declaration after the snapshot; sync
+            # must preserve the peer's still-live matching endpoint instead of deleting it.
+            file = remote.store.root / path
+            file.write_bytes(before)
+            peer_declare_art(remote, ref)
+            file.unlink()
+            injected.append(True)
+        return original(store, absent)
+    monkeypatch.setattr(server_module, 'absent_here', late)
+    with serving(remote) as server:
+        report = transfer(client.store, client.authority, remote.name, server.address)
+    assert injected and report.status != 'synced', report
+    assert client.store.read_exact(path) == before
