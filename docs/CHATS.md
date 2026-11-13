@@ -207,3 +207,36 @@ Chat binding does not grant control, knowledge or party membership. The scene ru
 This is a headless roster interface for UI adapters: pass `actors` when starting and the exact `actor` when attaching/detaching. No new launch kind or persona-selection UI is added. QuickStart's source-only broken-binding repair reports generic actor bindings without a detach action; it cannot distinguish same-species instances. Use the exact-instance `ChatLibrary.detach_source` API until the UI repair protocol carries actor identity. Existing sovereignty assignments remain authoritative for any instance kind. This change does not expand species-backed voice generation or the separate character-only `controller_knowledge` projection, and does not change 047's claim extraction.
 
 The additive role uses the existing chat payload format. Older builds may report actor-role chats as undecodable; they must not rewrite them into character bindings. Existing chats need no migration.
+## Scene workspace browsing (065)
+
+Chats uses the additive read-only `chats.workspace` operation. It searches and filters the complete
+canonical navigation snapshot before returning at most 50 chat rows. Next/Previous replace the current
+page, rather than accumulating an unbounded list. Recent activity has a canonical-reference tie breaker;
+A–Z uses title then canonical reference. Campaign and World accept their exact IDs. Existing chat links,
+composer draft keys, shelf pins and tab search/group/sort preferences remain owned by the shell.
+
+Character/scenario selection defaults to exact source identity, including the selected pinned revision.
+An unpinned qualified reference selects all its revisions. The explicit descendant option includes only
+portrayals whose successfully validated composition chain contains that selected reference. It never
+uses names, `same_individual` links, siblings or ancestors as substitutes. Active bindings and immutable
+launch provenance count; detached bindings do not count otherwise. Broken sources remain visible with
+their reference and diagnostic. The comparison list shows pinned references and validated ancestry paths;
+it does not infer semantic equivalence or provide a second source editor.
+
+`chats.workspace` accepts `filter` (`all`, `recent`, `character`, `scenario`, `campaign`, `world`, `pinned`),
+`source`, `match` (`exact`/`derived`), `q`, `sort` (`recent`/`name`), `campaign`, `world`, and an explicit
+`pins` list for the local shelf selection. `limit` is 1–50 (default 50). `offset`, `source_offset`, and
+`comparison_offset` independently page the three result lists; nonzero offsets require the previous
+`snapshot`. `source_q` searches the source chooser across the snapshot. The response contains `chats`,
+`total`, `next`, `snapshot`, `sources`/`source_total`/`source_next`,
+`comparisons`/`comparison_total`/`comparison_next`, and up to 50 source `diagnostics`.
+Continuation refuses with `changed` if canonical navigation, source names, manifests, definition bytes
+or ancestry changed; the page offers an explicit restart. The current implementation loads the full
+file-backed library once per request and scans navigation. Bounded replies do not imply constant-time
+index lookup. Legacy `chats` requests retain unpinned behavior; additive `match=exact` preserves pins.
+
+Up to 20 named workspace filters can be saved, reapplied and deleted in device-local browser storage.
+Selections include query, source, match, grouping and sorting. They are explicitly unsynchronized;
+malformed, disabled or full storage is reported visibly. Saving a filter never writes chat records,
+controller assignments, transcripts or campaign state. Later preference synchronization remains outside
+this slice.

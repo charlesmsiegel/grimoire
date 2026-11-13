@@ -1,7 +1,7 @@
 """What the app's server calls for ``POST /api/<op>`` (108): the text API (044) plus every sprint's adapter ops.
 
-A dotted op (``sources.list``) goes to its adapter, run through ``TextApi.serialized``; anything else goes to the
-text API itself. ``library`` lists every op, core and adapter, so a page can tell which of its actions exist.
+Core ops, including dotted read ops, go to the text API. Other dotted ops (``sources.list``) go to
+their adapter, run through ``TextApi.serialized``. ``library`` lists every op, core and adapter, so a page can tell which of its actions exist.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from .adapters import ADAPTERS
 
 
 class AppApi:
-    """The text API plus the app's adapters: what the server calls for ``POST /api/<op>``. A dotted op goes to
-    its adapter, anything else to the text API. Two adapters may not share a name."""
+    """The text API plus the app's adapters: what the server calls for ``POST /api/<op>``. Core ops go to the text API; other dotted ops go to
+    their adapter. Adapter operations may not shadow core operations."""
 
     def __init__(self, api: TextApi, adapters: tuple[Adapter, ...] | None = None) -> None:
         if adapters is None:
@@ -32,7 +32,10 @@ class AppApi:
                 raise ValueError(f"two adapters are named {adapter.name!r}")
             names.add(adapter.name)
             for op, handler in adapter.ops.items():
-                handlers[f"{adapter.name}.{op}"] = (adapter, handler)
+                qualified = f"{adapter.name}.{op}"
+                if qualified in api.ops:
+                    raise ValueError(f"adapter shadows core op {qualified!r}")
+                handlers[qualified] = (adapter, handler)
         self._handlers = MappingProxyType(handlers)
 
     @property
@@ -41,7 +44,7 @@ class AppApi:
         return tuple(sorted((*self.api.ops, *self._handlers)))
 
     def call(self, op: str, args: Mapping[str, object] | None = None) -> dict:
-        if not isinstance(op, str) or "." not in op:
+        if not isinstance(op, str) or op in self.api.ops or "." not in op:
             result = self.api.call(op, args)
             if op == "library":  # the client learns adapter ops from the same answer as the core ones
                 result = {**result, "ops": list(self.ops)}
