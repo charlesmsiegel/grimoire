@@ -231,6 +231,12 @@ class SourceAuthoring:
         if kind == IMPORT_KIND:
             raise AuthoringRefused("import_record_read_only", "an import record is written only by its importer")
         family = family_of_kind(kind)
+        # Character is an authoring template, not a runtime authority role. Match the card
+        # importer's ordinary speaking-agent template only when no explicit facets were supplied.
+        if kind == "character" and "traits" not in fields:
+            fields = {**fields, "traits": [{"facet": "agent"},
+                                          {"facet": "communicative", "speaks": ["speech"],
+                                           "understands": ["speech"]}]}
         payload = self._apply_fields(family, {}, fields, derived=False)
         entity_id = self._new_id(source_id, entity_id, self._display_name(family, payload), kind)
         ref = SourceRef(source_id, kind, entity_id, "r1")

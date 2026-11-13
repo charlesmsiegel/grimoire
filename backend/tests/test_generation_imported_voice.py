@@ -296,9 +296,9 @@ def test_caps_truncation_and_skips_are_deterministic_and_recorded():
     assert VoiceNote("personality", 2, "truncated") in derived.notes
 
 
-def test_only_imported_character_revisions_derive_a_voice():
+def test_native_characters_derive_a_voice_but_v1_still_needs_its_reader():
     plain = replace(definition_of(V3), extras={})
-    assert derive_voice(plain) is None
+    assert derive_voice(plain).profile.imported is None
     v1_style = replace(definition_of(V3), description="", extras={"v1": {"legacy_id": "v1:a:x.json", "text": "{}"}})
     assert derive_voice(v1_style) is None  # only 026's reader can read a V1 card
     assert derive_voice(v1_style, (v1_voice_texts,)).reason == NO_VOICE_TEXT
