@@ -35,6 +35,7 @@ serving device's version. The serving device refuses a deletion it would have to
 
 from __future__ import annotations
 
+import json
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -44,7 +45,7 @@ from grimoire.security import ResourcePath
 from grimoire.store import LibraryStore, RecordNotFound, StoreError, Transaction, etag
 from grimoire.store.engine import MAX_CONFLICT_ATTEMPTS
 from grimoire.store.jsonfmt import is_etag
-from grimoire.sync import ResolveRefused, SyncError, SyncInterrupted, device_of, resolve, syncable
+from grimoire.sync import ResolveRefused, SyncError, SyncInterrupted, device_of, resolve, syncable, semantic
 from grimoire.sync.bookkeeping import read_document
 from grimoire.sync.documents import keeps_name
 from grimoire.sync.keeps import kept_slots
@@ -322,7 +323,17 @@ class _RelayedTransaction(Transaction):
                on_denied: Callable[[frozenset[str]], Mapping[str, bytes | None]] | None = None):
         if on_denied is not None:  # partial commits are sync's; the serving device commits a step whole
             raise StoreError("a resolve over the transport commits each step whole")
+        checks = []
+        campaigns = {make()[0]['path'].split('/')[1] for kind, make in self._ops
+                     if kind == 'put' and make()[0]['path'].startswith('campaigns/')
+                     and syncable(make()[0]['path']) in ('turn', 'accepted', 'relation', 'holdings', 'wrapup', 'continuity')}
+        for campaign in sorted(campaigns):
+            current = semantic.listing(self._mirror, campaign)
+            payload = json.dumps({'campaign': campaign, 'files': {p: t for p, t in current.items() if t is not None},
+                                  'blocked': [p for p, t in current.items() if t is None]}, sort_keys=True).encode()
+            checks.append(('semantic', lambda body=payload: ({'op': 'semantic'}, body, None, None)))
         result = super().commit(handle, approvals)
+        self._ops = checks + self._ops
         if self._mirror.relay is None:
             raise StoreError("this mirror has no peer to relay its commits to")
         self._mirror.relay(self._ops)
@@ -371,6 +382,9 @@ class ResolveRequest:
         Anything else would let a paired device write chosen bytes over a record. The deletion
         (``keep=None``) is admitted only where this device lacks the record: it is the winner.
         """
+        if syncable(self.path) in ('turn', 'relation'):
+            if semantic.resolution_risk(store, self.path, self.peer):
+                raise PeerRefused('semantic_review', 'semantic scene resolution requires the continuity owner operation')
         found = _current(store, self.path)
         if found != self.expected:
             raise PeerRefused("stale", f"{self.path} changed on this device since the conflict was reported")
@@ -431,6 +445,8 @@ class ResolveRequest:
         those bytes. When this device is the winner, its record's step (deliveries cleared) finds
         the chosen version already here, as every later step does.
         """
+        if syncable(self.path) in ('turn', 'relation') and semantic.resolution_risk(store, self.path, self.peer):
+            raise PeerRefused('semantic_review', 'semantic sources changed during resolution')
         writes = [(header, body) for header, body in ops if header.get("path") == self.path]
         found = _current(store, self.path)
         held = [body for header, body in writes if header.get("op") == "keep" and header.get("hold") is True]

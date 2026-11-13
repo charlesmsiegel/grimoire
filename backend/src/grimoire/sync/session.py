@@ -31,7 +31,7 @@ from grimoire.store.replica import (
     SHADOWED, CanonicalScan, chats_named, instances_named, parse_exact, pinned_by, previous_of,
 )
 
-from . import bookkeeping, deletion, keeps as kept_record, knowledge as merge, units as ledger_units
+from . import bookkeeping, deletion, keeps as kept_record, knowledge as merge, units as ledger_units, semantic
 from .art import art_needs, art_unmet
 from .decide import archive_candidate, decide, derive_base
 from .documents import ArchiveView, KeepsView, PendingView, parse_keeps, syncable
@@ -292,12 +292,13 @@ def _plan(left: LibraryStore, right: LibraryStore, handles: Mapping[str, object]
                                               _current(sides[path][dest])))
     _held_families(plan)
     ledger_units.plan_units(plan)
+    semantic.guard(plan)
     for device in pair:
         _admit(plan, device)
         ledger_units.whole(plan, device)
     _group_knowledge(plan)
     for device in pair:
-        _admit_deletes(plan, device, doomed[device])
+        _admit_deletes(plan, device, [p for p in doomed[device] if p not in plan.held])
     for device in pair:
         _plan_keeps(plan, device)
     for device in pair:  # the whole planned commit, once: interactions between units are caught here
@@ -529,6 +530,10 @@ def _dependencies(plan: SyncPlan, dest: str, copies: list[Copy]) -> tuple[list[C
             return by_path[path].etag if path in by_path else _etag_on(plan, dest, path)
         newly = {}
         for copy in kept:
+            semantic_need = semantic.unmet(copy.path, copy.data, final)
+            if semantic_need:
+                newly[copy.path] = semantic_need
+                continue
             origin_files = plan.scans[copy.origin].files  # type: ignore[attr-defined]
             parts = tuple(copy.path.split("/"))
             origin_scan, dest_scan = plan.scans[copy.origin], plan.scans[dest]
@@ -1030,6 +1035,7 @@ class Step:
     #: 028: for a data step that lands a merged ledger, each unit as the plan read it on this device
     #: (``units.step_listings``), which a serving device checks of itself before it commits the step
     units: tuple[Mapping[str, object], ...] = ()
+    semantic: tuple[Mapping[str, object], ...] = ()
 
 
 def apply_sync(plan: SyncPlan, handles: Mapping[str, object],
@@ -1149,7 +1155,8 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     held = contextlib.ExitStack()
     try:
         held.enter_context(_locked(*plan.stores.values()))  # a blob copy loads from the origin inside this commit
-        stale = ledger_units.changed(plan, copies, applied.published)  # 028: rechecked under the locks
+        stale = (semantic.changed(plan, copies, applied.published)
+                 or ledger_units.changed(plan, copies, applied.published))  # rechecked under both locks
         if stale is not None:
             raise SyncInterrupted(stale, _report(plan, applied))
         _recheck_deletes(plan, device, copies, deletes)
@@ -1172,6 +1179,7 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         applied.consumed.extend(result.consumed_approvals)
         published = [copy for copy in copies if copy.path in result.etags]
         units = ledger_units.step_listings(plan, device, published, applied.published.get(device, ()))
+        semantic_checks = semantic.step_listings(plan, device, published, applied.published.get(device, ()), deletes)
         applied.published[device] = published
         applied.kept[device] = [keep for keep in keeps if str(_kept_key(keep)) in result.etags]
         applied.deleted[device] = plan.deletes[device] = [
@@ -1185,7 +1193,7 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
         plan.kept_records[device], recorded = delivery.committed(result.etags)
         if result.etags:
             applied.observe(Step("data", device, tuple(published), tuple(applied.kept[device]), (*states, *recorded),
-                                 tuple(applied.deleted[device]), tuple(units)))
+                                 tuple(applied.deleted[device]), tuple(units), tuple(semantic_checks)))
 
 
 def _commit_holds(plan: SyncPlan, device: str, handle: object, approvals: Mapping[str, str],

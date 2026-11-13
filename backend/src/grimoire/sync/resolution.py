@@ -22,7 +22,7 @@ from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, 
 from grimoire.store.layout import definition_parts, manifest_parts
 from grimoire.store.replica import CanonicalScan, pinned_by
 
-from . import bookkeeping, deletion, keeps as kept_record, knowledge as merge, session
+from . import bookkeeping, deletion, keeps as kept_record, knowledge as merge, session, semantic
 from .art import art_needs, art_unmet
 from .decide import archive_candidate, derive_base
 from .documents import ArchiveView, PendingView, syncable
@@ -62,6 +62,12 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
     kind = syncable(path)
     if kind is None:
         raise ResolveRefused(f"{path} is not a synchronized record")
+    semantic_plan = None
+    if kind in ('turn', 'relation'):
+        semantic_plan = session.plan_sync(left, right, handles)
+        if any(path in r.scenes or (kind == 'relation' and path.split('/')[1] == r.campaign)
+               for r in semantic.reviews(semantic_plan)):
+            raise ResolveRefused(f'{path} requires semantic review; use the continuity owner operation')
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}")
@@ -187,6 +193,10 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
         raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
     try:
         with _locked(*stores.values()):  # a blob is loaded from the winner inside this commit
+            if semantic_plan is not None:
+                stale = semantic.changed(semantic_plan, [Copy(path, winner, receiver, data, None)], {})
+                if stale is not None:
+                    raise ResolveRefused(stale)
             _end_deliveries(stores, other, pair, resolved)
             if mine is not None:
                 _record_hold(stores[receiver], receiver, other[receiver], pair, path, etag(mine))
