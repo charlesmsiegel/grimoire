@@ -76,6 +76,12 @@ def _optional_text(value: object, label: str, *, nonempty: bool = False) -> None
         raise InvalidEnvelope(f"{label} must be {'nonempty ' if nonempty else ''}text")
 
 
+def _schema(value: object) -> None:
+    """Opaque schema metadata follows one policy across the scoped record families."""
+    if type(value) is not str or not value.strip() or len(value) > SCHEMA_MAX:
+        raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
+
+
 @dataclass(frozen=True)
 class RecordEnvelope:
     """One definition revision (pinned ``SourceRef``) or campaign instance (``InstanceRef``)."""
@@ -162,8 +168,7 @@ class ScopeRecord:
         if not isinstance(self.address, _SCOPE_ADDRESSES):
             raise InvalidEnvelope("a scope record's address must be a ScopeRef, ChatRef, RelationRef, AcceptedRef, "
                                   "WrapUpRef, HoldingsRef, TranscriptRef, TurnRef or BookmarkRef")
-        if type(self.schema) is not str or not self.schema.strip() or len(self.schema) > SCHEMA_MAX:
-            raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
+        _schema(self.schema)
         _optional_text(self.owner, "owner", nonempty=True)
         object.__setattr__(self, "payload", _freeze(self.payload))
         object.__setattr__(self, "extra", _frozen_extra(self.extra, _SCOPE_RECORD_FIELDS))
@@ -194,8 +199,7 @@ class AssetRecord:
     def __post_init__(self) -> None:
         if not isinstance(self.address, (ImageRef, PlacementRef)):
             raise InvalidEnvelope("an asset record's address must be an ImageRef or PlacementRef")
-        if type(self.schema) is not str or not self.schema.strip() or len(self.schema) > SCHEMA_MAX:
-            raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
+        _schema(self.schema)
         _optional_text(self.owner, "owner", nonempty=True)
         object.__setattr__(self, "payload", _freeze(self.payload))
         object.__setattr__(self, "extra", _frozen_extra(self.extra, _ASSET_RECORD_FIELDS))
@@ -226,8 +230,7 @@ class KnowledgeRecord:
     def __post_init__(self) -> None:
         if not isinstance(self.address, KnowledgeRef):
             raise InvalidEnvelope("a knowledge record's address must be a KnowledgeRef")
-        if type(self.schema) is not str or not self.schema.strip() or len(self.schema) > SCHEMA_MAX:
-            raise InvalidEnvelope(f"schema must be nonempty text of at most {SCHEMA_MAX} characters")
+        _schema(self.schema)
         _optional_text(self.owner, "owner", nonempty=True)
         object.__setattr__(self, "payload", _freeze(self.payload))
         object.__setattr__(self, "extra", _frozen_extra(self.extra, _KNOWLEDGE_RECORD_FIELDS))
