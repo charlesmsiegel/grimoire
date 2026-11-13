@@ -2,7 +2,7 @@
 
 **Outcome:** Catch factual contradictions in proposed narration before they propagate into canon, without making the narrator rigid or repetitive.
 
-**Status:** **first slice implemented**, headless and pure: `grimoire.referee` (no labeller call, no runner). The contract is in [REFEREE.md](../../REFEREE.md). Milestone 1 and the proving scenario are met on synthetic fixtures: five categories (presence, staging, possessions, knowledge, outcomes) checked against 041, 023/034, 012 and 029/040 records, and a sixth, intentions, against 039's briefed choice, with cited evidence and the prose unchanged, plus 003 authorship review and mislabel routing. The labeller and milestone 2 (one narration workflow in 035's runner) are next.
+**Status:** **scheduled first-useful slice implemented**, including the inherited independent non-narrator prose extraction and one production narration workflow. `grimoire.referee` remains pure; `grimoire.narration_review` extracts source-anchored atomic labels in a separate optional call, and the scene runner persists evidence and gates acceptance. The contract and 112/113 integration fields are in [REFEREE.md](../../REFEREE.md). Synthetic tests cover the existing five continuity categories plus intentions and PC-authorship/mislabel review, production HTTP extraction, accounting, cancellation, stale facts and explicit owner exceptions. Original prose is preserved; review never mutates canon or actor knowledge. Milestone 3, live-model quality, graphical controls and physical-phone validation remain open.
 
 ## Scope and ownership
 - Check generated text against currently authoritative presence, possessions, identity, capabilities, knowledge, scene staging and resolved outcomes.

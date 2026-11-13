@@ -108,14 +108,26 @@ def heard(take: Take) -> tuple:
     return tuple(line for line in take.shown() if table.intersection(line.audience))
 
 
+def _review_summary(line) -> dict | None:
+    detail = line.review_detail
+    if detail is None:
+        return None
+    report = detail.report()
+    return {"source_sha256": detail.source_sha256, "complete": detail.complete,
+            "findings": len(report["findings"]), "unchecked": len(report["unchecked"]),
+            "authorship": len(report["authorship"]), "mislabels": len(report["mislabels"])}
+
+
 def _lines(take: Take) -> list[dict]:
-    return [{"line": line.line_id, "speaker": line.speaker, "actor": _ref(line.actor), "text": line.text}
+    return [{"line": line.line_id, "speaker": line.speaker, "actor": _ref(line.actor), "text": line.text,
+             "review": line.review, "review_summary": _review_summary(line)}
             for line in heard(take)]
 
 
 def _take(take: Take) -> dict:
     return {"take": take.take, "state": take.state, "origin": take.origin, "lines": _lines(take),
             "outcome": take.outcome, "declined": list(take.declined),
+            "review_token": take.review_token,
             "calls": [{"actor": call.actor_id, "status": call.status, "reason": call.reason}
                       for call in take.calls if call.status != "accepted"]}
 

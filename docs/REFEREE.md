@@ -1,11 +1,8 @@
 # Narration continuity referee: grounded findings about a proposed narration
 
-**Status:** first slice of [Narration Continuity Referee](roadmap/sprints/narration-continuity-referee.md) (Sprint 047, Wave 6): milestone 1 and the proving scenario. It is a pure, headless library, `grimoire.referee`:
-- `model.py`: labelled claims, the facts a review reads, findings and the report;
-- `check.py`: `referee`, the deterministic checks;
-- `mislabel.py`: routing and flagging the authorship mislabels 003's correction flow cannot reach.
+**Status:** Sprint 047's deterministic referee and independent prose extraction are implemented. `grimoire.referee` remains pure; `grimoire.narration_review` owns the strict extraction reader and separate provider call. `grimoire.play.continuity` joins them to generated proposals, with durable evidence, accounting and explicit acceptance. Tests use synthetic providers and libraries; live-model accuracy and graphical/physical-phone acceptance are not certified.
 
-Nothing here touches files, calls a model or changes the narration, and **nothing labels prose yet**. The claims are typed values the caller builds, as 029's frames and 040's attempts are: the labeller that extracts them from generated text, its model call and its cost, and wiring the referee into 035's runner, are [milestone 2](#boundaries-and-later-work). The scenarios are synthetic.
+The narrator never labels its own output. Optional extraction is disabled by default and cannot commit effects, grant a player commitment, or add actor knowledge. The original prose remains unchanged.
 
 ## What it does
 
@@ -63,7 +60,7 @@ A `Finding(claim_id, category, kind, classification, reason, span, quote, eviden
 
 Reasons are 041's own (`off_stage`, `not_cast`, `elsewhere`, `door_shut`, `held_by_other`, `out_of_earshot`, `restrained`, …), `insufficient`, `not_holder`, `never_told`, `heard_unadmitted`, `unconfirmed_evidence`, `related_evidence`, `contradicts_resolution`, `conflicting_resolutions`, `not_overcome`, `prevented`, `other_approach`, `other_actor`, `diverged` and `breaks_refusal`. A 041 answer that means the label is wrong (`is_self`, `is_actor`, `holds_actor`, a speaker who is not an actor) is `unchecked` as `bad_label:<reason>`; a thing the stage does not track is `untracked`. Other `unchecked` reasons: `unknown_proposition`, `custody_unreadable` (a custody chain that loops, runs past 16 containers or stops at an item with no possession record), `unknown_tag`, `no_winning_frame` (an overcome obstacle whose winning attempt has no frame), and `unreadable` (a reference the stage or 012 refuses).
 
-**A finding is a report**, not a ruling, a repair or a block. What follows from one (repair, player review, an accepted exception, blocking) is milestone 2's.
+**A finding is a report**, not a ruling or a repair. The runner holds material, uncertain and unchecked findings for explicit review; protected player authorship and possible mislabels cannot be overridden through continuity acceptance.
 
 **Findings are director-side.** Like a stage's answers and 012's director projection, evidence can name a secret's proposition or where a hidden thing is: never put a finding in an actor's prompt or show it to a player as it is.
 
@@ -81,14 +78,50 @@ Ambiguous control of the voice routes too. `flag_mislabel(report, corrections, c
 
 `RefereeError(reason)` carries a machine reason and no text, label or reference, and pickles with its reason only: `invalid_field`, `unknown_kind`, `missing_field`, `campaign_mismatch`, `duplicate_id`, `stale_stage`, `stale_intention`, `intention_cast_mismatch`, `intention_mismatch`, `invalid_text` (empty, or over 200 000 characters), `too_many_claims` (over 256), `needs_authority` and `invalid_authority` (003 refused the `Authority`, for instance ambiguous control).
 
+## Independent extraction and production review
+
+Enable `"critique": 1` in the app model configuration to request one independent extraction call per generated take; omit it or set `0` to disable it. The existing per-call attempt cap and provider retry/fallback rules apply. Extraction output honors the configured token limit, capped at 4096. The stage is `critique`, phase `continuity`, on the **same turn meter** as generation. Its attempts, including failures and cancellation, are retained in `Take.calls` and the normal usage API. Missing usage/prices remain unknown. A separate runtime object and untrusted provider identity execute this call, even when its route/model matches the narrator's.
+
+The extraction prompt carries exact line IDs, SHA-256 digests, prose and a bounded director-side vocabulary of qualified references. Its JSON reply supplies atomic continuity and authorship labels with exact half-open Unicode character spans and quotes. A strict reader rejects unoffered references, duplicate IDs, malformed anchors, extra fields and authority data. It does not accept model-written contributions, delegations, conditions or resolutions. Missing lines or authorship coverage remain unchecked; `complete` is the extractor's coverage assertion, **not a guarantee of semantic completeness**.
+
+The runner captures immutable facts before provider execution under the library lock, including current holdings, possessions, knowledge, recorded resolutions, obstacles and actual NPC brief choices where configured. Missing records are unchecked. Obstacle checks require an explicitly supplied runner obstacle service; the campaign hub’s obstacle library is not automatically shared with the text runner. A stage at a different sequence from the epistemic brief is withheld and reported unavailable rather than silently advanced or rewound. This conservative moment policy can require review even when a human knows the latest stage is unchanged. Corrupt/quarantined fact inputs refuse initial capture. If they become unreadable after a billed call, the proposal is held stale and its usage is retained.
+
+A canonical snapshot fingerprint covers facts, control, stage, relevant instances and configured agendas. Landing and keeping recheck it under the writer's commit lock; changed facts require a fresh generated review. The guard follows existing store concurrency guarantees, not an atomic transaction over arbitrary external file edits. Extraction has the generation fence's cancellation token. Superseded work retains billed usage without becoming the current proposal.
+
+Before derived review evidence is written, a separate untrusted library handle must authorize `PROPOSE` for the exact serialized turn payload and address. It cannot `APPLY` effects. The app installs a fixed proposal grant when critique is enabled; revocation is preserved across settings reload and restart. Provider execution approval and library proposal permission are independent checks. A denied proposal drops derived lines while preserving billed attempts.
+
+### Review states and acceptance
+
+`SceneLine.review` is one of:
+
+- `unlabelled`: the optional extraction was not requested, including older records;
+- `reviewed`: supplied labels checked without material/uncertain/unchecked findings;
+- `needs_review`: a material or uncertain finding, or an unchecked fact;
+- `unchecked`: extraction coverage is incomplete;
+- `failed`: extraction failed, with a fixed reason and retained accounting;
+- `stale`: reviewed inputs changed;
+- `blocked`: rejected PC authorship or possible PC-speech mislabel;
+- `exception`: the owner explicitly accepted held prose under the exact proposal token.
+
+`blocked` cannot be accepted by acknowledgment. Existing withdrawal/rephrase/reroll operations preserve the original proposal and create fresh text for fresh review. A stale snapshot cannot be accepted with an old token. Accepting an exception changes presentation only: effects, outcomes, holdings and knowledge still require their existing independent writers.
+
+The snapshot fingerprint and review token are different. A review token binds the chat, turn, take, ordered exact lines, dispositions and evidence to that snapshot. `SceneRunner.keep(..., turn=..., acknowledge_review=token)` requires the exact token for held prose and an issued trusted owner handle. `keep_lines(..., acknowledge_reviews={"<source take number>": token})` applies the same checks to every selected source. Neither a Boolean acknowledgment nor a token from another take works. A composition drawn from multiple reviewed takes is a new aggregate: even individually clean sources require owner acknowledgment and are recorded as `exception` with `aggregate_unchecked`. The runner does not falsely label that combination reviewed or invoke a hidden extra model call. Within one generated take, all lines are checked together, so cumulative spends across speakers share the same inventory accounting.
+
+### Contracts for 112 and 113
+
+- **112:** model settings accept optional integer `critique` (`0` or `1`, default `0`). `models.stages` reports the available optional `critique` stage and its cap. Existing usage includes stage/call/attempt counts and cost for extraction; no extra aggregation store is introduced. Settings failure or disabling critique clears the extractor for subsequent takes. The UI owner supplies the control; this slice does not rewrite its page.
+- **113 / play:** ordinary text-API lines include `review` and a safe `review_summary` (source digest, coverage and counts). Takes include `review_token`. The `keep` op accepts `acknowledge_review`; `play.keep_lines` accepts `acknowledge_reviews`, always with the exact `turn` the user read.
+- **Owner-only evidence:** `continuity_review` takes `chat`, `turn`, and `take` and returns durable source-anchored findings, evidence, coverage, status and tokens. The underlying `SceneRunner.continuity_review` authenticates the library owner. Ordinary actor/player views contain no evidence details, hidden proposition IDs or secret source material. No prompt/history reader consumes review reports.
+
+The persistent line details and take fields are additive: existing unlabelled turns still decode. Older clients cannot supply the new acknowledgment and therefore cannot silently accept a held review. Downgrading a writer that does not understand the new fields is not supported.
+
 ## Boundaries and later work
 
-| Not in this slice | Owner |
+| Not certified or implemented here | Owner |
 |---|---|
-| The labeller: extracting atomic claims from generated prose with a model call that is not the narrator's, opt-in and metered like any optional stage, and a strict reader of its output | 047 milestone 2 |
-| Running the referee on a take in 035's runner before it can be kept, and what a material finding does there (block, repair, player review, accepted exception); filling `SceneLine.review` | 047 milestone 2, with 035 |
-| A stage kept across narrated turns, to pass as `Facts.stage` | 041 milestone 2, with 035 |
-| A player-facing view of findings that reveals no hidden fact | 047 milestone 2 |
-| Identity (a name used for the wrong individual) and capability (025 abilities) claims | 047 later |
-| Long-form continuity, stylized prose and deliberately deceptive narrators at realistic latency and cost; measuring false positives on real model output | 047 milestone 3 |
-| Whether the labeller covered every claim: the referee checks what it is given | 047 milestone 2 (coverage evaluation) |
+| Full semantic claim coverage, false-positive/creative-damage quality and live-model latency/cost benchmarks | 047 milestone 3 |
+| Automatic targeted rewriting of narration | 047 later; this slice flags and supports explicit review/reroll |
+| Persisted multi-turn stage storage and richer time reconciliation | 041 milestone 2 |
+| Full identity/capability claim extraction beyond the referee's current kinds | 047 later |
+| Full 003 condition/delegation editing and UI | Existing authority owners and 113 |
+| Graphical review controls, keyboard/screen-reader/touch acceptance | 112/113 and Wave 7 UI gate |

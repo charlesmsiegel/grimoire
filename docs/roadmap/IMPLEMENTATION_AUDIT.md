@@ -4,6 +4,8 @@
 
 This is a code-and-test audit of the 119 scheduled **first-useful slices**, including inherited first-proof additions. Requirements were not narrowed to match the code. A check does not close later milestones, certify a live model, or prove physical-phone/browser accessibility. Unchecked entries distinguish missing implementation from a proof not yet established. The [ordered roadmap](README.md#implementation-checkmarks) carries the same checkmarks.
 
+**047 follow-up:** the independent extraction and production integration described below were added after the pinned audit snapshot; other entries retain their audit scope.
+
 ## Wave results
 
 | Wave | Checked slices | Wave complete | Exit / remaining limit |
@@ -13,7 +15,7 @@ This is a code-and-test audit of the 119 scheduled **first-useful slices**, incl
 | [3](#wave-3) | 10/10 | ☑ | All ten scheduled headless first slices are present. Later subject-validation and other milestones remain open. |
 | [4](#wave-4) | 9/10 | ☐ | 033 still rejects non-character actors in chat rosters, despite supporting creature scene casts. |
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
-| [6](#wave-6) | 5/6 | ☐ | 047 lacks the independent prose-claim extraction required by its inherited first-proof addition. Physical-phone validation also remains unverified. |
+| [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 6/7 | ☐ | 112 retains production UI integration gaps. 113 has a real CLI/Chromium follow-up proof. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it. |
 | [8](#wave-8) | 1/24 | ☐ | Only 066 is complete at its narrow first-proof boundary. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
@@ -353,7 +355,7 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="wave-6"></a>
 ## Wave 6
 
-047 lacks the independent prose-claim extraction required by its inherited first-proof addition. Physical-phone validation also remains unverified.
+Scheduled first slices are implemented; physical-phone validation remains unverified.
 
 <a id="slice-044"></a>
 ### 044 — V2 Mobile Client
@@ -386,9 +388,9 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="slice-047"></a>
 ### 047 — Narration Continuity Referee
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/narration-continuity-referee.md)).
-- Evidence: [`backend/src/grimoire/referee/check.py`](../../backend/src/grimoire/referee/check.py); [`backend/tests/test_referee_scenarios.py`](../../backend/tests/test_referee_scenarios.py); [`docs/roadmap/sprints/narration-continuity-referee.md`](../../docs/roadmap/sprints/narration-continuity-referee.md); [`backend/src/grimoire/referee/__init__.py`](../../backend/src/grimoire/referee/__init__.py).
-- Scope / gap: inherited first-proof addition requires independent non-narrator atomic-claim extraction from prose. Pure referee consumes supplied labelled claims only; no production prose-to-review integration.
+- [x] Scheduled first-useful slice ([requirements](sprints/narration-continuity-referee.md)).
+- Evidence: [`backend/src/grimoire/narration_review`](../../backend/src/grimoire/narration_review); [`backend/src/grimoire/play/continuity.py`](../../backend/src/grimoire/play/continuity.py); [`backend/tests/test_narration_extraction.py`](../../backend/tests/test_narration_extraction.py); [`backend/tests/test_scene_continuity.py`](../../backend/tests/test_scene_continuity.py); [`backend/tests/test_app_continuity.py`](../../backend/tests/test_app_continuity.py); [current contract](../REFEREE.md).
+- Scope / limit: separate non-narrator atomic extraction feeds the pure referee in production generation. Synthetic HTTP/provider proofs cover source anchors, durable owner-only evidence, optional-call accounting, cancellation/retry, freshness and exact acceptance tokens. Whole-take spends accumulate; mixed reviewed takes require an explicit owner exception because the aggregate is unchecked. Model completeness is an assertion, not semantic certification. Live-model quality and 112/113 graphical acceptance remain separate gates.
 
 <a id="slice-048"></a>
 ### 048 — Performance And Tracing

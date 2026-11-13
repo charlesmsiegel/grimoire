@@ -30,10 +30,11 @@ Choosing every shown line of one take is that take kept whole, so it is ``keep``
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 
 from grimoire.core.identity import ChatRef
+from grimoire.play import continuity
 from grimoire.play.adjudicate import check_decided
 from grimoire.play.scene import _refuse, _stage_ok
 from grimoire.scene import MAX_TAKES, SceneLine, Take, TurnRecord
@@ -53,7 +54,7 @@ def kept_order(picked: Iterable[tuple[Take, SceneLine]]) -> list[tuple[Take, Sce
 
 
 def keep_lines(runner, chat: ChatRef, by, lines: Iterable[str], *, acknowledge_unscreened: bool = False,  # type: ignore[no-untyped-def]
-               turn: str | None = None) -> TurnRecord:
+               turn: str | None = None, acknowledge_reviews: Mapping[str, str] | None = None) -> TurnRecord:
     """Keep the lines named by id (as the scene shows them) as the open turn's one kept take; the turn closes.
 
     ``turn`` names the turn the lines were read on, as for ``keep``: another open turn is refused
@@ -62,6 +63,11 @@ def keep_lines(runner, chat: ChatRef, by, lines: Iterable[str], *, acknowledge_u
 
     if isinstance(lines, (str, bytes)):
         raise _refuse("invalid_field", "lines is a list of line ids")
+    if acknowledge_reviews is None:
+        acknowledge_reviews = {}
+    if not isinstance(acknowledge_reviews, Mapping) or not all(type(k) is str and type(v) is str
+                                                               for k, v in acknowledge_reviews.items()):
+        raise _refuse("invalid_field", "review acknowledgments map take numbers to review tokens")
     chosen = tuple(lines)
     if not all(type(line_id) is str and line_id for line_id in chosen) or len(chosen) > MAX_PICKED:
         raise _refuse("invalid_field", f"lines is at most {MAX_PICKED} line ids")
@@ -90,7 +96,12 @@ def keep_lines(runner, chat: ChatRef, by, lines: Iterable[str], *, acknowledge_u
     if len(sources) == 1 and len(picked) == len(sources[0].shown()):
         # the whole of one take: the take itself is kept, as ``keep`` keeps it
         return runner.keep(chat, by, sources[0].take, acknowledge_unscreened=acknowledge_unscreened,
-                           turn=record.turn_id)
+                           turn=turn, acknowledge_review=acknowledge_reviews.get(str(sources[0].take)))
+    reviewed = {}
+    for source in sources:
+        source_lines = [line for take, line in picked if take is source]
+        reviewed.update({line.line_id: line for line in continuity.prepare_keep(
+            runner, record, source, principal, acknowledge_reviews.get(str(source.take)), turn, lines=source_lines, aggregate=len(sources) > 1)})
     check_decided(runner, record)
     unscreened = tuple(sorted({name for take in sources for name in take.unscreened}))
     if unscreened and not acknowledge_unscreened:
@@ -108,7 +119,7 @@ def keep_lines(runner, chat: ChatRef, by, lines: Iterable[str], *, acknowledge_u
     number = len(record.takes) + 1
     if number > MAX_TAKES:
         raise _refuse("too_many_takes", f"a turn holds at most {MAX_TAKES} takes: keep one take whole, or pass")
-    kept = tuple(replace(line, line_id=f"{record.turn_id}.{number}.{place}")
+    kept = tuple(replace(reviewed[line.line_id], line_id=f"{record.turn_id}.{number}.{place}")
                  for place, (_take, line) in enumerate(picked, 1))
     # an opening asked for twice is still an opening; anything else was generated
     origin = "opening" if all(take.origin == "opening" for take in sources) else "generated"
@@ -118,8 +129,13 @@ def keep_lines(runner, chat: ChatRef, by, lines: Iterable[str], *, acknowledge_u
         record = record.with_take(replace(record.running, state="superseded"))
     record = record.with_take(composed).with_intentions(number, [replace(item, take=number) for item in carried])
     # 016 again, as for ``keep``: for the table read again under the store lock
-    runner._write(record, stored, unpaused=True,
-                  before_commit=lambda: runner._check_now(chat, principal, kept))
+    def checked_keep():
+        for source in sources:
+            continuity.prepare_keep(runner, stored.record, source, principal,
+                                    acknowledge_reviews.get(str(source.take)), turn,
+                                    lines=[line for take, line in picked if take is source], aggregate=len(sources) > 1)
+        runner._check_now(chat, principal, kept)
+    runner._write(record, stored, unpaused=True, before_commit=checked_keep)
     return record
 
 
