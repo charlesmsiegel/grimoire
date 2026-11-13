@@ -76,7 +76,8 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.ar
                       "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
                       "grimoire.play", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
                       "grimoire.runtime", "grimoire.scenestore", "grimoire.shelfstore", "grimoire.sourceapi",
-                      "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi"})
+                      "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi",
+                      "grimoire.topologystore"})
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,9 @@ PURE_PACKAGES = (
                 never_import=("grimoire.core.inference",)),
     # Typed relationship graph (017): values, codec, derived index and actor claims; the service is an adapter.
     PurePackage("grimoire.graph", ("grimoire.graph", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Source topology (059): deterministic values/queries; native persistence is an adapter.
+    PurePackage("grimoire.topology", ("grimoire.topology", "grimoire.core", "grimoire.graph.index"),
+                never_import=("grimoire.core.inference",)),
     # Party membership and scene casts (033): pure state over 017 relations; the service is an adapter.
     PurePackage("grimoire.party", ("grimoire.party", "grimoire.graph", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
