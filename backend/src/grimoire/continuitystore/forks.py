@@ -4,7 +4,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from grimoire.continuitywire.archive import FORK_SCHEMA, MAX_ARCHIVE_BYTES, archived_turn, decode_fork, fingerprint
+from grimoire.continuitywire.archive import (
+    FORK_SCHEMA, MAX_ARCHIVE_BYTES, archived_turn, decode_fork, fingerprint, retained_source_revisions,
+)
 from grimoire.continuitywire.projection import TURN_FIELDS, scene_revision
 from grimoire.continuity.provenance import decode_scene_sources
 from grimoire.core.authority import AuthorityError
@@ -163,7 +165,8 @@ def _new_archive(plan, campaign, operation_id, token, source):
         for deletion in plan.deletes.get(device, ()):
             reconciled.pop(deletion.path, None)
     data = dict(operation_id=operation_id, campaign=campaign, devices=list(plan.devices), token=token,
-                source_device=source, premises=premises, scenes=scenes, reconciled=reconciled)
+                source_device=source, premises=premises, scenes=scenes, reconciled=reconciled,
+                source_revisions=retained_source_revisions(scenes))
     data['fingerprint'] = fingerprint(data)
     try:
         return decode_fork(FORK_SCHEMA, data, campaign)
