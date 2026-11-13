@@ -3,6 +3,7 @@ from dataclasses import replace
 
 import pytest
 
+from grimoire.continuity import scene_revision
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import AcceptedRef, ChatRef
 from grimoire.effectstore import InvalidEffect
@@ -10,6 +11,7 @@ from grimoire.effectstore.continuity import (capture_scene_sources, decode_scene
                                             stale_scene_sources)
 from grimoire.scene import Post, TurnRecord, TURN_SCHEMA, turn_to_payload
 from grimoire.store import LibraryStore, ScopeRecord, StaleWrite
+from grimoire.store.jsonfmt import thaw
 from grimoire.store.layout import address_parts
 
 from capture_fixtures import planned, publish, recovery, seed_capture, throw
@@ -131,9 +133,6 @@ def test_unknown_or_malformed_provenance_refuses(value):
 
 
 def test_source_revision_uses_exact_validated_native_projection(world):
-    from grimoire.continuity import scene_revision
-    from grimoire.store.jsonfmt import thaw
-
     store, handles = world
     turn = write_turn(store, handles)
     stored = store.campaign_turns('c').records[turn.ref]
