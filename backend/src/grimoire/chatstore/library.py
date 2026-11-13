@@ -471,9 +471,9 @@ class ChatLibrary:
                 problems.append("undecodable_scope")
         return ChatView(record, stored.etag, scope, scope_etag, tuple(_broken(view, record, scope)), tuple(problems))
 
-    def navigation(self) -> NavigationIndex:
-        """Rebuilt from canonical records on every call; nothing is cached."""
-        view = self.store.load()
+    def navigation(self, *, view: LibraryView | None = None) -> NavigationIndex:
+        """Rebuilt from canonical records; optionally share a caller's loaded snapshot."""
+        view = self.store.load() if view is None else view
         entries = []
         for ref, stored in view.chats.items():
             try:

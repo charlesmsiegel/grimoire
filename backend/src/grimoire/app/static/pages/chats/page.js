@@ -8,11 +8,11 @@
 // "Pinned" group at the top, and "Pinned" (#/chats?filter=pinned) lists them alone. A pin is the person's note
 // beside the chat: it changes nothing of the chat itself.
 
-import { FILTERS, GROUPS, PINNED, PINNED_FILTER, SORTS, chatFaces, chatMeta, chatTitle, countLabel, groupChats, oneOf, pinnedOnly,
-  plural, searchChats, shownRows, sortChats, viewOf, when } from "./model.js";
+import { FILTERS, GROUPS, PINNED, PINNED_FILTER, SORTS, chatFaces, chatMeta, chatTitle, groupChats, oneOf, pinnedOnly,
+  plural, shownRows, viewOf, when } from "./model.js";
 import { chatMarks, pinnedChats, problemText, readShelf } from "../sources/shelf.js";
 
-const MAX_LIST = 1000;  // the most one list request returns
+import { makePager, savedFilters, writeFilters } from "./workspace.js";
 
 export async function mount(root, ctx) {
   const { ui } = ctx;
@@ -24,33 +24,42 @@ export async function mount(root, ctx) {
   if (ctx.has("sync")) ctx.setActions(syncButton(ctx));
 
   const pins = ctx.has("shelf.read");
-  const { filter, source } = viewOf(ctx.query, { pins });
+  const parsed = viewOf(ctx.query, { pins });
+  const filter = ["campaign", "world"].includes(ctx.query.get("filter")) ? ctx.query.get("filter") : parsed.filter;
+  const source = parsed.source;
+  const campaign = filter === "campaign" ? ctx.query.get("campaign") : null;
+  const world = filter === "world" ? ctx.query.get("world") : null;
   const address = (changes) => {
-    const query = { filter, source, ...changes };
-    if (query.filter === "all") { delete query.filter; delete query.source; }
+    const query = { filter, source, match: ctx.query.get("match") || undefined, campaign: campaign || undefined, world: world || undefined, ...changes };
+    if (query.filter !== "campaign") delete query.campaign;
+    if (query.filter !== "world") delete query.world;
+    if (!["character", "scenario"].includes(query.filter)) { delete query.source; delete query.match; }
+    if (query.filter === "all") delete query.filter;
     if (!query.source) delete query.source;
     return ctx.href("chats", [], query);
   };
   const kept = { q: ctx.draft("chats:q"), group: ctx.draft("chats:group"), sort: ctx.draft("chats:sort") };
   const state = { q: kept.q.get(), group: oneOf(GROUPS, kept.group.get()), sort: oneOf(SORTS, kept.sort.get()),
     collapsed: new Set(), expanded: new Set() };
+  let page = null, offset = 0, sourceOffset = 0, comparisonOffset = 0, timer;
+  const request = makePager(ctx.api);
   let chats = null;  // not read yet
   let shelf = null;  // the pins, where the app keeps them
 
   const search = ui.search("Search chats", { value: state.q, placeholder: "Search chats by title, campaign or character",
-    oninput: (text) => { state.q = text; kept.q.set(text); render(); } });
+    oninput: (text) => { state.q = text; kept.q.set(text); clearTimeout(timer); timer = setTimeout(() => load(), 200); } });
   search.classList.add("chats-search");
   search.setAttribute("data-focus-key", "chats:q");
   const top = el("div", { class: "g-row" }, search,
     ctx.registered("start") && ctx.has("play.start") ? ui.buttonLink("New chat", "start", [], undefined, { kind: "primary" }) : null);
 
   const options = (pairs) => pairs.map(([value, label]) => ({ value, label }));
-  const which = ui.segments("Which chats", options(pins ? [...FILTERS, PINNED_FILTER] : FILTERS), { value: filter,
+  const which = ui.segments("Which chats", options([...(pins ? [...FILTERS, PINNED_FILTER] : FILTERS), ["campaign", "Campaign"], ["world", "World"]]), { value: filter,
     onchange: (value) => ctx.navigate(address({ filter: value, source: undefined })) });
   const grouping = ui.segments("Group by", options(GROUPS), { value: state.group,
     onchange: (value) => { state.group = value; kept.group.set(value); render(); } });
   const sorting = ui.segments("Sort", options(SORTS), { value: state.sort,
-    onchange: (value) => { state.sort = value; kept.sort.set(value); render(); } });
+    onchange: (value) => { state.sort = value; kept.sort.set(value); load(); } });
   const picker = el("div", { class: "chats-picker" });  // the character or scenario whose chats these are
   const controls = el("div", { class: "g-row" }, which.node, el("span", { class: "g-grow" }),
     el("span", { class: "chats-label", "aria-hidden": "true" }, "Group by"), grouping.node,
@@ -60,26 +69,110 @@ export async function mount(root, ctx) {
   const results = el("div", { class: "chats-results" });
   root.append(el("div", { class: "chats-page" }, top, controls, picker, unread, status, results));
 
-  // Every chat is read once (newest activity first, as far as one list request goes): it is the list itself,
-  // the rail's count, and the characters and scenarios the picker offers.
-  const [every, marks] = await Promise.all([ctx.api("chats", { filter: "recent", limit: MAX_LIST }), readShelf(ctx)]);
-  shelf = marks;
-  const capped = every.chats.length >= MAX_LIST;  // there may be more than one request lists: the count is not known
-  if (!capped) ctx.setCount("chats", { value: every.chats.length, label: plural(every.chats.length, "chat", "chats") });
-  if (filter === "all" || filter === PINNED) {
-    chats = every.chats;
-  } else {
-    const choices = [{ value: "", label: "Choose a " + filter }];
-    for (const item of every.sources.filter((entry) => entry.role === filter)) choices.push({ value: item.ref, label: item.name || item.ref });
-    // A linked source the list does not name (not bound by any chat, or not in this library) is still the one
-    // shown: the picker says its exact ref rather than silently showing another.
-    if (source && !choices.some((option) => option.value === source)) choices.push({ value: source, label: source });
-    picker.append(ui.choice(filter === "character" ? "Character" : "Scenario", choices, {
-      value: source || "", onchange: (value) => ctx.navigate(address({ source: value || undefined })),
-    }).node);
-    chats = source ? (await ctx.api("chats", { filter, source, limit: MAX_LIST })).chats : [];
+  const pager = el("div", { class: "g-row", "aria-label": "Chat pages" });
+  const comparison = el("div", { class: "chats-comparisons" });
+  const saved = el("div", { class: "g-row" });
+  const storageStatus = el("div", { role: "status" });
+  results.parentNode.append(pager, comparison, saved, storageStatus);
+  let storage;
+  try { storage = window.localStorage; } catch (_) { storage = { getItem() { throw Error("Storage disabled"); }, setItem() { throw Error("Storage disabled"); } }; }
+  let filters = savedFilters(storage);
+  const selection = () => ({ q: state.q, group: state.group, sort: state.sort, filter, source,
+    match: ctx.query.get("match") || "exact", campaign, world });
+  function savedControls() {
+    storageStatus.textContent = filters.error || "Saved filters are device-local and not synchronized.";
+    const name = el("input", { type: "text", "aria-label": "Saved filter name", maxlength: "100" });
+    saved.replaceChildren(name, ui.button("Save filter", () => {
+      if (!name.value.trim()) { storageStatus.textContent = "Enter a filter name."; return; }
+      const values = [...filters.values.filter(x => x.name !== name.value.trim()), { name: name.value.trim(), selection: selection() }];
+      const error = writeFilters(storage, values);
+      if (error) { storageStatus.textContent = error; return; }
+      filters = { values, error: null }; savedControls();
+    }));
+    for (const item of filters.values) {
+      saved.append(ui.button("Apply " + item.name, () => {
+        const value = item.selection;
+        kept.q.set(value.q || ""); kept.group.set(oneOf(GROUPS, value.group)); kept.sort.set(oneOf(SORTS, value.sort));
+        ctx.navigate(ctx.href("chats", [], { filter: value.filter, source: value.source, match: value.match,
+          campaign: value.campaign, world: value.world }));
+      }), ui.button("Delete " + item.name, () => {
+        const values = filters.values.filter(x => x !== item);
+        const error = writeFilters(storage, values);
+        if (error) { storageStatus.textContent = error; return; }
+        filters = { values, error: null }; savedControls();
+      }));
+    }
   }
-  render();
+  savedControls();
+  shelf = await readShelf(ctx);
+  await load();
+
+  async function load(at = 0, sourcesAt = 0, comparisonsAt = 0, focus = false) {
+    const focusLabel = document.activeElement?.textContent;
+    const focusKey = document.activeElement?.getAttribute("data-focus-key");
+    const args = { filter, source: source || undefined, q: state.q, sort: state.sort,
+      match: ctx.query.get("match") || "exact", campaign: campaign || undefined,
+      world: world || undefined, pins: [...pinnedChats(shelf)],
+      offset: at, source_offset: sourcesAt, comparison_offset: comparisonsAt,
+      source_q: ctx.query.get("source_q") || "",
+      snapshot: (at || sourcesAt || comparisonsAt) && page ? page.snapshot : undefined };
+    const response = await request(args);
+    if (!response) return;
+    if (response.error) {
+      status.textContent = response.error.reason === "changed" ? "Navigation changed. Restart to see the current library." : String(response.error.message || response.error);
+      if (response.error.reason === "changed") {
+        chats = null; page = null;
+        offset = 0; sourceOffset = 0; comparisonOffset = 0;
+        const restart = ui.button("Restart browsing", () => load(0, 0, 0, true));
+        pager.replaceChildren(restart);
+        results.replaceChildren(); comparison.replaceChildren(); picker.replaceChildren();
+        restart.focus();
+      }
+      return;
+    }
+    page = response.result; offset = at; sourceOffset = sourcesAt; comparisonOffset = comparisonsAt;
+    chats = page.chats;
+    if (filter === "all" && !state.q.trim()) ctx.setCount("chats", { value: page.total, label: plural(page.total, "chat", "chats") });
+    picker.replaceChildren();
+    if (filter === "character" || filter === "scenario") {
+      const choices = [{ value: "", label: "Choose a " + filter }, ...page.sources.map(item => ({value:item.ref,label:(item.name || "Missing source") + " · " + item.ref}))];
+      if (source && !choices.some(x => x.value === source)) { if (choices.length > 50) choices.pop(); choices.push({value:source,label:source}); }
+      picker.append(ui.choice(filter, choices, { value: source || "", onchange: value => ctx.navigate(address({source:value || undefined})) }).node,
+        ui.choice("Source match", [{value:"exact",label:"Exact pinned source"},{value:"derived",label:"Include validated descendant portrayals"}], {
+          value: ctx.query.get("match") || "exact", onchange: value => ctx.navigate(address({match:value})) }).node);
+      const sourceSearch = ui.search("Search source references", {value:ctx.query.get("source_q") || "", oninput:text => {
+        clearTimeout(timer); timer = setTimeout(() => { ctx.query.set("source_q", text); load(); }, 200);
+      }});
+      sourceSearch.setAttribute("data-focus-key", "chats:source-search");
+      picker.append(sourceSearch);
+      if (sourceOffset) picker.append(ui.button("Previous sources", () => load(offset, Math.max(0, sourceOffset - 50), comparisonOffset, "sources")));
+      if (page.source_next !== null) picker.append(ui.button("Next sources", () => load(offset, page.source_next, comparisonOffset, "sources")));
+    }
+    if (filter === "campaign" || filter === "world") {
+      picker.append(ui.search(filter === "campaign" ? "Exact campaign ID" : "Exact world source ID", {
+        value:ctx.query.get(filter) || "", oninput:value => { clearTimeout(timer); timer = setTimeout(() => ctx.navigate(address({[filter]:value})), 300); }
+      }));
+    }
+    pager.replaceChildren();
+    if (offset) pager.append(ui.button("Previous chats", () => load(Math.max(0, offset - 50), 0, 0, true)));
+    if (page.next !== null) pager.append(ui.button("Next chats", () => load(page.next, 0, 0, true)));
+    comparison.replaceChildren();
+    if (source) {
+      comparison.append(el("h2", {}, "Matched source revisions and validated ancestry"));
+      for (const item of page.comparisons) comparison.append(el("p", {}, item.ref + " · " + (item.path.join(" → ") || "Unavailable: " + item.problem)));
+      if (comparisonOffset) comparison.append(ui.button("Previous comparisons", () => load(offset, sourceOffset, Math.max(0, comparisonOffset - 50), "comparisons")));
+      if (page.comparison_next !== null) comparison.append(ui.button("Next comparisons", () => load(offset, sourceOffset, page.comparison_next, "comparisons")));
+    }
+    for (const problem of page.diagnostics) comparison.append(el("p", {}, problem.ref + ": " + problem.code));
+    render();
+    if (focus === "sources" || focus === "comparisons") {
+      // Keep the paging direction where available; at a boundary use the return control.
+      const controls = focus === "sources" ? picker : comparison;
+      const buttons = Array.from(controls.querySelectorAll("button"));
+      (buttons.find(button => button.textContent === focusLabel) || buttons[0])?.focus();
+    } else if (focus) (results.querySelector("a") || pager.querySelector("button"))?.focus();
+    else if (focusKey === "chats:source-search") picker.querySelector("[data-focus-key=\"chats:source-search\"]")?.focus();
+  }
 
   // Pin or unpin one chat at the etag this page read, then read the pins again and draw the list again, with
   // focus back on that chat's toggle wherever its row now stands.
@@ -93,7 +186,7 @@ export async function mount(root, ctx) {
     }
     const fresh = await readShelf(ctx);
     if (fresh) shelf = fresh;
-    render();
+    if (filter === PINNED) await load(); else render();
     const again = Array.from(results.querySelectorAll("button.chats-pin")).find((node) => node.getAttribute("data-focus-key") === "chats:pin:" + chat.chat);
     if (again) again.focus();
   }
@@ -102,15 +195,13 @@ export async function mount(root, ctx) {
     if (chats === null) return;  // typed in before the list arrived: it is searched when it does
     const pinned = pinnedChats(shelf);
     const listed = filter === PINNED ? pinnedOnly(chats, pinned) : chats;
-    const found = sortChats(searchChats(listed, state.q), state.sort);
+    const found = listed;
     const groups = groupChats(found, state.group, shelf ? pinned : null);
     const now = Date.now();
     const said = problemText(shelf);
     unread.replaceChildren(...(said ? [ui.notice(said, { kind: "bad" })] : []));
-    status.textContent = !listed.length ? ""
-      : countLabel(found.length, groups.length, state.group) + (!capped ? "" : filter === "all" ? ", the " + MAX_LIST + " played last"
-        : filter === PINNED ? ", among the " + MAX_LIST + " played last" : "");
-    const none = listed.length ? "No chats match. Start one, or clear the search."
+    status.textContent = page && page.total ? page.total + " chats in this result · showing " + (found.length ? offset + 1 : 0) + "–" + (offset + found.length) : "";
+    const none = state.q.trim() ? "No chats match. Start one, or clear the search."
       : filter === PINNED ? "No chat is pinned yet. Pin one from its row under All to keep it here."
         : filter === "all" ? "No chats yet. Start one, or sync with your other device."
           : source ? "No chats here." : "Choose a " + filter + " to see its chats.";

@@ -43,3 +43,7 @@
   .chats-row { gap: 10px; padding: 10px 12px; }
   .chats-pin { margin-right: 12px; }
 }
+
+/* Exact revision and ancestry references remain readable at phone widths and larger fonts. */
+.chats-comparisons { overflow-wrap: anywhere; }
+.chats-picker { flex-wrap: wrap; }

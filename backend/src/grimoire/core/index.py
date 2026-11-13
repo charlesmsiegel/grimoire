@@ -277,6 +277,11 @@ class DefinitionIndex:
             if (broken := self.check(endpoint)) is not None
         )
 
+    def definitions(self) -> tuple[Definition, ...]:
+        """Every registered pinned revision, in stable reference order (read-only)."""
+        return tuple(sorted((definition for revisions in self._revisions.values()
+                            for definition in revisions.values()), key=lambda definition: str(definition.ref)))
+
     def find_by_name(self, name: str, kind: str | None = None) -> tuple[SourceRef, ...]:
         """Candidates whose name (in any revision) matches; never a selection."""
         if not isinstance(name, str):

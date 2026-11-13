@@ -1,0 +1,19 @@
+# Scene workspace
+
+## Local reference intent (070)
+
+The chat reference-intent panel stages a sketch or a typed description beside the existing composer. Import a PNG, JPEG or WebP of at most 2 MiB and 4096 × 4096 decoded pixels. No external image URL is fetched. Choose rectangle or ellipse and use the labeled normalized x, y, width and height fields to select a contained positive region; the overlay previews those coordinates. Typed intention and public region description work without an image.
+
+Source/provenance, rights/permission and private notes/corrections stay with the local annotation. **Use as draft** appends only the reviewed action and public region description to the current composer through its normal input event. It neither posts nor changes a map, actor, canonical record or evidence. Ordinary posting sends composer text; the image and annotation metadata remain local. Repeating an unchanged intent leaves the player’s edited composer alone. Cancel closes the panel without changing the composer. Clear reference discards the retained annotation and image without changing the composer.
+
+References are unsynced tab-memory drafts, scoped to the exact chat reference. They survive leaving and revisiting within the tab and disappear on reload. At most ten chats may retain annotations and one validated image per chat; clear an existing annotation to make room. No localStorage/sessionStorage image persistence or provider/backend request occurs. Preview object URLs are revoked on replacement, clear and page abort; revisiting recreates a preview from the retained file. Invalid import, invalid region and late cancelled decoding cannot replace a valid image or overwrite composer text. Import/decode failures and capacity errors appear in the panel’s live status.
+
+This slice performs no image interpretation or inferred canonical acceptance. Sync/revision integration for annotations, inferred map positions/objects, gesture and broader campaign workspace integration remain later owners.
+
+## Authored VN presentation (072)
+
+Choose VN presentation beside the transcript to read an authorized kept turn with its historical speaker names and verbatim text, including addressed/private/withheld post markers. Only actors attributed in that kept turn and its post are eligible; a silent current cast member is never added. The transcript DOM and composer stay owned by the chat page; switching presentation hides/shows the existing log without rewriting it or its scroll position.
+
+Edit cue explicitly chooses left/center/right blocking, focus, current resolved outfit/portrait art, none/fade transition, an existing authorized chat backdrop and a note. Save applies view metadata; Cancel discards editor changes; Reset cue or Reset local cues removes authored metadata. Current authorized art is decorative and makes no historical wardrobe claim. Departed speakers use their historical labels and initials. Removed cue turns, actors, selected art and backgrounds are marked unavailable rather than rebound. Reduced-motion preferences suppress fades; native labeled controls support keyboard and mobile input.
+
+Versioned sessionStorage cues are scoped to the exact chat and kept turn, limited to 100 cues per chat and 1000 characters per note. Stored data contains only authored view metadata, never copied transcript text. Cues are local, unsynced and survive same-tab reload/revisit when sessionStorage works. Malformed data and unavailable/quota storage produce a visible warning; failed writes retain an explicitly unsaved in-memory value. Reset local cues is the recovery control. No canonical write, provider call, media write or remote image URL input is introduced. Historical art snapshots, cue synchronization/revision integration, line-specific cues and adaptive cinematics remain future work, as does broader 115 integration.
