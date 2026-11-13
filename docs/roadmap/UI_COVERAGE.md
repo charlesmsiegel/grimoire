@@ -47,6 +47,10 @@ The Wave 7 sprints may work concurrently only against frozen, explicit UI contra
 
 ### End-to-end release proof
 
+The [offline browser acceptance harness](../ACCEPTANCE.md) provides reproducible
+synthetic checks and records its integration and manual-device limits. It does not
+by itself certify this wave or replace the release proof below.
+
 With synthetic fixtures and **no direct CLI/editing after launching the app**:
 
 1. First run chooses a V2-isolated library, sets a hosted or local model endpoint, and can skip world creation.
