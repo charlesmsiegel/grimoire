@@ -35,6 +35,12 @@ A derived portrayal names its pinned base in its own payload and composes over i
 
 One actor's bounded context from its own card, its own knowledge and the triggered common lore of the chat's bound sources, deterministic and model-free, with provenance and omissions beside each line. See [CONTEXT.md](CONTEXT.md).
 
+### Location topology (059 headless first slice)
+
+Persistent source-qualified hierarchy and paths, with campaign-local path overrides and
+director-only deterministic queries, live in `grimoire.topology` and `grimoire.topologystore`.
+See [TOPOLOGY](TOPOLOGY.md) for ownership, failure behavior and separate map/travel/UI consumers.
+
 ### Device sync (first slice implemented: `grimoire.sync`)
 
 Two libraries exchange records directly, three-way against the last state both agreed on, and every overlapping edit becomes a named conflict kept on both devices rather than a silent overwrite. Families whose merge rules are not written yet are held back and reported. See [SYNC.md](SYNC.md).
