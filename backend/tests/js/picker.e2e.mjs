@@ -143,13 +143,35 @@ test("the picker chooses, cancels, refuses a stale slot and closes with its page
   zoom.dispatchEvent({ type: "input" });
   assert.deepEqual(dialog.querySelectorAll("input").filter((node) => node.getAttribute("type") === "number").slice(0, 4).map((node) => node.value),
     ["25", "25", "50", "50"], "the zoom fills in the exact crop");
-  byText(dialog, "button", "Use this picture")[0].click();
-  await until(() => !body.querySelector("dialog"), 15000, "the crop saved");
-  art = await call("media.art", { subject });
-  const avatar = art.slots.find((item) => item.slot === "avatar");
-  assert.equal(avatar.image, dusk);
-  assert.deepEqual(avatar.crop, { x: 2500, y: 2500, w: 5000, h: 5000 });
-  const shown = await until(() => slot("avatar") && slot("avatar").querySelector("img"), 15000, "the framed avatar");
+  // Saving closes the modal before the page's gallery refresh finishes. Hold that
+  // response to exercise the stale-image interval seen on slower CI runners.
+  const fetchBeforeRefresh = globalThis.fetch;
+  let releaseGallery, galleryHeld = false;
+  const galleryGate = new Promise((resolve) => { releaseGallery = resolve; });
+  globalThis.fetch = async (url, options) => {
+    const response = await fetchBeforeRefresh(url, options);
+    if (url === "/api/media.gallery") {
+      galleryHeld = true;
+      await galleryGate;
+    }
+    return response;
+  };
+  try {
+    byText(dialog, "button", "Use this picture")[0].click();
+    await until(() => !body.querySelector("dialog"), 15000, "the crop saved");
+    await until(() => galleryHeld, 15000, "the page refresh is pending");
+    art = await call("media.art", { subject });
+    const avatar = art.slots.find((item) => item.slot === "avatar");
+    assert.equal(avatar.image, dusk);
+    assert.deepEqual(avatar.crop, { x: 2500, y: 2500, w: 5000, h: 5000 });
+  } finally {
+    globalThis.fetch = fetchBeforeRefresh;
+    releaseGallery();
+  }
+  const shown = await until(() => {
+    const image = slot("avatar") && slot("avatar").querySelector("img");
+    return image && image.classList.contains("art-zoom-200") && image;
+  }, 15000, "the avatar renders its saved zoom");
   assert.ok(shown.classList.contains("art-zoom-200"), "the slot shows the zoom it stores");
 
   // a cover, here the source's own: framed 16/5 at the modal's width, and taken off again with Remove

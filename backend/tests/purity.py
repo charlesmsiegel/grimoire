@@ -176,6 +176,12 @@ PURE_PACKAGES = (
     # NPC goals (039): authored agendas and the deterministic policy that chooses from the NPC's own
     # knowledge. It calls no model, so it never touches the inference contracts.
     PurePackage("grimoire.goals", ("grimoire.goals", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Institutional decisions (057) consume canonical graph membership, never store or deliver knowledge.
+    PurePackage("grimoire.institutions", ("grimoire.institutions", "grimoire.core", "grimoire.graph"),
+                never_import=("grimoire.core.inference",)),
+    # Social hypotheses (060) consume actor evidence, never providers or another actor's actual mind.
+    PurePackage("grimoire.social_hypotheses", ("grimoire.social_hypotheses", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Recorded NPC decisions (045): the record of a 039 choice, its evidence and codec, and replay; the
     # ledger is an adapter. It calls no model, so it never touches the inference contracts.
     PurePackage("grimoire.decisions", ("grimoire.decisions", "grimoire.goals", "grimoire.core"),
