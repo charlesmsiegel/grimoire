@@ -27,7 +27,7 @@ def rumor_actor_ids(store, campaign):
         x = stack.pop()
         if isinstance(x, Mapping):
             for k, v in x.items():
-                if k in ('sender', 'recipient', 'attributed_to') and v is not None:
+                if k in ('sender', 'recipient') or (k == 'attributed_to' and v is not None):
                     try:
                         ref = InstanceRef.parse(v)
                         if ref.campaign_id != campaign:

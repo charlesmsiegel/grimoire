@@ -43,3 +43,19 @@ def test_malformed_memory_actor_blocks_identity_allocation(tmp_path, actor):
             )], None)
             with pytest.raises(TakenIdsUnlisted):
                 campaign_taken_ids(store, 'camp')
+
+
+@pytest.mark.parametrize('field', ['sender', 'recipient'])
+def test_null_required_rumor_actor_blocks_identity_allocation(tmp_path, field):
+    with LibraryStore.create(tmp_path / 'lib', locker=ProcessLocker()) as store:
+        with DurableAuthority.open(store, {'human:owner'}) as authority:
+            authority._append('rumors/camp', [envelope('damaged', 'synthetic', value={field: None})], None)
+            with pytest.raises(TakenIdsUnlisted):
+                campaign_taken_ids(store, 'camp')
+
+
+def test_anonymous_rumor_attribution_does_not_block_identity_allocation(tmp_path):
+    with LibraryStore.create(tmp_path / 'lib', locker=ProcessLocker()) as store:
+        with DurableAuthority.open(store, {'human:owner'}) as authority:
+            authority._append('rumors/camp', [envelope('damaged', 'synthetic', value={'attributed_to': None})], None)
+            assert campaign_taken_ids(store, 'camp') == frozenset()
