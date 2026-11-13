@@ -163,7 +163,7 @@ class SnapshotVoices:
 
 
 def _no_text(ref: SourceRef) -> MissingVoice:
-    return MissingVoice(NO_VOICE_TEXT, f"{ref} was imported with no text to speak from: no example lines, "
+    return MissingVoice(NO_VOICE_TEXT, f"{ref} has no text to speak from: no example lines, "
                                        "personality or description")
 
 

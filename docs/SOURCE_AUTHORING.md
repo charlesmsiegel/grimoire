@@ -123,9 +123,12 @@ them:
 - **Typed relations** between actors, which are campaign state (017). A source declares only derivation links here.
 - **Abilities and other facets with fields**, edited in the raw editor.
 - **Moving a chat to a newer revision**, a reviewed rebase (042) done from the chat.
-- **Voices for characters made here.** A character speaks in play from an authored voice profile (014, 027), or,
-  if it was imported, from its own imported text. Voice profiles are not authored in the library yet, so a
-  character created here can be attached but is not yet a speaker.
+- **Dedicated voice-profile editing** is not available. Native characters now speak from their own description
+  and personality section, using bounded deterministic extraction; imported text and explicit profiles keep
+  their existing precedence. Empty characters still have no voice. New character entries default to agent
+  and spoken communicative facets unless the caller supplies traits explicitly. Existing immutable records
+  are never rewritten: a character created earlier without agent facets requires an explicit revision and
+  reviewed rebase before it can participate in play.
 
 Only the head revision is edited. An older revision is read exactly and can still be attached.
 

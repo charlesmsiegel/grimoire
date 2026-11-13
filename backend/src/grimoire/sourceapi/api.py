@@ -54,9 +54,9 @@ UNAVAILABLE = {
                  "links here.",
     "abilities": "Abilities and other facets with fields are edited in the raw editor.",
     "rebase": "Moving a chat to a newer revision is a reviewed rebase (042), done from the chat.",
-    "voice": "A character made here speaks in play only once a voice profile is authored for it (014, 027); "
-             "voice profiles are not authored in the library yet. Imported characters speak from their own "
-             "imported text.",
+    "voice": "Dedicated voice-profile editing is not available. Native characters speak from their own "
+             "description and personality section; imported characters speak from their imported text. "
+             "A character with no usable voice text cannot speak.",
 }
 
 
