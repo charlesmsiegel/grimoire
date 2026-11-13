@@ -194,8 +194,8 @@ export async function mount(root, ctx) {
     const now = Date.now();
     const said = problemText(shelf);
     unread.replaceChildren(...(said ? [ui.notice(said, { kind: "bad" })] : []));
-    status.textContent = page ? page.total + " chats in this result · showing " + (found.length ? offset + 1 : 0) + "–" + (offset + found.length) : "";
-    const none = listed.length ? "No chats match. Start one, or clear the search."
+    status.textContent = page && page.total ? page.total + " chats in this result · showing " + (found.length ? offset + 1 : 0) + "–" + (offset + found.length) : "";
+    const none = state.q.trim() ? "No chats match. Start one, or clear the search."
       : filter === PINNED ? "No chat is pinned yet. Pin one from its row under All to keep it here."
         : filter === "all" ? "No chats yet. Start one, or sync with your other device."
           : source ? "No chats here." : "Choose a " + filter + " to see its chats.";

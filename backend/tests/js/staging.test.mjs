@@ -252,3 +252,51 @@ test("two historically heard outfit NPCs and a portrait-only NPC resolve authori
   for (const npc of npcs)
     assert.ok(stage.node.textContent.includes(npc.speaker));
 });
+
+test("scene redraw preserves unsaved cue note, choices and focused editor field", () => {
+  install();
+  const stage = makeStaging(
+    {
+      ui,
+      styles() {},
+      has() {
+        return false;
+      },
+      signal: new AbortController().signal,
+    },
+    "redraw-draft",
+    { log: ui.el("section") },
+  );
+  document.body.append(stage.node);
+  const scene = { turns: [turn], cast: [] };
+  stage.update(scene);
+  const mode = stage.node.querySelector('[name="stage-mode"]');
+  mode.value = "vn";
+  mode.dispatchEvent({ type: "change" });
+  byText(stage.node, "button", "Edit cue")[0].click();
+  const note = stage.node.querySelector('[name="Cue note"]');
+  note.value = "Unsaved note";
+  note.focus();
+  const position = stage.node.querySelector('[name="Position a"]');
+  position.value = "right";
+  position.dispatchEvent({ type: "change" });
+  for (const [name, value] of [
+    ["Focus actor", "a"],
+    ["Transition", "fade"],
+  ]) {
+    const field = stage.node.querySelector(`[name="${name}"]`);
+    field.value = value;
+    field.dispatchEvent({ type: "change" });
+  }
+  stage.update({ ...scene });
+  assert.equal(stage.node.querySelector('[name="Focus actor"]').value, "a");
+  assert.equal(stage.node.querySelector('[name="Transition"]').value, "fade");
+  assert.equal(
+    stage.node.querySelector('[name="Cue note"]').value,
+    "Unsaved note",
+  );
+  assert.equal(stage.node.querySelector('[name="Position a"]').value, "right");
+  assert.equal(document.activeElement.getAttribute("name"), "Cue note");
+  byText(stage.node, "button", "Save cue")[0].click();
+  assert.match(stage.node.textContent, /Authored cue: Unsaved note/);
+});

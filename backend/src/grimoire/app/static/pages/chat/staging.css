@@ -14,15 +14,15 @@
   display: block;
 }
 .vn-frame {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   position: relative;
   min-height: 10rem;
   isolation: isolate;
   overflow: hidden;
-  flex-wrap: wrap;
 }
 .vn-actor {
-  flex: 0 1 28%;
+  min-width: 0;
   margin: 0.4rem;
   padding: 0.3rem;
   z-index: 1;
@@ -35,13 +35,13 @@
   object-fit: contain;
 }
 .vn-left {
-  order: 1;
+  grid-column: 1;
 }
 .vn-center {
-  order: 2;
+  grid-column: 2;
 }
 .vn-right {
-  order: 3;
+  grid-column: 3;
 }
 .vn-focus {
   outline: 3px solid currentColor;
@@ -79,10 +79,23 @@
 }
 @media (max-width: 500px) {
   .vn-actor {
-    flex-basis: 24%;
     font-size: 0.85em;
   }
   .vn-controls textarea {
     width: 90%;
   }
+}
+
+/* Contain long VN content inside the existing stage scroll area. */
+.chat-stage {
+  flex-direction: column;
+  overflow-y: auto;
+}
+.vn-controls {
+  flex: none;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.chat-stage .chat-log {
+  min-height: 100px;
 }
