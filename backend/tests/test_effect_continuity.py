@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from grimoire.continuity import scene_revision
+from grimoire.continuitywire.projection import scene_revision
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import AcceptedRef, ChatRef
 from grimoire.effectstore import InvalidEffect

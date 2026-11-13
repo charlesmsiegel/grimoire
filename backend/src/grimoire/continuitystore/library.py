@@ -6,7 +6,7 @@ from grimoire.core.authority import AuthorityError
 from grimoire.core.identity import ContinuityRef, validate_segment
 from grimoire.graph.index import require_director
 from grimoire.store import ScopeRecord
-from grimoire.continuity.archive import decode_fork
+from grimoire.continuitywire.archive import decode_fork
 
 from .snapshot import DEPENDENCY_SCHEMA, native_snapshot
 

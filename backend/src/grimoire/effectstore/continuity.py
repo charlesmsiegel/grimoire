@@ -4,7 +4,7 @@ Exact envelope etags are historical provenance. Staleness uses scene projections
 whole same-chat listing, so acceptance bookkeeping may advance without changing fiction.
 """
 
-from grimoire.continuity import scene_revision
+from grimoire.continuitywire.projection import scene_revision
 from grimoire.continuity.provenance import (MAX_SCENE_SOURCES, SOURCE_VERSION, COVERAGES, SceneSource,
                                             decode_scene_sources, scene_sources_payload)
 from grimoire.core.identity import ChatRef

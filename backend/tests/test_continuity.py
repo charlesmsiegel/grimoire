@@ -3,7 +3,8 @@ from types import MappingProxyType
 
 import pytest
 
-from grimoire.continuity import Dependency, Pin, RetconRequest, Rehearsal, preview_impact, scene_revision
+from grimoire.continuity import Dependency, Pin, RetconRequest, Rehearsal, preview_impact
+from grimoire.continuitywire.projection import scene_revision
 
 
 def pin(name, campaign='c', revision='a'):

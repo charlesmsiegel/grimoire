@@ -1,5 +1,5 @@
 """Actual accepted relationship and scene changes cannot silently combine offline."""
-from grimoire.continuity import scene_revision
+from grimoire.continuitywire.projection import scene_revision
 from grimoire.core.identity import ContinuityRef
 from grimoire.store import ScopeRecord
 from grimoire.store.layout import address_parts
@@ -179,7 +179,7 @@ def test_native_fixture_imports_in_fresh_interpreter():
 @pytest.mark.parametrize('mutation', ['edit', 'remove'])
 def test_declared_holder_endpoint_changes_token_and_stops_scene_apply(pair, changed_device, mutation):
     from grimoire.core.identity import ContinuityRef
-    from grimoire.continuity import scene_revision
+    from grimoire.continuitywire.projection import scene_revision
     from grimoire.store import ScopeRecord
     from grimoire.sync import apply_sync, semantic, SyncInterrupted
     from grimoire.store.envelope import parse_scope_record
