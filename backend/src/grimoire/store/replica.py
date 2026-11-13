@@ -335,6 +335,11 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
                 continue
             _walk(access, child, files, blocked, skipped)
         elif kind == "file":
+            if len(child) == 3 and child[0] == CAMPAIGNS and child[2] in {"continuity", "accepted", "turns"}:
+                # Semantic input families cannot be regular files. Preserve that
+                # structural uncertainty in local and peer canonical snapshots.
+                blocked[text] = "unreadable"
+                continue
             found = classify(child)
             if found is None or found[0] not in EXACT_KINDS:  # ledgers, notes, stray files
                 skipped.append(text)
