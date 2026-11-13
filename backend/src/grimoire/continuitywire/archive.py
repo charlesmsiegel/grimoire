@@ -12,18 +12,26 @@ from grimoire.security import ResourcePath
 from grimoire.store.envelope import parse_scope_record
 from grimoire.store.jsonfmt import etag, is_etag, parse_strict, thaw
 from grimoire.store.layout import address_parts, classify
+from grimoire.store.replica import pinned_by
 
 FORK_SCHEMA = 'grimoire.continuity-fork/1'
 MAX_ARCHIVE_BYTES = 6 * 1024 * 1024
 MAX_ARCHIVE_SCENES = 256
 MAX_PREMISES = 8192
-_KEYS = {'operation_id', 'campaign', 'devices', 'token', 'source_device', 'fingerprint', 'premises', 'scenes', 'reconciled'}
+_KEYS = {'operation_id', 'campaign', 'devices', 'token', 'source_device', 'fingerprint', 'premises',
+         'scenes', 'reconciled', 'source_revisions'}
 
 
 def fingerprint(payload):
     data = {k: v for k, v in payload.items() if k != 'fingerprint'}
     return etag(json.dumps(thaw(data), sort_keys=True, separators=(',', ':'), ensure_ascii=False,
                            allow_nan=False).encode('utf-8'))
+
+
+def retained_source_revisions(scenes):
+    """Expose exactly the native pins hidden inside all retained envelope texts."""
+    return sorted({str(ref) for scene in scenes for variant in scene['variants'].values()
+                   for ref in pinned_by(tuple(scene['path'].split('/')), variant['text'].encode('utf-8'))})
 
 
 def archived_turn(path, text):
@@ -93,6 +101,8 @@ def decode_fork(schema, payload, campaign=None):
             raise ValueError('reconciled scene differs from selected source')
         if scene['variants'][data['source_device']]['before'] != scene['source_etag']:
             raise ValueError('selected source revision differs')
+    if data['source_revisions'] != retained_source_revisions(scenes):
+        raise ValueError('fork source_revisions must exactly match all retained envelope pins')
     if paths != sorted(set(paths)):
         raise ValueError('fork scenes must be distinct and ordered')
     expected_token = etag(json.dumps([(d, data['premises'][d], []) for d in devices],

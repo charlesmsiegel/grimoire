@@ -6,26 +6,29 @@ import pytest
 
 import grimoire.continuitystore.forks as forks
 from grimoire.continuitywire.projection import scene_revision
-from grimoire.continuitywire.archive import FORK_SCHEMA, fingerprint
+from grimoire.continuitywire.archive import FORK_SCHEMA, decode_fork, fingerprint
 from grimoire.continuitystore import ContinuityLibrary, resolve_fork
 from grimoire.core.authority import AuthorityError
-from grimoire.core.identity import ContinuityRef
+from grimoire.core.identity import ContinuityRef, SourceRef
 from grimoire.core.inference import InferenceStage
 from grimoire.ledgers import DurableAuthority
-from grimoire.scene import CallRecord, Label, Take, TurnEffect, turn_from_payload, turn_to_payload
+from grimoire.scene import CallRecord, Label, SceneLine, Take, TurnEffect, turn_from_payload, turn_to_payload
 from grimoire.security import Grant, Permission, ResourcePath
-from grimoire.store import LibraryStore, ProcessLocker, ScopeRecord, WriteDenied, etag
+from grimoire.store import (
+    LibraryStore, ProcessLocker, RecordEnvelope, RevisionReferenced, ScopeRecord, SourceManifest, WriteDenied, etag,
+)
 from grimoire.store.envelope import scope_record_document
 from grimoire.store.jsonfmt import render, thaw
 from grimoire.store.layout import address_parts
+from grimoire.store.replica import pinned_by
 from grimoire.sync import ResolveRefused, plan_sync, semantic, sync_until_quiet
 from grimoire.sync.semantic import resolution_risk
 from grimoire.testing import Crash, CrashScenario, Target, run_with_fault
 from grimoire.testing.fileops import snapshot
-from effects_fixtures import CHAT, effects_library, give
+from effects_fixtures import CHAT, TAM, effects_library, give
 from ledger_fixtures import Device, build_base, pay
 from ledger_helpers import fixed_clock
-from store_helpers import OWNER
+from store_helpers import OWNER, delete_held
 from sync_helpers import DESKTOP, PHONE, handles
 from test_effect_continuity import write_turn
 from test_sync_ledger import ledger_files
@@ -280,7 +283,8 @@ def test_malformed_known_archive_fails_closed_in_all_readers(pair, mutation):
     assert resolution_risk(d.store, 'campaigns/c/turns/t-2.000001.json', PHONE)
 
 
-def test_native_receipt_restore_transaction_recovers_atomically(pair, tmp_path):
+def test_native_receipt_restore_transaction_recovers_atomically(revision_pair, tmp_path):
+    pair = revision_pair
     request = args(pair)
     original = pair[PHONE].store.read_exact(PATH)
     source = pair[DESKTOP].store.read_exact(PATH)
@@ -309,6 +313,9 @@ def test_native_receipt_restore_transaction_recovers_atomically(pair, tmp_path):
             assert not run.violations, run.violations
             restored = run.recovered['phone/' + PATH] == source
             assert restored == (receipt in run.recovered)
+            if restored:
+                assert RETAINED_R1 in pinned_by(('campaigns', 'c', 'continuity', 'retain-1.json'),
+                                              run.recovered[receipt])
             if not restored: assert run.recovered['phone/' + PATH] == original
 
 
@@ -397,3 +404,124 @@ def test_post_sync_noop_accounts_for_unrelated_planned_campaign_deletion(pair):
     assert not sync_until_quiet(request[0], request[1], request[-2]).conflicts
     assert all(d.store.read_exact(path) is None for d in pair.values())
     assert resolve_fork(*request).status == 'already_applied'
+
+
+RETAINED_SOURCE = 'catalog:fork-retention'
+RETAINED_R1 = SourceRef(RETAINED_SOURCE, 'character', 'voice', 'r1')
+RETAINED_R2 = RETAINED_R1.at('r2')
+RETAINED_R3 = RETAINED_R1.at('r3')
+RETAINED_PATH = '/'.join(address_parts(RETAINED_R1))
+
+
+def revision_turn(device, revision):
+    stored = device.store.campaign_turns('c').records[next(iter(device.store.campaign_turns('c').records))]
+    turn = turn_from_payload(stored.record.address, stored.record.schema, stored.record.payload)
+    line = SceneLine(turn.turn_id + '.1.1', TAM, 'Tam', 'I remember the old harbor.', (TAM,),
+                     actor_revision=revision)
+    turn = replace(turn, takes=(Take(1, 'proposed', 'generated', (TAM,), lines=(line,)),))
+    tx = device.store.transaction()
+    tx.put(replace(stored.record, payload=turn_to_payload(turn)), stored.etag)
+    tx.commit(device.handles.app)
+
+
+@pytest.fixture
+def revision_pair(tmp_path):
+    base = build_base(tmp_path)
+    made = {n: Device(base, tmp_path, n) for n in (DESKTOP, PHONE)}
+    desk, phone = made[DESKTOP], made[PHONE]
+    tx = desk.store.transaction()
+    tx.put(SourceManifest(RETAINED_SOURCE, OWNER, 'Retained voice', {'character/voice': 'r2'}), None)
+    for ref in (RETAINED_R1, RETAINED_R2, RETAINED_R3):
+        tx.put(RecordEnvelope(ref, {'bio': 'Synthetic voice ' + ref.revision}), None)
+    tx.commit(desk.handles.app)
+    write_turn(desk.store, desk.handles)
+    revision_turn(desk, RETAINED_R2)
+    assert not sync_until_quiet(desk.store, phone.store, handles()).conflicts
+    desk.accept(give())
+    revision_turn(phone, RETAINED_R1)
+    for d in made.values(): bind(d)
+    yield made
+    for d in made.values():
+        d.authority.close()
+        d.close()
+
+
+def assert_retained_revision_cannot_be_pruned(device):
+    before = device.store.read_exact(RETAINED_PATH)
+    assert before is not None
+    with pytest.raises(RevisionReferenced):
+        delete_held(device.store, RETAINED_PATH, handle=device.handles.app)
+    assert device.store.read_exact(RETAINED_PATH) == before
+
+
+def test_retained_line_source_revision_survives_native_prune_reopen_and_sync(revision_pair):
+    made = revision_pair
+    assert_retained_revision_cannot_be_pruned(made[PHONE])
+    source_bytes = {n: d.store.read_exact(RETAINED_PATH) for n, d in made.items()}
+    request = args(made)
+    resolve_fork(*request)
+    for d in made.values():
+        assert_retained_revision_cannot_be_pruned(d)
+        archive = ContinuityLibrary(d.store, d.handles.app).inspect_fork('c', 'retain-1')
+        assert archive['source_revisions'] == [str(RETAINED_R1), str(RETAINED_R2)]
+        assert RETAINED_R1 in pinned_by(('campaigns', 'c', 'continuity', 'retain-1.json'),
+                                      d.store.read_exact('campaigns/c/continuity/retain-1.json'))
+        root = d.store.root
+        d.authority.close()
+        d.close()
+        d.store = LibraryStore.open(root)
+        bind(d)
+        assert_retained_revision_cannot_be_pruned(d)
+    hs = {n: d.handles.app for n, d in made.items()}
+    assert not sync_until_quiet(made[DESKTOP].store, made[PHONE].store, hs).conflicts
+    for n, d in made.items():
+        assert_retained_revision_cannot_be_pruned(d)
+        assert d.store.read_exact(RETAINED_PATH) == source_bytes[n]
+
+
+def test_archive_source_revision_union_uses_native_envelope_extra_rules(revision_pair):
+    for d in revision_pair.values():
+        stored = next(iter(d.store.campaign_turns('c').records.values()))
+        # The native extractor resolves unpinned references beside resolved_revision,
+        # including envelope extras; a scene-field-only traversal would miss this.
+        extra = {**stored.record.extra, 'historical_binding': {'character': str(RETAINED_R3.unpinned()),
+                                                             'resolved_revision': 'r3'}}
+        tx = d.store.transaction()
+        tx.put(replace(stored.record, extra=extra), stored.etag)
+        tx.commit(d.handles.app)
+    resolve(revision_pair)
+    archive = ContinuityLibrary(revision_pair[DESKTOP].store, revision_pair[DESKTOP].handles.app).inspect_fork('c', 'retain-1')
+    assert archive['source_revisions'] == [str(RETAINED_R1), str(RETAINED_R2), str(RETAINED_R3)]
+
+
+@pytest.mark.parametrize('mutation', ['omit', 'fabricate', 'duplicate', 'reverse', 'type'])
+def test_archive_source_revisions_reject_recomputed_fingerprint_tampering(revision_pair, mutation):
+    resolve(revision_pair)
+    d = revision_pair[DESKTOP]
+    archive = ContinuityLibrary(d.store, d.handles.app).inspect_fork('c', 'retain-1')
+    if mutation == 'omit': archive['source_revisions'] = [str(RETAINED_R2)]
+    elif mutation == 'fabricate': archive['source_revisions'] = [str(RETAINED_R1), str(RETAINED_R2), str(RETAINED_R3)]
+    elif mutation == 'duplicate': archive['source_revisions'] = [str(RETAINED_R1), str(RETAINED_R1), str(RETAINED_R2)]
+    elif mutation == 'reverse': archive['source_revisions'] = [str(RETAINED_R2), str(RETAINED_R1)]
+    else: archive['source_revisions'] = 'not a list'
+    archive['fingerprint'] = fingerprint(archive)
+    with pytest.raises(ValueError, match='source.revision'):
+        decode_fork(FORK_SCHEMA, archive, 'c')
+
+
+@pytest.mark.parametrize('first', [DESKTOP, PHONE])
+def test_interrupted_fork_keeps_retained_source_revision_pinned(revision_pair, monkeypatch, first):
+    request = args(revision_pair)
+    commit = forks._commit_device
+    pending = PHONE if first == DESKTOP else DESKTOP
+    def interrupt(device, transaction, handle):
+        if device == pending: raise KeyboardInterrupt()
+        return commit(device, transaction, handle)
+    monkeypatch.setattr(forks, '_device_order', lambda devices: (first, pending))
+    monkeypatch.setattr(forks, '_commit_device', interrupt)
+    with pytest.raises(KeyboardInterrupt): resolve_fork(*request)
+    assert_retained_revision_cannot_be_pruned(revision_pair[first])
+    assert_retained_revision_cannot_be_pruned(revision_pair[PHONE])
+    monkeypatch.setattr(forks, '_commit_device', commit)
+    resolve_fork(*request)
+    for d in revision_pair.values(): assert_retained_revision_cannot_be_pruned(d)
