@@ -5,7 +5,6 @@ from grimoire.continuity import Dependency, ImpactReport, Pin, Rehearsal, Retcon
 from grimoire.core.authority import AuthorityError
 from grimoire.core.identity import ContinuityRef, validate_segment
 from grimoire.graph.index import require_director
-from grimoire.security.authorizer import Authorizer, WorkerHandle
 from grimoire.store import ScopeRecord
 
 from .snapshot import DEPENDENCY_SCHEMA, native_snapshot
@@ -27,15 +26,26 @@ class RehearsalPreview:
 
 
 class ContinuityLibrary:
-    def __init__(self, store, handle):
-        authority = getattr(handle, '_authority', None)
-        if (type(handle) is not WorkerHandle or type(authority) is not Authorizer
-                or not authority.issued(handle) or handle.trusted is not True):
-            raise AuthorityError('continuity review requires a trusted application handle')
+    def __init__(self, store, handle, *, issued=None, owners=None):
+        # Unbound stores have no intrinsic issuer. The trusted application must supply
+        # its verified issuer and owner set; a handle cannot vouch for itself.
         self.store, self.handle = store, handle
+        self._issued = issued
+        self._owners = frozenset(owners or ())
+        self._require_owner()
+
+    def _require_owner(self):
+        authority = self.store.authority
+        issued = getattr(authority, 'issued', None) if authority is not None else self._issued
+        owners = getattr(authority, 'owners', ()) if authority is not None else self._owners
+        if (not callable(issued) or not issued(self.handle)
+                or getattr(self.handle, 'trusted', False) is not True
+                or getattr(self.handle, 'principal', None) not in owners):
+            raise AuthorityError('continuity review requires this library owner and verified issuer')
 
     def snapshot(self, campaign, *, requested_by='director'):
         require_director(requested_by)
+        self._require_owner()
         validate_segment(campaign, 'campaign_id')
         with self.store.lock:
             if self.store.campaign_presence(campaign) != 'present':

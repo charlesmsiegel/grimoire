@@ -43,7 +43,7 @@ def world(tmp_path):
                         written_by=DIRECTOR, requested_by=DIRECTOR).commit()
         dialogue = turn(store, handles, 2, 'Tam says: I will use the key Wren gave me.')
         unused = turn(store, handles, 3, 'Clouds gather at the harbor.')
-        yield store, handles, ContinuityLibrary(store, handles.app), source, dialogue, unused, done.ref
+        yield store, handles, ContinuityLibrary(store, handles.app, issued=handles.authorizer.issued, owners={OWNER}), source, dialogue, unused, done.ref
 
 
 def test_native_transfer_dialogue_wrapup_and_readonly_rehearsal(world):
@@ -75,7 +75,7 @@ def test_declaration_reopens_and_stale_endpoint_is_preserved_as_problem(world):
     root = store.root
     store.close()
     with LibraryStore.open(root) as reopened:
-        library = ContinuityLibrary(reopened, handles.app)
+        library = ContinuityLibrary(reopened, handles.app, issued=handles.authorizer.issued, owners={OWNER})
         assert any(edge.reason == 'dialogue' for edge in library.snapshot('c').dependencies)
         turn(reopened, handles, 2, 'A different claim.')
         report = library.preview('c', (pins[source],), 'edit')
@@ -148,7 +148,7 @@ def test_malformed_family_stays_incomplete_after_reload(world, family):
     assert not report.complete
     store.close()
     with LibraryStore.open(root) as reopened:
-        report = ContinuityLibrary(reopened, handles.app).preview('c', (pin,), 'edit')
+        report = ContinuityLibrary(reopened, handles.app, issued=handles.authorizer.issued, owners={OWNER}).preview('c', (pin,), 'edit')
         assert not report.complete
 
 
@@ -199,3 +199,54 @@ def test_acceptance_order_remains_potential_without_explicit_causal_use(world):
     assert report.complete, report.problems
     impacted = next(item for item in report.impacts if item.target.path == second_path)
     assert impacted.certainty == 'potential' and impacted.reason == 'chronological'
+
+
+def test_foreign_issuer_cannot_read_bound_or_unbound_library(world):
+    from grimoire.security import Authorizer
+    from grimoire.ledgers import DurableAuthority
+    from ledger_helpers import fixed_clock
+    store, handles, library, source, dialogue, unused, event = world
+    foreign = Authorizer(['human:outsider']).handle_for('human:outsider', trusted=True)
+    with pytest.raises(AuthorityError): ContinuityLibrary(store, foreign)
+    with pytest.raises(AuthorityError):
+        ContinuityLibrary(store, foreign, issued=handles.authorizer.issued, owners={OWNER})
+    with pytest.raises(AuthorityError):
+        ContinuityLibrary(store, handles.player(), issued=handles.authorizer.issued, owners={OWNER})
+    authority = DurableAuthority.open(store, [OWNER], clock=fixed_clock())
+    with pytest.raises(AuthorityError): ContinuityLibrary(store, foreign)
+    # Caller-provided fallback cannot override the bound authority.
+    with pytest.raises(AuthorityError):
+        ContinuityLibrary(store, foreign, issued=lambda h: True, owners={'human:outsider'})
+    with pytest.raises(AuthorityError): library.snapshot('c')
+    owner = authority.handle_for(OWNER, trusted=True)
+    assert ContinuityLibrary(store, owner).snapshot('c').pins
+    nonowner = authority.handle_for('human:guest', trusted=True)
+    with pytest.raises(AuthorityError): ContinuityLibrary(store, nonowner)
+
+
+def test_native_ruling_and_belief_recorded_dependencies(world):
+    from grimoire.core.identity import KnowledgeRef
+    from grimoire.core.knowledge import Belief, Proposition, Ruling, Report, Subject
+    from grimoire.evidencestore import EvidenceLibrary
+    store, handles, library, source, dialogue, unused, event = world
+    evidence = EvidenceLibrary(store, handles.app, owner=OWNER)
+    evidence.append('c', [
+        Proposition('c', 'key', 'Tam has the key.', moment(8), 'director'),
+        Proposition('c', 'unrelated', 'The sky is cloudy.', moment(8), 'director'),
+        Ruling('c', 'key-ruling', 'key', 'unknown', moment(9), 'director'),
+        Report('c', 'key-report', TAM, 'key', 'hearing', moment(9), 'director', True),
+        Belief('c', 'key-belief', TAM, 'key', 'believed', moment(10), DIRECTOR, ('key-report',)),
+    ], chat=CHAT, controls=CONTROLS).commit()
+    snap = library.snapshot('c')
+    paths = {name: '/'.join(address_parts(KnowledgeRef('c', family, name))) for family, name in
+             [('proposition', 'key'), ('proposition', 'unrelated'), ('ruling', 'key-ruling'),
+              ('evidence', 'key-report'), ('belief', 'key-belief')]}
+    report = library.preview('c', (snap.pins[paths['key']],), 'edit')
+    assert report.complete, report.problems
+    impacted = {item.target.path for item in report.impacts}
+    assert paths['key-ruling'] in impacted
+    assert paths['unrelated'] not in impacted
+    report = library.preview('c', (snap.pins[paths['key-report']],), 'cut')
+    assert report.complete, report.problems
+    assert paths['key-belief'] in {item.target.path for item in report.impacts}
+    assert paths['unrelated'] not in {item.target.path for item in report.impacts}

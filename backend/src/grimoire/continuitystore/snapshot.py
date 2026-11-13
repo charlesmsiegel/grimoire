@@ -134,11 +134,15 @@ def native_snapshot(store, campaign):
             elif isinstance(value, Report):
                 link(path(KnowledgeRef(campaign, 'proposition', value.proposition_id)), name, 'evidence')
             elif isinstance(value, (Proposition, Ruling)):
+                if isinstance(value, Ruling):
+                    link(path(KnowledgeRef(campaign, 'proposition', value.proposition_id)), name, 'evidence')
                 for subject in value.about if isinstance(value, Proposition) else value.grounds:
                     source = subject_path(subject)
                     if source is not None: link(source, name, 'evidence')
             else:
                 # Objective event bridge shares an accepted id; does not grant access.
+                for evidence_id in getattr(value, 'evidence_ids', ()):
+                    link(path(KnowledgeRef(campaign, 'evidence', evidence_id)), name, 'evidence')
                 proposition_id = getattr(value, 'proposition_id', None)
                 if proposition_id:
                     link(path(KnowledgeRef(campaign, 'proposition', proposition_id)), name, 'evidence')
