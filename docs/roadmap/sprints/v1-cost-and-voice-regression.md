@@ -2,7 +2,8 @@
 
 > **Status (first slice):** baseline capture pending. `grimoire.story-quality/2` and the opt-in
 > 0.2.1 capture harness have landed and are proven by a real-0.2.1 dry run; no live,
-> provider-reported capture has been run. See [V0.2.1 baseline](../../evals/V021_BASELINE.md).
+> provider-reported capture has been run. See [V0.2.1 baseline](../../evals/V021_BASELINE.md) and its
+> [capture prerequisites and spending approval](../../evals/V021_BASELINE.md#capture-prerequisites-and-spending-approval).
 
 **Outcome:** V2 should improve character fidelity without silently increasing ordinary play costs.
 
