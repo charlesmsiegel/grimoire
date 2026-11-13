@@ -95,7 +95,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
                                      "once first, so their uncertainty is recorded")
     if keep is None:  # an absent side's etag is None too, so the deletion is its own branch (028)
         return _resolve_deletion(stores, scans, sides, pair, other, pendings, archived, path, kind, handles,
-                                 approvals or {})
+                                 approvals or {}, semantic_plan=semantic_plan)
     winners = [device for device in pair if _current(sides[device]) == keep]
     if not winners:
         raise ResolveRefused("keep must be the current etag of one device's version, or None for the deletion")
@@ -216,7 +216,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
 def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, CanonicalScan], sides: Mapping[str, Side],
                       pair: tuple[str, str], other: Mapping[str, str], pendings: Mapping[str, PendingView],
                       archived: list[ArchiveView], path: str, kind: str, handles: Mapping[str, object],
-                      approvals: Mapping[str, Mapping[str, str]]) -> str:
+                      approvals: Mapping[str, Mapping[str, str]], *, semantic_plan: session.SyncPlan | None = None) -> str:
     """``resolve(..., keep=None)`` (028): the device still holding ``path`` deletes it as row 9's propagated
     deletion would, and returns that device. A manifest takes along each revision of its source that
     both archives agree on and the other device deleted too (a source is deleted as a whole: alone,
@@ -271,6 +271,10 @@ def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, Ca
         raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error
     try:
         with _locked(*stores.values()):
+            if semantic_plan is not None:
+                stale = semantic.changed(semantic_plan, [], {}, deletes)
+                if stale is not None:
+                    raise ResolveRefused(stale)
             _unchanged_since_scan(stores, receiver, winner, {gone.path: gone.expected for gone in deletes})
             again = deletion.still_needed(store, {}, {}, paths)  # anything written there since the scan
             if again:

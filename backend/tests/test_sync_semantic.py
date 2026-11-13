@@ -352,3 +352,50 @@ def test_declared_image_external_revision_is_held(pair, edited):
     report = sync(desk.store, phone.store, H)
     assert report.conflict(path).code == 'semantic_review'
     assert {name: d.store.read_exact(path) for name, d in pair.items()} == before
+
+
+@pytest.mark.parametrize('target', ['placement', 'scope_art', 'relation'])
+@pytest.mark.parametrize('holder', [DESKTOP, PHONE])
+@pytest.mark.parametrize('declare_late', [False, True])
+def test_explicit_deletion_rechecks_late_native_dependency_before_publication(pair, monkeypatch, target, holder, declare_late):
+    from dataclasses import replace
+    from grimoire.sync import resolution
+    from grimoire.testing.fileops import snapshot
+    from test_continuitystore import add_art
+    from test_sync_images import H
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    if target == 'relation':
+        ref = next(iter(desk.store.campaign_relations('c').records))
+    else:
+        refs = add_art(desk.store)
+        ref = refs[1 if target == 'placement' else 2]
+    assert not sync_until_quiet(desk.store, phone.store, H).conflicts
+    path = '/'.join(address_parts(ref))
+    keeping = pair[holder]
+    absent = pair[PHONE if holder == DESKTOP else DESKTOP]
+    (absent.store.root / path).unlink()
+    if target == 'relation':
+        stored = keeping.store.read(ref)
+        tx = keeping.store.transaction()
+        tx.put(replace(stored.record, owner='human:synthetic-editor'), stored.etag)
+        tx.commit(keeping.handles.app)
+    else:
+        asset_edit(keeping, ref)
+    expected = {name: None if d.store.read_exact(path) is None else etag(d.store.read_exact(path))
+                for name, d in pair.items()}
+    original = resolution._resolve_deletion
+    injected = []
+    def late(*args, **kwargs):
+        if declare_late:
+            declare_art(keeping, ref)
+        injected.append({name: snapshot(d.store.root) for name, d in pair.items()})
+        return original(*args, **kwargs)
+    monkeypatch.setattr(resolution, '_resolve_deletion', late)
+    if declare_late:
+        with pytest.raises(ResolveRefused, match='semantic'):
+            resolve(desk.store, phone.store, path, None, expected, H)
+        assert injected and {name: snapshot(d.store.root) for name, d in pair.items()} == injected[0]
+        assert keeping.store.read_exact(path) is not None
+    else:
+        assert resolve(desk.store, phone.store, path, None, expected, H) == holder
+        assert keeping.store.read_exact(path) is None

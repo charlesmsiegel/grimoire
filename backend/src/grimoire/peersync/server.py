@@ -16,7 +16,7 @@ import socket
 import threading
 
 from grimoire.store import LibraryStore, StoreError
-from grimoire.sync import SyncInterrupted, device_of
+from grimoire.sync import SyncInterrupted, device_of, semantic, syncable
 from grimoire.sync.documents import check_device_id
 
 from .busy import committing, resolving_out
@@ -160,7 +160,11 @@ class PeerServer:
                         if resolving is not None:
                             resolving.confirm_absent(self.store, header.get("absent"))
                         else:  # a sync: the requester deletes what this device deleted
-                            absent_here(self.store, header.get("absent"))
+                            absent = header.get("absent")
+                            absent_here(self.store, absent)
+                            if any(p.startswith('campaigns/') and syncable(p) in ('turn', 'relation', 'image', 'placement')
+                                   and semantic.resolution_risk(self.store, p, peer) for p in absent):
+                                raise PeerRefused('semantic_review', 'semantic sources changed before deletion confirmation')
                     channel.send({"t": "confirmed"})
                 elif kind == "op":
                     buffer.add(header, body)  # a refusal here is held and answered at "commit"
