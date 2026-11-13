@@ -60,4 +60,3 @@ def decode_scene_sources(value: object, chat: ChatRef) -> tuple[SceneSource, ...
     if (value['coverage'] == 'empty_limited') != (not sources):
         raise ValueError('inconsistent continuity coverage')
     return tuple(sorted(sources))
-
