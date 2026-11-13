@@ -4,6 +4,8 @@
 // record of its own except the composer's unsent text, a draft that survives leaving the chat and is cleared
 // only once posted. Everything shown from the library (card text, model output) is set as text, never as markup.
 
+import { makeReferenceIntent } from "./reference-intent.js";
+import { makeStaging } from "./staging.js";
 import { makeCompare } from "./compare.js";
 import { makeStory } from "./story.js";
 import { makeTray } from "./tray.js";
@@ -76,6 +78,8 @@ export async function mount(root, ctx) {
   const redrawPictures = () => { if (page.scene && !ctx.signal.aborted) render(page.scene); };
   const backdrop = makeBackdrop(ctx, chat, { run, redraw: redrawPictures });
   const attach = makeAttach(ctx, chat, { field: composer.node, run, redraw: redrawPictures });
+  const staging = makeStaging(ctx, chat, { log });
+  foot.prepend(makeReferenceIntent(ctx, chat, { composer }));
   const panelBody = el("div", { class: "chat-panel-body" });
   // The panel's tabs. Each has something to show for every chat; a tab that might have nothing is left out here.
   const PANEL_TABS = [
@@ -94,7 +98,7 @@ export async function mount(root, ctx) {
   // The story so far (story.js): the recap under the scene bar, the Story tab and bookmarks.
   const story = makeStory(ctx, chat, { run, rows, tint, redraw: () => { if (page.scene && !page.busy) render(page.scene); },
     afterJump: () => setPanel(false) });
-  root.append(el("div", { class: "chat-frame" }, el("div", { class: "chat-column" }, bars, sceneBar, story.recap, el("div", { class: "chat-stage" }, log), foot), panel));
+  root.append(el("div", { class: "chat-frame" }, el("div", { class: "chat-column" }, bars, sceneBar, story.recap, el("div", { class: "chat-stage" }, staging.node, log), foot), panel));
 
   function setPanel(open) {
     page.panelOpen = open;
@@ -187,6 +191,7 @@ export async function mount(root, ctx) {
     if (!scene.problems.some((problem) => problem.code === "broken_binding")) page.repairs = null;
     const reply = replyState(scene, { writing: page.writing, failure: page.failure });
     story.update(scene);
+    staging.update(scene);
     drawHeader(scene);
     bars.replaceChildren(...holds(scene));
     drawSceneBar(scene);
