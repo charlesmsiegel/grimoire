@@ -2,6 +2,8 @@
 
 **Snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
+The subsequent 049/054 proofs recorded below bring the current entries to **64/119 scheduled slices**, with **4/12 scoped waves** unchanged. This does not rewrite the historical snapshot or its verification results.
+
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
 | Merged change | Audit decision |
@@ -33,7 +35,7 @@ This is a code-and-test audit of the 119 scheduled **first-useful slices**, incl
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 7/24 | ☐ | 051, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 9/24 | ☐ | 049, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -490,14 +492,14 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-051, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/offline-multi-device-sync.md)).
-- Evidence: [`sync/turns.py`](../../backend/src/grimoire/sync/turns.py) preserves conflicting turn revisions; [`play/forks.py`](../../backend/src/grimoire/play/forks.py) requires explicit owner choice. [`test_peersync_turns.py`](../../backend/tests/test_peersync_turns.py)::test_a_forked_chat_goes_on_from_the_owners_choice_on_both_paired_devices exercises two paired offline branches, chosen continuation on both peers, and exclusion of set-aside text; [`test_textapi.py`](../../backend/tests/test_textapi.py) covers conflicting offline turns, edits, and picture slots.
-- Scope / gap: Existing 028/044 behavior satisfies the narrow table wording, but the 049 sprint explicitly requires cross-domain semantic reconciliation. No combined relationship-change-after-scene versus same-scene-edit proof found; ledger conflict tests and turn-fork tests are separate. Therefore incomplete under the requested complete-implementation standard.
+- [x] Scheduled first-useful slice ([requirements](sprints/offline-multi-device-sync.md)).
+- Evidence: [`sync/semantic.py`](../../backend/src/grimoire/sync/semantic.py); [`test_sync_semantic.py`](../../backend/tests/test_sync_semantic.py); [`test_peersync_semantic.py`](../../backend/tests/test_peersync_semantic.py); [`test_continuity_forks.py`](../../backend/tests/test_continuity_forks.py). Actual compatible synthetic libraries detect relationship/event changes after a scene versus its offline edit, retain variants, block generic-resolution bypasses and stale/deletion races, and explicitly archive/restore compatible fiction before ordinary exactly-once ledger reconciliation. Interrupted resolution reopens and resumes under pinned premises.
+- Scope / gap: Headless semantic reconciliation beyond earlier turn forks, documented in [CONTINUITY.md](../CONTINUITY.md). Uncertain ancestry and incompatible continuations refuse; remote fork controls and broad UI are 115. Long-period disconnected media/tombstone/retcon convergence remains later work.
 
 <a id="slice-050"></a>
 ### 050 — Capture And Trainer Links
@@ -523,9 +525,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-054"></a>
 ### 054 — Scenes Forks And Retcons
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/scenes-forks-and-retcons.md)).
-- Evidence: [`play/forks.py`](../../backend/src/grimoire/play/forks.py) preserves offline alternative turns and chooses an owner-approved continuation; EFFECTS.md and RECOVERY.md retain old accepted effect bridges.
-- Scope / gap: No causal retcon/fork impact preview or correction of downstream effects.
+- [x] Scheduled first-useful slice ([requirements](sprints/scenes-forks-and-retcons.md)).
+- Evidence: [`continuitystore`](../../backend/src/grimoire/continuitystore); [`test_continuitystore.py`](../../backend/tests/test_continuitystore.py); [`test_effect_continuity.py`](../../backend/tests/test_effect_continuity.py); [`test_continuity_forks.py`](../../backend/tests/test_continuity_forks.py). The transferred-key scenario previews downstream possession, actions, declared dialogue, summary and evidence impacts without changing originals. Native source pins and potential scene/event ordering distinguish recorded causality from uncertainty. Bounded authored rehearsals are speculative and model-free; retained forks preserve exact scene envelopes without replaying accepted effects.
+- Scope / gap: Director-only headless previews, explicit compatible-source restoration and pinned correction exports for 053; no automatic downstream repair, prose inference, generated continuations, alternative promotion or 115 UI. Missing/stale/legacy inputs remain incomplete or refused rather than inferred. See [CONTINUITY.md](../CONTINUITY.md).
 
 <a id="slice-055"></a>
 ### 055 — Calendar And Clocks
