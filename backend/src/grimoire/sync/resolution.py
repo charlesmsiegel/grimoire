@@ -22,7 +22,7 @@ from grimoire.store import LibraryStore, NameCollision, StaleWrite, StoreError, 
 from grimoire.store.layout import definition_parts, manifest_parts
 from grimoire.store.replica import CanonicalScan, pinned_by
 
-from . import bookkeeping, deletion, keeps as kept_record, knowledge as merge, session
+from . import bookkeeping, deletion, keeps as kept_record, knowledge as merge, session, semantic
 from .art import art_needs, art_unmet
 from .decide import archive_candidate, derive_base
 from .documents import ArchiveView, PendingView, syncable
@@ -62,6 +62,17 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
     kind = syncable(path)
     if kind is None:
         raise ResolveRefused(f"{path} is not a synchronized record")
+    semantic_plan = None
+    if kind in ('turn', 'relation') or (kind in ('image', 'placement') and path.startswith('campaigns/')):
+        semantic_plan = session.plan_sync(left, right, handles)
+        if kind == 'relation' and _held_relation(path, set(semantic_plan.ledger_campaigns)):
+            # Use the same scan that found the semantic premises: a one-shot listing
+            # failure must not disappear before the native ledger owner is selected.
+            raise ResolveRefused(f"{path} is a ledger file: its campaign has accepted events (021), and a relation "
+                                 "they changed must never arrive without them; end its conflict with resolve_ledger")
+        if any(path in r.scenes or path in r.endpoints or (kind == 'relation' and path.split('/')[1] == r.campaign)
+               for r in semantic.reviews(semantic_plan)):
+            raise ResolveRefused(f'{path} requires semantic review; use the continuity owner operation')
     ids = device_of(left), device_of(right)
     if ids[0] == ids[1]:
         raise SameDevice(f"both libraries are device {ids[0]!r}")
@@ -89,7 +100,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
                                      "once first, so their uncertainty is recorded")
     if keep is None:  # an absent side's etag is None too, so the deletion is its own branch (028)
         return _resolve_deletion(stores, scans, sides, pair, other, pendings, archived, path, kind, handles,
-                                 approvals or {})
+                                 approvals or {}, semantic_plan=semantic_plan)
     winners = [device for device in pair if _current(sides[device]) == keep]
     if not winners:
         raise ResolveRefused("keep must be the current etag of one device's version, or None for the deletion")
@@ -187,6 +198,10 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
         raise ResolveRefused(f"{path} cannot be resolved on {receiver}: {error}") from error
     try:
         with _locked(*stores.values()):  # a blob is loaded from the winner inside this commit
+            if semantic_plan is not None:
+                stale = semantic.changed(semantic_plan, [Copy(path, winner, receiver, data, None)], {})
+                if stale is not None:
+                    raise ResolveRefused(stale)
             _end_deliveries(stores, other, pair, resolved)
             if mine is not None:
                 _record_hold(stores[receiver], receiver, other[receiver], pair, path, etag(mine))
@@ -206,7 +221,7 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
 def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, CanonicalScan], sides: Mapping[str, Side],
                       pair: tuple[str, str], other: Mapping[str, str], pendings: Mapping[str, PendingView],
                       archived: list[ArchiveView], path: str, kind: str, handles: Mapping[str, object],
-                      approvals: Mapping[str, Mapping[str, str]]) -> str:
+                      approvals: Mapping[str, Mapping[str, str]], *, semantic_plan: session.SyncPlan | None = None) -> str:
     """``resolve(..., keep=None)`` (028): the device still holding ``path`` deletes it as row 9's propagated
     deletion would, and returns that device. A manifest takes along each revision of its source that
     both archives agree on and the other device deleted too (a source is deleted as a whole: alone,
@@ -261,6 +276,10 @@ def _resolve_deletion(stores: Mapping[str, LibraryStore], scans: Mapping[str, Ca
         raise ResolveRefused(f"{path} cannot be deleted on {receiver}: {error}") from error
     try:
         with _locked(*stores.values()):
+            if semantic_plan is not None:
+                stale = semantic.changed(semantic_plan, [], {}, deletes)
+                if stale is not None:
+                    raise ResolveRefused(stale)
             _unchanged_since_scan(stores, receiver, winner, {gone.path: gone.expected for gone in deletes})
             again = deletion.still_needed(store, {}, {}, paths)  # anything written there since the scan
             if again:

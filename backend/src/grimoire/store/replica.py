@@ -39,7 +39,7 @@ _RECORD_ROOTS = (SOURCES, CAMPAIGNS)
 #: 018's blobs (binary, listed by name and size in ``CanonicalScan.blobs``); ledgers never are.
 EXACT_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
                          "accepted", "wrapup", "holdings", "turn", "image", "placement", "transcript",
-                         "bookmark"})
+                         "bookmark", "continuity"})
 #: 018's image objects and placements: strict-JSON asset records that never pin a revision.
 ASSET_RECORD_KINDS = frozenset({"image", "placement"})
 #: The load problem (and sync blocked reason) of an instance id held by two kinds in one campaign.
@@ -107,7 +107,7 @@ def parse_exact(parts: Parts, data: bytes
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
         elif found[0] in ("scope", "chat", "relation", "accepted", "wrapup", "holdings", "turn",
-                          "transcript", "bookmark"):  # 107/017/021/023/035/036
+                          "transcript", "bookmark", "continuity"):  # 107/017/021/023/035/036
             envelope = parse_scope_record(document)[0]
             if envelope.address != found[1]:
                 raise _invalid("address_mismatch", f"{'/'.join(parts)} holds {envelope.address}")
@@ -335,6 +335,11 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
                 continue
             _walk(access, child, files, blocked, skipped)
         elif kind == "file":
+            if len(child) == 3 and child[0] == CAMPAIGNS and child[2] in {"continuity", "accepted", "turns"}:
+                # Semantic input families cannot be regular files. Preserve that
+                # structural uncertainty in local and peer canonical snapshots.
+                blocked[text] = "unreadable"
+                continue
             found = classify(child)
             if found is None or found[0] not in EXACT_KINDS:  # ledgers, notes, stray files
                 skipped.append(text)
@@ -359,7 +364,7 @@ def _walk(access: Access, parts: Parts, files: dict[str, bytes], blocked: dict[s
 
 #: ``turns``: a 035 turn's lines pin the revisions they were spoken under.
 _RECORD_FOLDERS = frozenset({"instances", "chats", "relations", "events", "evidence", "accepted", "wrapups",
-                             "holdings", "transcripts", "turns", "bookmarks"})
+                             "holdings", "transcripts", "turns", "bookmarks", "continuity"})
 
 
 def _may_hold_records(access: Access, original: Parts) -> bool:

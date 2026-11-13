@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
+from grimoire.core.json_value import JsonObject
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, InstanceRef, KnowledgeRef, WrapUpRef, paired_instances, validate_segment,
@@ -51,6 +52,7 @@ from grimoire.store import (
 from grimoire.store.layout import address_parts
 
 from . import parts
+from .continuity import capture_scene_sources, scene_sources_payload, stale_scene_sources
 from .errors import InvalidEffect
 from .errors import refused as _refused
 
@@ -148,6 +150,7 @@ class EffectChange:
     rests_on: Callable[[], list[tuple[str, str]]] | None = None
     #: an acceptance: the device tag its new event and relation ids carry (028), re-checked at commit
     device: str | None = None
+    scene_sources: tuple | None = None  # new acceptance/adoption only, never repin a completion
     _committed: bool = field(default=False, repr=False)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -193,6 +196,8 @@ class EffectChange:
             paired = paired_instances(self.library.store.campaign_instances(self.campaign_id))
             found += [("/".join(address_parts(actor)), "instance_id_conflict")
                       for actor in sorted(self.actors & paired, key=str)]
+        if self.scene_sources is not None and self.chat is not None:
+            found += stale_scene_sources(self.library.store, self.chat, self.scene_sources)
         if self.rests_on is not None:
             found += self.rests_on()
         if self.device is not None and self.library._current_tag() != self.device:
@@ -347,14 +352,17 @@ class TurnEffectsLibrary:
             planned = parts.plan_holdings(self._holdings(), proposal, snap.events.values(), ref.event_id,
                                           authorization.holdings_domains)
             ordinal = 1 + max((e.ordinal for e in snap.events.values()), default=0)
+            sources = capture_scene_sources(self.store, proposal.chat)
             event = self._event(ref, proposal, authorization, records, tuple(receipts),
-                                None if planned is None else planned[1], ordinal, causal_after(snap, tag))
+                                None if planned is None else planned[1], ordinal, causal_after(snap, tag), sources)
             record = ScopeRecord(ref, accepted_schema(event), accepted_to_payload(event), owner=self._owner)
             agents, actors = self._acting(proposal)
-            return EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
+            change = EffectChange(self, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
                                 checks_relations=True, agent_etags=agents, actors=actors,
                                 holdings_changes=() if planned is None else (planned[0],), holder_pins=pins,
-                                device=tag)
+                                device=tag, scene_sources=sources)
+            change.preview()  # native envelope/JSON size preflight, never a partial pin list
+            return change
 
     def _duplicate(self, proposal: EffectProposal, snap: _Snapshot) -> EffectChange | None:
         """The no-op of an effect that is already accepted and applied; ``None`` when no active event has it.
@@ -419,7 +427,7 @@ class TurnEffectsLibrary:
 
     def _event(self, ref: AcceptedRef, proposal: EffectProposal, authorization, records: tuple,  # type: ignore[no-untyped-def]
                receipts: tuple[Receipt, ...], holdings, ordinal: int,
-               after: tuple[str, ...] | None = None) -> AcceptedEvent:
+               after: tuple[str, ...] | None = None, scene_sources: tuple = ()) -> AcceptedEvent:
         """The accepted-event value of a new acceptance (or an adoption) under ``ref``; ``after`` is what it
         was accepted after (028), recorded on an identified library only."""
         charged = parts.charges(proposal, authorization.ability_domains)
@@ -429,7 +437,7 @@ class TurnEffectsLibrary:
                 tuple(AcceptedOperation(op, domain) for op, domain in zip(proposal.operations, authorization.domains)),
                 authorization.contributions, records, authorization.controls, str(self.handle.principal),  # type: ignore[attr-defined]
                 self._clock(), ordinal, receipts, attempt_id=proposal.attempt_id, holdings=holdings, abilities=charged,
-                after=after)
+                after=after, extras=JsonObject({"continuity_sources": scene_sources_payload(scene_sources)}))
         except EffectError as error:
             raise _refused(error) from None
 

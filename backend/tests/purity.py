@@ -70,7 +70,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
                                          "datetime", "uuid", "secrets")
 
 #: grimoire packages that are adapters or test infrastructure, not pure.
-ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.archaeologystore", "grimoire.campaignapi", "grimoire.capture", "grimoire.cardstore", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
+ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.archaeologystore", "grimoire.campaignapi", "grimoire.capture", "grimoire.cardstore", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.contextstore", "grimoire.continuitystore", "grimoire.continuitywire", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.mediaapi", "grimoire.migrate_v1",
                       "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
@@ -106,6 +106,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.core", ("grimoire.core",), never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.core.inference", ("grimoire.core.inference",)),
     PurePackage("grimoire.intent", ("grimoire.intent",)),
+    # Pure continuity graph and provenance values; native JSON/envelope codecs live in continuitywire.
+    PurePackage("grimoire.continuity", ("grimoire.continuity", "grimoire.core", "grimoire.scene"),
+                never_import=("grimoire.core.inference",)),
     # World-optional chats (107): values, codec and navigation; the store-backed service is an adapter.
     PurePackage("grimoire.chats", ("grimoire.chats", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Reviewed source rebase and chat-canon definitions (042): field review only; the store-backed service is an adapter.
