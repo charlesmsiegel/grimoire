@@ -128,3 +128,47 @@ def test_staged_request_refuses_deleted_recipient(tmp_path, monkeypatch):
         with open_authority(store) as a:
             with pytest.raises(Exception, match='unknown_actor'):
                 service(store, a).enqueue(rumor(), moment=m(10), requested_by=DIRECTOR)
+
+
+@pytest.mark.parametrize('phase,kind', [('enqueue', 'request'), ('enqueue', 'attempt'), ('enqueue', 'complete'), ('delivery', 'attempt'), ('delivery', 'complete')])
+@pytest.mark.parametrize('after', [False, True])
+def test_disk_recovery_at_authority_journal_boundaries(tmp_path, monkeypatch, phase, kind, after):
+    root = tmp_path / 'lib'
+    with LibraryStore.create(root) as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as a:
+            a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
+            SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
+            lib = service(store, a)
+            if phase == 'delivery':
+                lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
+            original = RumorLibrary._write
+            def interrupted(self, campaign, head, entry_kind, **fields):
+                matches = entry_kind == kind and (kind == 'request' or fields.get('phase') == phase)
+                if matches:
+                    if after:
+                        original(self, campaign, head, entry_kind, **fields)
+                    raise OSError('crash')
+                return original(self, campaign, head, entry_kind, **fields)
+            with monkeypatch.context() as patch:
+                patch.setattr(RumorLibrary, '_write', interrupted)
+                with pytest.raises(OSError):
+                    if phase == 'enqueue':
+                        lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
+                    else:
+                        lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
+    with LibraryStore.open(root) as store:
+        with open_authority(store) as a:
+            ev = EvidenceLibrary(store, a.handle_for('app:adjudicator', trusted=True))
+            ev.append(C, [Event(C, 'journal-interloper', 'bell', m(20), 'authored')]).commit()
+            lib = service(store, a)
+            if phase == 'enqueue':
+                lib.enqueue(rumor(), moment=m(21), requested_by=DIRECTOR)
+            else:
+                lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(21), conditions=ALL, requested_by=DIRECTOR)
+            row = lib.trace(C, requested_by=DIRECTOR)[0]['news']
+            assert row['enqueued'] and (row['delivered'] if phase == 'delivery' else True)
+            knowledge = ev.read(C, requested_by=DIRECTOR).knowledge
+            assert sum(p.text == 'a distorted account' for p in knowledge.propositions) == 1
+            assert sum(e.evidence_id.startswith('rumor-') for e in knowledge.evidence) == (phase == 'delivery')
