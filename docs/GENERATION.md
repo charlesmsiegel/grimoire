@@ -188,3 +188,15 @@ By default every present actor hears every spoken line (no whispering), so a sec
 | Building each speaker's pack and the director's lore every turn, with the transcript window as scene text | 035 (done in its first slice, [SCENES](SCENES.md)) |
 | Other optional stages in a generation turn (`planning`, `summary`, ...) | later sprints; 045's `select`/`decision` phase is [DECISIONS](DECISIONS.md) |
 | Choosing an NPC's intention every turn and giving the turn to an NPC that acts on its goals | 035 M2 |
+
+## Ensemble coordination (051)
+
+The headless [`grimoire.ensemble` adapter](ENSEMBLE.md) schedules explicit floor,
+interjection, aside and quiet bids before calling this runtime. `run_turn` accepts
+optional `modes`, mapping each speaking actor's `InstanceRef` to a closed
+`ContributionMode`; `npc_messages(..., mode=...)` renders its fixed presentation
+instruction. No private rationale is included, and omitted modes preserve the
+existing messages. The ensemble adapter validates current cast/control and
+actor-local grounding, filters new speech by audience, and prevents replay even
+for an entirely silent exchange. Ordinary app play is unchanged; 115 owns UI
+integration.

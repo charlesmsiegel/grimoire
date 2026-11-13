@@ -32,6 +32,7 @@ from grimoire.goals import Choice
 from grimoire.voice import DEFAULT_MAX_CHARS, ResolvedVoice, SecretFact, SpeakerFragment, speaker_fragment
 
 from .errors import GenerationError
+from .delivery import ContributionMode
 from .plan import checked_controls, controller
 from .voice import VOICE_SECTION
 
@@ -706,11 +707,14 @@ def heard_transcript(brief: NpcBrief, spoken: Sequence[HeardLine] = ()) -> str:
             if lines else "Nothing has been said yet.")
 
 
-def npc_messages(brief: NpcBrief, spoken: Sequence[HeardLine] = ()) -> tuple[tuple[str, str], ...]:
+def npc_messages(brief: NpcBrief, spoken: Sequence[HeardLine] = (), *, mode: ContributionMode | None = None) -> tuple[tuple[str, str], ...]:
     """The (role, content) messages of one NPC call: its brief, then everything it heard so far."""
     if not isinstance(brief, NpcBrief):
         raise GenerationError("bad_brief", "npc_messages needs an NpcBrief")
-    return (("system", brief.system), ("user", f"{heard_transcript(brief, spoken)}\n\nGive {brief.name}'s reply only."))
+    if mode is not None and not isinstance(mode, ContributionMode):
+        raise GenerationError("bad_mode", "a contribution mode must be a ContributionMode")
+    cue = "" if mode is None else f"\n\n{mode.instruction}"
+    return (("system", brief.system), ("user", f"{heard_transcript(brief, spoken)}\n\nGive {brief.name}'s reply only.{cue}"))
 
 
 def director_messages(brief: DirectorBrief, spoken: Sequence[HeardLine] = ()) -> tuple[tuple[str, str], ...]:
