@@ -265,3 +265,90 @@ def test_semantic_overlay_preserves_native_unreadable_ledger_evidence(pair):
     conflicts = tuple(plan.conflicts.values())
     assert any(c.code == 'semantic_review' for c in conflicts)
     assert any(item.reason == 'unreadable' and item.subject == path for c in conflicts for item in c.review)
+
+
+def asset_edit(device, placement):
+    from dataclasses import replace
+    from grimoire.imagestore import ImageLibrary
+    from test_sync_images import H
+    images = ImageLibrary(device.store, H[DESKTOP], owner=OWNER)
+    value, revision = images.read_placement(placement)
+    images.place(placement.subject, placement.slot,
+                 replace(value, provenance={'synthetic': 'offline metadata edit'}), revision).commit()
+
+
+def declare_art(device, placement, record_id='art'):
+    from grimoire.continuitystore import ContinuityLibrary
+    from grimoire.store.layout import address_parts
+    review = ContinuityLibrary(device.store, device.handles.app,
+                               issued=device.handles.authorizer.issued, owners={OWNER})
+    pins = review.snapshot('c').pins
+    review.declare_dependency(record_id, pins['campaigns/c/turns/t-1.000001.json'],
+                              pins['/'.join(address_parts(placement))], 'asset')
+
+
+@pytest.mark.parametrize('target', ['placement', 'scope_art'])
+@pytest.mark.parametrize('edited', [DESKTOP, PHONE])
+def test_declared_placement_edit_is_held_without_overwriting_either_device(pair, target, edited):
+    from test_continuitystore import add_art
+    from test_sync_images import H
+    from grimoire.store.layout import address_parts
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    refs = add_art(desk.store)
+    placement = refs[1 if target == 'placement' else 2]
+    declare_art(desk, placement)
+    assert not sync_until_quiet(desk.store, phone.store, H).conflicts
+    asset_edit(pair[edited], placement)
+    path = '/'.join(address_parts(placement))
+    before = {name: device.store.read_exact(path) for name, device in pair.items()}
+    report = sync(desk.store, phone.store, H)
+    assert report.conflict(path).code == 'semantic_review'
+    assert {name: device.store.read_exact(path) for name, device in pair.items()} == before
+    expected = {name: etag(data) for name, data in before.items()}
+    with pytest.raises(ResolveRefused, match='semantic'):
+        resolve(desk.store, phone.store, path, expected[DESKTOP], expected, H)
+
+
+@pytest.mark.parametrize('target', ['placement', 'scope_art'])
+@pytest.mark.parametrize('edited', [DESKTOP, PHONE])
+def test_late_declaration_invalidates_already_planned_placement_copy(pair, target, edited):
+    from test_continuitystore import add_art
+    from test_sync_images import H
+    from grimoire.store.layout import address_parts
+    from grimoire.sync import apply_sync
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    refs = add_art(desk.store)
+    placement = refs[1 if target == 'placement' else 2]
+    assert not sync_until_quiet(desk.store, phone.store, H).conflicts
+    asset_edit(pair[edited], placement)
+    path = '/'.join(address_parts(placement))
+    receiver = pair[PHONE if edited == DESKTOP else DESKTOP]
+    before = receiver.store.read_exact(path)
+    planned = plan_sync(desk.store, phone.store, H)
+    assert any(copy.path == path for copy in planned.copies[receiver.name])
+    declare_art(receiver, placement)
+    with pytest.raises(SyncInterrupted, match='semantic'):
+        apply_sync(planned, H)
+    assert receiver.store.read_exact(path) == before
+
+
+@pytest.mark.parametrize('edited', [DESKTOP, PHONE])
+def test_declared_image_external_revision_is_held(pair, edited):
+    import json
+    from test_continuitystore import add_art
+    from test_sync_images import H
+    from grimoire.store.layout import address_parts
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    image, _, _ = add_art(desk.store)
+    declare_art(desk, image)
+    assert not sync_until_quiet(desk.store, phone.store, H).conflicts
+    path = '/'.join(address_parts(image))
+    # Immutable images have no update API: simulate an external/offline metadata edit.
+    file = pair[edited].store.root / path
+    value = json.loads(file.read_text())
+    value['payload']['provenance'] = {'synthetic': 'offline image metadata'}
+    file.write_text(json.dumps(value))
+    before = {name: d.store.read_exact(path) for name, d in pair.items()}
+    report = sync(desk.store, phone.store, H)
+    assert report.conflict(path).code == 'semantic_review'
+    assert {name: d.store.read_exact(path) for name, d in pair.items()} == before

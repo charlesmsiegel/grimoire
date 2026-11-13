@@ -63,9 +63,9 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
     if kind is None:
         raise ResolveRefused(f"{path} is not a synchronized record")
     semantic_plan = None
-    if kind in ('turn', 'relation'):
+    if kind in ('turn', 'relation') or (kind in ('image', 'placement') and path.startswith('campaigns/')):
         semantic_plan = session.plan_sync(left, right, handles)
-        if any(path in r.scenes or (kind == 'relation' and path.split('/')[1] == r.campaign)
+        if any(path in r.scenes or path in r.endpoints or (kind == 'relation' and path.split('/')[1] == r.campaign)
                for r in semantic.reviews(semantic_plan)):
             raise ResolveRefused(f'{path} requires semantic review; use the continuity owner operation')
     ids = device_of(left), device_of(right)
