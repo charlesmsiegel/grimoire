@@ -136,3 +136,14 @@ The following are not part of this slice:
 - embeddings, which structurally have no output tokens;
 - several contributions from one NPC in a turn;
 - persistence and UI.
+
+## Actor-specific experiments (068)
+
+[`grimoire.actor_inference`](ACTOR_INFERENCE.md) now provides an isolated headless
+planner/critic experiment runner. Explicit actor selection and stage caps are
+both required; a shared attempt/output allowance bounds authorized experiment
+work across turns. It is not a dollar cap. Baseline generation remains one call
+per contributing NPC and is unchanged in ordinary play. The runner records every
+attempt and keeps optional proposals actor-private and noncanonical. Its synthetic
+comparison harness does not establish live V0.2.1 parity; 015 still owns that
+measurement. The app's optional-stage controls are not enabled by this package.
