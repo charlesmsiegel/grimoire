@@ -544,8 +544,8 @@ Only 066 is complete at its narrow first-proof boundary. Other domain slices and
 ### 062 — Ruleset Action Contracts
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/ruleset-action-contracts.md)).
-- Evidence: adjudication and obstacles implement fiction-first outcomes; existing entity facets do not implement rules-family adapters.
-- Scope / gap: No separate D20/WoD/PbtA/Ars action contract implementations and examples.
+- Evidence: [`grimoire.rulesets`](../../backend/src/grimoire/rulesets) and [`test_rulesets.py`](../../backend/tests/test_rulesets.py) provide separate D20/WoD/PbtA/Ars proposal contracts and synthetic examples; see [contract and limits](../RULESETS.md).
+- Scope / gap: Headless proposal validation only. No canonical resolution, executable hooks, combat or UI integration; these remain 075/090/115. Completion remains unchecked until full verification and independent gates finish.
 
 <a id="slice-063"></a>
 ### 063 — Rumors And Information Flow
