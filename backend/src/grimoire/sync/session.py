@@ -1139,8 +1139,8 @@ def _commit_data(plan: SyncPlan, device: str, handle: object, approvals: Mapping
     held = contextlib.ExitStack()
     try:
         held.enter_context(_locked(*plan.stores.values()))  # a blob copy loads from the origin inside this commit
-        stale = (semantic.changed(plan, copies, applied.published, deletes, applied.deleted)
-                 or ledger_units.changed(plan, copies, applied.published))  # rechecked under both locks
+        stale = (ledger_units.changed(plan, copies, applied.published)
+                 or semantic.changed(plan, copies, applied.published, deletes, applied.deleted))  # both locked
         if stale is not None:
             raise SyncInterrupted(stale, _report(plan, applied))
         _recheck_deletes(plan, device, copies, deletes)
