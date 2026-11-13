@@ -27,9 +27,14 @@ export async function mount(root, ctx) {
   const parsed = viewOf(ctx.query, { pins });
   const filter = ["campaign", "world"].includes(ctx.query.get("filter")) ? ctx.query.get("filter") : parsed.filter;
   const source = parsed.source;
+  const campaign = filter === "campaign" ? ctx.query.get("campaign") : null;
+  const world = filter === "world" ? ctx.query.get("world") : null;
   const address = (changes) => {
-    const query = { filter, source, match: ctx.query.get("match") || undefined, campaign: ctx.query.get("campaign") || undefined, world: ctx.query.get("world") || undefined, ...changes };
-    if (query.filter === "all") { delete query.filter; delete query.source; }
+    const query = { filter, source, match: ctx.query.get("match") || undefined, campaign: campaign || undefined, world: world || undefined, ...changes };
+    if (query.filter !== "campaign") delete query.campaign;
+    if (query.filter !== "world") delete query.world;
+    if (!["character", "scenario"].includes(query.filter)) { delete query.source; delete query.match; }
+    if (query.filter === "all") delete query.filter;
     if (!query.source) delete query.source;
     return ctx.href("chats", [], query);
   };
@@ -73,7 +78,7 @@ export async function mount(root, ctx) {
   try { storage = window.localStorage; } catch (_) { storage = { getItem() { throw Error("Storage disabled"); }, setItem() { throw Error("Storage disabled"); } }; }
   let filters = savedFilters(storage);
   const selection = () => ({ q: state.q, group: state.group, sort: state.sort, filter, source,
-    match: ctx.query.get("match") || "exact", campaign: ctx.query.get("campaign"), world: ctx.query.get("world") });
+    match: ctx.query.get("match") || "exact", campaign, world });
   function savedControls() {
     storageStatus.textContent = filters.error || "Saved filters are device-local and not synchronized.";
     const name = el("input", { type: "text", "aria-label": "Saved filter name", maxlength: "100" });
@@ -105,8 +110,8 @@ export async function mount(root, ctx) {
   async function load(at = 0, sourcesAt = 0, comparisonsAt = 0, focus = false) {
     const focusKey = document.activeElement?.getAttribute("data-focus-key");
     const args = { filter, source: source || undefined, q: state.q, sort: state.sort,
-      match: ctx.query.get("match") || "exact", campaign: ctx.query.get("campaign") || undefined,
-      world: ctx.query.get("world") || undefined, pins: [...pinnedChats(shelf)],
+      match: ctx.query.get("match") || "exact", campaign: campaign || undefined,
+      world: world || undefined, pins: [...pinnedChats(shelf)],
       offset: at, source_offset: sourcesAt, comparison_offset: comparisonsAt,
       source_q: ctx.query.get("source_q") || "",
       snapshot: (at || sourcesAt || comparisonsAt) && page ? page.snapshot : undefined };
@@ -115,8 +120,12 @@ export async function mount(root, ctx) {
     if (response.error) {
       status.textContent = response.error.reason === "changed" ? "Navigation changed. Restart to see the current library." : String(response.error.message || response.error);
       if (response.error.reason === "changed") {
-        pager.replaceChildren(ui.button("Restart browsing", () => load(0, 0, 0, true)));
-        results.replaceChildren(); comparison.replaceChildren();
+        chats = null; page = null;
+        offset = 0; sourceOffset = 0; comparisonOffset = 0;
+        const restart = ui.button("Restart browsing", () => load(0, 0, 0, true));
+        pager.replaceChildren(restart);
+        results.replaceChildren(); comparison.replaceChildren(); picker.replaceChildren();
+        restart.focus();
       }
       return;
     }

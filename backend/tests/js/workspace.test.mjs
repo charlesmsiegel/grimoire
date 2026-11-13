@@ -25,3 +25,57 @@ test('latest request wins, bounded and exact by default; stale refusal is expose
   pending[2].reject({reason:'changed'});
   assert.equal((await third).error.reason, 'changed');
 });
+
+import {install, byText} from './fakedom.mjs';
+import * as ui from '../../src/grimoire/app/static/shell/ui.js';
+import {href} from '../../src/grimoire/app/static/shell/router.js';
+import {mount} from '../../src/grimoire/app/static/pages/chats/page.js';
+
+async function workspacePage(query) {
+  install('http://localhost');
+  let navigation, refuse = false;
+  const requests = [], drafts = new Map([['chat:alpha/one:composer', 'Kept composer draft']]);
+  const ctx = {ui, href, query:new URLSearchParams(query), styles(){}, layout(){}, setTitle(){}, setCrumb(){},
+    has(){return false;}, registered(){return false;}, setCount(){}, navigate(value){navigation=value;},
+    draft(key){return {get:()=>drafts.get(key)||'',set:value=>drafts.set(key,value)};},
+    api:async(op,args)=> {
+      requests.push(args);
+      if (refuse) throw {reason:'changed'};
+      return {chats:[{chat:'chat:alpha/one',label:'Old row',sources:[],launch:null,scope:null}],total:51,next:50,
+        snapshot:'old',sources:[],source_next:null,comparisons:[],comparison_next:null,diagnostics:[]};
+    }};
+  const root=ui.el('div',{}); document.body.append(root); await mount(root,ctx);
+  return {root, requests, drafts, get navigation(){return navigation;}, refuse(value){refuse=value;}};
+}
+
+test('changing scope filters clears hidden campaign/world/source restrictions', async () => {
+  for (const query of ['filter=campaign&campaign=alpha', 'filter=world&world=world%3Aalpha']) {
+    const page = await workspacePage(query);
+    byText(page.root,'button','All')[0].click();
+    assert.equal(page.navigation,'#/chats');
+    byText(page.root,'button','By character')[0].click();
+    assert.equal(page.navigation,'#/chats?filter=character');
+    byText(page.root,'button',query.startsWith('filter=campaign') ? 'World' : 'Campaign')[0].click();
+    assert.equal(page.navigation, query.startsWith('filter=campaign') ? '#/chats?filter=world' : '#/chats?filter=campaign');
+  }
+});
+
+test('stale continuation cannot resurrect cached rows through grouping; restart recovers with focus and drafts', async () => {
+  const page = await workspacePage('');
+  page.refuse(true);
+  byText(page.root,'button','Next chats')[0].click();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(page.root.querySelectorAll('a.chats-row').length,0);
+  byText(page.root,'button','None')[0].click();
+  assert.equal(page.root.querySelectorAll('a.chats-row').length,0);
+  assert.match(page.root.querySelector('.chats-status').textContent,/Navigation changed/);
+  assert.equal(document.activeElement.textContent,'Restart browsing');
+  page.refuse(false);
+  byText(page.root,'button','Restart browsing')[0].click();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(page.requests.at(-1).offset,0);
+  assert.equal(page.requests.at(-1).snapshot,undefined);
+  assert.equal(page.root.querySelectorAll('a.chats-row').length,1);
+  assert.equal(document.activeElement.getAttribute('href'),'#/chat/chat%3Aalpha%2Fone');
+  assert.equal(page.drafts.get('chat:alpha/one:composer'),'Kept composer draft');
+});
