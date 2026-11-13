@@ -24,7 +24,7 @@ from types import MappingProxyType
 
 from grimoire.core.identity import (
     AcceptedRef, ChatRef, HoldingsRef, IdentityConflict, InstanceRef, KnowledgeRef, RelationRef, ScopeRef, SourceRef,
-    BookmarkRef, TranscriptRef, TurnRef, WrapUpRef,
+    BookmarkRef, ContinuityRef, TranscriptRef, TurnRef, WrapUpRef,
     paired_instances, validate_segment,
 )
 from grimoire.core.index import DIRECTED_RELATIONS, DefinitionIndex, DefinitionLink, SourceDescriptor
@@ -41,7 +41,7 @@ from .errors import (
 )
 from .jsonfmt import JsonError, etag, parse_strict
 from .layout import (
-    ACCEPTED, BOOKMARKS, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, HOLDINGS, IMAGES, INSTANCES, PLACEMENTS,
+    ACCEPTED, BOOKMARKS, CONTINUITY, CAMPAIGNS, CHATS, CONFLICTS, EVENTS, EVIDENCE, EVIDENCE_FAMILIES, HOLDINGS, IMAGES, INSTANCES, PLACEMENTS,
     SCOPE, MANIFEST, MARKER, RECORDS, RELATIONS, RESERVED_CAMPAIGN_ENTRIES, RESERVED_ROOTS, SOURCE_DIR, SOURCES, SUFFIX,
     SYNC, SCOPE_ART, TRANSCRIPTS,
     TURNS, TXN, WRAPUPS, Parts, classify, is_noise, manifest_parts, name_key,
@@ -151,7 +151,7 @@ class CampaignRecords:
     """One campaign's records of one family (relations, accepted events, wrap-ups, chats, transcript pages or turns)
     and the problems ``load()`` would report under that family's folder."""
 
-    records: Mapping[RelationRef | AcceptedRef | WrapUpRef | ChatRef | TranscriptRef | TurnRef | BookmarkRef,
+    records: Mapping[RelationRef | AcceptedRef | WrapUpRef | ChatRef | TranscriptRef | TurnRef | BookmarkRef | ContinuityRef,
                      StoredScopeRecord]
     problems: tuple[LoadProblem, ...]
 
@@ -611,6 +611,7 @@ class _Campaigns:
     accepted: dict[AcceptedRef, StoredScopeRecord] = field(default_factory=dict)
     wrapups: dict[WrapUpRef, StoredScopeRecord] = field(default_factory=dict)
     turns: dict[TurnRef, StoredScopeRecord] = field(default_factory=dict)
+    continuity: dict[ContinuityRef, StoredScopeRecord] = field(default_factory=dict)
     bookmarks: dict[BookmarkRef, StoredScopeRecord] = field(default_factory=dict)
     holdings: dict[HoldingsRef, StoredScopeRecord] = field(default_factory=dict)
 
@@ -722,11 +723,12 @@ def _discover_chats(access: Access, base: Parts, found: _Campaigns, problems: li
 
 
 #: campaign-scoped record families stored one file per record: folder -> (classified kind, ``_Campaigns`` field)
-_FAMILIES = {RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups"),
+_FAMILIES = {CONTINUITY: ("continuity", "continuity"),
+             RELATIONS: ("relation", "relations"), ACCEPTED: ("accepted", "accepted"), WRAPUPS: ("wrapup", "wrapups"),
              TURNS: ("turn", "turns"), BOOKMARKS: ("bookmark", "bookmarks"), CHATS: ("chat", "chats")}  # ``load()`` reads chats itself (``_discover_chats``); listed for ``campaign_family``
 #: families that grow with every played turn (021, 035): like 020's events/evidence, ``load()`` skips them
 #: a chat's bookmarks are read with its chat (``campaign_family``), never by ``load()``
-_HISTORY = frozenset({ACCEPTED, WRAPUPS, TURNS, TRANSCRIPTS, BOOKMARKS})  # 036's transcript pages too
+_HISTORY = frozenset({ACCEPTED, WRAPUPS, TURNS, TRANSCRIPTS, BOOKMARKS, CONTINUITY})  # 036's transcript pages too
 
 
 def _discover_family(access: Access, base: Parts, family: str, found: _Campaigns,

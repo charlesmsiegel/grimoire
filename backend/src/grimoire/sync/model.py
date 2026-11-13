@@ -34,12 +34,12 @@ Action = Literal["agreed", "copy", "conflict", "delete"]
 #: ``bookmark`` is a person's bookmark on a chat's turn (one file each, mutable, ordinary rows; it names its chat).
 SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
                           "blob", "image", "placement", "transcript", "turn", "accepted", "wrapup", "holdings",
-                          "bookmark"})
+                          "bookmark", "continuity"})
 #: 018's art: own units, never source-coarse, never grouped with a definition. A blob is binary and
 #: content-addressed (listed by name and size, hashed only when copied or first seen).
 ASSET_KINDS = frozenset({"blob", "image", "placement"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
-CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript", "turn", "bookmark"})
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript", "turn", "bookmark", "continuity"})
 #: 028's ledger: 021's accepted events and wrap-ups and 023's holder files, which their own stores commit
 #: several at a time. They are never decided file by file: a campaign's ledger files (with its 017
 #: relations, see ``HOLDS_RELATIONS``) are one unit that ``grimoire.ledgermerge`` merges (``units``).
@@ -55,8 +55,8 @@ HELD_BACK_KINDS: frozenset[str] = frozenset()
 HOLDS_RELATIONS = "accepted"
 #: Create-only kinds: copied only onto an absent file, and a changed one is a conflict, never a copy.
 #: ``knowledge`` is 020's events, evidence and knowledge-log batches; ``image`` and ``blob`` are 018's;
-#: ``transcript`` is 036's append-only transcript pages.
-IMMUTABLE_KINDS = frozenset({"definition", "knowledge", "image", "blob", "transcript"})
+#: ``transcript`` is 036's append-only transcript pages; ``continuity`` archives immutable review evidence.
+IMMUTABLE_KINDS = frozenset({"definition", "knowledge", "image", "blob", "transcript", "continuity"})
 #: Kinds whose one-sided deletion of the agreed version propagates (028, row 9): the store's own
 #: deletable kinds. 020 knowledge records and 036 transcript pages are create-only with no delete (a
 #: missing one is damage), 018 image objects are create-only and blobs are content-addressed: for

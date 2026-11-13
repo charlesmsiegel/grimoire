@@ -17,7 +17,7 @@ import unicodedata
 from typing import Literal
 
 from grimoire.core.identity import (
-    KNOWLEDGE_FAMILIES, AcceptedRef, BookmarkRef, ChatRef, HoldingsRef, ImageRef, InstanceRef, KnowledgeRef, OwnerRef,
+    KNOWLEDGE_FAMILIES, AcceptedRef, BookmarkRef, ChatRef, ContinuityRef, HoldingsRef, ImageRef, InstanceRef, KnowledgeRef, OwnerRef,
     PlacementRef,
     RelationRef, ScopeRef, SourceRef, TranscriptRef, TurnRef, WrapUpRef, validate_segment, validate_source_id,
 )
@@ -88,6 +88,7 @@ _BLOB_NAME = re.compile(rf"(?P<sha>[0-9a-f]{{64}})\.(?P<ext>{'|'.join(map(re.esc
 TRANSCRIPTS = "transcripts"  # campaigns/<id>/transcripts/<chat_id>/<seq:010d>.json: one transcript page (036)
 _PAGE_NAME = re.compile(r"[0-9]{10}\.json")
 HOLDINGS = "holdings"  # campaigns/<id>/holdings/<kind>/<instance_id>.json: counted holdings (023)
+CONTINUITY = "continuity"
 BOOKMARKS = "bookmarks"  # campaigns/<id>/bookmarks/<bookmark_id>.json: one bookmark on a chat's turn
 
 ROOT_ENTRIES = frozenset({MARKER, SOURCES, CAMPAIGNS, TXN, CONFLICTS, SYNC})
@@ -176,6 +177,10 @@ def turn_parts(ref: TurnRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, TURNS, ref.turn_id + SUFFIX))
 
 
+def continuity_parts(ref: ContinuityRef) -> Parts:
+    return _checked((CAMPAIGNS, ref.campaign_id, CONTINUITY, ref.record_id + SUFFIX))
+
+
 def bookmark_parts(ref: BookmarkRef) -> Parts:
     return _checked((CAMPAIGNS, ref.campaign_id, BOOKMARKS, ref.bookmark_id + SUFFIX))
 
@@ -214,7 +219,7 @@ def holdings_parts(ref: HoldingsRef) -> Parts:
 
 
 Address = (SourceRef | InstanceRef | ScopeRef | ChatRef | RelationRef | KnowledgeRef | ImageRef | PlacementRef
-           | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef | TurnRef | BookmarkRef)
+           | AcceptedRef | WrapUpRef | HoldingsRef | TranscriptRef | TurnRef | BookmarkRef | ContinuityRef)
 
 
 def address_parts(address: Address) -> Parts:
@@ -242,6 +247,8 @@ def address_parts(address: Address) -> Parts:
         return transcript_parts(address)
     if isinstance(address, TurnRef):
         return turn_parts(address)
+    if isinstance(address, ContinuityRef):
+        return continuity_parts(address)
     if isinstance(address, BookmarkRef):
         return bookmark_parts(address)
     return definition_parts(address)
@@ -361,6 +368,10 @@ def classify(parts: Parts) -> tuple[Kind, object] | None:
             stem = _stem(parts[3])
             if stem is not None:
                 found = ("turn", TurnRef(parts[1], stem))
+        elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == CONTINUITY:
+            stem = _stem(parts[3])
+            if stem is not None:
+                found = ("continuity", ContinuityRef(parts[1], stem))
         elif len(parts) == 4 and parts[0] == CAMPAIGNS and parts[2] == BOOKMARKS:
             stem = _stem(parts[3])
             if stem is not None:
