@@ -1,0 +1,6 @@
+[
+  {"id":"facade", "file":"facade.py.txt", "specialist":"overengineering", "finding":"thin_wrapper", "structural_expected":true, "actionable_defect":false},
+  {"id":"awaited", "file":"awaited.py.txt", "specialist":"coroutines", "finding":"unawaited_coroutine", "structural_expected":false, "actionable_defect":false},
+  {"id":"discarded", "file":"discarded.py.txt", "specialist":"coroutines", "finding":"unawaited_coroutine", "structural_expected":true, "actionable_defect":true},
+  {"id":"missing", "file":"missing.py.txt", "specialist":"coroutines", "finding":"unawaited_coroutine", "structural_expected":null, "actionable_defect":null}
+]
