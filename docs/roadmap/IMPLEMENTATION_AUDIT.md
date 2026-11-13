@@ -593,8 +593,8 @@ Only 066 is complete at its narrow first-proof boundary. Other domain slices and
 ### 069 — Coding Skills Calibration
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/coding-skills-calibration.md)).
-- Evidence: Engineering guidance and ordinary test suites exist.
-- Scope / gap: No pinned independent defect/theory grader calibration corpus, repeatability results or false-positive analysis found.
+- Evidence: [`grimoire.calibration`](../../backend/src/grimoire/calibration.py) runs a pinned external deterministic-specialist corpus with three repeat trials, unknown-analysis handling and structural confusion counts; [calibration report and limits](../CALIBRATION.md).
+- Scope / gap: Independent actionable-defect/theory model calibration, model pins, panel repeatability and defect false-positive rates remain unavailable. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
 
 <a id="slice-070"></a>
 ### 070 — Multimodal Player Input
@@ -607,8 +607,8 @@ Only 066 is complete at its narrow first-proof boundary. Other domain slices and
 ### 071 — Theory Driven Simplification
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/theory-driven-simplification.md)).
-- Evidence: Existing modules have contracts and tests.
-- Scope / gap: No identified bounded simplification with theory comparison and measured change-rehearsal proof found; general modularity is not this deliverable.
+- Evidence: [Opaque envelope schema policy](../STORAGE.md#opaque-record-schema-policy-071-bounded-slice) removes one repeated validation decision in a verified high-churn module; 51 behavior cases passed before/after, and an executed hypothetical NUL-policy rehearsal required three edits before versus one after with 45 passing cases per variant.
+- Scope / gap: This narrower schema-policy slice does not prove the actor/world change scenario or Android runtime; those broader obligations remain open.
 
 <a id="slice-072"></a>
 ### 072 — VN Staging And Cues
