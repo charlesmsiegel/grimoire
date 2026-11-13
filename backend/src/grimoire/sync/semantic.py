@@ -203,6 +203,12 @@ def guard(plan):
             implicated.update(p for p in plan.paths if premise_path(p, review.campaign))
         implicated.update(p for p in plan.paths if syncable(p) in ('relation', 'continuity')
                           and p.split('/')[1] == review.campaign)
+        if (not review.scenes and not review.endpoints and review.reasons == ('unreadable_semantic_sources',)
+                and any(plan.conflicts[p].code == 'merge_review' for p in implicated if p in plan.conflicts)):
+            # This is the ledger owner's structural failure, without evidence of a
+            # cross-domain invalidation. Its unit is already held; keep its native
+            # code and detailed refusal instead of replacing them with a new label.
+            continue
         for path in implicated:
             plan.held.add(path)
             plan.agreed.discard(path)

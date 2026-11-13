@@ -65,6 +65,11 @@ def resolve(left: LibraryStore, right: LibraryStore, path: str, keep: str | None
     semantic_plan = None
     if kind in ('turn', 'relation') or (kind in ('image', 'placement') and path.startswith('campaigns/')):
         semantic_plan = session.plan_sync(left, right, handles)
+        if kind == 'relation' and _held_relation(path, set(semantic_plan.ledger_campaigns)):
+            # Use the same scan that found the semantic premises: a one-shot listing
+            # failure must not disappear before the native ledger owner is selected.
+            raise ResolveRefused(f"{path} is a ledger file: its campaign has accepted events (021), and a relation "
+                                 "they changed must never arrive without them; end its conflict with resolve_ledger")
         if any(path in r.scenes or path in r.endpoints or (kind == 'relation' and path.split('/')[1] == r.campaign)
                for r in semantic.reviews(semantic_plan)):
             raise ResolveRefused(f'{path} requires semantic review; use the continuity owner operation')
