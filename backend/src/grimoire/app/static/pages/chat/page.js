@@ -39,7 +39,7 @@ export async function mount(root, ctx) {
     return ctx.act(work).finally(() => { page.busy = false; if (page.scene && !ctx.signal.aborted) render(page.scene); });
   };
   const page = { busy: false, scene: null, mode: "auto", modes: null, pickable: null, repairs: null, entry: undefined,
-    tab: "cast", panelOpen: false, adding: false, writing: false, failure: null, chosen: null, redirecting: null, striking: null,
+    tab: "cast", panelOpen: false, adding: false, pendingCard: "", writing: false, failure: null, chosen: null, redirecting: null, striking: null,
     keys: null, stopped: false,
     // a start that stopped before it finished, as Start Chat was told (?unfinished=), until continue answers
     unfinished: ctx.query.get("unfinished") };
@@ -598,13 +598,15 @@ export async function mount(root, ctx) {
             + (role === "character" && here.has(item.name) ? " (a character of that name is here)" : "") });
       }
     }
-    const pick = ui.choice("Card to add", options);
+    const pick = ui.choice("Card to add", options, { value: page.pendingCard,
+      onchange: (value) => { page.pendingCard = value; } });
     box.append(pick.node, el("p", { class: "g-muted" }, "A character, a lorebook or a scenario from your library. A newcomer hears only what is said from now on."),
       ui.button("Add", () => run(async () => {
         if (!pick.value) return;
         const space = pick.value.indexOf(" ");
         const scene = await call("play.add_card", { role: pick.value.slice(0, space), ref: pick.value.slice(space + 1) });
         page.adding = false;
+        page.pendingCard = "";
         page.unfinished = scene.unfinished || null;  // the newcomer bound but not seated: continue seats it
         render(scene);
         loadEntry();

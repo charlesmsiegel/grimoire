@@ -47,24 +47,26 @@ phones. No screenshots, traces, tokens or generated libraries are committed.
 | Fresh setup | Keyboard folder check, actionable missing-device error, source creation, cancellation/focus restoration | No V1 default reuse |
 | Models | Save/check local endpoint, no setup calls, request counts and provider-reported usage, changed token limit after restart | 112's full production role/context/budget work still needs integrated rerun |
 | World-less play | Imported V3 card, manual persona, distinct NPC calls/voices, newcomer exclusion, keep/retry, process reopen | Synthetic voice separation, not human/live quality certification |
-| Manual character play | No-greeting manually created character must answer | Existing production failure remains a failing test; no expected-failure marker |
+| Manual character play | No-greeting manually created character must answer | Native voice derives from own description/personality; creation supplies default speaking facets only when omitted |
 | Review | Real effect proposal, cancel, stale fingerprint refusal, separate player/director keys, accepted-state readback | Supported action-backed relation effect; broader 113 production integrations still require their own tests |
 | Navigation | Same chat through all/character/scenario filters; draft after back/reload | Canonical ID and one chat asserted |
+| Cast picker | Delayed real metadata response, retained qualified selection, real duplicate-binding refusal, corrected retry | No fabricated successful writes, sleeps or automatic retry |
 | Migration | Browser scan/preview/approval, art-loss warning, two-NPC play and process resume | Synthetic source snapshot must remain unchanged |
 | Media/sync | UI upload, pairing, manual transfer, image bytes, two offline branches and preserved alternative | Reachable loopback clients only |
 | Accessibility/responsiveness | Tab/Enter/Escape, focus return, alert text, 1280×900 and 390×844 layout, phone control geometry and cast panel | DOM/geometry evidence, not real screen-reader or physical-touch proof |
 
-On the audit base `e551c709f7e38a13ce85009502539d31bd2c67b8`, Chromium
-verification on Linux/Python 3.12 produced **12 passed, 1 failed**. The remaining
-failure is `test_manually_created_character_can_reply`: create a character with
-name/description and no greeting, start a world-less chat, then Post. The UI's
-reply attempt reaches `director_declined` rather than a keepable NPC take. The
-imported-card path passes. Source authoring explicitly reports that manual
-characters need a voice profile and that this library cannot author one yet
-(`sourceapi/api.py`, the voice limitation). The handoff is 109 authoring to
-014/027 voice resolution and 111 play; a greeting alone is not the diagnosed
-missing contract. This is a reproducible unmet play
-contract, not an expected failure or a claim that all Wave 7 features are ready.
+The audit base `e551c709f7e38a13ce85009502539d31bd2c67b8` failed the
+manual-character journey: the library could not supply its required voice or
+speaking facets. The integrated native-authoring fix derives bounded voice from
+the character's own description/personality and defaults omitted creation traits;
+it does not alter existing records or override explicit traits. The unchanged
+manual-character browser test exercises that path without injected voices/facets.
+
+The browser suite also exposed a cast-picker race: late chat metadata rebuilt
+the selector and erased the pending choice. The page now retains the qualified
+choice across redraws and real server refusals, and clears it after a successful
+addition. Timing-controlled regression tests verify both success and correction
+without weakening the ordinary two-voice/newcomer-privacy journey.
 
 The suite deliberately retains unmet release contracts as ordinary failures.
 Its existence does not close a roadmap checkmark. The 033 actor-kind, 047 claim
