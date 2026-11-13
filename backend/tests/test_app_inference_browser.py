@@ -33,12 +33,13 @@ SRC = Path(__file__).resolve().parent.parent / "src"
 
 
 @contextlib.contextmanager
-def running_app(folder, settings):
+def running_app(folder, settings, *, campaign_config=None):
     """Use exactly the CLI construction path, with bounded startup and shutdown."""
     environment = dict(os.environ, PYTHONPATH=os.pathsep.join([str(SRC), os.environ.get("PYTHONPATH", "")]))
     process = subprocess.Popen(
         [sys.executable, "-m", "grimoire.app", "serve", str(folder), "--owner", OWNER,
-         "--port", "0", "--model", str(settings)],
+         "--port", "0", "--model", str(settings),
+         *(["--campaign-config", str(campaign_config)] if campaign_config is not None else [])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment,
     )
     ready = queue.Queue()

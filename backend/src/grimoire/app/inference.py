@@ -101,7 +101,7 @@ _LOCKER = OsLocker()
 #: The optional stages, and why the app plays none but the director's reply yet. A stage is shown as it is:
 #: the app never offers a switch that would change nothing.
 _NOT_WIRED = {
-    InferenceStage.LABELLING: "035's labelling needs a labeller runtime and handle the app does not set up yet",
+    InferenceStage.LABELLING: "campaign labelling is configured separately through --campaign-config and used at the campaign hub",
     InferenceStage.PLANNING: "no V2 service plans an NPC with a model yet",
     InferenceStage.EPISTEMIC_INFERENCE: "no V2 service infers perception with a model yet",
     InferenceStage.RECALL: "memory recall is deterministic in V2; no model-assisted recall exists yet",
@@ -349,13 +349,21 @@ class InferenceApi:
             return
         try:
             config = self._parse(data)
+            self._composed_agendas(config)
         except ConfigError as error:
             self._apply(None, _problem("settings_invalid", _config_message(error)))
             return
         self._build(config)
 
+    def _composed_agendas(self, config: ModelConfig):
+        startup = self.text_api.startup_agendas
+        owners = {agenda.actor for agenda in startup}
+        if any(agenda.actor in owners for agenda in config.agendas):
+            raise ConfigError("agendas overlap campaign startup policies; edit the startup file and restart")
+        return (*startup, *config.agendas)
+
     def _build(self, config: ModelConfig) -> None:
-        self.text_api.runner.set_agendas(config.agendas)
+        self.text_api.runner.set_agendas(self._composed_agendas(config))
         try:
             access = build_access(config, self.owner, environ=self.environ, transport=self.transport)
         except ConfigError as error:  # the key variable is not set: saved, but nothing can be generated
@@ -369,7 +377,7 @@ class InferenceApi:
 
     def _apply(self, config: ModelConfig | None, problem: dict | None) -> None:
         self.config, self.problem = config, problem
-        self.text_api.runner.set_agendas(())
+        self.text_api.runner.set_agendas(self.text_api.startup_agendas)
         self._give(None, None)
 
     def _give(self, runtime, policy) -> None:  # type: ignore[no-untyped-def]
@@ -495,6 +503,7 @@ class InferenceApi:
                                                           "ending _API_KEY (such as OPENROUTER_API_KEY)"}]
         try:
             config = parse_model_config(raw)
+            self._composed_agendas(config)
         except ConfigError as error:
             message = _config_message(error)
             field = next((key for key in sorted(KEYS) if message.startswith(key)), "settings")
@@ -567,7 +576,10 @@ class InferenceApi:
             except (ValueError, StoreError, SceneRefused):
                 raise ApiRefused("context_unavailable", "this NPC's current context cannot be safely built") from None
             agenda = next((a for a in self.config.agendas if a.actor == actor), None) if self.config else None
-            result["agenda"] = simple_view(agenda)
+            startup = next((a for a in self.text_api.startup_agendas if a.actor == actor), None)
+            result["agenda"] = ({"editable": False, "source": "campaign_startup",
+                "reason": "This policy comes from campaign startup configuration; edit that file and restart to change it."}
+                if startup is not None else simple_view(agenda))
         return result
 
     def _save_agenda(self, args: Mapping[str, object]) -> dict:
@@ -577,6 +589,8 @@ class InferenceApi:
         chat, actor, _scene, _actors = self._selected(args)
         if actor is None:
             raise ApiRefused("invalid_field", "choose an NPC for these tactics")
+        if any(a.actor == actor for a in self.text_api.startup_agendas):
+            raise ApiRefused("startup_agenda", "edit the campaign startup file and restart to change this policy")
         if self.config is None:
             raise ApiRefused("not_configured", "save model settings before configuring tactics")
         existing = next((a for a in self.config.agendas if a.actor == actor), None)
