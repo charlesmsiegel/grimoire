@@ -120,14 +120,23 @@ export function makeStaging(ctx, chat, { log }) {
   const choice = (name, values, value, onchange) => {
     const select = el(
       "select",
-      { name, "aria-label": name, onchange: () => onchange(select.value) },
+      {
+        name,
+        "aria-label": name,
+        "data-stage-focus": name,
+        onchange: () => onchange(select.value),
+      },
       ...values.map(([v, label]) => el("option", { value: v }, label)),
     );
     select.value = value;
     return select;
   };
   const button = (text, fn) =>
-    el("button", { type: "button", onclick: fn }, text);
+    el(
+      "button",
+      { type: "button", "data-stage-focus": text, onclick: fn },
+      text,
+    );
   const mode = choice(
     "stage-mode",
     [
@@ -153,11 +162,23 @@ export function makeStaging(ctx, chat, { log }) {
   const pictures = chatPictures(ctx, chat, () => {
     if (scene && !ctx.signal.aborted) draw();
   });
-  function draw() {
+  function draw(nextFocus) {
+    const active = document.activeElement;
+    const focusKey =
+      nextFocus ||
+      (body.contains(active) ? active.getAttribute("data-stage-focus") : null);
+    drawContent();
+    if (focusKey) {
+      const target = [...body.querySelectorAll("[data-stage-focus]")].find(
+        (item) => item.getAttribute("data-stage-focus") === focusKey,
+      );
+      (target || mode).focus({ preventScroll: true });
+    }
+  }
+  function drawContent() {
     const previousNote = body.querySelector('[name="Cue note"]');
     if (editing && editDraft && previousNote)
       editDraft.note = previousNote.value;
-    const activeName = document.activeElement?.getAttribute("name");
     const epoch = ++revision;
     status.textContent = store.warning;
     body.replaceChildren();
@@ -382,6 +403,7 @@ export function makeStaging(ctx, chat, { log }) {
     );
     const note = el("textarea", {
       name: "Cue note",
+      "data-stage-focus": "Cue note",
       "aria-label": "Cue note",
       maxlength: "1000",
     });
@@ -392,20 +414,14 @@ export function makeStaging(ctx, chat, { log }) {
         draft.note = note.value;
         store.save({ ...store.cues, [selected]: draft });
         editing = false;
-        draw();
+        draw("Edit cue");
       }),
       button("Cancel cue", () => {
         editing = false;
-        draw();
+        draw("Edit cue");
       }),
     );
     body.append(editor);
-    if (activeName) {
-      const focused = [...editor.querySelectorAll("[name]")].find(
-        (item) => item.getAttribute("name") === activeName,
-      );
-      focused?.focus();
-    }
   }
   return {
     node,
