@@ -14,7 +14,7 @@ This is a code-and-test audit of the 119 scheduled **first-useful slices**, incl
 | [4](#wave-4) | 9/10 | ☐ | 033 still rejects non-character actors in chat rosters, despite supporting creature scene casts. |
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 5/6 | ☐ | 047 lacks the independent prose-claim extraction required by its inherited first-proof addition. Physical-phone validation also remains unverified. |
-| [7](#wave-7) | 5/7 | ☐ | 112 and 113 have production UI integration gaps. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it. |
+| [7](#wave-7) | 6/7 | ☐ | 112 retains production UI integration gaps. 113 has a real CLI/Chromium follow-up proof. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it. |
 | [8](#wave-8) | 1/24 | ☐ | Only 066 is complete at its narrow first-proof boundary. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
@@ -400,7 +400,7 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="wave-7"></a>
 ## Wave 7
 
-112 and 113 have production UI integration gaps. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it.
+112 retains production UI integration gaps. 113 now has a real CLI/Chromium follow-up proof. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it.
 
 <a id="slice-108"></a>
 ### 108 — UI Shell, Onboarding and Navigation
@@ -440,9 +440,9 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="slice-113"></a>
 ### 113 — UI Campaign State and Canon Review
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/ui-campaign-state-canon.md)).
-- Evidence: [`backend/src/grimoire/app/adapters/campaign.py`](../../backend/src/grimoire/app/adapters/campaign.py); [`backend/tests/test_campaignapi.py`](../../backend/tests/test_campaignapi.py); [`backend/src/grimoire/campaignapi/api.py`](../../backend/src/grimoire/campaignapi/api.py); [`backend/src/grimoire/app/static/pages/campaign/page.js`](../../backend/src/grimoire/app/static/pages/campaign/page.js).
-- Scope / gap: hub_of constructs CampaignApi without labeller/policy/stages/agendas. Thus actual app cannot label new obstacle attempts or inspect configured 041 stage / 039 agendas, although injectable API tests exercise them. Recorded effects review/consent/recovery and audience-safe knowledge work. Browser smoke separately unverified.
+- [x] Scheduled first-useful slice ([requirements](sprints/ui-campaign-state-canon.md)); follow-up to the audit snapshot above.
+- Evidence: [`app/campaign_config.py`](../../backend/src/grimoire/app/campaign_config.py) and [`app/campaign_services.py`](../../backend/src/grimoire/app/campaign_services.py) wire explicit startup stage/agenda and optional labeling configuration into CLI/chat/hub; [`test_app_campaign_config.py`](../../backend/tests/test_app_campaign_config.py) covers policy, authority, retries and usage; [`test_app_campaign_review.py`](../../backend/tests/test_app_campaign_review.py) covers stale turn and frame refusal; [`test_app_campaign_browser.py`](../../backend/tests/test_app_campaign_browser.py) runs actual CLI startup/restart and Chromium interactions over synthetic data.
+- Scope / limits: browser proof includes keyboard cancellation, failed-label retry, stale second-tab review, separate player/director effect keys, actor-private evidence, absent-NPC exclusion, configured NPC choice, narrow viewport and exactly-once consequence after restart. 039 agendas and 041 stages remain authored startup configuration, not later persisted simulation/editors. Labeling has an explicit independent paid route; no effect follows automatically from narration. Full Wave 7 screen-reader/physical-phone acceptance remains unverified; this closes 113's scheduled first-useful slice only.
 
 <a id="slice-114"></a>
 ### 114 — UI Media, Sync and Resilience

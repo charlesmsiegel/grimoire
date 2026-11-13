@@ -254,7 +254,8 @@ def campaign_items(hub: Mapping[str, Any], chat: str, title: str, campaign: str 
         said = f"Labelled {label['label']}" + (f", against “{goal}”" if goal else "") \
             + (f" by {against['approach']}" if against and against.get("approach") else "") + "."
         actions, notes = offered("confirm", "Confirming the labelling", _action(
-            "confirm", "Confirm the labelling", "campaign.confirm", {"chat": chat, "audience": "table"},
+            "confirm", "Confirm the labelling", "campaign.confirm", {"chat": chat, "audience": "table",
+                                                       "turn": action["turn"], "expected": action["expected"]},
             "Labelling confirmed", quick=not (label["factors"] or label["stakes"])))
         items.append({
             "id": f"label:{chat}:{action['turn']}", "kind": "action", "label": KINDS["action"],

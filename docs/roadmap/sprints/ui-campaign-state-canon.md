@@ -1,6 +1,6 @@
 # Sprint 113: UI Campaign State and Canon Review
 
-> **Planned Wave 7 P0 UI sprint, not a completed feature.** [Roadmap](../README.md) · [UI coverage](../UI_COVERAGE.md).
+> **Scheduled first-useful slice implemented and verified through real CLI/Chromium; later milestones and full Wave 7 acceptance remain open.** [Roadmap](../README.md) · [UI coverage](../UI_COVERAGE.md).
 
 **Outcome:** UI Campaign State and Canon Review makes the corresponding Wave 1–6 functionality usable from the graphical app.
 **Owner:** frontend/campaign-and-canon. **Required earlier contracts:** 003, 012, 017, 020, 021, 023–025, 029–030, 032–035, 039–043; 047 when integrated.
@@ -36,3 +36,5 @@ Own only the named frontend module and its domain-specific API adapters. Consume
 
 - Which existing headless operations need new UI adapters and authorization checks?
 - Which later milestone controls must remain explicitly unavailable?
+
+The production hub consumes explicit startup configuration for existing 039 agendas, 041 stages and an optional bounded labeling route. See [Campaign hub](../../CAMPAIGN_HUB.md#startup-services-113) for configuration, authority and lifetime limits, and [the audit evidence](../IMPLEMENTATION_AUDIT.md#slice-113) for the real browser proof.

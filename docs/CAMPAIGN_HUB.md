@@ -17,7 +17,7 @@ It keeps no record of its own. Every write goes through the service that owns th
 | `recover_effects` | Settle (or `abort`) acceptances of this chat that were cut short; where 035 needs the player present (an abort of an effect they endorsed, or a completion whose endorsement the authority no longer records), `player_key: true` is the player's own key, given knowingly | 035 runner, 030 |
 | `chats` (app only) | The library's recent chats, grouped by campaign (each with its `title` and `world`, its chats newest first, each chat with its `label`, `last_activity`, `problem` and `cast`: its bound characters and persona), all as the core `chats` op answers them; with `campaign`, that campaign's alone (read only) | none |
 
-Every op takes `chat` (a `ChatRef` string) and an optional `audience`, checked before anything is written. Write ops return `{"done": ..., "hub": ...}`, the hub as it stands after the write, so a screen never shows a stale situation beside a fresh result. A refusal is an `ApiRefused` with the owning service's own reason (`fingerprint_mismatch`, `already_accepted`, `unknown_effect`, `not_at_table`, `changed` for a stale write, ...) and writes nothing unless that service's refusal says so (035 records a labelling the model refused, so the table sees why). A hub that cannot be read after a committed write comes back as `hub: null` with its problem, never as a refusal of the write.
+Every op takes `chat` (a `ChatRef` string) and an optional `audience`, checked before anything is written. Production `campaign.label`, `campaign.confirm` and `campaign.decide` also require `turn` and `expected` from the displayed `open_action`; missing review identity is refused as `review_required`, and a changed turn as `changed`. Both director adjudication and player consent additionally name the displayed frame `fingerprint`. Reload and review again after a stale refusal; no approval is transferred to the newer action. Write ops return `{"done": ..., "hub": ...}`, the hub as it stands after the write, so a screen never shows a stale situation beside a fresh result. A refusal is an `ApiRefused` with the owning service's own reason (`fingerprint_mismatch`, `already_accepted`, `unknown_effect`, `not_at_table`, `changed` for a stale write, ...) and writes nothing unless that service's refusal says so (035 records a labelling the model refused, so the table sees why). A hub that cannot be read after a committed write comes back as `hub: null` with its problem, never as a refusal of the write.
 
 ## The page
 
@@ -37,7 +37,7 @@ Every op takes `chat` (a `ChatRef` string) and an optional `audience`, checked b
 Who acts:
 
 - **The table** confirms a labelling and consents to a setback, naming the frame's fingerprint, after a confirmation that says what it decides. It also endorses an effect exactly as shown.
-- **Either view** asks for a labelling where the app has a labeller. The app passes the hub none yet, so labelling there is named as unavailable.
+- **Either view** asks for a labelling where the app has a labeller. The app enables it only through an explicit `--campaign-config` labeling route (below); without one it is named as unavailable.
 - **The director** decides, and proposes an effect. A proposal names a kept turn (read from the core `open` op) or the open action's turn once it is decided and is written in structured form: 021 operations, plus 023 `add` and `consume` lines. The director then approves it. When the director's key is the last one, the confirmation says the effect becomes world truth.
 - A cut-short acceptance of this chat (035's `effect_unsettled`, `effect_untagged` or `effect_elsewhere`) is shown to both views. Only the director's view settles or undoes it. The player's own key is a separate box they tick, and so is the owner's word that an untagged one was accepted in this library (`own`). One that another device accepted is left to that device. The page then says how many effects were settled.
 - A proposal being built survives other writes, and is cleared once it is made.
@@ -76,3 +76,83 @@ An obstacle's `due` lists what its decided attempts brought, as 040 says (each w
 ## Not available yet
 
 The hub's `unavailable` list names each feature it does not offer and the work that would: revoking an accepted effect and ability use (035 offers neither), effects proposed from narration (035/047), the long-term ledger (053), the story graph (081), clocks (055), NPC agenda editing (039) and stored goal progress (039's next slice), rebasing a pinned scenario or lorebook (042), stored change-set proposals (043 milestone 3: a change set is reviewed from its document in the review screen), and the stage when a chat has none (041). Item powers (034) and beliefs of actors outside the chat's cast are not shown yet.
+
+
+## Startup services (113)
+
+Start with `python -m grimoire.app serve /absolute/path/to/v2-library --campaign-config /absolute/path/to/campaign.json`.
+The file is a read-only, versioned JSON configuration, loaded before serving, including after first-run setup.
+It is not a canonical campaign record, a sync family or an editable UI document. Restart reloads it;
+041's later persisted stage evolution and 039's agenda editor/progress remain unavailable.
+Omitting the option keeps ordinary unstaged play and disables paid labeling.
+
+A synthetic example (replace references with the exact IDs in your library):
+
+```json
+{
+  "version": 1,
+  "stages": [{
+    "chat": "campaign:realm#chat/table",
+    "as_of": 0,
+    "areas": [{"area_id": "room", "label": "The room"}],
+    "actors": ["campaign:realm/character/mara"],
+    "placements": [{"who": "campaign:realm/character/mara", "area": "room", "basis": "established"}]
+  }],
+  "agendas": [{
+    "actor": "campaign:realm/character/mara",
+    "goals": [{"goal_id": "safe", "aim": "Stay safe", "priority": 1,
+      "approaches": [{"approach_id": "wait", "action": "Wait by the door"}]}]
+  }],
+  "labelling": {
+    "provider_id": "local-labels",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "model": "label-model",
+    "max_output_tokens": 1200,
+    "attempts": 1,
+    "director": 0
+  }
+}
+```
+
+The outer object requires `version: 1`; `stages`, `agendas` and `labelling` are optional.
+The file is bounded to 1 MiB and at most 256 stages and 256 agendas. Duplicate JSON keys,
+duplicate chat/agenda identities, unknown fields and invalid domain values are refused with content-free errors.
+No names are resolved to identities. Stage/cast inconsistencies and unusable agenda references remain explicit
+runtime refusals/problems rather than being silently repaired.
+
+A stage requires `chat`, `as_of`, `areas`; it accepts `ways`, `actors`, `placements`, `absences`.
+Areas have `area_id` and optional `label`. Ways have `way_id`, two `sides` (one may be `null` for offstage),
+optional `state` (`open`, `closed`, `locked`), `key` (an instance reference), `basis` and `since`.
+Placements have `who` and exactly one of `area` or `holder`; absences have `actor` and optional `via`.
+Both accept `basis` (`established` or `assumed`) and `since`. Defaults and semantic checks are those of
+[041 staging](STAGING.md). All actors must be placed or absent and belong to the chat's campaign.
+The same stage source constrains ordinary chat hearing/presence and the hub; reading it grants no actor knowledge.
+
+An agenda requires `actor` and `goals`, optionally `limits`. Each goal has `goal_id`, `aim`, `priority`,
+`approaches`; each approach has `approach_id`, `action`, optional `tags` and `needs`.
+Limits have `limit_id`, `rule`, `forbids` tags and optional `when` conditions.
+A condition is either `{"present": "<InstanceRef>"}` or `{"holds": "<proposition-id>", "stances": ["believed"]}`.
+Conditions and limits use [039's policy](GOALS.md), consulting only that NPC's perspective;
+configured goals are displayed only in the director view and ordinary generation records its policy choice.
+They do not create memories, events or new model calls.
+
+`labelling` uses the existing app model JSON shape: provider ID, endpoint and model, optional `key_env`,
+output-token bound, attempts and fallback models. Credentials come from the named environment variable;
+no key value belongs in this file. Missing credentials refuse configuration. The labeling policy allows
+one call per explicit request and at most the configured number of attempts (maximum three).
+The campaign page shows the effective route and bounds and asks **Request labels** before making a potentially
+billed call. **Cancel** sends nothing. A failed label remains visible and can be retried deliberately;
+leaving the page is not a promise to cancel an already sent provider request.
+
+This route is separate from 112's **Models** settings. Editing narration settings neither enables nor reroutes
+labeling. Original labeling attempts retain route, usage and measurement provenance on the turn; existing
+route-keyed usage pricing leaves a different, unpriced labeling model unpriced. It never borrows another
+route's token price. The route calls providers with an untrusted, payload-approved handle, and proposals use
+a distinct library-issued untrusted **PROPOSE-only** handle. Restart reuses its active matching grant;
+a revoked grant is refused rather than silently restored. Adjudication and the two human acceptance keys
+remain separate. Labeling, inspecting stages and inspecting goals never accept a consequence.
+
+Integration dependencies: 113 consumes the stable model parser/provider transport, `SceneRunner`, `StageBook`,
+`Agenda`, adjudication and effect APIs. It does not implement 033 creature casting, 047 independent prose
+extraction or 112's broader inference UI. Source rebase/change-set handoffs and unsupported later features
+keep their existing explicit availability boundaries. No V1 path or data migration is introduced.

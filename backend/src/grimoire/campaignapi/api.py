@@ -224,6 +224,7 @@ class CampaignApi:
         abilities = self._abilities(captured, shown, problems)
         sources = self._sources(captured, names, None if director else mine, problems)
         hub = {"chat": str(chat), "audience": audience, "director": self.owner, "player": self.owner,
+               "labelling_config": getattr(self, "labelling_config", None),
                "cast": cast, "persona": None if scene.persona is None else str(scene.persona),
                "paused": scene.paused, "stage": stage_view(stage, names), "party": party,
                "holdings": holdings, "items": items, "abilities": abilities, "sources": sources,
@@ -422,6 +423,7 @@ class CampaignApi:
             problems.append({"code": error.reason, "detail": str(error)})
         actor = None if pending.post is None else pending.post.actor
         return {"turn": pending.turn_id, "actor": actor_ref(actor, names),
+                "expected": scene.turns.etags().get(pending.turn_id),
                 "label": None if latest is None else label_view(latest),
                 "framed": framed_view(framed, names), "outcome": outcome_view(outcome, names)}
 

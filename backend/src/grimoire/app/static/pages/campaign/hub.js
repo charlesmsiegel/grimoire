@@ -109,7 +109,11 @@ export async function showHub(root, ctx, campaign, asked, audience) {
     const names = new Map(hub.cast.map((member) => [member.actor, member.name]));
     const nameOf = (ref) => (ref ? names.get(ref.ref) || ref.name || ref.ref : "nobody");
     for (const turn of hub.turns) numbers.set(turn.turn, turn.number);
-    const at = { ctx, hub, nameOf, write, director, call, knowing, chat, numberOf: (turn) => numbers.get(turn) };
+    // Capture this rendering's review identity, including while a confirmation dialog is open.
+    const reviewedWrite = (op, args, ...rest) => write(op,
+      ["label", "confirm", "decide"].includes(op) && hub.open_action
+        ? { ...args, turn: hub.open_action.turn, expected: hub.open_action.expected } : args, ...rest);
+    const at = { ctx, hub, nameOf, write: reviewedWrite, director, call, knowing, chat, numberOf: (turn) => numbers.get(turn) };
     const make = { action: actionCard, recover: recoverCard, cast: castCard, holdings: holdingsCard, changes: changesCard,
       obstacles: obstaclesCard, truth: truthCard, goals: goalsCard, knowledge: knowledgeCard, propose: () => proposal(hub),
       turns: turnsCard, sources: sourcesCard, unavailable: unavailableCard };
@@ -185,8 +189,17 @@ function actionCard({ ctx, hub, nameOf, write, director, numberOf, chat }) {
     const choices = [{ value: "", label: "No obstacle" }, ...hub.obstacles.filter((item) => item.status !== "overcome")
       .map((item) => ({ value: item.obstacle, label: item.goal }))];
     const against = ui.choice("Against", choices);
-    parts.push(el("div", { class: "campaign-row" }, against.node, ui.button(label ? "Label again" : "Label this action", () =>
-      write("label", against.value ? { obstacle: against.value } : {}))));
+    const config = hub.labelling_config;
+    const route = config ? config.provider + " / " + config.model +
+      (config.fallbacks.length ? "; fallbacks: " + config.fallbacks.join(", ") : "") +
+      ". Up to " + config.attempts + " attempt(s), " + config.max_output_tokens + " output tokens per attempt." : "The configured labelling model.";
+    parts.push(el("p", { class: "g-muted" }, route + " Separate from Models settings. A requested call may be billed."));
+    parts.push(el("div", { class: "campaign-row" }, against.node, ui.button(label ? "Label again" : "Label this action", async () => {
+      const args = against.value ? { obstacle: against.value } : {};
+      if (await ui.confirm("Request a labelling call? " + route + " This proposes labels only; it accepts no consequence.", { confirmLabel: "Request labels" })) {
+        return write("label", args);
+      }
+    })));
   } else if (can.label) parts.push(ui.unavailable("Labelling this action", can.label.reason));
   if (label && !framed) {
     if (director) parts.push(el("div", { class: "campaign-band" }, "Waiting on the table to confirm how this was read."));
@@ -221,7 +234,7 @@ function decideForm(ctx, framed, can, write, director, results, weigh) {
   result.select.setAttribute("data-focus-key", "campaign:result");
   const go = ui.button(director ? "Decide" : "Consent", async () => {
     const args = { result: result.value, cites: weigh.cites(), consequences: weigh.consequences() };
-    if (director) return write("decide", { ...args, basis: "adjudicated" }, "Decided: " + result.value + ".");
+    if (director) return write("decide", { ...args, basis: "adjudicated", fingerprint: framed.fingerprint }, "Decided: " + result.value + ".");
     const yes = await ui.confirm("Consent to " + result.value + " for this action, as framed now? This decides it.", { confirmLabel: "Consent" });
     if (yes) return write("decide", { ...args, basis: "consent", fingerprint: framed.fingerprint }, "Consented: " + result.value + ".");
   }, { kind: "primary" });

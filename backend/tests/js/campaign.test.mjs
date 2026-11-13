@@ -34,7 +34,7 @@ function hub(audience, overrides = {}) {
       broken: null, head: "catalog:a/character/anya@r2", problem: null, behind: true, actor: { ref: ANYA, name: "Anya" },
       notices: [{ code: "instance_source_drift", detail: "" }], handoff: { api: "review", op: "rebase.review", args: { actor: ANYA } } }],
     obstacles: [], turns: [], problems: [],
-    open_action: { turn: "t1.000001", actor: { ref: ANYA, name: "Anya" },
+    open_action: { turn: "t1.000001", expected: "review-etag", actor: { ref: ANYA, name: "Anya" },
       label: { label: "sneak", state: "confirmed", reason: null, factors: [], stakes: [], against: null }, framed: FRAMED, outcome: null },
     actions: [{ op: "label", available: false, reason: "no labelling model is configured for this app" },
       ...["confirm", "decide", "propose_effect", "endorse_effect", "approve_effect", "recover_effects"].map((op) => ({ op, available: true }))],
@@ -105,7 +105,7 @@ test("the director decides among every result the frame allows, citing what was 
   byText(action, "button", "Decide")[0].click();
   await tick();
   assert.deepEqual(writes(calls), [["campaign.decide", { chat: CHAT, audience: "director", result: "partial", cites: ["lantern"],
-    consequences: [], basis: "adjudicated" }]]);
+    consequences: [], basis: "adjudicated", fingerprint: FRAMED.fingerprint, turn: "t1.000001", expected: "review-etag" }]]);
   assert.ok(!byText(action, "button", "Consent").length, "the director gives no player's consent");
 });
 
@@ -124,7 +124,7 @@ test("the acting player consents only to a setback, naming the frame's fingerpri
   byText(dialog, "button", "Consent").at(-1).click();
   await tick();
   assert.deepEqual(writes(calls), [["campaign.decide", { chat: CHAT, audience: "table", result: "failure", cites: [], consequences: ["seen"],
-    basis: "consent", fingerprint: FRAMED.fingerprint }]]);
+    basis: "consent", fingerprint: FRAMED.fingerprint, turn: "t1.000001", expected: "review-etag" }]]);
 });
 
 test("a consent the person declines writes nothing", async () => {
@@ -273,7 +273,7 @@ test("a proposed labelling shows its factors and stakes beside the button that c
   assert.equal(action.querySelectorAll("input").length, 0, "nothing is ticked before there is a frame to decide");
   byText(action, "button", "Confirm this labelling")[0].click();
   await tick();
-  assert.deepEqual(writes(calls), [["campaign.confirm", { chat: CHAT, audience: "table" }]]);
+  assert.deepEqual(writes(calls), [["campaign.confirm", { chat: CHAT, audience: "table", turn: "t1.000001", expected: "review-etag" }]]);
   // the director's view waits on the table for it, and is not offered the table's confirmation
   const director = await mounted("director", hub("director", { open_action: open }));
   assert.ok(!byText(section(director.root, "Open action"), "button", "Confirm").length);
