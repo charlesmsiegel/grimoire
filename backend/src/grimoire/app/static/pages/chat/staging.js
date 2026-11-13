@@ -109,6 +109,7 @@ export function makeStaging(ctx, chat, { log }) {
   let scene = null,
     selected = null,
     editing = false,
+    editDraft = null,
     revision = 0;
   const node = el("section", {
       class: "vn-controls",
@@ -153,6 +154,10 @@ export function makeStaging(ctx, chat, { log }) {
     if (scene && !ctx.signal.aborted) draw();
   });
   function draw() {
+    const previousNote = body.querySelector('[name="Cue note"]');
+    if (editing && editDraft && previousNote)
+      editDraft.note = previousNote.value;
+    const activeName = document.activeElement?.getAttribute("name");
     const epoch = ++revision;
     status.textContent = store.warning;
     body.replaceChildren();
@@ -286,6 +291,7 @@ export function makeStaging(ctx, chat, { log }) {
     if (!editing) {
       body.append(
         button("Edit cue", () => {
+          editDraft = JSON.parse(JSON.stringify(cue));
           editing = true;
           draw();
           body.querySelector('[name="Cue note"]').focus();
@@ -303,7 +309,7 @@ export function makeStaging(ctx, chat, { log }) {
       );
       return;
     }
-    const draft = JSON.parse(JSON.stringify(cue)),
+    const draft = editDraft || (editDraft = JSON.parse(JSON.stringify(cue))),
       editor = el("fieldset", {}, el("legend", {}, "Edit local cue"));
     for (const a of actors) {
       const state = draft.actors[a.actor] || { position: "center", art: "" };
@@ -394,6 +400,12 @@ export function makeStaging(ctx, chat, { log }) {
       }),
     );
     body.append(editor);
+    if (activeName) {
+      const focused = [...editor.querySelectorAll("[name]")].find(
+        (item) => item.getAttribute("name") === activeName,
+      );
+      focused?.focus();
+    }
   }
   return {
     node,
