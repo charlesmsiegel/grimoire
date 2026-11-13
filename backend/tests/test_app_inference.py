@@ -463,7 +463,8 @@ def test_stages_say_which_optional_calls_the_app_can_play_and_why_the_rest_are_u
         assert stages["npc_generation"]["kind"] == "baseline"
         assert stages["director_generation"]["available"] is True
         unavailable = [name for name, stage in stages.items() if not stage["available"]]
-        assert {"decision", "labelling", "planning", "critique"} <= set(unavailable)
+        assert {"decision", "labelling", "planning"} <= set(unavailable)
+        assert stages["critique"]["available"] is True and stages["critique"]["enabled"] is False
         assert all(stages[name]["note"] and stages[name]["enabled"] is False for name in unavailable)
         features = {item["feature"] for item in inference.call("models")["unavailable"]}
         assert {"fallback_prices", "session_budget", "prompt_preview"} <= features
