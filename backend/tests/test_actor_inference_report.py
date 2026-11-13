@@ -2,14 +2,16 @@ from dataclasses import replace
 from decimal import Decimal
 import pytest
 from test_actor_inference import setup, run_setup, ODA, BELLAMY, POLICY, PRESENT
-from generation_fixtures import say
+from generation_fixtures import CAMPAIGN
 from grimoire.generation import GenerationError
+from grimoire.core.inference import InferencePolicy, TurnUsageLedger
+from grimoire.providers.meter import TurnMeter
 from grimoire.testing.providers import Reply, Status
 from grimoire.evals.format import parse_scenario
 from evals_helpers import minimal_scenario
 from grimoire.evals.policy import GatePolicy
 from grimoire.tracing.cost import Price, PriceTable
-from grimoire.actor_inference import record_experiment, compare_experiments, synthetic_benchmark, BenchmarkInput
+from grimoire.actor_inference import record_experiment, compare_experiments, synthetic_benchmark, BenchmarkInput, ExperimentBudget, plan_experiment
 
 
 def scenario():
@@ -95,7 +97,6 @@ def test_deterministic_injected_benchmark_runs_both_variants_and_reports_synthet
         data = setup(steps, planners=(ODA,) if optional else (), critics=(BELLAMY,) if optional else (),
                      policy=POLICY if optional else None, clock=lambda: next(ticks))
         h, plan, runner, controls, briefs = data
-        from grimoire.actor_inference import ExperimentBudget
         return BenchmarkInput(runner, h.meter(plan), briefs, controls, PRESENT, ExperimentBudget(10,1000))
     policy = GatePolicy(max_cost_increase=1, max_latency_increase=1, allowed_flags=frozenset({'planning','critique'}))
     result = synthetic_benchmark(scenario(), factory, conditions={'model':'model-a','budget':'max_output_tokens=64'}, policy=policy)
@@ -106,7 +107,6 @@ def test_deterministic_injected_benchmark_runs_both_variants_and_reports_synthet
 
 
 def test_failed_retry_unknown_usage_and_all_attempt_latencies_retained():
-    from grimoire.core.inference import InferencePolicy
     data = setup([Status(503), reply('Use terse cadence.'), reply('Count the silver ledger.'),
                   reply('Darling splendid evening.')], planners=(ODA,),
                   policy=InferencePolicy({'planning':1}, max_attempts_per_call=2))
@@ -123,9 +123,6 @@ def test_failed_retry_unknown_usage_and_all_attempt_latencies_retained():
 def test_poisoned_meter_refuses_recording_missing_attempts():
     data = setup([reply('Count the silver ledger.')])
     h, plan, runner, controls, briefs = data
-    from grimoire.core.inference import TurnUsageLedger
-    from grimoire.providers.meter import TurnMeter
-    from grimoire.actor_inference import ExperimentBudget
     meter = TurnMeter(TurnUsageLedger(plan), _fail_booking=lambda _: True)
     out = runner.run(meter, briefs, controls=controls,present=PRESENT,budget=ExperimentBudget(10,1000))
     with pytest.raises(GenerationError,match='poisoned_meter'):
@@ -140,7 +137,6 @@ def test_benchmark_matching_and_allowed_flags_fail_closed():
 
 
 def test_unissued_usage_has_unknown_money_and_unknown_call_latency():
-    from grimoire.actor_inference import ExperimentBudget
     data = setup([])
     meter, out = run_setup(data,budget=ExperimentBudget(0,0))
     report = record(meter,out,prices=PriceTable({}))
@@ -156,3 +152,23 @@ def test_quality_evidence_separate_from_usage_and_semantic_characterization_unkn
     assert report.quality.secrecy_leak_rate == 0
     assert report.quality.characterization_score is None
     assert 'marker' in report.quality.limits
+
+
+def test_benchmark_rejects_reversed_speaking_order_before_sends():
+    harnesses = []
+    def factory(variant):
+        optional = variant == 'planner_critic'
+        data = setup([], planners=(ODA,) if optional else (), critics=(BELLAMY,) if optional else (),
+                     policy=POLICY if optional else None)
+        h, plan, runner, controls, briefs = data
+        harnesses.append(h)
+        if optional:
+            plan = plan_experiment(CAMPAIGN, 't1', present=PRESENT, speakers=(BELLAMY, ODA),
+                                   controls=controls, planners=(ODA,), critics=(BELLAMY,), policy=POLICY)
+        return BenchmarkInput(runner, h.meter(plan), briefs, controls, PRESENT, ExperimentBudget(10,1000))
+    with pytest.raises(ValueError, match='must match'):
+        synthetic_benchmark(scenario(), factory,
+                            conditions={'model':'model-a','budget':'max_output_tokens=64'},
+                            policy=GatePolicy(allowed_flags=frozenset({'planning','critique'})))
+    assert len(harnesses) == 2
+    assert all(not h.transport.sends for h in harnesses)

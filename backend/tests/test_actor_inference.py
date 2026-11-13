@@ -1,8 +1,9 @@
 """Synthetic actor experiment acceptance; real adapter, scripted transport."""
-from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 import pytest
-from generation_fixtures import Harness, world, brief, say, CAMPAIGN, ODA, BELLAMY, QUILL, PRIVATE
+from test_decisions import oda_choice, brief as choice_brief
+from grimoire.voice import SecretFact
+from generation_fixtures import Harness, world, brief, say, CAMPAIGN, ODA, BELLAMY, QUILL, PRIVATE, WREN
 from grimoire.core.identity import InstanceRef
 from grimoire.core.inference import InferencePolicy
 from grimoire.generation import GenerationError
@@ -130,7 +131,6 @@ def test_failure_stops_without_hidden_fallback_and_retry_retained():
 
 @pytest.mark.parametrize('selected', [None, ('count', 'tally')])
 def test_planning_refuses_any_existing_choice_before_io(selected):
-    from test_decisions import oda_choice, brief as choice_brief
     data = setup([], planners=(ODA,), policy=POLICY)
     choice = oda_choice(present=PRESENT, selected=selected)
     h, plan, runner, controls, briefs = data
@@ -152,7 +152,6 @@ def test_untrusted_handle_requires_per_call_authorization():
 
 @pytest.mark.parametrize('which', ['optional_absent', 'duplicate', 'foreign', 'pc'])
 def test_plan_rejects_bad_identity_and_authority_even_when_optional_disabled(which):
-    from generation_fixtures import WREN
     controls, _ = world()
     present, speakers, planners = PRESENT, (ODA,), ()
     if which == 'optional_absent': planners = (QUILL,)
@@ -217,7 +216,6 @@ def test_invalid_routes_rejected_at_construction(routes):
 
 @pytest.mark.parametrize('repeats_in_own_reply', [True, False])
 def test_critique_exposure_is_only_own_reply_not_other_actors_speech(repeats_in_own_reply):
-    from grimoire.voice import SecretFact
     controls, voices = world()
     secret = SecretFact('letter-private', (PRIVATE,))
     own = 'Count this report: ' + PRIVATE if repeats_in_own_reply else 'Count the silver.'

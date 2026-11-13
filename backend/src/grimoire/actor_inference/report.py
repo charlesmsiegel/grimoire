@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 
-from grimoire.core.inference import TOKEN_FIELDS, UsageTotals, Measurement
+from grimoire.core.inference import TOKEN_FIELDS, UsageTotals, Measurement, InferenceStage
 from grimoire.evals.format2 import parse_run_v2
 from grimoire.evals.gate2 import compare_v2
 from grimoire.evals.checks import hard_findings, scorecard
@@ -146,10 +146,11 @@ def synthetic_benchmark(scenario, factory, *, conditions, policy: GatePolicy, tu
     base, candidate = cases
     def settings(case):
         return (case.runner._routes, case.runner._max_tokens, case.meter.ledger.plan.present_refs,
-                case.meter.ledger.plan.generated_actor_ids, case.meter.ledger.plan.control_snapshot,
+                tuple(c.actor_id for c in case.meter.ledger.plan.calls
+                      if c.stage is InferenceStage.NPC_GENERATION), case.meter.ledger.plan.control_snapshot,
                 case.briefs)
     if settings(base) != settings(candidate):
-        raise ValueError('benchmark model, output, cast, speakers and briefs must match')
+        raise ValueError('benchmark model, output, cast, speaking order and briefs must match')
     stages = [{c.stage.value for c in case.meter.ledger.plan.calls if not c.stage.is_baseline} for case in cases]
     if stages[0] or stages[1] != {'planning', 'critique'}:
         raise ValueError('benchmark requires baseline and explicitly enabled planner/critic variants')

@@ -112,7 +112,7 @@ are not dollar ceilings. No judge scores are invented.
 `synthetic_benchmark(scenario, factory, conditions=..., policy=..., ...)` is a runnable
 injected benchmark. `factory('baseline')` and `factory('planner_critic')` must each
 return `BenchmarkInput(runner, meter, briefs, controls, present, budget)` with separate
-scripted adapters. It validates matching routes, output cap, cast, speakers and briefs,
+scripted adapters. It validates matching routes, output cap, cast, ordered speakers and briefs,
 requires zero baseline extras and both enabled candidate stages, refuses the adapter's
 real-HTTP measurement mode before execution, and checks synthetic measurements afterward.
 Injected adapters/factories are trusted caller code, not a security sandbox. Use a
