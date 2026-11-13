@@ -108,6 +108,7 @@ export async function mount(root, ctx) {
   await load();
 
   async function load(at = 0, sourcesAt = 0, comparisonsAt = 0, focus = false) {
+    const focusLabel = document.activeElement?.textContent;
     const focusKey = document.activeElement?.getAttribute("data-focus-key");
     const args = { filter, source: source || undefined, q: state.q, sort: state.sort,
       match: ctx.query.get("match") || "exact", campaign: campaign || undefined,
@@ -144,8 +145,8 @@ export async function mount(root, ctx) {
       }});
       sourceSearch.setAttribute("data-focus-key", "chats:source-search");
       picker.append(sourceSearch);
-      if (sourceOffset) picker.append(ui.button("Previous sources", () => load(offset, Math.max(0, sourceOffset - 50), comparisonOffset)));
-      if (page.source_next !== null) picker.append(ui.button("Next sources", () => load(offset, page.source_next, comparisonOffset)));
+      if (sourceOffset) picker.append(ui.button("Previous sources", () => load(offset, Math.max(0, sourceOffset - 50), comparisonOffset, "sources")));
+      if (page.source_next !== null) picker.append(ui.button("Next sources", () => load(offset, page.source_next, comparisonOffset, "sources")));
     }
     if (filter === "campaign" || filter === "world") {
       picker.append(ui.search(filter === "campaign" ? "Exact campaign ID" : "Exact world source ID", {
@@ -159,12 +160,17 @@ export async function mount(root, ctx) {
     if (source) {
       comparison.append(el("h2", {}, "Matched source revisions and validated ancestry"));
       for (const item of page.comparisons) comparison.append(el("p", {}, item.ref + " · " + (item.path.join(" → ") || "Unavailable: " + item.problem)));
-      if (comparisonOffset) comparison.append(ui.button("Previous comparisons", () => load(offset, sourceOffset, Math.max(0, comparisonOffset - 50))));
-      if (page.comparison_next !== null) comparison.append(ui.button("Next comparisons", () => load(offset, sourceOffset, page.comparison_next)));
+      if (comparisonOffset) comparison.append(ui.button("Previous comparisons", () => load(offset, sourceOffset, Math.max(0, comparisonOffset - 50), "comparisons")));
+      if (page.comparison_next !== null) comparison.append(ui.button("Next comparisons", () => load(offset, sourceOffset, page.comparison_next, "comparisons")));
     }
     for (const problem of page.diagnostics) comparison.append(el("p", {}, problem.ref + ": " + problem.code));
     render();
-    if (focus) (results.querySelector("a") || pager.querySelector("button"))?.focus();
+    if (focus === "sources" || focus === "comparisons") {
+      // Keep the paging direction where available; at a boundary use the return control.
+      const controls = focus === "sources" ? picker : comparison;
+      const buttons = Array.from(controls.querySelectorAll("button"));
+      (buttons.find(button => button.textContent === focusLabel) || buttons[0])?.focus();
+    } else if (focus) (results.querySelector("a") || pager.querySelector("button"))?.focus();
     else if (focusKey === "chats:source-search") picker.querySelector("[data-focus-key=\"chats:source-search\"]")?.focus();
   }
 

@@ -31,7 +31,7 @@ import * as ui from '../../src/grimoire/app/static/shell/ui.js';
 import {href} from '../../src/grimoire/app/static/shell/router.js';
 import {mount} from '../../src/grimoire/app/static/pages/chats/page.js';
 
-async function workspacePage(query) {
+async function workspacePage(query, pagedSources = false) {
   install('http://localhost');
   let navigation, refuse = false;
   const requests = [], drafts = new Map([['chat:alpha/one:composer', 'Kept composer draft']]);
@@ -42,7 +42,7 @@ async function workspacePage(query) {
       requests.push(args);
       if (refuse) throw {reason:'changed'};
       return {chats:[{chat:'chat:alpha/one',label:'Old row',sources:[],launch:null,scope:null}],total:51,next:50,
-        snapshot:'old',sources:[],source_next:null,comparisons:[],comparison_next:null,diagnostics:[]};
+        snapshot:'old',sources:[],source_next:pagedSources && args.source_offset < 100 ? args.source_offset + 50 : null,comparisons:[],comparison_next:pagedSources && args.comparison_offset < 100 ? args.comparison_offset + 50 : null,diagnostics:[]};
     }};
   const root=ui.el('div',{}); document.body.append(root); await mount(root,ctx);
   return {root, requests, drafts, get navigation(){return navigation;}, refuse(value){refuse=value;}};
@@ -78,4 +78,24 @@ test('stale continuation cannot resurrect cached rows through grouping; restart 
   assert.equal(page.root.querySelectorAll('a.chats-row').length,1);
   assert.equal(document.activeElement.getAttribute('href'),'#/chat/chat%3Aalpha%2Fone');
   assert.equal(page.drafts.get('chat:alpha/one:composer'),'Kept composer draft');
+});
+
+test('mounted source and comparison paging retains useful focus forward and back, including boundaries', async () => {
+  const page = await workspacePage('filter=character&source=card:a/character/a@r1', true);
+  for (const kind of ['sources', 'comparisons']) {
+    for (const [direction, expected] of [['Next','Next'], ['Next','Previous'], ['Previous','Previous'], ['Previous','Next']]) {
+      const button = byText(page.root,'button',`${direction} ${kind}`)[0];
+      button.focus(); button.click();
+      await new Promise(resolve=>setTimeout(resolve,0));
+      assert.equal(document.activeElement.textContent, `${expected} ${kind}`);
+      assert.ok(page.root.querySelectorAll("button").includes(document.activeElement));
+      assert.equal(page.root.querySelectorAll('a.chats-row').length,1);
+      assert.equal(page.drafts.get('chat:alpha/one:composer'),'Kept composer draft');
+    }
+  }
+  page.refuse(true);
+  const next = byText(page.root,'button','Next sources')[0]; next.focus(); next.click();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(document.activeElement.textContent,'Restart browsing');
+  assert.equal(page.root.querySelectorAll('a.chats-row').length,0);
 });
