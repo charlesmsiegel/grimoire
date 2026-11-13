@@ -47,6 +47,7 @@ There is **no app yet**. Chats are played headlessly by Sprint 035's runner, whi
 | `persona` | `character` | yes: the player's body. **No control assignment is created**; that belongs to 003/035. |
 | `scenario` | `scenario` | no. A scenario is never a fake `Agent` NPC. |
 | `lorebook` | `lorebook` | no |
+| `actor` | any, matching the native instance's qualified source | no: explicitly reuses an existing instance of any kind |
 
 ### Launch
 
@@ -66,7 +67,7 @@ A binding stores:
 
 Rules:
 - Detaching writes a **tombstone**; the binding is never deleted.
-- A chat has at most one *active* binding per role and qualified entity, and at most one active persona.
+- A chat has at most one *active* binding per role and qualified entity, except the `actor` role, whose identity also includes the exact campaign instance (033). Two individuals of one species can therefore share a chat. There is at most one active persona.
 - Re-attaching adds a new binding.
 
 ### Roster
@@ -133,10 +134,10 @@ Every mutating method returns a `ChatChange`:
 - **Pinning.** `start_chat`, `attach_source` and `set_persona` pin every unpinned ref to the revision `check_definition` resolves it to then (the revision whose bytes were checked and that a new actor is based on), the launch included. A reused actor (`actor=`, `reuse_actors`, or the same persona chosen again) given an unpinned ref is pinned to the revision it plays, by 042's ancestor rule: the one revision its active pinned bindings in the campaign's chats agree on (so an explicit rebind counts); otherwise (no chat binds it pinned, the chats disagree, or a chat of the campaign cannot be read) its instance's pinned `source`, else, with no `source`, its `base`; the same persona chosen again keeps its current pinned revision. When the instance's `source` follows its head, or the revision it plays no longer resolves (a broken reference, which detach and re-attach repair), the ref is pinned to the revision it resolves to now. The played revision is read from the same instance file whose etag the commit re-checks, and when it rests on the campaign's chats the commit also re-checks every chat of the campaign at the etag it read, as 042's rebase does: a chat added, removed, damaged or rebound since is `StaleWrite`. It is never a newer head nobody reviewed for that actor. A pinned ref is bound as given. `follow=True` (keyword) binds unpinned refs as given instead, following their heads; no product path passes it. A later revision reaches a pinned chat only through 042's reviewed rebase ([REBASE](REBASE.md#pin-by-default)).
 - `start_chat(launch, attach=…, persona=…, label=…, scope=None, reuse_actors=None, follow=False)`:
   - **New scope:** the campaign id is drawn until both `campaign_presence` and `campaign_authority_presence` are `absent` and no grant or approval in the security ledger names it (`grimoire.ledgers.security_campaign_ids`); a look-alike folder counts as taken. Both ledgers outlive a hand-deleted `campaigns/<id>` folder: a new campaign given that id would inherit the sovereignty ledger's (`authority/campaigns/<id>`) controls, and a grant scoped to `campaigns/<id>`, or to anything under it, would cover the new campaign. So the id stays taken while either names it. The security ledger is scanned as the sovereignty ledger is for [taken instance ids](#taken-instance-ids): raw, revoked grants included, failing closed with `TakenIdsUnlisted`. It is read once when planning a new scope, and only once a drawn id is otherwise free, and once more at commit; a campaign id it was just found not to name cannot have its individuals named either, so the new scope's actor numbering does not read it again. New actors in the new scope are then numbered outside `campaign_taken_ids` as in an existing one.
-  - **Continuing a scope:** pass `scope=`. A campaign without `scope.json` (one from before 107, or from 026) gets one lazily. To reuse existing campaign actors instead of creating new ones, pass `reuse_actors={(role, entity_key): InstanceRef}`. A reused actor must be a character instance of the same entity.
+  - **Continuing a scope:** pass `scope=`. A campaign without `scope.json` (one from before 107, or from 026) gets one lazily. To reuse existing campaign actors instead of creating new ones, pass `reuse_actors={(role, entity_key): InstanceRef}`. Character/persona roles reuse character instances of the same entity. For any instance kind, use `actors=[(source_ref, instance_ref), ...]`; this binds each existing instance as `actor`, including several individuals of one species.
 - `read_chat(chat)` / `read_scope(scope)` return the decoded record and its etag, the `expected` value for an edit.
-- `attach_source(chat, ref, role, expected=…, actor=None, follow=False)`: `actor=` explicitly reuses an existing campaign actor of the same entity, for example when re-attaching a detached character. The default is a new actor.
-- `detach_source(…)`: works on a broken reference; it is the repair path.
+- `attach_source(chat, ref, role, expected=…, actor=None, follow=False)`: `actor=` explicitly reuses an existing campaign actor of the same entity, for example when re-attaching a detached character. The default for character/persona is a new actor. Role `actor` requires an explicit existing native instance; omission is `actor_required`, never an allocation.
+- `detach_source(…)`: works on a broken reference; it is the repair path. Role `actor` requires `actor=instance_ref`; a missing or wrong instance is refused without detaching another individual.
 - `set_persona(chat, ref | None, expected=…, actor=None, follow=False)`: detaches the current persona and binds the new one. Choosing the same persona entity again keeps its actor while that actor's instance exists; if the file has vanished, a new actor is minted.
 - `set_label(…)`.
 - Edits keep the stored envelope's unknown top-level fields and original `owner`, including an absent one. Only new records get the library's `owner`.
@@ -196,3 +197,13 @@ Actor instances are written as `grimoire.record/1` with:
 | A persisted navigation cache and the richer library browser | 065 |
 
 Binding a source creates no event, belief or evidence record and never makes anyone aware of its content.
+
+## Non-character actors (033)
+
+An `actor` binding accepts any source kind and preserves the existing instance's exact kind and ID. A species definition may back a `creature` instance; it is never converted to `character`. Reuse decodes the native entity payload and checks its qualified `source`, cross-checking envelope `derived_from` when present. Missing, unsupported, malformed or conflicting provenance is refused. Existing source pins, actor etags, authorization and cross-kind ID conflict checks remain in force. No source-kind-to-instance-kind allocation rule is invented.
+
+Chat binding does not grant control, knowledge or party membership. The scene runner reads all active actor bindings and filters reserves through 033's membership state; detach leaves roster, memories and control history intact. `SourceBinding.key` remains the source lookup key; `identity_key` distinguishes generic actor instances. Snapshot entity resolution uses the exact actor and can retain different selected revisions for individuals of one species; a source-only lookup may be ambiguous.
+
+This is a headless roster interface for UI adapters: pass `actors` when starting and the exact `actor` when attaching/detaching. No new launch kind or persona-selection UI is added. QuickStart's source-only broken-binding repair reports generic actor bindings without a detach action; it cannot distinguish same-species instances. Use the exact-instance `ChatLibrary.detach_source` API until the UI repair protocol carries actor identity. Existing sovereignty assignments remain authoritative for any instance kind. This change does not expand species-backed voice generation or the separate character-only `controller_knowledge` projection, and does not change 047's claim extraction.
+
+The additive role uses the existing chat payload format. Older builds may report actor-role chats as undecodable; they must not rewrite them into character bindings. Existing chats need no migration.

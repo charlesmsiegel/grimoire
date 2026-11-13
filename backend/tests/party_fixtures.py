@@ -35,7 +35,8 @@ def _individual(ref: InstanceRef, name: str) -> EntityInstance:
 def seed(store: LibraryStore) -> None:
     txn = store.transaction()
     txn.put(SourceManifest(EMBER, OWNER, "Emberfall", {"species/goblin": "r1"}), None)
-    txn.put(RecordEnvelope(SPECIES.ref, definition_to_payload(SPECIES), name=SPECIES.name), None)
+    txn.put(RecordEnvelope(SPECIES.ref, definition_to_payload(SPECIES), name=SPECIES.name,
+                           extra={"schema": ENTITY_SCHEMA}), None)
     for ref in PEOPLE:
         txn.put(instance_record(ref), None)
     for ref, name in ((SNIK, "Snik"), (GRUB, "Grub")):

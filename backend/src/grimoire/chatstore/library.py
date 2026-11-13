@@ -31,7 +31,7 @@ from grimoire.chats import (
     chat_to_payload, nav_entry, scope_entry, scope_from_payload, scope_to_payload,
 )
 from grimoire.core.entity import EntityInstance
-from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
+from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_from_payload, instance_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, paired_instances, validate_segment
 from grimoire.decisionstore import decision_actor_ids
 from grimoire.devicetag import DeviceIdentityUnusable, device_tag
@@ -371,7 +371,7 @@ class _LazyTaken:
 
 
 def _check_role(ref: SourceRef, role: str) -> None:
-    if role not in ROLE_KINDS or ref.kind != ROLE_KINDS[role]:
+    if role not in ROLE_KINDS or (ROLE_KINDS[role] is not None and ref.kind != ROLE_KINDS[role]):
         raise InvalidBinding(f"role {role!r} cannot bind {ref}", "role_kind")
 
 
@@ -496,21 +496,25 @@ class ChatLibrary:
 
     def start_chat(self, launch: Launch, *, attach: Iterable[tuple[SourceRef, str]] = (),
                    persona: SourceRef | None = None, label: str | None = None, scope: ScopeRef | None = None,
-                   reuse_actors: ReuseMap | None = None, follow: bool = False) -> ChatChange:
+                   reuse_actors: ReuseMap | None = None, follow: bool = False,
+                   actors: Iterable[tuple[SourceRef, InstanceRef]] = ()) -> ChatChange:
         """A new chat, by default in a new world-less scope; ``scope`` continues an existing campaign.
 
         Every source is **pinned** to the revision it resolves to now (the launch included), so a later
         revision reaches the chat only through 042's reviewed rebase. ``follow=True`` is the explicit
-        opt-in to bind unpinned refs as given, following their heads."""
+        opt-in to bind unpinned refs as given, following their heads. ``actors`` binds existing
+        instances under 033's generic actor role; unlike the source-keyed ``reuse_actors`` map,
+        it can name several individuals of one species. It requires an existing ``scope``."""
         with self.store.read_pass():  # every binding is validated against one verified exclusion set
-            return self._start_chat(launch, attach, persona, label, scope, reuse_actors, follow)
+            return self._start_chat(launch, attach, persona, label, scope, reuse_actors, follow, actors)
 
     def _start_chat(self, launch: Launch, attach: Iterable[tuple[SourceRef, str]], persona: SourceRef | None,
                     label: str | None, scope: ScopeRef | None, reuse_actors: ReuseMap | None,
-                    follow: bool) -> ChatChange:
+                    follow: bool, actors: Iterable[tuple[SourceRef, InstanceRef]]) -> ChatChange:
         at = self._clock()
+        explicit_actors = tuple(actors)
         reuse = dict(reuse_actors or {})
-        if reuse and scope is None:
+        if (reuse or explicit_actors) and scope is None:
             raise InvalidBinding("reusing actors needs an existing scope", "reuse_needs_scope")
         wanted: list[tuple[SourceRef, str]] = []
         if launch.ref is not None:
@@ -538,9 +542,10 @@ class ChatLibrary:
         chat = ChatRef(scope.campaign_id, self._id("t"))
         bindings, actors, reused = [], [], {}
         reads: list[dict[ChatRef, str]] = []
-        for ref, role in wanted:
-            binding, envelope, etag = self._prepare(scope.campaign_id, ref, role,
-                                                    reuse.pop((role, ref.entity_key), None), taken, follow, reads)
+        requested = [(ref, role, reuse.pop((role, ref.entity_key), None)) for ref, role in wanted]
+        requested += [(ref, "actor", actor) for ref, actor in explicit_actors]
+        for ref, role, actor in requested:
+            binding, envelope, etag = self._prepare(scope.campaign_id, ref, role, actor, taken, follow, reads)
             bindings.append(binding)
             if envelope is not None and etag is None:
                 actors.append(binding.actor)
@@ -582,7 +587,8 @@ class ChatLibrary:
 
     def attach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str,
                       actor: InstanceRef | None = None, follow: bool = False) -> ChatChange:
-        """Bind ``ref``, pinned to the revision it resolves to now unless ``follow=True`` (see ``start_chat``)."""
+        """Bind ``ref``, pinned unless ``follow=True``. Role ``actor`` requires an existing ``actor``;
+        it never allocates or re-keys an individual (033). See ``start_chat``."""
         record, base = self._current(chat, expected)
         taken = _LazyTaken(lambda: self._taken(chat, record))
         reads: list[dict[ChatRef, str]] = []
@@ -590,8 +596,10 @@ class ChatLibrary:
         return self._chat_change(chat, record.attach(binding, self._clock()), base, expected, envelope, binding.actor,
                                  etag, _merged(reads))
 
-    def detach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str) -> ChatChange:
+    def detach_source(self, chat: ChatRef, ref: SourceRef, role: str, *, expected: str,
+                      actor: InstanceRef | None = None) -> ChatChange:
         """Tombstone a binding; works for a broken reference (the repair path). Actors stay.
+        Role ``actor`` requires its exact ``actor`` to distinguish same-species individuals (033).
 
         A lorebook a bound scenario implies (037; its snapshot selects it, unbound) is detached by
         recording it as bound and detached at once: the tombstone is the chat's opt-out, which
@@ -602,7 +610,7 @@ class ChatLibrary:
             implied = self._implied_lorebook(record, ref)
             if implied is not None:
                 record = record.attach(NewBinding(implied, role, implied.revision), at)  # type: ignore[arg-type]
-        return self._chat_change(chat, record.detach(ref, role, at), base, expected)
+        return self._chat_change(chat, record.detach(ref, role, at, actor=actor), base, expected)
 
     def set_persona(self, chat: ChatRef, ref: SourceRef | None, *, expected: str,
                     actor: InstanceRef | None = None, follow: bool = False) -> ChatChange:
@@ -706,10 +714,12 @@ class ChatLibrary:
         nobody reviewed for it; when it plays the head, or the revision it plays no longer resolves (the
         broken reference that detach and attach repair), to the revision it resolves to now."""
         _check_role(ref, role)
+        if role == "actor" and reuse is None:
+            raise InvalidBinding("an actor binding needs an existing instance", "actor_required")
         if role not in ACTOR_ROLES and reuse is not None:
             raise InvalidBinding(f"a {role} binding has no actor", "role_kind")
         if reuse is not None:
-            etag, stored = self._check_reuse(campaign, reuse, ref)
+            etag, stored = self._check_reuse(campaign, reuse, ref, role=role)
             if not follow and not ref.pinned:
                 plays = self._plays(reuse, ref, stored, reads)
                 if plays is not None and not isinstance(self.store.check_definition(plays), str):
@@ -780,10 +790,11 @@ class ChatLibrary:
         except DeviceIdentityUnusable as error:
             raise InvalidBinding(str(error), "device_identity") from error
 
-    def _check_reuse(self, campaign: str, actor: InstanceRef, ref: SourceRef) -> tuple[str, RecordEnvelope]:
+    def _check_reuse(self, campaign: str, actor: InstanceRef, ref: SourceRef, *,
+                     role: str = "character") -> tuple[str, RecordEnvelope]:
         """The etag of the actor's file as checked, and the file: the commit binds only these very bytes."""
-        if actor.campaign_id != campaign or actor.kind != "character":
-            raise InvalidBinding(f"{actor} is not a character of {campaign}", "actor_mismatch")
+        if actor.campaign_id != campaign or (role != "actor" and actor.kind != "character"):
+            raise InvalidBinding(f"{actor} is not an eligible actor of {campaign}", "actor_mismatch")
         try:
             stored = self.store.read(actor)
         except RecordNotFound:
@@ -792,6 +803,19 @@ class ChatLibrary:
             source = SourceRef.parse(stored.envelope.derived_from)  # type: ignore[union-attr]
         except ValueError:
             source = None
+        if role == "actor":
+            # 033: native individualized creatures can carry their source only in the typed
+            # payload. Decode it rather than trust an arbitrary payload field; never reconcile
+            # contradictory provenance by choosing whichever happens to match the request.
+            envelope = stored.envelope
+            try:
+                native = instance_from_payload(actor, envelope.extra.get("schema"), envelope.payload)
+            except ValueError:
+                raise InvalidBinding(f"{actor} is not a readable native instance", "invalid_actor") from None
+            if (native.source is None or (envelope.derived_from is not None and
+                    (source is None or source.entity_key != native.source.entity_key))):
+                raise InvalidBinding(f"{actor} has inconsistent source provenance", "actor_mismatch")
+            source = native.source
         if source is None or source.entity_key != ref.entity_key:
             raise InvalidBinding(f"{actor} is not an instance of {ref.unpinned()}", "actor_mismatch")
         if actor in paired_instances(self.store.campaign_instances(campaign)):  # load() leaves both members out
