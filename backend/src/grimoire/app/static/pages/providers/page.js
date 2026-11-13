@@ -1,3 +1,5 @@
+import { contextPanel } from "./context.js";
+
 // Models and costs (112): the model the table plays with, the calls a turn may make, what each chat's calls
 // used and this device's recent call timings (docs/INFERENCE_UI.md).
 // Everything shown comes from the app's own ops; library and provider text is only ever set as text.
@@ -115,7 +117,7 @@ function testLine(result) {
 }
 
 /** The ops this page calls: ``chats`` is the text API's, the rest Sprint 112's adapter's (``providers.<op>``). */
-const OWN = new Set(["models", "check_models", "save_models", "usage", "diagnostics", "test_call"]);
+const OWN = new Set(["models", "check_models", "save_models", "usage", "diagnostics", "test_call", "context", "save_agenda"]);
 
 /** The shell's page entry (docs/APP_SHELL.md): ``ctx.api(op, args)`` posts one op and rejects with
  * ``error.reason``; once the page is left it rejects with ``left`` and nothing more is drawn. */
@@ -148,9 +150,12 @@ export async function mount(root, ctx) {
   const usageSection = el("section", { class: "g-stack providers-usage", "aria-label": "Usage by chat" });
   const usageBody = el("div", { class: "g-stack" });
   const diagnostics = el("section", { class: "g-card providers-card", "aria-label": "Recent calls on this device" });
+  const context = contextPanel(ctx, (saved) => {
+    state.models = saved; statusCard(); modelCard(); stagesCard();
+  });
   const missing = el("section", { class: "providers-missing", "aria-label": "Not available yet" });
   root.replaceChildren(el("div", { class: "g-stack g-loose" }, status, live,
-    el("div", { class: "providers-columns" }, model, stages), usageSection, diagnostics, missing));
+    el("div", { class: "providers-columns" }, model, stages), usageSection, context.node, diagnostics, missing));
 
   // -- the status card ----------------------------------------------------------------------------------------
   function statusCard() {
@@ -222,6 +227,8 @@ export async function mount(root, ctx) {
       fallbacks: text(form.fallbacks).split(/[\s,]+/).filter(Boolean),
       max_output_tokens: number(form.tokens), attempts: number(form.attempts),
       director: form.director.checked ? 1 : 0,
+      decision: number(form.decision),
+      agendas: (state.models && state.models.settings && state.models.settings.agendas) || [],
     };
     const key = text(form.key);
     if (key) settings.key_env = key;
@@ -268,6 +275,9 @@ export async function mount(root, ctx) {
         { min: 1, max: shown.bounds.max_output_tokens }),
       attempts: control("Attempts per call", { value: String(settings.attempts || 1), required: true, name: "attempts", type: "number",
         hint: "Every attempt may be billed." }, { min: 1, max: shown.bounds.attempts }),
+      decision: control("Optional decision calls per turn", { value: String(settings.decision || 0), name: "decision", type: "number",
+        hint: "Off at 0. Billed optional choices for NPCs with tactics, capped per turn. Each speaking NPC still gets its own reply." },
+        { min: 0, max: shown.bounds.decisions || 16 }),
       pricePrompt: control("Price per million prompt tokens", { value: settings.price_prompt || "", name: "price_prompt", placeholder: "e.g. 3" },
         { inputmode: "decimal", spellcheck: "false" }),
       priceReply: control("Price per million reply tokens", { value: settings.price_reply || "", name: "price_reply", placeholder: "e.g. 15" },
@@ -281,7 +291,7 @@ export async function mount(root, ctx) {
     };
     form.director.checked = settings.director > 0;
     form.key.input.classList.add("g-mono");
-    for (const name of ["provider", "name", "url", "key", "fallbacks", "tokens", "attempts", "pricePrompt", "priceReply", "priceCached"]) {
+    for (const name of ["provider", "name", "url", "key", "fallbacks", "tokens", "attempts", "decision", "pricePrompt", "priceReply", "priceCached"]) {
       form[name].input.setAttribute("data-focus-key", "providers:" + name);
     }
     form.presets = ui.segments("Preset", PRESET_LABELS, { onchange: (value) => {
@@ -301,7 +311,7 @@ export async function mount(root, ctx) {
       el("h2", { class: "g-heading" }, "Model"),
       el("div", {}, form.presets.node),
       el("div", { class: "providers-fields" }, form.provider.node, form.name.node, wide(form.url), wide(form.key),
-        wide(form.fallbacks), form.tokens.node, form.attempts.node,
+        wide(form.fallbacks), form.tokens.node, form.attempts.node, wide(form.decision),
         el("div", { class: "providers-prices providers-wide" }, form.pricePrompt.node, form.priceReply.node),
         wide(form.priceCached)),
       el("label", { class: "providers-toggle" }, form.director,
@@ -360,7 +370,7 @@ export async function mount(root, ctx) {
     }
     const known = new Set(listed.chats.map((entry) => entry.chat));
     const picker = el("select", { class: "g-input providers-chat", "aria-label": "Chat", "data-focus-key": "providers:chat",
-      onchange: (event) => { state.chat = event.target.value || null; state.skip = 0; usage(); } },
+      onchange: (event) => { state.chat = event.target.value || null; state.skip = 0; usage(); context.changeChat(state.chat); } },
       el("option", { value: "" }, "Choose a chat"),
       // the chosen chat stays choosable even when it is past the list's end (its exact ref is shown)
       state.chat && !known.has(state.chat) ? el("option", { value: state.chat, selected: true }, state.chat) : null,
@@ -375,6 +385,7 @@ export async function mount(root, ctx) {
       listed.error ? ui.notice("The chats cannot be listed: " + listed.error.message, { kind: "bad" }) : null,
       usageBody);
     if (state.chat) usage(); else fill(usageBody, ui.empty("Choose a chat to see what its model calls used."));
+    context.changeChat(state.chat);
   }
 
   function tile(label, value, note, bad) {
@@ -496,6 +507,7 @@ export async function mount(root, ctx) {
       state.test = null;
       statusCard(); modelCard(); stagesCard(); missingSection();
       if (state.chat) usage();  // the costs follow the prices just saved
+      context.refresh();
       if (ctx.refreshLibrary) ctx.refreshLibrary().catch(() => {});
       say(state.models.generation.available ? "Saved. The next turn plays by these settings." : "Saved, but generation is off: " + state.models.generation.problem.message,
         !state.models.generation.available);
