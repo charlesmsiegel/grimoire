@@ -1,7 +1,7 @@
 """Resolve selections and corrections exclusively through an actor projection."""
 from grimoire.core.identity import validate_segment
 from grimoire.core.perspective import ActorKnowledge
-from .model import MemorySelection, MemoryCorrection, MemoryItem, MemoryView
+from .model import MemorySelection, MemoryCorrection, MemoryItem, MemoryView, UnavailableMemory
 
 
 def consolidate_view(knowledge, collection_id, selections, corrections, *, limit=100):
@@ -57,7 +57,9 @@ def consolidate_view(knowledge, collection_id, selections, corrections, *, limit
     current = tuple(MemoryItem(evidence[i], selection_ids=tuple(sorted(selection_paths[i])), correction_ids=tuple(sorted(correction_paths[i]))) for i in shown if i in evidence and i not in links)
     history = tuple(MemoryItem(evidence[i], links[i], tuple(sorted(selection_paths[i])), correction_ids[i], tuple(sorted(correction_paths[i]))) for i in shown if i in evidence and i in links)
     return MemoryView(knowledge.actor, collection_id, knowledge.as_of, current, history,
-                      tuple(i for i in shown if i not in evidence), len(ordered) - len(shown))
+                      tuple(i for i in shown if i not in evidence), len(ordered) - len(shown),
+                      tuple(UnavailableMemory(i, tuple(sorted(selection_paths[i])), tuple(sorted(correction_paths[i])))
+                            for i in shown if i not in evidence))
 
 
 def _check_acyclic(links, roots):

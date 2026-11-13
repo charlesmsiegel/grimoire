@@ -100,3 +100,27 @@ def test_terminal_unions_converging_multihop_origins():
     item = consolidate_view(ActorKnowledge(actor, 7, evidence, (), (), ()), 'recap', selections, corrections, limit=1).current[0]
     assert item.selection_ids == ('one', 'two')
     assert item.correction_ids == ('first', 'last', 'second')
+
+
+def test_unavailable_terminal_keeps_editorial_origins_at_limit_one():
+    actor = InstanceRef('camp', 'character', 'alice')
+    evidence = (KnownEvidence('old', 'perception', 'sight', Moment(1), 'old'),)
+    selection = MemorySelection('sel', actor, 'recap', ('old',), Moment(2))
+    correction = MemoryCorrection('fix', actor, ('old',), ('missing',), Moment(3), 'private')
+    view = consolidate_view(ActorKnowledge(actor, 3, evidence, (), (), ()), 'recap', (selection,), (correction,), limit=1)
+    assert view.unavailable == ('missing',)
+    item = view.unavailable_details[0]
+    assert (item.evidence_id, item.selection_ids, item.correction_ids) == ('missing', ('sel',), ('fix',))
+    assert 'private' not in repr(view)
+
+
+def test_unavailable_terminal_unions_converging_paths():
+    actor = InstanceRef('camp', 'character', 'alice')
+    evidence = tuple(KnownEvidence(i, 'perception', 'sight', Moment(n), i) for n, i in enumerate(('a', 'b', 'c'), 1))
+    selections = (MemorySelection('one', actor, 'recap', ('a',), Moment(3)), MemorySelection('two', actor, 'recap', ('b',), Moment(3)))
+    corrections = (MemoryCorrection('first', actor, ('a',), ('c',), Moment(4), 'private'), MemoryCorrection('second', actor, ('b',), ('c',), Moment(5), 'private'), MemoryCorrection('last', actor, ('c',), ('missing',), Moment(6), 'private'))
+    view = consolidate_view(ActorKnowledge(actor, 6, evidence, (), (), ()), 'recap', selections, corrections, limit=1)
+    item = view.unavailable_details[0]
+    assert item.evidence_id == 'missing'
+    assert item.selection_ids == ('one', 'two')
+    assert item.correction_ids == ('first', 'last', 'second')

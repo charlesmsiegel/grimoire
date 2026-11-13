@@ -59,6 +59,13 @@ class MemoryItem:
 
 
 @dataclass(frozen=True, slots=True)
+class UnavailableMemory:
+    evidence_id: str
+    selection_ids: tuple[str, ...]
+    correction_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryView:
     actor: InstanceRef
     collection_id: str
@@ -67,3 +74,4 @@ class MemoryView:
     history: tuple[MemoryItem, ...]
     unavailable: tuple[str, ...]
     omitted: int
+    unavailable_details: tuple[UnavailableMemory, ...] = ()
