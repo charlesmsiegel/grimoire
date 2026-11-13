@@ -468,7 +468,7 @@ Only 066 is complete at its narrow first-proof boundary. Other domain slices and
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/capture-and-trainer-links.md)).
 - Evidence: [`test_effect_completion.py`](../../backend/tests/test_effect_completion.py) / [`test_effect_completion_recovery.py`](../../backend/tests/test_effect_completion_recovery.py) with capture_fixtures.py prove generic accepted-effect recovery, one ball spend and allied_with(existing TAM,WISP).
-- Scope / gap: No production capture/trainer association workflow or rejection/full capture identity proof. grimoire.capture is external model usage capture, not creature capture.
+- Implementation update (050): `grimoire.companions` supplies accepted capture, trainer links, optional one-device spending, active/reserve placement and capture-aware recovery. `test_companions.py` and `test_companions_recovery.py` exercise qualified identities, refusal/failed capture, authority, stale capacity, retry and native crash recovery. [Contract and limits](../COMPANIONS.md). Checkbox retained for the coordinated post-merge completion audit; 033 roster integration and 115 UI are separate. `grimoire.capture` remains external model usage capture.
 
 <a id="slice-051"></a>
 ### 051 — Ensemble Conversation

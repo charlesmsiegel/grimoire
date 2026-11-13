@@ -14,7 +14,7 @@ Five things about an individual are kept apart:
 | Question | Answered by | Never implied by |
 |---|---|---|
 | Who speaks and decides for it? | a control assignment ([PLAYER_SOVEREIGNTY](PLAYER_SOVEREIGNTY.md)) | party membership |
-| Who is it allied with, or who owns or trained it? | 017 relations (`allied_with`, `owns`, …), and later 050's trainer links | being in a party or a scene |
+| Who is it allied with, or who owns or trained it? | 017 relations (`allied_with`, `owns`, …), and 050's `trained_by` trainer links ([COMPANIONS](COMPANIONS.md)) | being in a party or a scene |
 | Is it travelling with a party? | an `in_party` relation | control, ownership |
 | Is it stored in a party's reserve (boxed)? | an `in_reserve` relation | anything else |
 | Is it present in this scene? | the scene's **cast** | membership, ownership or control |
@@ -138,7 +138,7 @@ A release only ends a relation. The member's instance file, its other relations,
 | A creature (or another non-character instance) in a **chat's** roster. 107 admits only character and persona actors; this must land before milestone 2 | 033, next slice |
 | Persisted scene casts, cast defaults when a party moves, and milestone 2 (stage selected members without losing reserve identities in a running scene) | 033, later slices; scenes run in 035 |
 | Who may command an autonomous companion, and reading control from the sovereignty ledger | 003/035 (this slice takes `controlled` from the caller) |
-| Capture, trainer links and storage capacity | [050](roadmap/sprints/capture-and-trainer-links.md) |
+| Capture, trainer links and active capacity (headless adapter implemented) | [050 / COMPANIONS](COMPANIONS.md) |
 | Which present individuals actually speak, and what a newly present one is told | 027 (each speaker is its own generation call) and 032 |
 | Physical positions within a scene, and who can still reach whom | 041 ([STAGING](STAGING.md); its first slice checks a stage against a `SceneCast`) |
 | An **audience**: individuals who perceive a scene without being on stage | 032 (who receives what) and 041 (who can see and hear, [STAGING](STAGING.md)); the cast here is only who is present |
