@@ -5,7 +5,7 @@ from types import MappingProxyType
 
 from grimoire.continuity import Dependency, Pin, scene_revision
 from grimoire.continuity.archive import FORK_SCHEMA, decode_fork
-from grimoire.core.identity import AcceptedRef, RelationRef, KnowledgeRef, HoldingsRef
+from grimoire.core.identity import AcceptedRef, RelationRef, KnowledgeRef, HoldingsRef, OwnerRef, InstanceRef
 from grimoire.core.knowledge import Perception, Report, Proposition, Ruling
 from grimoire.effects import accepted_from_payload, wrapup_from_payload
 from grimoire.continuity.provenance import decode_scene_sources
@@ -13,6 +13,9 @@ from grimoire.continuity.declarations import DEPENDENCY_SCHEMA, decode_dependenc
 from grimoire.evidence import decode_batch, decode_claimed
 from grimoire.graph.codec import relation_from_payload
 from grimoire.holdings import holdings_from_payload
+from grimoire.images import IMAGE_SCHEMA, PLACEMENT_SCHEMA, image_from_payload, placement_from_payload
+from grimoire.library import LibraryPathError
+from grimoire.store import CampaignRecords, StoreError
 from grimoire.scene import turn_from_payload
 from grimoire.store.layout import address_parts
 
@@ -68,6 +71,37 @@ def native_snapshot(store, campaign):
          'knowledge')
     scan(store.campaign_holdings(campaign), lambda ref, schema, payload:
          holdings_from_payload(ref.holder, schema, payload), 'holdings')
+
+    def asset_scan(refs, listed, schema, codec, kind):
+        problems.extend(f'{p.path}: {p.code}' for p in listed)
+        records = {}
+        for ref in refs:
+            try:
+                records[ref] = store.read(ref)
+            except (StoreError, LibraryPathError, ValueError, OSError) as error:
+                problems.append(f'{path(ref)}: unreadable {kind}: {type(error).__name__}')
+
+        def decode_asset(ref, found_schema, payload):
+            if found_schema != schema:
+                raise ValueError('unsupported asset schema')
+            return codec(payload)
+
+        scan(CampaignRecords(records, ()), decode_asset, kind)
+
+    # Only canonical campaign-owned image and placement envelopes are endpoints.
+    # Blob bytes and image connectivity never imply causal dependence or knowledge.
+    images, listed = store.list_images(f'campaign:{campaign}')
+    asset_scan(images, listed, IMAGE_SCHEMA, image_from_payload, 'image')
+    # The subject enumerator treats a regular-file placements parent as empty.
+    # A read-only listing probe validates that ancestry without inventing a node.
+    _, listed = store.list_placements(InstanceRef(campaign, 'character', 'continuity-scan'))
+    problems.extend(f'{p.path}: {p.code}' for p in listed)
+    subjects, complete = store.campaign_placement_subjects(campaign)
+    if not complete:
+        problems.append(f'campaigns/{campaign}/placements: incomplete placement subjects')
+    for subject in (*subjects, OwnerRef(f'campaign:{campaign}')):
+        placements, listed = store.list_placements(subject)
+        asset_scan(placements, listed, PLACEMENT_SCHEMA, placement_from_payload, 'placement')
 
     def link(source, dependent, reason, certainty='known'):
         # Missing references remain explicit graph premises: preview must fail closed.
