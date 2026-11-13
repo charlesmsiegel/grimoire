@@ -128,3 +128,42 @@ def test_correction_chains_and_competing_correction(tmp_path):
             assert [i.evidence.evidence_id for i in library.view(SAM, 'recap', as_of=5, requested_by=DIRECTOR).current] == ['v-sam']
             with pytest.raises(ValueError, match='competing_correction'):
                 library.correct(MemoryCorrection('fix-two', SAM, ('v-sam',), ('v-sam-member',), m(8), 'authored'), requested_by=DIRECTOR)
+
+
+def test_unconfirmed_future_and_foreign_scope_evidence_are_refused(tmp_path):
+    from grimoire.core import AuthorityError, InstanceRef
+    from evidence_fixtures import ORRIN, SAM
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as authority:
+            handle = authority.handle_for(OWNER, trusted=True)
+            controls = SovereigntyLedger(authority)
+            for actor in (ORRIN, SAM):
+                controls.record(C, ControlChange(C, actor.instance_id, DIRECTOR), handle)
+            library = MemoryLibrary(store, authority, handle)
+            for selection in (MemorySelection('unconfirmed', ORRIN, 'recap', ('v-orrin',), m(8)),
+                              MemorySelection('future', SAM, 'recap', ('v-sam-member',), m(4))):
+                with pytest.raises(ValueError, match='unavailable_evidence'):
+                    library.select(selection, requested_by=DIRECTOR)
+            with pytest.raises(AuthorityError):
+                library.select(MemorySelection('foreign', InstanceRef('other', 'character', 'sam'), 'recap', ('v-sam',), m(8)), requested_by=DIRECTOR)
+
+
+def test_codec_rejects_malformed_payload_without_echoing_content():
+    from grimoire.memory.codec import decode, encode
+    from grimoire.store.errors import LedgerInvalid
+    kind, payload = encode(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)))
+    payload['unexpected'] = 'SECRET-TEXT'
+    with pytest.raises(LedgerInvalid) as error:
+        decode(kind, payload)
+    assert 'SECRET-TEXT' not in str(error.value)
+
+
+def test_long_existing_correction_chain_admission_avoids_recursion():
+    from grimoire.memory import MemoryCorrection
+    rows = [(MemoryCorrection(f'c{i}', MARA, (f'e{i}',), (f'e{i+1}',), m(i), 'authored'), DIRECTOR, OWNER) for i in range(1100)]
+    # Joining an earlier uncorrected source to the long chain must validate its entire path.
+    MemoryLibrary._check_record(rows, MemoryCorrection('join', MARA, ('start',), ('e0',), m(1200), 'authored'), DIRECTOR)
+    with pytest.raises(ValueError, match='cyclic_correction'):
+        MemoryLibrary._check_record(rows, MemoryCorrection('loop', MARA, ('e1100',), ('e0',), m(1200), 'authored'), DIRECTOR)

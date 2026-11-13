@@ -7,6 +7,7 @@ from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import envelope, exact
 from grimoire.memory import MemorySelection, MemoryCorrection, consolidate_view
 from grimoire.memory.codec import encode, decode
+from grimoire.memory.view import _check_acyclic
 from grimoire.security import is_human
 from grimoire.security.policy import is_valid_principal
 from grimoire.store.errors import LedgerInvalid, TakenIdsUnlisted
@@ -92,10 +93,7 @@ class MemoryLibrary:
             # Subsequent validation in consolidate_view detects cycles.
             links = {i: v.replacement_ids for v in own if isinstance(v, MemoryCorrection) for i in v.obsolete_ids}
             links.update({i: value.replacement_ids for i in value.obsolete_ids})
-            def walk(i, seen):
-                if i in seen: raise ValueError('cyclic_correction')
-                for j in links.get(i, ()): walk(j, seen | {i})
-            for i in value.obsolete_ids: walk(i, set())
+            _check_acyclic(links, value.obsolete_ids)
 
     def _write(self, value, requested_by):
         if type(value) not in (MemorySelection, MemoryCorrection):

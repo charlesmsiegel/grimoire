@@ -32,14 +32,7 @@ def consolidate_view(knowledge, collection_id, selections, corrections, *, limit
             if replacement not in reachable:
                 reachable.add(replacement)
                 pending.append(replacement)
-    # Check cycles even if the records are supplied directly to this pure API.
-    def visit(item, path):
-        if item in path:
-            raise ValueError('cyclic_correction')
-        for replacement in links.get(item, ()):
-            visit(replacement, path | {item})
-    for item in reachable:
-        visit(item, set())
+    _check_acyclic(links, reachable)
     evidence = {e.evidence_id: e for e in knowledge.evidence if e.moment.sequence <= knowledge.as_of}
     ordered = sorted(reachable, key=lambda i: (evidence[i].moment.sequence, i) if i in evidence else (float('inf'), i))
     shown = ordered[:limit]
@@ -47,3 +40,23 @@ def consolidate_view(knowledge, collection_id, selections, corrections, *, limit
     history = tuple(MemoryItem(evidence[i], links[i], origins.get(i, ()), correction_ids[i]) for i in shown if i in evidence and i in links)
     return MemoryView(knowledge.actor, collection_id, knowledge.as_of, current, history,
                       tuple(i for i in shown if i not in evidence), len(ordered) - len(shown))
+
+
+def _check_acyclic(links, roots):
+    """Iterative DFS: valid long histories do not consume Python's call stack."""
+    done, active = set(), set()
+    for root in roots:
+        if root in done:
+            continue
+        stack = [(root, False)]
+        while stack:
+            node, leaving = stack.pop()
+            if leaving:
+                active.remove(node)
+                done.add(node)
+            elif node in active:
+                raise ValueError('cyclic_correction')
+            elif node not in done:
+                active.add(node)
+                stack.append((node, True))
+                stack.extend((child, False) for child in links.get(node, ()))

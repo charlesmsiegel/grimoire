@@ -40,3 +40,31 @@ def test_unavailable_replacement_never_revives_old_and_limit_is_bounded():
     view = consolidate_view(knowledge, 'recap', (selection,), (correction,), limit=1)
     assert view.current == () and view.history[0].evidence.evidence_id == 'old'
     assert view.omitted == 1
+
+
+def test_many_scenes_and_long_chain_are_bounded_without_recursion():
+    actor = InstanceRef('camp', 'character', 'alice')
+    evidence = tuple(KnownEvidence(f'e{i}', 'perception', 'sight', Moment(i), f'excerpt {i}') for i in range(1201))
+    knowledge = ActorKnowledge(actor, 2500, evidence, (), (), ())
+    selections = tuple(MemorySelection(f's{i}', actor, 'recap', tuple(f'e{j}' for j in range(i, min(i + 500, 1201))), Moment(1201)) for i in (0, 500, 1000))
+    corrections = tuple(MemoryCorrection(f'c{i}', actor, (f'e{i}',), (f'e{i+1}',), Moment(1202 + i), 'authored') for i in range(1100))
+    result = consolidate_view(knowledge, 'recap', selections, corrections, limit=1000)
+    assert len(result.current) + len(result.history) + len(result.unavailable) == 1000
+    assert result.omitted == 201
+
+
+def test_missing_replacement_is_unavailable_without_reviving_old():
+    actor = InstanceRef('camp', 'character', 'alice')
+    knowledge = ActorKnowledge(actor, 4, (KnownEvidence('old', 'perception', 'sight', Moment(1), 'old'),), (), (), ())
+    selection = MemorySelection('one', actor, 'recap', ('old',), Moment(2))
+    correction = MemoryCorrection('fix', actor, ('old',), ('missing',), Moment(3), 'authored')
+    view = consolidate_view(knowledge, 'recap', (selection,), (correction,))
+    assert view.current == () and view.unavailable == ('missing',)
+    assert view.history[0].replacement_ids == ('missing',)
+
+
+def test_non_character_actor_memory_uses_qualified_identity():
+    actor = InstanceRef('camp', 'item', 'lantern')
+    knowledge = ActorKnowledge(actor, 2, (KnownEvidence('seen', 'perception', 'sight', Moment(1), 'a visitor'),), (), (), ())
+    selection = MemorySelection('sel', actor, 'recap', ('seen',), Moment(2))
+    assert consolidate_view(knowledge, 'recap', (selection,), ()).current[0].evidence.content == 'a visitor'

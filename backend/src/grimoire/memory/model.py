@@ -14,7 +14,7 @@ def _ids(ids):
 
 def _common(operation_id, actor, moment):
     validate_segment(operation_id, 'operation_id')
-    if type(actor) is not InstanceRef or actor.kind != 'character' or type(moment) is not Moment:
+    if type(actor) is not InstanceRef or type(moment) is not Moment:
         raise ValueError('invalid_record')
 
 
