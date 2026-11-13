@@ -239,7 +239,14 @@ fills its form from its own):
 
 `TextApi` constructs a `DecisionLibrary` on its trusted `app:decisions` handle and passes it to
 `SceneRunner`. The additive `agendas=()` constructor input and `SceneRunner.set_agendas()` accept trusted
-039 policies; production `providers.configure` loads them from the model settings. No campaign page is changed.
+039 policies. `TextApi.startup_agendas` retains the validated immutable constructor policies from
+`--campaign-config`; production `providers.configure` composes those with disjoint model-file policies.
+Startup policies are read-only in the inspector: edit the campaign startup file and restart to change them.
+Overlapping model settings are refused before saving. Missing, malformed or overlapping model files disable
+narration and remove model-owned policies while preserving startup policies and stages. Missing credentials
+disable generation but retain the composed policies. The campaign hub continues to show startup policy;
+model-owned tactics are inspected here. Its separate labeling runtime, route, authority and call cap remain
+independent of every narration-provider save. No campaign page is changed.
 `SceneRunner.inspect_context(chat, actor)` shares generation's actor assembly, returning an explicit safe
 view rather than serializing the snapshot or hidden/held secret markers. Source-wide diagnostics are omitted.
 It refuses damaged knowledge and player/foreign actors, and works without a provider.
@@ -258,6 +265,7 @@ billing. Historical snapshots, general goal editing, probability policies and sc
 remain later work. These device-local settings are not synchronized campaign canon.
 
 Executable proofs include `test_app_inference_context.py`, `test_app_inference_decisions.py`,
-`test_play_decisions.py` and `test_app_inference_browser.py` (actual CLI, AppServer and Chromium,
+`test_play_decisions.py`, `test_app_inference_campaign.py`, `test_app_inference_campaign_browser.py`
+and `test_app_inference_browser.py` (actual CLI, AppServer and Chromium,
 with synthetic fixtures and a loopback model). Browser coverage includes keyboard submission, narrow
 viewport, restart and failed-request recovery; it is not a physical-phone or screen-reader certification.
