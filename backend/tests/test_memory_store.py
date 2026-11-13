@@ -1,0 +1,130 @@
+import pytest
+from grimoire.core import DIRECTOR
+from grimoire.ledgers import ControlChange, SovereigntyLedger
+from grimoire.memory import MemorySelection
+from grimoire.memorystore import MemoryLibrary
+from grimoire.evidencestore import EvidenceLibrary
+from grimoire.store import LibraryStore
+from ledger_helpers import OWNER, open_authority
+from evidence_fixtures import C, MARA, m
+from test_evidencestore_scenarios import seed_actors, append_u
+from store_helpers import owner_handle
+
+
+def test_retry_and_reopen(tmp_path):
+    root = tmp_path / 'lib'
+    with LibraryStore.create(root) as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as authority:
+            handle = authority.handle_for(OWNER, trusted=True)
+            SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), handle)
+            library = MemoryLibrary(store, authority, handle)
+            selection = MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8))
+            library.select(selection, requested_by=DIRECTOR)
+            library.select(selection, requested_by=DIRECTOR)
+    with LibraryStore.open(root) as store:
+        with open_authority(store) as authority:
+            library = MemoryLibrary(store, authority, authority.handle_for(OWNER, trusted=True))
+            assert library.view(MARA, 'recap', as_of=8, requested_by=DIRECTOR).current[0].evidence.evidence_id == 'v-mara'
+
+
+def test_transfer_keeps_previous_editor_material_out_of_pc_view(tmp_path):
+    root = tmp_path / 'lib'
+    with LibraryStore.create(root) as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as authority:
+            owner = authority.handle_for(OWNER, trusted=True)
+            controls = SovereigntyLedger(authority)
+            controls.record(C, ControlChange(C, 'mara', DIRECTOR), owner)
+            director = MemoryLibrary(store, authority, owner)
+            director.select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
+            controls.record(C, ControlChange(C, 'mara', 'human:player'), owner)
+            player = MemoryLibrary(store, authority, authority.handle_for('human:player', trusted=True))
+            assert player.view(MARA, 'recap', as_of=8, requested_by='human:player').current == ()
+            with pytest.raises(Exception):
+                director.view(MARA, 'recap', as_of=8, requested_by=DIRECTOR)
+            assert len(director.inspect(C, requested_by=DIRECTOR)) == 1
+
+
+def test_conflicting_retry_and_foreign_evidence_are_rejected(tmp_path):
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as authority:
+            handle = authority.handle_for(OWNER, trusted=True)
+            SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), handle)
+            library = MemoryLibrary(store, authority, handle)
+            library.select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
+            with pytest.raises(ValueError, match='operation_conflict'):
+                library.select(MemorySelection('sel', MARA, 'other', ('v-mara',), m(8)), requested_by=DIRECTOR)
+            with pytest.raises(ValueError, match='unavailable_evidence'):
+                library.select(MemorySelection('other', MARA, 'recap', ('v-ines',), m(8)), requested_by=DIRECTOR)
+
+
+def test_actor_ids_remain_reserved_after_instance_deletion(tmp_path):
+    from grimoire.memorystore import memory_actor_ids
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as authority:
+            handle = authority.handle_for(OWNER, trusted=True)
+            SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), handle)
+            MemoryLibrary(store, authority, handle).select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
+        (store.root / 'campaigns' / C / 'instances' / 'character' / 'mara.json').unlink()
+        assert 'mara' in memory_actor_ids(store, C)
+
+
+def test_damaged_ledger_fails_closed_on_reopen(tmp_path):
+    from grimoire.store.errors import LedgerBroken, LedgerInvalid
+    root = tmp_path / 'lib'
+    with LibraryStore.create(root) as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as authority:
+            handle = authority.handle_for(OWNER, trusted=True)
+            SovereigntyLedger(authority).record(C, ControlChange(C, 'mara', DIRECTOR), handle)
+            MemoryLibrary(store, authority, handle).select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
+    batch = next((root / 'authority' / 'memory' / C).glob('*.json'))
+    batch.write_text('{}')
+    with LibraryStore.open(root) as store:
+        with open_authority(store) as authority:
+            with pytest.raises((LedgerBroken, LedgerInvalid)):
+                MemoryLibrary(store, authority, authority.handle_for(OWNER, trusted=True)).view(MARA, 'recap', as_of=8, requested_by=DIRECTOR)
+
+
+def test_trusted_service_can_direct_npc_but_cannot_edit_pc(tmp_path):
+    from grimoire.core import AuthorityError
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as authority:
+            owner = authority.handle_for(OWNER, trusted=True)
+            controls = SovereigntyLedger(authority)
+            controls.record(C, ControlChange(C, 'mara', DIRECTOR), owner)
+            service = MemoryLibrary(store, authority, authority.handle_for('app:adjudicator', trusted=True))
+            service.select(MemorySelection('sel', MARA, 'recap', ('v-mara',), m(8)), requested_by=DIRECTOR)
+            controls.record(C, ControlChange(C, 'mara', 'human:player'), owner)
+            with pytest.raises(AuthorityError):
+                service.select(MemorySelection('sel-two', MARA, 'recap', ('v-mara',), m(8)), requested_by='human:player')
+
+
+def test_correction_chains_and_competing_correction(tmp_path):
+    from grimoire.memory import MemoryCorrection
+    from evidence_fixtures import SAM
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as authority:
+            handle = authority.handle_for(OWNER, trusted=True)
+            SovereigntyLedger(authority).record(C, ControlChange(C, 'sam', DIRECTOR), handle)
+            library = MemoryLibrary(store, authority, handle)
+            library.select(MemorySelection('sel', SAM, 'recap', ('v-sam',), m(5)), requested_by=DIRECTOR)
+            correction = MemoryCorrection('fix', SAM, ('v-sam',), ('v-sam-member',), m(6), 'authored')
+            library.correct(correction, requested_by=DIRECTOR)
+            library.select(MemorySelection('stale', SAM, 'recap', ('v-sam',), m(7)), requested_by=DIRECTOR)
+            assert [i.evidence.evidence_id for i in library.view(SAM, 'recap', as_of=7, requested_by=DIRECTOR).current] == ['v-sam-member']
+            assert [i.evidence.evidence_id for i in library.view(SAM, 'recap', as_of=5, requested_by=DIRECTOR).current] == ['v-sam']
+            with pytest.raises(ValueError, match='competing_correction'):
+                library.correct(MemoryCorrection('fix-two', SAM, ('v-sam',), ('v-sam-member',), m(8), 'authored'), requested_by=DIRECTOR)
