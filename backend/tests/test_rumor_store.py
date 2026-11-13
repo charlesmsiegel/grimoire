@@ -61,6 +61,11 @@ def test_pc_speech_requires_exact_current_controller_and_codec_replays(tmp_path)
             lib.enqueue(r, moment=m(9), requested_by=OWNER, contribution=c)
             lib.enqueue(r, moment=m(9), requested_by=OWNER, contribution=c)
             assert lib.outbox(MARA, requested_by=OWNER)[0].text == r.text
+            before = lib.actor_knowledge(C, MARA, as_of=20, requested_by=OWNER)
+            a.add_grant(Grant('director-g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
+            service = RumorLibrary(store, a, a.handle_for('app:adjudicator', trusted=True))
+            service.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
+            assert lib.actor_knowledge(C, MARA, as_of=20, requested_by=OWNER) == before
 
 
 def test_watermark_clock_and_id_collisions(tmp_path):
@@ -190,3 +195,29 @@ def test_actor_projection_requires_issued_current_controller_and_matching_scope(
                 director.actor_knowledge('other', MARA, as_of=8, requested_by=DIRECTOR)
             with pytest.raises(AuthorityError):
                 director.actor_knowledge(C, InstanceRef('other', 'character', 'mara'), as_of=8, requested_by=DIRECTOR)
+
+
+def test_human_projection_separates_inherited_and_own_beliefs_across_transfer(tmp_path):
+    from grimoire.core import Belief, ControlAssignment, PlayerContribution
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed_actors(store)
+        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        with open_authority(store) as a:
+            a.add_grant(Grant('g', OWNER, frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
+            owner = a.handle_for(OWNER, trusted=True)
+            controls = SovereigntyLedger(a)
+            controls.record(C, ControlChange(C, 'mara', OWNER), owner)
+            lib = RumorLibrary(store, a, owner)
+            view = lib.actor_knowledge(C, MARA, as_of=8, requested_by=OWNER)
+            assert view.current == ()
+            assert [b.belief_id for b in view.inherited] == ['b-mara-2']
+            contribution = PlayerContribution(C, 'interiority', 's', 't', 'mara', OWNER, 'interiority', 'the guild sold its own charter')
+            belief = Belief(C, 'own-belief', MARA, 'p-mis', 'believed', m(9, 's', 't'), OWNER, ('v-mara',), supersedes='b-mara-2', contribution_id='interiority')
+            EvidenceLibrary(store, owner).append(C, [belief], controls=[ControlAssignment(C, 'mara', OWNER)], contributions={'own-belief': contribution}).commit()
+            view = lib.actor_knowledge(C, MARA, as_of=9, requested_by=OWNER)
+            assert [b.belief_id for b in view.current] == ['own-belief']
+            controls.record(C, ControlChange(C, 'mara', 'human:new'), owner)
+            other = RumorLibrary(store, a, a.handle_for('human:new', trusted=True))
+            transferred = other.actor_knowledge(C, MARA, as_of=9, requested_by='human:new')
+            assert transferred.current == ()
+            assert [b.belief_id for b in transferred.inherited] == ['own-belief']

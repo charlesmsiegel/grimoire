@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution, controller_of, submit_contribution
 from grimoire.core.identity import InstanceRef, paired_instances, validate_segment
 from grimoire.core.knowledge import Moment, Proposition, Report
-from grimoire.core.perspective import SentReport
+from grimoire.core.perspective import SentReport, controller_knowledge
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import envelope
@@ -209,7 +209,13 @@ class RumorLibrary:
         with self.authority.lock:
             self._actor_reader(campaign, actor, requested_by)
             rows = self._load(campaign)[0][0]
-            view = EvidenceLibrary(self.store).actor_knowledge(campaign, actor, as_of=as_of)
+            evidence = EvidenceLibrary(self.store)
+            if requested_by == DIRECTOR:
+                view = evidence.actor_knowledge(campaign, actor, as_of=as_of)
+            else:
+                knowledge = evidence.read(campaign, requested_by=DIRECTOR).knowledge
+                controls = SovereigntyLedger(self.authority).load(campaign).controls
+                view = controller_knowledge(knowledge, actor, requested_by, controls, as_of=as_of)
             ids = {_id(campaign, rid, 'report') for rid in rows}
             sent = [s for s in view.sent if s.evidence_id not in ids]
             for rid, row in rows.items():
