@@ -17,10 +17,10 @@ can list the campaigns and reach a hub from a campaign id (the ``campaign`` rout
 from __future__ import annotations
 
 from collections.abc import Mapping
-from weakref import WeakKeyDictionary
 
 from grimoire.app.adapter import Adapter, AdapterContext
 from grimoire.campaignapi import CampaignApi
+from grimoire.campaignapi import parse
 from grimoire.core.identity import ChatRef, validate_segment
 from grimoire.textapi import ApiRefused
 
@@ -32,20 +32,41 @@ MAX_CHATS = 1000
 #: The bindings of a chat that the list names as its cast.
 CAST_ROLES = ("character", "persona")
 
-_HUBS: WeakKeyDictionary = WeakKeyDictionary()
+_ATTRIBUTE = "_campaign_hub"
 
 
 def hub_of(ctx: AdapterContext) -> CampaignApi:
     """The one campaign hub over this app's open library (built on first use, then kept with its text API)."""
-    hub = _HUBS.get(ctx.api)
+    hub = getattr(ctx.api, _ATTRIBUTE, None)
     if hub is None:
-        hub = _HUBS[ctx.api] = CampaignApi(ctx.store, ctx.authority, owner=ctx.owner, handle=ctx.handle)
+        hub = CampaignApi(ctx.store, ctx.authority, owner=ctx.owner, handle=ctx.handle, lock=ctx.api.lock)
+        setattr(ctx.api, _ATTRIBUTE, hub)
     return hub
 
 
 def _op(name: str):  # type: ignore[no-untyped-def]
     def handler(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
-        return hub_of(ctx).call(name, args)
+        hub = hub_of(ctx)
+        # The page's authority is on what it actually reviewed, never whichever turn another tab
+        # made latest. The app writer lock surrounds this adapter; store.lock also excludes a local
+        # domain writer between this comparison and the domain's own compare-and-swap.
+        if name in ("label", "confirm", "decide"):
+            with ctx.store.lock:
+                if name == "label" and not hub.labelling:
+                    raise ApiRefused("no_labeller", "no labelling model is configured for this app")
+                chat = parse.chat_of(args)
+                scene = hub.runner.open(chat)
+                pending = scene.pending
+                if pending is None:
+                    raise ApiRefused("not_an_action", "no open action is waiting for review")
+                if not isinstance(args.get("turn"), str) or not isinstance(args.get("expected"), str):
+                    raise ApiRefused("review_required", "reload the action and review it before continuing")
+                if args["turn"] != pending.turn_id or args["expected"] != scene.turns.etags().get(pending.turn_id):
+                    raise ApiRefused("changed", "the action changed; reload and review it again")
+                if name == "decide" and not isinstance(args.get("fingerprint"), str):
+                    raise ApiRefused("review_required", "review the current frame before deciding")
+                return hub.call(name, args)
+        return hub.call(name, args)
 
     handler.__name__ = f"campaign_{name}"
     return handler

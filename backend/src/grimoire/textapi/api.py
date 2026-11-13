@@ -136,7 +136,7 @@ class TextApi:
     ``sync`` dials. Calls are serialized: one library, one writer at a time."""
 
     def __init__(self, store: LibraryStore, authority, *, owner: str, player: str | None = None,  # type: ignore[no-untyped-def]
-                 runtime=None, policy=None, voices=None, peers: Mapping[str, tuple[str, int]] | None = None,
+                 runtime=None, policy=None, voices=None, stages=None, agendas=(), peers: Mapping[str, tuple[str, int]] | None = None,
                  clock: Callable[[], str] = _utc_now, new_id: Callable[[str], str] = _new_id,
                  transfer_timeout: float = 600.0) -> None:
         self.store = store
@@ -148,7 +148,7 @@ class TextApi:
         # one adjudication key for the app: a turn framed at the hub is read here with the key it was framed under
         self.adjudication = AdjudicationLibrary(store, authority, authority.handle_for(ADJUDICATOR, trusted=True))
         self.runner = SceneRunner(store, authority, self.owner_handle, owner=owner, runtime=runtime, policy=policy,
-                                  voices=voices, adjudication=self.adjudication)
+                                  voices=voices, adjudication=self.adjudication, stages=stages, agendas=agendas)
         self.chats = ChatLibrary(store, self.owner_handle, clock=clock, new_id=new_id, owner=owner)
         self.quick = QuickStart(self.chats, self.runner)
         self.images = ImageLibrary(store, self.owner_handle, owner=owner)

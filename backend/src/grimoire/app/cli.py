@@ -34,6 +34,8 @@ from grimoire.textapi import TextApi
 
 from .adapters import providers
 from .appapi import AppApi
+from .campaign_config import CampaignConfigError, load_campaign_config
+from .campaign_services import configure as configure_campaign, validate_credentials
 from .launcher import Launcher
 from .libraries import (
     DEFAULT_OWNER,
@@ -177,9 +179,19 @@ def serve(args: argparse.Namespace) -> None:
     except SetupError as error:
         raise _console(error) from None
     peers = dict(args.peer)
+    try:
+        campaign_config = load_campaign_config(args.campaign_config)
+        validate_credentials(campaign_config)
+    except CampaignConfigError as error:
+        raise CliError(str(error)) from None
 
     def build(store: LibraryStore, authority: DurableAuthority) -> TextApi:
-        api = TextApi(store, authority, owner=args.owner, peers=peers)
+        api = TextApi(store, authority, owner=args.owner, peers=peers,
+                      stages=campaign_config.stages, agendas=campaign_config.agendas)
+        try:
+            configure_campaign(api, campaign_config)
+        except CampaignConfigError as error:
+            raise CliError(str(error)) from None
         # 112: the model is the settings file's; one that is missing or unusable starts the app without a
         # model, and its Models and costs page says why and can set one up
         settings = providers.configure(api, args.model)
@@ -285,6 +297,8 @@ def parser() -> argparse.ArgumentParser:
     three.add_argument("--port", type=_port, default=8080)
     three.add_argument("--peer", type=_peer, action="append", default=[], help="NAME=HOST:PORT of a paired device")
     three.add_argument("--sync-port", type=_port, help="also serve this library to paired devices on this port")
+    three.add_argument("--campaign-config", type=Path,
+                       help="read-only authored stages, NPC agendas and optional labeling model (JSON)")
     three.add_argument("--model", type=Path, help="the model settings file (JSON): created by the app when missing")
     three.add_argument("--setup", action="store_true",
                        help="where LIBRARY holds no library yet, serve the first-run page to make one")

@@ -194,9 +194,14 @@ def test_an_action_decided_at_the_hub_is_narrated_in_the_chat(desk):
     labelled_action(folder, chat)
     with Device(folder, [say("Mara pockets the coins.")]) as device:
         app = AppApi(device.api)
-        outcome = app.call("campaign.confirm", {"chat": str(chat)})["done"]["outcome"]
+        review = app.call("campaign.hub", {"chat": str(chat)})["open_action"]
+        outcome = app.call("campaign.confirm", {"chat": str(chat), "turn": review["turn"],
+                                                "expected": review["expected"]})["done"]["outcome"]
         if outcome is None:  # the frame leaves it to the director
-            outcome = app.call("campaign.decide", {"chat": str(chat), "audience": "director", "result": "success"})[
+            review = app.call("campaign.hub", {"chat": str(chat)})["open_action"]
+            outcome = app.call("campaign.decide", {"chat": str(chat), "audience": "director", "result": "success",
+                                                   "turn": review["turn"], "expected": review["expected"],
+                                                   "fingerprint": review["framed"]["fingerprint"]})[
                 "done"]["outcome"]
         assert outcome["result"] == "success"
         # the chat's own runner reads the frame with the app's adjudication key the hub framed it under
@@ -234,3 +239,21 @@ def test_the_campaign_page_end_to_end(desk):
             thread.join(10)
     assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
     assert "# pass 1" in result.stdout
+
+
+def test_production_review_requires_the_exact_turn_revision(desk):
+    folder, chat = desk
+    labelled_action(folder, chat)
+    with Device(folder) as device:
+        app = AppApi(device.api)
+        shown = app.call("campaign.hub", {"chat": str(chat)})["open_action"]
+        # Missing and stale identities cannot turn a preview into authority on latest state.
+        assert refused(app, "campaign.confirm", chat=str(chat)).reason == "review_required"
+        assert refused(app, "campaign.confirm", chat=str(chat), turn=shown["turn"],
+                       expected="stale").reason == "changed"
+        assert app.call("campaign.hub", {"chat": str(chat)})["open_action"] == shown
+        result = app.call("campaign.confirm", {"chat": str(chat), "turn": shown["turn"],
+                                               "expected": shown["expected"]})
+        assert result["done"]["outcome"]["result"] == "success"
+        assert refused(app, "campaign.confirm", chat=str(chat), turn=shown["turn"],
+                       expected=shown["expected"]).reason == "changed"

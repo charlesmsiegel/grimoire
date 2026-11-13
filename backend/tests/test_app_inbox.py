@@ -137,7 +137,8 @@ def test_a_labelling_and_a_change_wait_on_the_player_and_are_decided_by_the_hubs
         assert action["route"] == {"route": "campaign", "path": [chat.campaign_id], "query": {"chat": str(chat)},
                                    "label": "Open where it happened"}
         (confirm,) = action["actions"]
-        assert (confirm["op"], confirm["args"]) == ("campaign.confirm", {"chat": str(chat), "audience": "table"})
+        assert (confirm["op"], confirm["args"]) == ("campaign.confirm", {"chat": str(chat), "audience": "table",
+            "turn": action["action"]["turn"], "expected": app.call("campaign.hub", {"chat": str(chat)})["open_action"]["expected"]})
         # a labelling with nothing more to read may be confirmed from the chat's tray; a change never is,
         # because its operations are read in full first
         assert confirm["quick"] is not bool(action["action"]["label"]["factors"] or action["action"]["label"]["stakes"])
