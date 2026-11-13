@@ -79,3 +79,24 @@ def test_limit_prioritizes_terminal_replacement_over_history():
     view = consolidate_view(ActorKnowledge(actor, 3, evidence, (), (), ()), 'recap', (selection,), (correction,), limit=1)
     assert [item.evidence.evidence_id for item in view.current] == ['new']
     assert view.history == () and view.omitted == 1
+
+
+def test_bounded_terminal_keeps_editorial_origins():
+    actor = InstanceRef('camp', 'character', 'alice')
+    evidence = tuple(KnownEvidence(i, 'perception', 'sight', Moment(n), i) for n, i in enumerate(('old', 'new'), 1))
+    selection = MemorySelection('sel', actor, 'recap', ('old',), Moment(2))
+    correction = MemoryCorrection('fix', actor, ('old',), ('new',), Moment(3), 'private')
+    view = consolidate_view(ActorKnowledge(actor, 3, evidence, (), (), ()), 'recap', (selection,), (correction,), limit=1)
+    assert view.current[0].selection_ids == ('sel',)
+    assert view.current[0].correction_ids == ('fix',)
+    assert 'private' not in repr(view)
+
+
+def test_terminal_unions_converging_multihop_origins():
+    actor = InstanceRef('camp', 'character', 'alice')
+    evidence = tuple(KnownEvidence(i, 'perception', 'sight', Moment(n), i) for n, i in enumerate(('a', 'b', 'c', 'd'), 1))
+    selections = (MemorySelection('one', actor, 'recap', ('a',), Moment(4)), MemorySelection('two', actor, 'recap', ('b',), Moment(4)))
+    corrections = (MemoryCorrection('first', actor, ('a',), ('c',), Moment(5), 'private'), MemoryCorrection('second', actor, ('b',), ('c',), Moment(6), 'private'), MemoryCorrection('last', actor, ('c',), ('d',), Moment(7), 'private'))
+    item = consolidate_view(ActorKnowledge(actor, 7, evidence, (), (), ()), 'recap', selections, corrections, limit=1).current[0]
+    assert item.selection_ids == ('one', 'two')
+    assert item.correction_ids == ('first', 'last', 'second')

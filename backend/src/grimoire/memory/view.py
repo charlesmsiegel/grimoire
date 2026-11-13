@@ -33,11 +33,29 @@ def consolidate_view(knowledge, collection_id, selections, corrections, *, limit
                 reachable.add(replacement)
                 pending.append(replacement)
     _check_acyclic(links, reachable)
+    # Propagate editorial links across the entire reachable DAG before applying the
+    # display limit, so hidden history cannot sever a terminal's attribution.
+    selection_paths = {i: set(origins.get(i, ())) for i in reachable}
+    correction_paths = {i: set() for i in reachable}
+    indegree = {i: 0 for i in reachable}
+    for source in reachable:
+        for target in links.get(source, ()):
+            indegree[target] += 1
+    ready = [i for i in reachable if indegree[i] == 0]
+    while ready:
+        source = ready.pop()
+        for target in links.get(source, ()):
+            selection_paths[target].update(selection_paths[source])
+            correction_paths[target].update(correction_paths[source])
+            correction_paths[target].add(correction_ids[source])
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
     evidence = {e.evidence_id: e for e in knowledge.evidence if e.moment.sequence <= knowledge.as_of}
     ordered = sorted(reachable, key=lambda i: (i in links, evidence[i].moment.sequence if i in evidence else float('inf'), i))
     shown = ordered[:limit]
-    current = tuple(MemoryItem(evidence[i], selection_ids=origins.get(i, ())) for i in shown if i in evidence and i not in links)
-    history = tuple(MemoryItem(evidence[i], links[i], origins.get(i, ()), correction_ids[i]) for i in shown if i in evidence and i in links)
+    current = tuple(MemoryItem(evidence[i], selection_ids=tuple(sorted(selection_paths[i])), correction_ids=tuple(sorted(correction_paths[i]))) for i in shown if i in evidence and i not in links)
+    history = tuple(MemoryItem(evidence[i], links[i], tuple(sorted(selection_paths[i])), correction_ids[i], tuple(sorted(correction_paths[i]))) for i in shown if i in evidence and i in links)
     return MemoryView(knowledge.actor, collection_id, knowledge.as_of, current, history,
                       tuple(i for i in shown if i not in evidence), len(ordered) - len(shown))
 

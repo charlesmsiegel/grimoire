@@ -55,6 +55,7 @@ class MemoryItem:
     replacement_ids: tuple[str, ...] = ()
     selection_ids: tuple[str, ...] = ()
     correction_id: str | None = None
+    correction_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
