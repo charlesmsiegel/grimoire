@@ -156,3 +156,49 @@ def test_generic_turn_resolve_rechecks_new_event_after_initial_review(pair, monk
     with pytest.raises(ResolveRefused, match='semantic'):
         resolve(desk.store, phone.store, path, expected[PHONE], expected, handles())
     assert etag(desk.store.read_exact(path)) == expected[DESKTOP]
+
+
+def test_native_fixture_imports_in_fresh_interpreter():
+    import os
+    import subprocess
+    import sys
+    env = dict(os.environ, PYTHONPATH='backend/src:backend/tests')
+    result = subprocess.run([sys.executable, '-c', 'from ledger_fixtures import Device'],
+                            env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('changed_device', [DESKTOP, PHONE])
+@pytest.mark.parametrize('mutation', ['edit', 'remove'])
+def test_declared_holder_endpoint_changes_token_and_stops_scene_apply(pair, changed_device, mutation):
+    from grimoire.core.identity import ContinuityRef
+    from grimoire.continuity import scene_revision
+    from grimoire.store import ScopeRecord
+    from grimoire.sync import apply_sync, semantic, SyncInterrupted
+    from grimoire.store.envelope import parse_scope_record
+    from grimoire.store.jsonfmt import parse_strict
+    from effects_fixtures import TAM
+    from store_helpers import OWNER
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    source = 'campaigns/c/holdings/character/tam.json'
+    dependent = 'campaigns/c/turns/t-1.000001.json'
+    turn = parse_scope_record(parse_strict(desk.store.read_exact(dependent)))[0]
+    payload = {'source': {'path': source, 'revision': etag(desk.store.read_exact(source))},
+               'dependent': {'path': dependent, 'revision': scene_revision(turn.payload)},
+               'reason': 'causal_action', 'certainty': 'known'}
+    for d in pair.values():
+        txn = d.store.transaction()
+        txn.put(ScopeRecord(ContinuityRef('c', 'holder-use'), 'grimoire.continuity-dependency/1', payload, owner=OWNER), None)
+        txn.commit(d.handles.app)
+    write_turn(phone.store, phone.handles, number=2)
+    plan = plan_sync(desk.store, phone.store, handles())
+    before = semantic.token(plan, 'c')
+    if mutation == 'edit':
+        pair[changed_device].hand_edit(TAM, 'coin', 9)
+    else:
+        (pair[changed_device].store.root / source).unlink()
+    after = semantic.token(plan_sync(desk.store, phone.store, handles()), 'c')
+    assert before != after
+    with pytest.raises(SyncInterrupted, match='semantic'):
+        apply_sync(plan, handles())
+    assert desk.store.read_exact('campaigns/c/turns/t-1.000002.json') is None

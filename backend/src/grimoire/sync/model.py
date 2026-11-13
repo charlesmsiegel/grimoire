@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Literal
 
 from grimoire.store.journal import DELETABLE_KINDS
@@ -124,3 +125,19 @@ class Decision:
     def mirrored(self) -> Decision:
         flip = {"left": "right", "right": "left", None: None}
         return Decision(self.action, self.code, flip[self.origin])  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True)
+class Conflict:
+    path: str
+    code: str
+    detail: str = ""
+    #: device -> whether it now holds the other device's version under ``.conflicts``
+    kept: Mapping[str, bool] = field(default_factory=dict)
+    #: devices that dismissed the other device's current version (``dismiss``): not kept for them again
+    #: while the conflict stands on the same archive base
+    dismissed: tuple[str, ...] = ()
+    #: ``merge_review`` (028): every reason the campaign's ledger merge stopped (``ledgermerge.ReviewItem``)
+    review: tuple = ()
+    #: ``merge_review``: what the review was made on (``units.token``); ``resolve_ledger`` must name it
+    token: str = ""

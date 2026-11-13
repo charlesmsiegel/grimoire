@@ -38,7 +38,7 @@ from .documents import ArchiveView, KeepsView, PendingView, parse_keeps, syncabl
 from .errors import ArchiveTooLarge, SameDevice, SyncInterrupted, SyncNotQuiet
 from .identity import device_of, identify
 from .model import (
-    ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, LEDGER_KINDS, Base, LedgerMerge, Side,
+    ASSET_KINDS, CAMPAIGN_LOCAL, HELD_BACK_KINDS, HOLDS_RELATIONS, LEDGER_KINDS, Base, Conflict, LedgerMerge, Side,
 )
 from .turns import turn_named, turn_needs
 
@@ -92,22 +92,6 @@ class Keep:
     device: str
     data: bytes
     slot: int
-
-
-@dataclass(frozen=True)
-class Conflict:
-    path: str
-    code: str
-    detail: str = ""
-    #: device -> whether it now holds the other device's version under ``.conflicts``
-    kept: Mapping[str, bool] = field(default_factory=dict)
-    #: devices that dismissed the other device's current version (``dismiss``): not kept for them again
-    #: while the conflict stands on the same archive base
-    dismissed: tuple[str, ...] = ()
-    #: ``merge_review`` (028): every reason the campaign's ledger merge stopped (``ledgermerge.ReviewItem``)
-    review: tuple = ()
-    #: ``merge_review``: what the review was made on (``units.token``); ``resolve_ledger`` must name it
-    token: str = ""
 
 
 @dataclass(frozen=True)

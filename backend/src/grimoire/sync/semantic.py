@@ -7,17 +7,17 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from grimoire.continuity import scene_revision
-from grimoire.continuitystore import decode_dependency
+from grimoire.continuity.declarations import decode_dependency
 from grimoire.effects import accepted_from_payload
-from grimoire.effectstore.continuity import decode_scene_sources
+from grimoire.continuity.provenance import decode_scene_sources
 from grimoire.scene import turn_from_payload
 from grimoire.store import etag
 from grimoire.store.envelope import parse_scope_record
 from grimoire.store.jsonfmt import parse_strict
-from grimoire.store.layout import address_parts
+from grimoire.store.layout import address_parts, classify
 from .documents import syncable
 from .identity import device_of
-from .model import Base
+from .model import Base, Conflict
 from . import bookkeeping, units
 
 
@@ -34,19 +34,29 @@ def relevant(path: str, campaign: str) -> bool:
     return len(parts) >= 3 and parts[:2] == ['campaigns', campaign] and parts[2] in {'turns', 'accepted', 'continuity', 'relations'}
 
 
+def premise_path(path: str, campaign: str) -> bool:
+    """A conservative complete campaign listing also binds absent declaration endpoints.
+
+    Endpoint records can belong to any native family. Binding the complete canonical set
+    avoids losing absent endpoints or declarations that exist only on the other snapshot.
+    """
+    parts = tuple(path.split('/'))
+    return len(parts) >= 3 and parts[:2] == ('campaigns', campaign) and classify(parts) is not None
+
+
 def expected_listing(plan, device, campaign, published=()):
     scan = plan.scans[device]
-    files = {p: etag(b) for p, b in scan.files.items() if relevant(p, campaign)}
-    files.update({c.path: c.etag for c in published if relevant(c.path, campaign)})
-    blocked = sorted(p for p in scan.blocked if relevant(p, campaign) and p not in files)
+    files = {p: etag(b) for p, b in scan.files.items() if premise_path(p, campaign)}
+    files.update({c.path: c.etag for c in published if premise_path(c.path, campaign)})
+    blocked = sorted(p for p in scan.blocked if (p.startswith(f'campaigns/{campaign}/') or p in ('', 'campaigns', f'campaigns/{campaign}')) and p not in files)
     return files, blocked
 
 
 def listing(store, campaign):
     # The canonical scanner refuses symlinks and records unlistable directories.
     scan = store.scan()
-    return {**{p: etag(b) for p, b in scan.files.items() if relevant(p, campaign)},
-            **{p: None for p in scan.blocked if relevant(p, campaign) or p in ('', 'campaigns', f'campaigns/{campaign}')}}
+    return {**{p: etag(b) for p, b in scan.files.items() if premise_path(p, campaign)},
+            **{p: None for p in scan.blocked if p.startswith(f'campaigns/{campaign}/') or p in ('', 'campaigns', f'campaigns/{campaign}')}}
 
 
 def token(plan, campaign):
@@ -169,7 +179,6 @@ def reviews(plan):
 
 
 def guard(plan):
-    from .session import Conflict  # session owns this type and imports this guard (as units does)
     for review in reviews(plan):
         implicated = {p for p in review.scenes if p in plan.sides} | {
             p for p, c in plan.units.items() if c == review.campaign}
