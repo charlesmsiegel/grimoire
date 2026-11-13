@@ -31,3 +31,15 @@ def test_unreadable_continuity_ledger_blocks_identity_allocation(tmp_path, famil
         batch.write_bytes(b'{unreadable')
         with pytest.raises(TakenIdsUnlisted):
             campaign_taken_ids(store, 'camp')
+
+
+@pytest.mark.parametrize('actor', [None, ['campaign:camp/character/mara'], 7,
+                                  'campaign:elsewhere/character/mara'])
+def test_malformed_memory_actor_blocks_identity_allocation(tmp_path, actor):
+    with LibraryStore.create(tmp_path / 'lib', locker=ProcessLocker()) as store:
+        with DurableAuthority.open(store, {'human:owner'}) as authority:
+            authority._append('memory/camp', [envelope(
+                'damaged', 'synthetic', value={'actor': actor}
+            )], None)
+            with pytest.raises(TakenIdsUnlisted):
+                campaign_taken_ids(store, 'camp')

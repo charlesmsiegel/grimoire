@@ -22,13 +22,14 @@ def memory_actor_ids(store, campaign_id):
     while stack:
         value = stack.pop()
         if isinstance(value, Mapping):
-            actor = value.get('actor')
-            if isinstance(actor, str):
+            if 'actor' in value:
+                actor = value['actor']
                 try:
                     ref = InstanceRef.parse(actor)
-                    if ref.campaign_id == campaign_id:
-                        result.add(ref.instance_id)
-                except ValueError:
+                    if ref.campaign_id != campaign_id:
+                        raise ValueError()
+                    result.add(ref.instance_id)
+                except (TypeError, ValueError):
                     raise TakenIdsUnlisted('memory actor cannot be read', ()) from None
             stack.extend(value.values())
         elif isinstance(value, (list, tuple)):
