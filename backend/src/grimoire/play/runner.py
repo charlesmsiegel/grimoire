@@ -66,10 +66,14 @@ from grimoire.play.scene import (
 from grimoire.play.stages import StageSource, stage_key, succession
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, LabelRuntime, RunFence
+from grimoire.narration_review import ExtractionRuntime
+from . import continuity
+from .continuity_facts import snapshot as continuity_snapshot
 from grimoire.scene import (
     MAX_TAKES, NARRATOR, CallRecord, Intention, IntentionOption, Label, Post, SceneLine, SceneRefused, Take, TurnRecord,
     audible, heard_for, render, segments, table_lines, turn_id,
 )
+from grimoire.scene.review import MAX_REVIEW_BYTES
 from grimoire.scenestore import MAX_TURN_BYTES, SceneLibrary, StoredTurn
 from grimoire.security import is_human
 from grimoire.staging import Stage, StagingRefused, check_cast
@@ -140,6 +144,7 @@ class SceneRunner:
                  secrets: Iterable[object] = (), voices: VoiceCatalog | None = None,
                  fence: RunFence | None = None, budget: Budget = DEFAULT_BUDGET,
                  labeller: LabelRuntime | None = None, label_handle=None,
+                 extractor: ExtractionRuntime | None = None, extract_handle=None,
                  adjudication: AdjudicationLibrary | None = None,
                  effects: TurnEffectsLibrary | None = None, obstacles: ObstacleLibrary | None = None,
                  agendas: Iterable[Agenda] = (),
@@ -156,6 +161,11 @@ class SceneRunner:
         if label_handle is not None and not (authority.issued(label_handle)
                                              and getattr(label_handle, "trusted", None) is False):
             raise _refuse("bad_handle", "the label handle is an untrusted handle this library's authority issued")
+        if extractor is not None and not isinstance(extractor, ExtractionRuntime):
+            raise _refuse("bad_extractor", "extractor must be an independent ExtractionRuntime")
+        if extract_handle is not None and not (authority.issued(extract_handle)
+                                               and getattr(extract_handle, "trusted", None) is False):
+            raise _refuse("bad_handle", "the extraction proposal handle must be untrusted and issued here")
         if adjudication is not None and not (isinstance(adjudication, AdjudicationLibrary)
                                              and adjudication.store is store and adjudication.authority is authority):
             raise _refuse("bad_adjudication", "adjudication must be this library's AdjudicationLibrary")
@@ -186,6 +196,8 @@ class SceneRunner:
         self.budget = budget
         self.labeller = labeller
         self.label_handle = label_handle
+        self.extractor = extractor
+        self.extract_handle = extract_handle
         self.adjudication = adjudication
         self.effects = effects
         self.obstacles = obstacles
@@ -592,20 +604,28 @@ class SceneRunner:
             raise _refuse(error.reason, "the turn cannot be planned") from None
         if director and not any(call.stage is InferenceStage.DIRECTOR_GENERATION for call in plan.calls):
             raise _refuse("director_declined", "the inference policy allows no director reply")
+        full_plan = continuity.planned(self, plan)
+        captured = None
         try:
-            briefs, intentions = self._briefs(context, chosen, heard_turns, number)
-            director_view = self._director(context, heard_turns) if director else None
+            with self.store.lock:
+                briefs, intentions = self._briefs(context, chosen, heard_turns, number)
+                director_view = self._director(context, heard_turns) if director else None
+                if full_plan is not plan:
+                    captured = continuity_snapshot(self, context, choices=tuple(
+                        brief.intention for brief in briefs if brief.intention is not None))
         except GenerationError as error:
             raise _refuse(error.reason, "a brief cannot be built") from None
         planned = tuple(CallRecord(call.call_id.phase, call.stage, call.call_id.actor_id, call.call_id.ordinal,
-                                   "planned") for call in plan.calls)
-        running = Take(number, "running", "generated", scene.cast, calls=planned, declined=_declined(plan),
+                                   "planned") for call in full_plan.calls)
+        running = Take(number, "running", "generated", scene.cast, calls=planned, declined=_declined(full_plan),
                        by=principal, on_stage=_here(scene), players=_table(scene))
         superseded = record.running
         if superseded is not None:
             record = record.with_take(replace(superseded, state="superseded"))
         record = record.with_take(running).with_intentions(number, intentions)
         room = len(planned) * (LINE_BYTES + plan.policy.max_attempts_per_call * ATTEMPT_BYTES) + TAKE_BYTES
+        if captured is not None:
+            room += len(plan.calls) * MAX_REVIEW_BYTES  # bounded persisted evidence for each generated line
         if self.scenes.size(record, stored) + room > MAX_TURN_BYTES:  # before any call: nothing is billed
             raise _refuse("turn_too_large", "this turn's file has no room for another take; keep a take or pass")
         claimed = []  # the fence is claimed as the running take is published, never after: an older run
@@ -616,21 +636,23 @@ class SceneRunner:
         meter = TurnMeter(TurnUsageLedger(plan))
         silent = tuple(voice for actor, voice in self._voices(context) if actor not in {a for a, _ in chosen})
         try:
-            with span("provider", calls=len(plan.calls)):
-                try:
+            try:
+                with span("provider", calls=len(plan.calls)):
                     outcome = self.runtime.run_turn(meter, briefs, controls=scene.controls,
                                                     director=director_view[0] if director_view else None,
                                                     token=token, scene_voices=silent, hears=_hearing(scene, rooms))
-                finally:
-                    record_calls(meter)
-        except GenerationError as error:
-            outcome = None
-            failure = error.reason
-        else:
-            failure = None
-        with span("review"):
-            take = self._finished(record, running, plan, meter, outcome, failure, scene,
-                                  director_view[1] if director_view else (), rooms)
+            except GenerationError as error:
+                outcome = None
+                failure = error.reason
+            else:
+                failure = None
+            with span("review"):
+                take = self._finished(record, running, plan, meter, outcome, failure, scene,
+                                      director_view[1] if director_view else (), rooms)
+                if captured is not None:
+                    take = continuity.extract(self, record, take, meter, full_plan, captured, scene, token)
+        finally:
+            record_calls(meter)
         return self._land(chat, stored, take, token, intentions, principal)
 
     # -- generation helpers -----------------------------------------------------------------------
@@ -808,9 +830,16 @@ class SceneRunner:
         again, under the store lock: a boundary set, or a player seated, while the run was in flight holds them):
         otherwise it lands without them (``_held_back``), its usage kept, as a take without room does.
         """
+        review_stale = False
+
         def fence() -> None:
             if take.state != "stale" and token.stale:
                 raise _Stale
+            if take.lines and take.snapshot_fingerprint is not None:
+                if not review_stale and not continuity.unchanged(self, chat, take.snapshot_fingerprint):
+                    raise continuity.ReviewStale
+                if not continuity.proposable(self, landed):
+                    raise continuity.ReviewDenied
             if take.lines:
                 try:
                     if principal is None:  # no requester to judge it for: shown to nobody
@@ -832,6 +861,16 @@ class SceneRunner:
                     try:
                         self._write(landed, stored, landing=True, before_commit=fence)
                         return take
+                    except continuity.ReviewStale:
+                        review_stale = True
+                        take = continuity.stale(take)
+                        take = replace(take, review_token=continuity.token_for(stored.record, take))
+                        continue
+                    except continuity.ReviewDenied:
+                        take = replace(take, lines=(), snapshot_fingerprint=None, review_token=None,
+                                       calls=tuple(replace(call, status="refused", reason="not_authorized")
+                                                   if call.phase == continuity.PHASE else call for call in take.calls))
+                        continue
                     except _Held as held:  # shown to nobody: the usage lands, the lines do not
                         take = _held_back(take, held.reason)
                         continue
@@ -956,7 +995,7 @@ class SceneRunner:
 
     @traced("keep")
     def keep(self, chat: ChatRef, by, take: int, *, acknowledge_unscreened: bool = False,
-             turn: str | None = None) -> TurnRecord:
+             turn: str | None = None, acknowledge_review: str | None = None) -> TurnRecord:
         """Keep one proposed take: its shown lines become the transcript, and the turn closes.
 
         ``turn`` is the turn the table read the take on (044): take numbers start again on every turn, so a
@@ -985,21 +1024,33 @@ class SceneRunner:
         if any(_differs(intention.perceived, _sight(scene, intention.actor))
                for intention in record.intentions if intention.take == take):  # 039 chose by whom it could see
             raise _refuse("cast_changed", "who an NPC can see changed since it chose what to pursue; ask again")
+        reviewed_lines = continuity.prepare_keep(self, record, found, principal, acknowledge_review, turn)
+        original = found
+        selected = {line.line_id: line for line in reviewed_lines}
+        found = replace(found, lines=tuple(selected.get(line.line_id, line) for line in found.lines))
         if record.running is not None:  # a run still in flight loses: its take lands stale
             record = record.with_take(replace(record.running, state="superseded"))
         record = record.with_take(replace(found, state="kept", by=principal))
         # 016 again, as the lines become transcript, for the table read again under the store lock: a boundary
         # set since they were proposed (or a player who sat down since) holds them; nothing caches a presentation
-        self._write(record, stored, unpaused=True,
-                    before_commit=lambda: self._check_now(chat, principal, found.shown()))
+        def checked_keep():
+            continuity.prepare_keep(self, stored.record, original, principal, acknowledge_review, turn)
+            self._check_now(chat, principal, found.shown())
+        self._write(record, stored, unpaused=True, before_commit=checked_keep)
         return record
 
     @traced("keep_lines")
     def keep_lines(self, chat: ChatRef, by, lines: Iterable[str], *, acknowledge_unscreened: bool = False,
-                   turn: str | None = None) -> TurnRecord:
+                   turn: str | None = None, acknowledge_reviews: Mapping[str, str] | None = None) -> TurnRecord:
         """Keep chosen lines of the open turn's proposed takes, at most one a speaker, as the turn's one kept
         take (``play.mixed``): what ``keep`` would store had one take held exactly those lines."""
-        return keep_lines(self, chat, by, lines, acknowledge_unscreened=acknowledge_unscreened, turn=turn)
+        return keep_lines(self, chat, by, lines, acknowledge_unscreened=acknowledge_unscreened, turn=turn,
+                          acknowledge_reviews=acknowledge_reviews)
+
+    @traced("continuity_review")
+    def continuity_review(self, chat: ChatRef, by, turn: str, take: int) -> dict:
+        """Owner-only grounded findings for the exact preserved proposal."""
+        return continuity.report_view(self, chat, by, turn, take)
 
     @traced("strike")
     def strike(self, chat: ChatRef, by, line_id: str) -> TurnRecord:

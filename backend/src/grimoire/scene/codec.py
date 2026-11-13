@@ -15,6 +15,8 @@ from grimoire.core.identity import ChatRef, InstanceRef, SourceRef, TurnRef
 from grimoire.core.inference import TOKEN_FIELDS, CallAttempt, CallId, InferenceStage, TokenUsage
 from grimoire.effects import EffectCodecError, EndorsementRecord, proposal_from_payload, proposal_to_payload
 
+from .review import review_from_payload, review_to_payload
+
 from .model import (_DEVICE, Against, CallRecord, Intention, IntentionOption, Label, Post, SceneLine, SceneRefused,
                     SetAside, Take, TurnEffect, TurnRecord, Waiver, turn_id)
 
@@ -34,7 +36,7 @@ _TAKE_KEYS = frozenset({"take", "state", "origin", "cast", "lines", "calls", "ou
                         "direction", "by"})
 #: written only on a take played on a 041 stage (its on-stage cast); a take written without one has none and reads
 #: as its whole cast present
-_OPTIONAL_TAKE_KEYS = frozenset({"on_stage", "players"})
+_OPTIONAL_TAKE_KEYS = frozenset({"on_stage", "players", "snapshot_fingerprint", "review_token"})
 _LINE_KEYS = frozenset({"line", "actor", "speaker", "text", "audience", "state", "by", "actor_revision",
                         "voice_profile", "review"})
 _CALL_KEYS = frozenset({"phase", "stage", "actor_id", "ordinal", "status", "reason", "attempts"})
@@ -150,6 +152,10 @@ def _take(take: Take) -> dict[str, object]:
         found["on_stage"] = [str(a) for a in take.on_stage]
     if take.players is not None:  # beside it, the player characters by control when the take was written
         found["players"] = [str(a) for a in take.players]
+    if take.snapshot_fingerprint is not None:
+        found["snapshot_fingerprint"] = take.snapshot_fingerprint
+    if take.review_token is not None:
+        found["review_token"] = take.review_token
     return found
 
 
@@ -157,7 +163,8 @@ def _line(line: SceneLine) -> dict[str, object]:
     return {"line": line.line_id, "actor": _ref(line.actor), "speaker": line.speaker, "text": line.text,
             "audience": [str(a) for a in line.audience], "state": line.state, "by": line.by,
             "actor_revision": _ref(line.actor_revision), "voice_profile": _ref(line.voice_profile),
-            "review": line.review}
+            "review": line.review,
+            **({} if line.review_detail is None else {"review_detail": review_to_payload(line.review_detail)})}
 
 
 def _call(call: CallRecord) -> dict[str, object]:
@@ -278,7 +285,8 @@ def _decode_take(value: object, address: TurnRef) -> Take:
                       for item in _list(data["calls"], "take.calls")),
                 data["outcome"], tuple(_list(data["declined"], "take.declined")),  # type: ignore[arg-type]
                 tuple(_list(data["unscreened"], "take.unscreened")),  # type: ignore[arg-type]
-                data["direction"], data["by"], on_stage, players)  # type: ignore[arg-type]
+                data["direction"], data["by"], on_stage, players,
+                data.get("snapshot_fingerprint"), data.get("review_token"))  # type: ignore[arg-type]
 
 
 def _decode_label(value: object, address: TurnRef) -> Label:
@@ -370,13 +378,19 @@ def _decode_effect(value: object, address: TurnRef) -> TurnEffect:
 
 
 def _decode_line(value: object) -> SceneLine:
-    data = _mapping(value, "line", _LINE_KEYS)
+    data = _mapping(value, "line", _LINE_KEYS, open_keys=True)
+    if set(data) - _LINE_KEYS - {"review_detail"}:
+        raise _invalid("line has unknown fields")
+    try:
+        detail = review_from_payload(data["review_detail"]) if "review_detail" in data else None
+    except (ValueError, TypeError, RecursionError):
+        raise _invalid("invalid narration review") from None
     actor = None if data["actor"] is None else _actor(data["actor"], "line.actor")
     return SceneLine(data["line"], actor, data["speaker"], data["text"],  # type: ignore[arg-type]
                      tuple(_actor(item, "line.audience") for item in _list(data["audience"], "line.audience")),
                      data["state"], data["by"],  # type: ignore[arg-type]
                      _source(data["actor_revision"], "line.actor_revision"),
-                     _source(data["voice_profile"], "line.voice_profile"), data["review"])  # type: ignore[arg-type]
+                     _source(data["voice_profile"], "line.voice_profile"), data["review"], detail)  # type: ignore[arg-type]
 
 
 def _decode_call(value: object, campaign_id: str, plan_turn: str) -> CallRecord:

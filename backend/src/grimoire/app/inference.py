@@ -37,6 +37,7 @@ from grimoire.providers.config import ProviderEndpoint, route_label
 from grimoire.scene import SceneRefused
 from grimoire.store import LibraryLocked, LockUnavailable, OsLocker, StoreError
 from grimoire.store.jsonfmt import etag, is_etag
+from grimoire.textapi.continuity import configure_extractor
 from grimoire.textapi import ApiRefused
 from grimoire.tracing import TraceLog, call_costs
 
@@ -103,7 +104,6 @@ _NOT_WIRED = {
     InferenceStage.EPISTEMIC_INFERENCE: "no V2 service infers perception with a model yet",
     InferenceStage.RECALL: "memory recall is deterministic in V2; no model-assisted recall exists yet",
     InferenceStage.GRAPH_LOOKUP: "graph traversal is deterministic in V2; no model-assisted lookup exists yet",
-    InferenceStage.CRITIQUE: "no V2 service asks a model for critique yet",
 }
 #: Features of the settings screen that have no V2 service behind them, with the reason the screen shows.
 UNAVAILABLE = (
@@ -344,6 +344,7 @@ class InferenceApi:
         self._access = None
         runner = self.text_api.runner
         runner.runtime = runtime
+        configure_extractor(self.text_api, getattr(runtime, "continuity_extractor", None))
         runner.policy = policy if policy is not None else InferencePolicy()
         self.text_api.runtime = runtime
 
@@ -352,6 +353,7 @@ class InferenceApi:
             return None
         view = config_json(config)
         view.setdefault("key_env", None)
+        view.setdefault("critique", 0)
         for name in PRICE_KEYS:
             view.setdefault(name, None)
         view["key_set"] = None if config.key_env is None else bool(self.environ.get(config.key_env))
@@ -365,6 +367,10 @@ class InferenceApi:
         stages.append({"stage": InferenceStage.DIRECTOR_GENERATION.value, "kind": "optional",
                        "enabled": director > 0, "cap": min(director, 1) if director else None, "available": True,
                        "note": "one director or narrator reply when asked for, at most one per turn"})
+        critique = 0 if config is None else config.critique_calls
+        stages.append({"stage": InferenceStage.CRITIQUE.value, "kind": "optional",
+                       "enabled": critique > 0, "cap": critique or None, "available": True,
+                       "note": "one independent prose extraction per take; findings never change canon"})
         for stage, reason in _NOT_WIRED.items():
             stages.append({"stage": stage.value, "kind": "optional", "enabled": False, "cap": None,
                            "available": False, "note": reason})
@@ -388,7 +394,8 @@ class InferenceApi:
             "stages": self._stages(config),
             "limits": None if config is None else {
                 "attempts_per_call": config.attempts, "max_output_tokens": config.max_output_tokens,
-                "director_calls_per_turn": min(config.director_calls, 1)},
+                "director_calls_per_turn": min(config.director_calls, 1),
+                "critique_calls_per_take": config.critique_calls},
             "prices": self._prices_view(config), "test_call": self._test_view(config),
             "unavailable": [{"feature": feature, "reason": reason} for feature, reason in UNAVAILABLE],
             "bounds": {"fallbacks": MAX_FALLBACKS, "attempts": MAX_ATTEMPTS, "max_output_tokens": MAX_OUTPUT_TOKENS},
