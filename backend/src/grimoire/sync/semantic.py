@@ -46,6 +46,12 @@ def premise_path(path: str, campaign: str) -> bool:
     return len(parts) >= 3 and parts[:2] == ('campaigns', campaign) and classify(parts) is not None
 
 
+def family_unknown(scan, campaign, family):
+    folder = f'campaigns/{campaign}/{family}'
+    return any(p in ('', 'campaigns', f'campaigns/{campaign}') or p == folder or p.startswith(folder + '/')
+               for p in scan.blocked)
+
+
 def expected_listing(plan, device, campaign, published=()):
     scan = plan.scans[device]
     files = {p: etag(b) for p, b in scan.files.items() if premise_path(p, campaign)}
@@ -189,6 +195,17 @@ def reviews(plan):
                and (not p.startswith(f'campaigns/{campaign}/relations') or edited)
                for d in plan.devices for p in plan.scans[d].blocked):
             reasons.add('unreadable_semantic_sources')
+        if ('malformed_dependency' in reasons
+                or any(family_unknown(plan.scans[d], campaign, 'continuity') for d in plan.devices)):
+            # Uninspectable declarations may bind any native endpoint, including
+            # artwork. Their absence from this snapshot is never evidence of safety.
+            endpoints.update(p for p in plan.paths if premise_path(p, campaign))
+            reasons.add('unreadable_semantic_sources')
+        if any(family_unknown(plan.scans[d], campaign, family)
+               for d in plan.devices for family in ('accepted', 'turns')):
+            scenes.update(p for p in turns[a].keys() | turns[b].keys()
+                          if turns[a].get(p) != turns[b].get(p))
+            reasons.add('unreadable_semantic_sources')
         if reasons:
             found.append(SemanticReview(campaign, tuple(sorted(scenes)), tuple(sorted(reasons)), token(plan, campaign),
                                         tuple(sorted(endpoints))))
@@ -203,20 +220,19 @@ def guard(plan):
             implicated.update(p for p in plan.paths if premise_path(p, review.campaign))
         implicated.update(p for p in plan.paths if syncable(p) in ('relation', 'continuity')
                           and p.split('/')[1] == review.campaign)
-        if (not review.scenes and not review.endpoints and review.reasons == ('unreadable_semantic_sources',)
-                and any(plan.conflicts[p].code == 'merge_review' for p in implicated if p in plan.conflicts)):
-            # This is the ledger owner's structural failure, without evidence of a
-            # cross-domain invalidation. Its unit is already held; keep its native
-            # code and detailed refusal instead of replacing them with a new label.
-            continue
+        structural_only = review.reasons == ('unreadable_semantic_sources',)
         for path in implicated:
             plan.held.add(path)
             plan.agreed.discard(path)
-            if path in review.scenes or path in review.endpoints or not units._same(plan, path):
+            if ((not structural_only and (path in review.scenes or path in review.endpoints))
+                    or not units._same(plan, path)):
                 native = plan.conflicts.get(path)
+                if structural_only and native is not None:
+                    continue  # Keep native diagnostics while still holding every implicated mutation.
                 plan.conflicts[path] = Conflict(path, 'semantic_review', ', '.join(review.reasons),
                                                 review=native.review if native is not None else (), token=review.token)
-        if not any(p in plan.conflicts and plan.conflicts[p].code == 'semantic_review' for p in implicated):
+        if not any(p in plan.conflicts and (structural_only or plan.conflicts[p].code == 'semantic_review')
+                   for p in implicated):
             anchor = next((p for p in plan.paths if relevant(p, review.campaign)), None)
             if anchor is not None:
                 native = plan.conflicts.get(anchor)
@@ -290,6 +306,10 @@ def resolution_risk(store, path, peer):
     campaign = path.split('/')[1]
     target = scan.files.get(path)
     target_chat = None
+    if family_unknown(scan, campaign, 'continuity'):
+        return True
+    if syncable(path) == 'turn' and any(family_unknown(scan, campaign, f) for f in ('accepted', 'turns')):
+        return True
     try:
         if syncable(path) == 'turn' and target is not None:
             record = _record(target)

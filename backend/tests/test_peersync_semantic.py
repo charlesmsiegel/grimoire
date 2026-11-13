@@ -331,3 +331,37 @@ def test_serving_sync_delete_confirmation_rechecks_late_declaration(pair, monkey
         report = transfer(client.store, client.authority, remote.name, server.address)
     assert injected and report.status != 'synced', report
     assert client.store.read_exact(path) == before
+
+
+@pytest.mark.parametrize('obstruction', ['link', 'file'])
+def test_peer_snapshot_keeps_asset_when_declarations_and_ledger_are_unreadable(pair, tmp_path, obstruction):
+    import shutil
+    from grimoire.store.layout import address_parts
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    scene(desk)
+    placement = peer_art(desk)[1]
+    with serving(phone) as server:
+        assert transfer(desk.store, desk.authority, PHONE, server.address).status == 'synced'
+    peer_declare_art(phone, placement)
+    for family in ('continuity', 'accepted'):
+        folder = phone.store.root / 'campaigns' / 'c' / family
+        folder.mkdir(exist_ok=True)
+        retained = tmp_path / f'peer-retained-{family}'
+        shutil.move(folder, retained)
+        if obstruction == 'link' or family == 'accepted':
+            folder.symlink_to(retained, target_is_directory=True)
+        else:
+            folder.write_text('regular-file declaration family')
+    _accept(desk, pay())
+    peer_edit_placement(desk, placement)
+    path = '/'.join(address_parts(placement))
+    before = {name: d.store.read_exact(path) for name, d in pair.items()}
+    with serving(phone) as server:
+        report = transfer(desk.store, desk.authority, PHONE, server.address)
+        assert report.status == 'conflicts', report
+        assert any(c.path == path and c.code == 'semantic_review' for c in report.conflicts)
+        expected = {name: etag(data) for name, data in before.items()}
+        resolution = resolve_conflict(desk.store, desk.authority, PHONE, server.address,
+                                      path, expected[DESKTOP], expected)
+        assert resolution.status == 'refused', resolution
+    assert {name: d.store.read_exact(path) for name, d in pair.items()} == before

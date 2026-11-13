@@ -399,3 +399,105 @@ def test_explicit_deletion_rechecks_late_native_dependency_before_publication(pa
     else:
         assert resolve(desk.store, phone.store, path, None, expected, H) == holder
         assert keeping.store.read_exact(path) is None
+
+
+@pytest.mark.parametrize('obstruction', ['link', 'file'])
+@pytest.mark.parametrize('ledger_blocked', [False, True])
+def test_unreadable_declarations_hold_native_asset_even_with_ledger_review(pair, tmp_path, obstruction, ledger_blocked):
+    import shutil
+    from test_continuitystore import add_art
+    from test_sync_images import H
+    from ledger_fixtures import pay
+    from grimoire.sync import semantic
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    placement = add_art(desk.store)[1]
+    assert not sync_until_quiet(desk.store, phone.store, H).conflicts
+    declare_art(phone, placement)
+    for family in ('continuity', 'accepted') if ledger_blocked else ('continuity',):
+        folder = phone.store.root / 'campaigns' / 'c' / family
+        folder.mkdir(exist_ok=True)
+        retained = tmp_path / f'retained-{family}'
+        shutil.move(folder, retained)
+        if obstruction == 'link' or family == 'accepted':
+            folder.symlink_to(retained, target_is_directory=True)
+        else:
+            folder.write_text('a regular file where declarations belong')
+    if ledger_blocked:
+        desk.accept(pay())
+    asset_edit(desk, placement)
+    path = '/'.join(address_parts(placement))
+    before = {name: d.store.read_exact(path) for name, d in pair.items()}
+    plan = plan_sync(desk.store, phone.store, H)
+    assert semantic.reviews(plan), 'unreadable declarations must not produce clean semantic review'
+    report = apply_sync(plan, H)
+    assert {name: d.store.read_exact(path) for name, d in pair.items()} == before
+    assert report.conflict(path).code == 'semantic_review'
+    expected = {name: etag(data) for name, data in before.items()}
+    with pytest.raises(ResolveRefused, match='semantic'):
+        resolve(desk.store, phone.store, path, expected[DESKTOP], expected, H)
+    assert semantic.resolution_risk(phone.store, path, DESKTOP)
+    if obstruction == 'file':
+        assert phone.store.scan().blocked['campaigns/c/continuity'] == 'unreadable'
+    if ledger_blocked:
+        native = [c for c in report.conflicts if c.code == 'merge_review']
+        assert native and any(item.reason == 'unlistable' for c in native for item in c.review)
+
+
+@pytest.mark.parametrize('edited', [DESKTOP, PHONE])
+@pytest.mark.parametrize('family', ['accepted', 'turns'])
+@pytest.mark.parametrize('obstruction', ['link', 'file'])
+def test_unreadable_accepted_sources_hold_offline_scene_edit(pair, tmp_path, edited, family, obstruction):
+    import shutil
+    from ledger_fixtures import pay
+    source = pair[PHONE if edited == DESKTOP else DESKTOP]
+    source.accept(pay(chat=CHAT))
+    folder = source.store.root / 'campaigns' / 'c' / family
+    retained = tmp_path / f'retained-{family}'
+    shutil.move(folder, retained)
+    if obstruction == 'link':
+        folder.symlink_to(retained, target_is_directory=True)
+    else:
+        folder.write_text('regular-file semantic input family')
+    write_turn(pair[edited].store, pair[edited].handles, text='Edited while source pins are unavailable.')
+    path = 'campaigns/c/turns/t-1.000001.json'
+    def scene_bytes(device):
+        if device is source and family == 'turns':
+            return (retained / 't-1.000001.json').read_bytes()
+        return device.store.read_exact(path)
+    before = {name: scene_bytes(d) for name, d in pair.items()}
+    from grimoire.sync import semantic
+    plan = plan_sync(pair[DESKTOP].store, pair[PHONE].store, handles())
+    assert semantic.reviews(plan), 'a malformed semantic input family must remain incomplete'
+    report = apply_sync(plan, handles())
+    assert {name: scene_bytes(d) for name, d in pair.items()} == before
+    assert report.conflict(path).code == 'semantic_review'
+    if family == 'accepted':
+        assert any(c.code == 'merge_review' and c.review for c in report.conflicts)
+
+
+@pytest.mark.parametrize('malformation', ['payload', 'schema'])
+def test_uninspectable_declaration_wire_holds_actual_native_asset(pair, malformation):
+    import json
+    from test_continuitystore import add_art
+    from test_sync_images import H
+    desk, phone = pair[DESKTOP], pair[PHONE]
+    placement = add_art(desk.store)[1]
+    assert not sync_until_quiet(desk.store, phone.store, H).conflicts
+    declare_art(phone, placement)
+    declaration = phone.store.root / 'campaigns/c/continuity/art.json'
+    value = json.loads(declaration.read_text())
+    if malformation == 'payload':
+        value['payload'] = {'uninspectable': True}
+    else:
+        value['schema'] = 'future.continuity-dependency/99'
+    declaration.write_text(json.dumps(value))  # synthetic external immutable-record corruption
+    asset_edit(desk, placement)
+    path = '/'.join(address_parts(placement))
+    before = {name: d.store.read_exact(path) for name, d in pair.items()}
+    report = sync(desk.store, phone.store, H)
+    assert {name: d.store.read_exact(path) for name, d in pair.items()} == before
+    assert report.conflict(path).code == 'semantic_review'
+    expected = {name: etag(data) for name, data in before.items()}
+    with pytest.raises(ResolveRefused, match='semantic'):
+        resolve(desk.store, phone.store, path, expected[DESKTOP], expected, H)
+    assert {name: d.store.read_exact(path) for name, d in pair.items()} == before
