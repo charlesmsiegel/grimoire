@@ -354,7 +354,9 @@ function turnsCard(at) {
   const { el } = ui;
   const blocks = hub.turns.map((turn) => {
     const parts = [el("h3", { class: "campaign-sub" }, "Turn " + turn.number + (turn.open ? " (open)" : turn.kept ? " (kept)" : ""))];
-    if (turn.post) parts.push(el("p", { class: "g-muted" }, nameOf(turn.post.actor) + " " + turn.post.kind + (turn.post.withheld ? " (withheld)" : "")));
+    for (const post of turn.posts || (turn.post ? [turn.post] : [])) {  // a combined turn (058) has one per player character
+      parts.push(el("p", { class: "g-muted" }, nameOf(post.actor) + " " + post.kind + (post.withheld ? " (withheld)" : "")));
+    }
     for (const label of turn.labels) parts.push(el("p", { class: "g-muted" }, "Labelled " + label.label + " (" + label.state + ")"));
     for (const effect of turn.effects) {
       const waits = effect.state === "proposed" || effect.state === "approved";

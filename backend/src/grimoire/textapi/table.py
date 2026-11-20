@@ -48,13 +48,23 @@ def drafts_view(draft: TurnDraft | None, names: Mapping[InstanceRef, str]) -> li
 
 
 def _drafted(api, chat: ChatRef, draft: TurnDraft) -> dict:  # type: ignore[no-untyped-def]
+    """``draft`` held as the chat's drafts, and the scene that shows it. A chat whose scene cannot be read (one that
+    does not exist, say) keeps the drafts it had, so a refused call holds nothing new against the cap."""
+    before = api.drafts.get(chat)
     if draft.drafts:
         if chat not in api.drafts and len(api.drafts) >= MAX_DRAFTED_CHATS:
             raise ApiRefused("too_many_drafts", f"drafts are held for at most {MAX_DRAFTED_CHATS} chats at once")
         api.drafts[chat] = draft
     else:
         api.drafts.pop(chat, None)
-    return api._scene(chat)
+    try:
+        return api._scene(chat)
+    except BaseException:
+        if before is None:
+            api.drafts.pop(chat, None)
+        else:
+            api.drafts[chat] = before
+        raise
 
 
 def seat(api, args: Mapping[str, object]) -> dict:  # type: ignore[no-untyped-def]

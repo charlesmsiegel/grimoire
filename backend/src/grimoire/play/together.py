@@ -196,16 +196,21 @@ def seat_player(runner, chat: ChatRef, by, actor: InstanceRef, controller: str  
         return tuple(scene.controls)
     if current != DIRECTOR and controller != DIRECTOR:
         raise _refuse("seated_elsewhere", f"another player controls {actor}; hand it back to the director first")
+    last = scene.last
+    if last is not None and last.open and any(post.actor == actor for post in last.posts):
+        # its player's post is still waiting on the cast's answer: handed to the director now, the model would
+        # answer that post as the character it was written for, and its player could no longer keep or pass it
+        raise _refuse("turn_open", f"{actor}'s post is still open: keep a take, or pass it, first")
     if controller != DIRECTOR:
-        # 003 tells a delegation's validity by its grantor controlling the actor now, so a delegation given while an
-        # earlier player held this character would revive if they got it back: hand it only to a player when no
-        # unrevoked delegation names it (the Wave 1 obligation: never revive a delegation on a control change)
+        # 003 tells a delegation's validity by its grantor controlling the actor now, so a delegation a player gave
+        # while they held this character would revive were it handed back to them: never hand it to a grantor of an
+        # unrevoked delegation naming it (the Wave 1 obligation: never revive a delegation on a control change)
         state = runner.sovereignty.load(chat.campaign_id)
         revoked = {(r.delegation_id, r.revoked_by) for r in state.revocations}
-        if any(d.actor_id == actor.instance_id and (d.delegation_id, d.granted_by) not in revoked
-               for d in state.delegations):
-            raise _refuse("delegations_on_record", f"a delegation names {actor}; it is not handed to a player while "
-                                                   "one is unrevoked")
+        if any(d.actor_id == actor.instance_id and d.granted_by == controller
+               and (d.delegation_id, d.granted_by) not in revoked for d in state.delegations):
+            raise _refuse("delegations_on_record", f"{controller} gave a delegation naming {actor} that is not "
+                                                   "revoked; it would revive were the character handed back")
     try:
         runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, actor.instance_id, controller),
                                   by)

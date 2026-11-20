@@ -168,9 +168,23 @@ def test_a_delegation_never_revives_when_its_player_gets_the_character_back(card
         table.runner.sovereignty.record(chat.campaign_id, grant, table.player(BOB))
         table.runner.seat_player(chat, table.owner, tamsin, DIRECTOR)
         refused("delegations_on_record", table.runner.seat_player, chat, table.owner, tamsin, BOB)
+        table.runner.seat_player(chat, table.owner, tamsin, ANA)  # Bob's delegation never applies to Ana's hold
+        table.runner.seat_player(chat, table.owner, tamsin, DIRECTOR)
         table.runner.sovereignty.record(chat.campaign_id, Revocation(chat.campaign_id, "d-bob", BOB), table.player(BOB))
         table.runner.seat_player(chat, table.owner, tamsin, BOB)
         assert table.runner.open(chat).controller(tamsin) == BOB
+
+
+def test_a_character_whose_post_waits_on_an_answer_keeps_its_player(cards):
+    folder, chat, _ = cards
+    with Table(folder, [say("Dark.")]) as table:
+        anya, mara, tamsin = two_players(table, chat)
+        table.runner.post_together(chat, both(table, anya, tamsin))
+        refused("turn_open", table.runner.seat_player, chat, table.owner, tamsin, DIRECTOR)
+        take = table.runner.generate(chat, table.player(BOB))
+        assert [call.actor_id for call in take.calls] == [mara.instance_id]  # never Tamsin answering Bob's words
+        table.runner.keep(chat, table.player(BOB), 1)
+        table.runner.seat_player(chat, table.owner, tamsin, DIRECTOR)
 
 
 # -- one turn, all or nothing ----------------------------------------------------------------------
@@ -318,6 +332,10 @@ def test_two_players_at_one_device_draft_and_submit_one_turn_through_the_text_ap
             (tamsin, BOB, "Tamsin Hale"), (anya, OWNER, "Anya Rook")]
         assert turn["post"] == turn["posts"][0]
         device.refused("no_drafts", "submit", chat=ref)
+        for n in range(70):  # a draft refused for a chat that does not exist holds nothing against the cap
+            device.refused("no_chat", "draft", chat=str(chat).replace(chat.chat_id, f"nochat{n}"), actor=anya,
+                           text='"Hi."')
+        assert device("draft", chat=ref, actor=anya, text='"Hi."')["drafts"]
         answered = device("generate", chat=ref)
         assert len(answered["turns"][-1]["offered"]) == 1 and len(table.harness.prompts()) == before + 1
 
