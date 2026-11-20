@@ -756,9 +756,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-084"></a>
 ### 084 — Cross Campaign Scene Transfer
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/cross-campaign-scene-transfer.md)).
-- Evidence: Qualified source refs and import/history support exist.
-- Scope / gap: No reviewed cross-campaign transcript copy with explicit actor identity mapping, untouched origin and noncopied effects.
+- [x] Scheduled first-useful slice ([requirements](sprints/cross-campaign-scene-transfer.md)).
+- Evidence: [`scenetransfer/library.py`](../../backend/src/grimoire/scenetransfer/library.py) `SceneTransfer`; [`scenetransfer/history.py`](../../backend/src/grimoire/scenetransfer/history.py); [`backend/tests/test_scene_transfer.py`](../../backend/tests/test_scene_transfer.py); [SCENE_TRANSFER](../SCENE_TRANSFER.md). A scan lists every origin actor with the target's instances of the same definition entity as its only reuse candidates and same-named other entities as namesakes. A plan refuses an undecided actor, a namesake or other-entity reuse, two actors merged into one and a second persona. It then writes one new 107 chat in the target campaign, with new or reused actors, and copies the history as 036 transcript pages. A post is copied only when every carried-over origin actor heard it; whispers and struck or withdrawn lines are never copied, and accepted effects and rulings are reported as left in the origin. The commit re-checks the origin's chat, pages and turns. The proving scenario copies Mara Vell's played chat into another campaign: the copy gets a new chat id, Mara becomes a new actor while a same-named alternate portrayal there stays distinct and cannot be reused, the origin campaign's files are byte for byte unchanged, the target holds no accepted event, and the target's runner generates from the copied history without the whisper or the struck line (scripted fakes).
+- Scope / gap: Transcript only. Reviewed state and asset transfer, chronology mapping beyond "the copy comes first" and missing-art presentation (milestone 3) are not implemented; private posts are omitted rather than carried with their audience. No app route or UI yet.
 
 <a id="slice-085"></a>
 ### 085 — Live Context Preview
