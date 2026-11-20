@@ -25,6 +25,7 @@ from grimoire.core.identity import SourceRef
 
 from .evidence import strings
 from .model import (
+    MAX_FIELD,
     MAX_QUOTE,
     MAX_SUMMARY,
     Citation,
@@ -64,7 +65,11 @@ class _Seen:
         self.read = read
         self.refs: list[tuple[str, str, SourceRef]] = []  # pointer, text, ref into this source
         self.text: list[tuple[str, str]] = []  # pointer, text (references to any source excluded)
+        self.uncitable = 0  # fields whose JSON pointer is longer than a citation may carry: not judged
         for pointer, value in strings(read.payload, "/payload"):
+            if len(pointer) > MAX_FIELD:
+                self.uncitable += 1
+                continue
             ref = _ref(value)
             if ref is None:
                 self.text.append((pointer, value))
@@ -89,6 +94,7 @@ class ConsistencyAuditor:
         self._queue: list[tuple[str, str]] = []
         self._seen: list[_Seen] = []
         self._pending: list[Finding] = []
+        self._uncitable = 0
 
     def next_action(self, observation: Observation | None) -> object:
         if observation is None:
@@ -106,11 +112,14 @@ class ConsistencyAuditor:
         if self._queue:
             kind, entity_id = self._queue.pop(0)
             return ReadRecord(kind, entity_id)
+        if self._uncitable:
+            return Finish(f"{self._uncitable} field(s) with a path too long to cite were not checked")
         return Finish()
 
     # -- the checks --------------------------------------------------------------------------------------
     def _absorb(self, read: RecordRead) -> None:
         new = _Seen(read, self.source)
+        self._uncitable += new.uncitable
         self._pending += self._dangling(new)
         for old in self._seen:
             duplicate = self._duplicate(new, old)

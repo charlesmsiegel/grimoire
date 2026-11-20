@@ -8,7 +8,8 @@ a worker. For each run it:
 2. mints an **untrusted** handle for that principal, which only the toolbox holds; the worker sees only
    observations, never the handle, the toolbox or the store;
 3. runs the job (``grimoire.investigations.run_job``), and
-4. revokes the grant (unless the owner already did), however the job ended, so no handle of the job can read anything afterwards.
+4. revokes the grant (unless the owner already did), however the job ended, so no handle of the job can
+   read anything afterwards.
 
 Both the grant's lifecycle and every read decision are in the library's ``security`` audit when the
 authority is the durable one. Nothing else is written: a cancelled, failed or exhausted job leaves every
@@ -24,6 +25,7 @@ from collections.abc import Callable
 
 from grimoire.changesets import ChangeSetError
 from grimoire.changesetstore import ChangeSetLibrary
+from grimoire.core.identity import SourceRef
 from grimoire.investigations import (
     AuditReview,
     ConsistencyAuditor,
@@ -98,9 +100,12 @@ class InvestigationService:
             raise TypeError("review takes an InvestigationReport")
         heads = ChangeSetLibrary(self.store, None)
         current: dict[tuple[str, str], Current] = {}
-        with self.store.lock:
+        with self.store.read_pass():
             for kind, entity_id in cited_records(report):
                 try:
+                    if self.store.check_definition(SourceRef(report.spec.source, kind, entity_id)) == "entity_dropped":
+                        current[(kind, entity_id)] = "entity_dropped"  # load() no longer admits it: stale
+                        continue
                     revision, _envelope, etag = heads.head(report.spec.source, kind, entity_id)
                 except ChangeSetError as error:
                     current[(kind, entity_id)] = error.reason

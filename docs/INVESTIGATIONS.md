@@ -26,7 +26,7 @@ There is no app route or UI (the Wave 9 UI exit, 116, owns that), no model worke
 
 Every tool call asks the handle for `inspect` on the address it is about to read, before any I/O: `list` on the source address, `read` on `.../_source/records/<kind>/<id>`. So a job reads only what its grant covers, and with a `DurableAuthority` both the grant's lifecycle and every read decision are in the library's `security` audit ([TOOL_AUTHORITY](TOOL_AUTHORITY.md)). `WorldToolbox` refuses a trusted handle.
 
-Heads resolve as the rest of the app resolves them (`ChangeSetLibrary.head`), and an entity `load()` drops (an id reused across kinds, say) is listed with no head and refused on read (`entity_dropped`), so a job never sees a head `load()` would not. Each tool call is its own read under the store lock; the job holds no lock between steps, so a long audit does not block the library ("explore outside file locks").
+Heads resolve as the rest of the app resolves them (`ChangeSetLibrary.head`), and an entity `load()` drops (an id reused across kinds, say) is listed with no head and refused on read (`entity_dropped`), so a job never sees a head `load()` would not. Each tool call is its own read under one store read pass (one verified admission snapshot for the call); the job holds no lock between steps, so a long audit does not block the library ("explore outside file locks").
 
 The job checks citations against **its own copies** of what it read, taken before the worker sees a result, and keeps a re-validated copy of each finding it accepts. So re-running a frozen value's `__init__` on what the worker was shown, or on a finding after it was accepted, changes no evidence and nothing kept.
 
@@ -89,7 +89,7 @@ Definitions in V2 have no structured relations, so a "link" is a payload string 
 
 ## Review and stale evidence
 
-`InvestigationService.review(report)` re-reads the head of every cited entity under the store lock and returns `AuditReview`: each finding with the changes in its evidence (`head_moved` when the head is another revision, `edited` when the same revision's bytes changed, or the read's refusal such as `missing`). `describe()` adds "f1 is stale: kind/id edited". A review reads only.
+`InvestigationService.review(report)` re-reads the head of every cited entity under the store lock and returns `AuditReview`: each finding with the changes in its evidence (`head_moved` when the head is another revision, `edited` when the same revision's bytes changed, or the read's refusal such as `missing`, or `entity_dropped` when `load()` no longer admits the entity, say after a hand edit reused its id). `describe()` adds "f1 is stale: kind/id edited". A review reads only.
 
 A review checks the records a finding **cites**, not the ones it says are absent. A `dangling_reference` finding stays current after someone creates the missing target, because only the referring record is cited and it did not change. Rerun the audit to drop it.
 
@@ -106,6 +106,7 @@ A review checks the records a finding **cites**, not the ones it says are absent
 - No process boundary for outside workers (see Trust model).
 - A crash between granting and revoking leaves an `inspect` grant active in the durable authority. Only trusted code can mint a handle for it, and the grant reads one source; nothing cleans it up yet.
 - No UI or app route (116), no proposals or repairs (milestone 2).
+- The auditor skips a payload field whose JSON pointer is longer than a citation may carry (512 characters) and says how many in its finish note; the rest of the audit goes on.
 - Review does not notice a missing entity being created, so a `dangling_reference` finding can outlive its cause until the audit is rerun.
 - Two jobs given the same `job_id` share a principal, so the audit trail cannot tell their reads apart; each toolbox is still pinned to its own source.
 - The auditor's checks are lexical: a name used as an ordinary word ("Harbor") can be reported as a missing link, and two distinct entities with one name as a possible duplicate. That is why they are findings for review, not edits.

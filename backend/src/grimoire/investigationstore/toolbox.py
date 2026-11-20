@@ -52,7 +52,7 @@ class WorldToolbox:
             return ToolResult("denied", detail=reason)
         store = self._store
         try:
-            with store.lock:
+            with store.read_pass():  # one verified admission snapshot for every entity checked below
                 stored = store.check_source(self._source)
                 if isinstance(stored, str):
                     return ToolResult(stored)  # type: ignore[arg-type]
@@ -85,7 +85,7 @@ class WorldToolbox:
         if not allowed:
             return ToolResult("denied", detail=reason)
         try:
-            with self._store.lock:
+            with self._store.read_pass():
                 if self._store.check_definition(SourceRef(self._source, kind, entity_id)) == _DROPPED:
                     return ToolResult(_DROPPED)
                 revision, envelope, etag = self._heads.head(self._source, kind, entity_id)

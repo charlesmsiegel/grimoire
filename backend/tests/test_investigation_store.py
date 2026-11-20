@@ -303,6 +303,30 @@ def test_an_entity_load_drops_is_never_read_as_evidence(library):
     assert [step.outcome for step in handle_report.steps if step.tool == "read"] == ["entity_dropped"]
 
 
+def test_review_marks_evidence_stale_when_load_stops_admitting_it(library):
+    store, authority, root = library
+    audits = service(store, authority)
+    report = audits.run(spec())
+    assert any(c.record == ("character", "wren") for f in report.findings for c in f.finding.citations)
+    # after the audit, a hand edit reuses Wren's id for an item: load() now drops character/wren
+    hand_write(root, "sources/world/harbor/_source/records/item/wren/r1.json",
+               b'{"format": "grimoire.record/1", "name": "Wren\'s Knife", "payload": {}}\n')
+    review = audits.review(report)
+    assert review.stale
+    assert any(change.citation.record == ("character", "wren") and change.reason == "entity_dropped"
+               for reviewed in review.findings for change in reviewed.changes)
+
+
+def test_a_field_too_deep_to_cite_is_skipped_and_the_audit_goes_on(tmp_path):
+    world = dict(WORLD)
+    world[("item", "chest")] = ("Chest", {"k" * 600: "world:harbor/character/nobody"})
+    with LibraryStore.create(tmp_path / "lib") as store:
+        seed(store, world)
+        report = service(store, Authorizer([OWNER])).run(spec())
+    assert report.status == "finished" and "not checked" in report.note
+    assert {item.finding.category for item in report.findings} == {"missing_link", "possible_duplicate"}
+
+
 class _ReadOne:
     def __init__(self, kind, entity_id):
         self.actions = iter((ReadRecord(kind, entity_id), Finish()))
