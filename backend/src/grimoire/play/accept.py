@@ -356,16 +356,29 @@ def _end(runner, chat: ChatRef, by, turn: str, number: int, reason: str, may) ->
     nothing, so the effect stays live and takes its keys. That record is what an acceptance checks, so an ended
     effect set live again in its turn file (by hand or by a peer) is refused at acceptance with the same reason.
     A crash between the commit and the record leaves the turn's ``refused`` mark alone, which still ends it; only
-    the check against a revival is then lost. The record reaches the authority's ledger with its next flush."""
+    the check against a revival is then lost. The record reaches the authority's ledger with its next flush.
+
+    A control change touches no turn file, so the compare-and-swap cannot see one: under the store lock, just
+    before the commit, control must still be what the call read (as acceptance checks it), or the call is
+    ``control_changed`` and ends nothing. A decline turns on who plays the effect's characters, and a player's
+    withdrawal on their seat at the table; only the director's withdrawal does not depend on control."""
     scene, principal, _ = _playing(runner, chat, by)
     stored = _turn(scene, turn)
     effect = _effect(stored, number)
     _collecting(effect)
     may(scene, stored, effect, principal)
     ended = replace(effect, state="refused", reason=reason)
+    directs = reason == WITHDRAWN and principal in runner.authority.owners
     runner._write(stored.record.with_effect(ended), stored, unpaused=True,
+                  before_commit=None if directs else lambda: _same_control(runner, scene),
                   on_commit=lambda: _record_end(by, stored.record.ref, number, reason, effect.fingerprint))
     return ended
+
+
+def _same_control(runner, scene) -> None:
+    """Under the store lock: who plays each character is still what ``scene`` read (as ``_settled_play`` checks)."""
+    if set(runner.sovereignty.load(scene.chat.campaign_id).controls) != set(scene.controls):
+        raise _refuse("control_changed", "who plays a character changed meanwhile; read the effect again")
 
 
 def end_address(ref: TurnRef, number: int, reason: str, fingerprint: str) -> str:

@@ -709,6 +709,31 @@ def test_a_key_landing_while_an_effect_is_ended_ends_nothing_and_records_nothing
         assert at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint).state == "accepted"
 
 
+@pytest.mark.parametrize("how", ["declined", "withdrawn"])
+def test_control_changing_while_an_effect_is_ended_ends_nothing_and_records_nothing(cards, monkeypatch, how):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, effect = proposed(at, chat)  # Ana's own proposal, Anya's act: Ana both declines and withdraws it
+        write = at.runner.scenes.write
+        raced = []
+
+        def racing(record, base, **kwargs):  # Anya goes to Bob after Ana's call read the scene, before its write
+            if not raced:
+                raced.append(True)
+                _hand_over(at, chat)
+            return write(record, base, **kwargs)
+        monkeypatch.setattr(at.runner.scenes, "write", racing)
+        if how == "declined":
+            refused("control_changed", at.runner.decline_effect, chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        else:
+            refused("control_changed", at.runner.withdraw_effect, chat, at.player(), turn, 1)
+        monkeypatch.setattr(at.runner.scenes, "write", write)
+        assert raced and stored_effect(at, chat, turn).state == "proposed"  # the turn file never took it
+        address = accepting.end_address(_turn_ref(at, chat, turn), 1, how, effect.fingerprint)
+        assert not any(item.resource == address for item in at.authority.audit())
+        assert at.runner.withdraw_effect(chat, at.owner, turn, 1).reason == "withdrawn"  # the director's needs none
+
+
 @pytest.mark.parametrize("failure", [StaleWrite([("turn", "another process wrote it")]), OSError("disk full")])
 def test_an_ending_whose_turn_commit_fails_records_nothing_and_the_effect_stays_acceptable(cards, monkeypatch,
                                                                                          failure):
