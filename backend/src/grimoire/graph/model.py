@@ -44,6 +44,7 @@ class Predicate:
 PREDICATES: Mapping[str, Predicate] = MappingProxyType({p.name: p for p in (
     Predicate("member_of", False),    # subject is a member of object (an organization, group, crew)
     Predicate("located_in", False),   # subject is in object (a place, a container)
+    Predicate("trained_by", False),   # creature -> trainer (050); neither control nor scene presence
     Predicate("owns", False),         # subject owns object
     Predicate("carries", False),      # subject is carrying object
     Predicate("knows", False),        # subject is acquainted with object; grants no knowledge of its facts
