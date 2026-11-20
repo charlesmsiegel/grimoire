@@ -10,3 +10,7 @@
 .reference-preview rect, .reference-preview ellipse { fill: #0055ff33; stroke: #fff; stroke-width: 5; paint-order: stroke fill; filter: drop-shadow(0 0 2px #000); }
 .reference-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .reference-status { overflow-wrap: anywhere; }
+/* 070: a drag across the sketch circles a spot; the page must not scroll or pick the image up instead */
+.reference-preview img { cursor: crosshair; touch-action: none; user-select: none; -webkit-user-drag: none; }
+.reference-preview { touch-action: none; }
+.reference-draft { font-style: italic; overflow-wrap: anywhere; }
