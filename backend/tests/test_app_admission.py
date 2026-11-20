@@ -190,7 +190,12 @@ def test_persistent_overload_is_fixed_503_closed_and_never_dispatched(monkeypatc
         assert "default-src 'none'" in answer.getheader("Content-Security-Policy", "")
         assert answer.getheader("X-Frame-Options") == "DENY"
         assert body and b"untrusted-secret" not in body
-        assert overflow.recv(1) == b"", "503 must close the connection"
+        try:
+            assert overflow.recv(1) == b"", "503 must close the connection"
+        except ConnectionResetError:
+            # macOS can reset a closed socket with unread request bytes. Only the
+            # terminal probe permits this; the complete 503 above must arrive.
+            pass
         assert len(server.state.paths) == 8
         release_and_recover(server, blocked)
         assert response(request("/after-overload"))[0].status == 200
