@@ -366,8 +366,8 @@ dictated passage** only, never on typed text:
 
 | Said | Does | The other reading (one press) |
 |---|---|---|
-| "no, I meant the west gate", "I meant …", "correction …" | replaces the part of the passage it lines up with, around a shared word that is not a stop word: words swapped in place ("the east gate", "at dawn" for "now"), put in after a stop word ("the gate" for "the west gate") or taken out from between shared words; or a whole that sounds alike (a misheard name). Neighbouring words are never taken or left doubled, and a trailing "please" is not put in | keep the words as said, in case they were a character's line |
-| the same, when nothing lines up | keeps the words as said | replace the whole last passage instead |
+| "no, I meant the west gate", "I meant …", "correction …" | replaces the part of the passage it plainly corrects: one edit around a shared word that is not a stop word (content words swapped in place, "the east gate"; words of the same kind swapped one by one, "an old gate"; words put in between shared words, "the gate"; content words taken out from between them), or a whole that sounds alike (a misheard name). Neighbouring words are never taken or left doubled, and a trailing "please" is not put in | keep the words as said, in case they were a character's line |
+| the same, when it is not plainly one edit ("a gate" for "the west gate") | keeps the words as said | replace the whole last passage instead |
 | "scratch that", "delete that", "strike that" | removes the last passage | keep the words as said |
 | "post it", "send it", "submit" … | nothing: voice never posts | keep the words as said |
 

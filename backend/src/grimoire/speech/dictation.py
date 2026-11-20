@@ -170,39 +170,52 @@ def _stops(words: list[str]) -> bool:
     return all(word in _STOP for word in words)
 
 
-def _fits(window: list[str], wanted: list[str], before: str | None, after: str | None) -> int | None:
-    """How many words ``window`` and ``wanted`` share when ``wanted`` reads as a correction of ``window``, else
-    ``None``. ``before`` and ``after`` are the passage's words just outside the window (``None`` at its ends).
+def _content(words: list[str]) -> bool:
+    return not any(word in _STOP for word in words)
 
-    They must share a word that is not a stop word, in order. Each run of window words they do not share is either
-    swapped, in the same place, for new words ("east" for "west", "swords" for "our bows", "at dawn" for "now",
-    "a" for "the"; never stop words for a content word, as "to" for "west", nor a content word for stop words), or
-    dropped from between shared words ("the big west gate" for "the gate"). New words go in at the window's start
-    only at the passage's start or after a stop word, and then not starting with one ("west" before "gate" in "to
-    the gate", but not "the west" after "a", nor anything beside "east"); at its end only at the passage's end. So
-    a correction never takes a neighbouring word, nor leaves one doubled."""
-    matcher = SequenceMatcher(None, window, wanted, autojunk=False)
-    shared = [word for block in matcher.get_matching_blocks() for word in window[block.a:block.a + block.size]]
+
+def _fits(window: list[str], wanted: list[str], before: str | None) -> int | None:
+    """How many words ``window`` and ``wanted`` share when ``wanted`` is plainly a correction of ``window``, else
+    ``None``. ``before`` is the passage's word just before the window (``None`` at its start).
+
+    Plainly means one edit, around shared words of which one is not a stop word:
+
+    - a swap in place, of content words for content words ("east" for "west", "orc" for "goblin chief"), or of
+      words for words of the same kind one by one ("an old" for "the west");
+    - new words put in between shared words ("the gate" for "the west gate"), at the passage's start ("Gate is
+      shut" for "the west gate"), or content words put in at the window's start right after a stop word ("gate"
+      for "west gate" in "to the gate");
+    - content words taken out from between shared words ("the big west gate" for "the gate").
+
+    Anything else (a clause dropped, an article swapped for a phrase, words put in beside a content word) is not
+    applied: the words are kept as said and replacing the whole passage is offered, since fidelity comes first."""
+    edits = [op for op in SequenceMatcher(None, window, wanted, autojunk=False).get_opcodes() if op[0] != "equal"]
+    if len(edits) != 1:
+        return None
+    tag, start, end, begin, stop = edits[0]
+    old, new = window[start:end], wanted[begin:stop]
+    shared = [word for at, word in enumerate(window) if not start <= at < end]
     if _stops(shared):
         return None
-    for tag, start, end, begin, stop in matcher.get_opcodes():
-        old, new = window[start:end], wanted[begin:stop]
-        if tag == "delete" and (start == 0 or end == len(window)):
+    if tag == "replace":
+        alike = len(old) == len(new) and all((left in _STOP) == (right in _STOP) for left, right in zip(old, new))
+        if not (alike or (_content(old) and _content(new))):
             return None
-        if tag == "replace" and (_stops(old) and new[0] not in _STOP or _stops(new) and not _stops(old)):
+    elif tag == "insert":
+        if start == len(window) or (start == 0 and before is not None and (not _content(new) or before not in _STOP)):
             return None
-        if tag == "insert" and start == 0 and before is not None and (before not in _STOP or new[0] in _STOP):
+        if _stops(new):
             return None
-        if tag == "insert" and start == len(window) and after is not None:
-            return None
+    elif tag == "delete" and (start == 0 or end == len(window) or not _content(old)):
+        return None
     return len(shared)
 
 
 def _align(passage: str, replacement: str) -> tuple[int, int] | None:
     """The character span of ``passage`` that ``replacement`` corrects, or ``None`` when nothing lines up.
 
-    A span lines up when the replacement reads as a correction of it (``_fits``), or, sharing no word, sounds like
-    the replacement as a whole (a misheard name). The most shared words win, then the tightest span, then the
+    A span lines up when the replacement is plainly a correction of it (``_fits``), or, sharing no word, sounds
+    like the replacement as a whole (a misheard name). The most shared words win, then the tightest span, then the
     latest, since a correction usually follows what it corrects. Only the passage's last words are searched, a
     correction drops at most a few words, and a long replacement is not a correction to line up."""
     words = _tokens(passage)[-MAX_ALIGN_WORDS:]
@@ -217,9 +230,7 @@ def _align(passage: str, replacement: str) -> tuple[int, int] | None:
     for size in range(1, min(len(wanted) + MAX_DROPPED, len(words)) + 1):
         for at in range(len(words) - size + 1):
             window = spoken[at:at + size]
-            before = spoken[at - 1] if at > 0 else None
-            after = spoken[at + size] if at + size < len(spoken) else None
-            shared = _fits(window, wanted, before, after)
+            shared = _fits(window, wanted, spoken[at - 1] if at > 0 else None)
             if shared is not None:
                 score: tuple[float, int, int] = (float(shared), -size, at)
             elif any(word in wanted for word in window) or abs(size - len(wanted)) > 1:
@@ -278,7 +289,10 @@ def _close(left: str, right: str, at_least: float) -> float:
     if not left or not right or 2 * min(len(left), len(right)) < at_least * (len(left) + len(right)):
         return 0.0
     matcher = SequenceMatcher(None, left, right)
-    return matcher.ratio() if matcher.quick_ratio() >= at_least else 0.0
+    if matcher.quick_ratio() < at_least:
+        return 0.0
+    ratio = matcher.ratio()
+    return ratio if ratio >= at_least else 0.0
 
 
 def suggest(passage: str, names: tuple[str, ...]) -> tuple[Suggestion, ...]:
@@ -308,7 +322,7 @@ def suggest(passage: str, names: tuple[str, ...]) -> tuple[Suggestion, ...]:
                 if any(start < stop and begin < end for begin, stop in taken):
                     continue
                 sound = _close(sound_key, name_key, 0.85)
-                spelling = _close(letters, name_letters, 0.6) if sound else 0.0
+                spelling = _close(letters, name_letters, 0.7) if sound else 0.0
                 if sound and spelling and (best is None or sound + spelling > best[0]):
                     best = (sound + spelling, start, end)
         if best is not None:
@@ -368,9 +382,7 @@ def revise(draft: str, last: str | None, heard: str, *, confidence: float | None
                         suggestions=verbatim.suggestions, alternative=offered)
     start, end = span
     replaced = last[start:end]
-    put = _capital_i(replacement)
-    if replaced[:1].isupper():
-        put = put[:1].upper() + put[1:]
+    put = _format(replacement, draft[:at] + last[:start])
     passage = last[:start] + put + last[end:]
     text = draft[:at] + passage + draft[at + len(last):]
     if len(text) > MAX_DRAFT:

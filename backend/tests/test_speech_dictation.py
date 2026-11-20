@@ -58,18 +58,31 @@ def test_a_correction_only_reaches_the_last_dictated_passage():
     ("We hire three guards", "no I meant four guards", "We hire four guards"),  # a word swapped
     ("We draw swords and charge the line", "no I meant we draw bows", "We draw bows and charge the line"),
     ("We head to the east gate", "no, I meant the west gate please", "We head to the west gate"),  # not the courtesy
-    ("We draw swords and charge", "no I meant we draw our bows", "We draw our bows and charge"),
     ("I attack the orc and flee", "I meant I attack the goblin chief", "I attack the goblin chief and flee"),
-    ("We ride to a gate", "I meant the west gate", "We ride to the west gate"),  # no "a the"
     ("We ride to the gate", "I meant a gate", "We ride to a gate"),
     ("We go to the big west gate", "I meant the gate", "We go to the gate"),  # two words taken out
     ("East gate now", "correction west gate", "West gate now"),  # swapped, not put in beside "east"
-    ("We leave at dawn", "no I meant we leave now", "We leave now"),  # "now" is meant
     ("Gate is shut", "I meant the west gate", "The west gate is shut"),
+    ("We ride to an old gate", "I meant the west gate", "We ride to the west gate"),  # no "an the"
+    ("Bring the rope and the lamp", "I meant the rope and a torch", "Bring the rope and a torch"),
+    ("We hire three guards and two archers", "I meant three archers", "We hire three guards and three archers"),
+    ("Mara waits and I go", "I meant we go", "Mara waits and we go"),  # no capital mid-sentence
 ])
 def test_a_correction_that_puts_in_takes_out_or_swaps_words_keeps_its_neighbours(passage, said, expected):
     fixed = revise(passage, passage, said)
     assert (fixed.kind, fixed.text) == ("corrected", expected)
+
+
+@pytest.mark.parametrize(("passage", "said", "whole"), [
+    ("We ride to a gate", "I meant the west gate", "The west gate"),  # "a the west gate" would be wrong
+    ("We draw swords and charge", "no I meant we draw our bows", "We draw our bows"),
+    ("We leave at dawn", "no I meant we leave now", "We leave now"),  # "now" is meant, not a courtesy
+    ("We run then I hide", "I meant we go", "We go"),  # nothing lines up: no clause is dropped by itself
+])
+def test_a_correction_that_is_not_plainly_one_edit_is_kept_as_words_with_the_whole_passage_offered(passage, said, whole):
+    kept = revise(passage, passage, said)
+    assert kept.kind == "added" and kept.text.startswith(passage + " ")
+    assert (kept.alternative.kind, kept.alternative.text) == ("corrected", whole)
 
 
 def test_a_capital_is_kept_where_the_correction_starts_a_sentence():
@@ -143,3 +156,6 @@ def test_a_scene_name_that_sounds_like_what_was_heard_is_only_suggested():
     assert suggest("i want more of it and look there", NAMES) == ()
     assert suggest("Mara Vell nods", NAMES) == ()
     assert suggest("the a to", NAMES) == ()
+    # a name is offered only when it both sounds and is spelled close enough
+    assert [s.name for s in suggest("I tell brannock and go", ("Brannoc", "Thane Corvin"))] == ["Brannoc"]
+    assert suggest("we drank ale", ("Dorn Ashe",)) == ()
