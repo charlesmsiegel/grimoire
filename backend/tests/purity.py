@@ -72,7 +72,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 #: grimoire packages that are adapters or test infrastructure, not pure.
 #: Calendar arithmetic (055) is deterministic but adapts datetime and third-party pyluach,
 #: so calendars is outside this dependency-free pure boundary; calendarstore also performs I/O.
-ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.archaeologystore", "grimoire.calendars", "grimoire.calendarstore", "grimoire.calibration", "grimoire.campaignapi", "grimoire.capture", "grimoire.cardstore", "grimoire.catalogs", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.companions", "grimoire.contextstore", "grimoire.continuitystore", "grimoire.continuitywire", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
+ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.archaeologystore", "grimoire.authoring", "grimoire.authoringstore", "grimoire.calendars", "grimoire.calendarstore", "grimoire.calibration", "grimoire.campaignapi", "grimoire.capture", "grimoire.cardstore", "grimoire.catalogs", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.companions", "grimoire.contextstore", "grimoire.continuitystore", "grimoire.continuitywire", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       # Inference orchestration owns runtime/provider calls and replay locks.
                       "grimoire.actor_inference", "grimoire.ensemble",
