@@ -115,7 +115,7 @@ Each query returns `ChatRef`s, each chat at most once:
 | `by_source(ref, role=None, include_detached=False)` | chats whose launch or a binding is the same qualified entity (`entity_key`). A roster actor counts through its binding: only while that binding is active, or with `include_detached`. A detached character or replaced persona is therefore not found by default, although its actor stays on the roster. A roster entry without any binding (a hand edit) always counts. A pinned query also requires that revision. Names are never matched. Definition links (`alternate_portrayal`, `derived_variant`, `same_individual`) are never followed: equivalence filters belong to 022/065. The launch always counts as provenance. Detached bindings count only on request. |
 | `by_scope(id)`, `campaigns()`, `by_world(source)` | chats in a scope; the scopes the player named; chats in scopes with that world |
 
-**No index is persisted in this slice.** `ChatLibrary.navigation()` rebuilds it from `store.load()` on every call, so "deleting the cache" is equivalent to rebuilding. `to_json()` is the deterministic form any later persisted cache (065) must equal. The index is never built from an LLM call; neither package imports a provider.
+**No index is persisted.** `ChatLibrary.navigation()` rebuilds it from `store.load()` on every call. The text API's listings reuse one validated in-process basis built from such a rebuild ([Scene workspace browsing](#scene-workspace-browsing-065)); it equals a rebuild, and dropping it is the same as rebuilding. `to_json()` is the deterministic form any later persisted cache must equal. The index is never built from an LLM call; neither package imports a provider.
 
 ## Service (`grimoire.chatstore.ChatLibrary`)
 
@@ -194,7 +194,7 @@ Actor instances are written as `grimoire.record/1` with:
 | Card import | 037 |
 | World promotion and release pinning | 042 (first slice: a chat's actors proposed as a new world, and reviewed re-pinning of an actor and its bindings, [REBASE](REBASE.md)); release pins 056 |
 | Cross-device merge of chat metadata | [028](roadmap/sprints/app-managed-device-sync.md) |
-| A persisted navigation cache and the richer library browser | 065 |
+| A navigation cache persisted across app restarts; configurable layouts and synced workspace preferences | 065 later milestones |
 
 Binding a source creates no event, belief or evidence record and never makes anyone aware of its content.
 
@@ -227,13 +227,32 @@ it does not infer semantic equivalence or provide a second source editor.
 `source`, `match` (`exact`/`derived`), `q`, `sort` (`recent`/`name`), `campaign`, `world`, and an explicit
 `pins` list for the local shelf selection. `limit` is 1–50 (default 50). `offset`, `source_offset`, and
 `comparison_offset` independently page the three result lists; nonzero offsets require the previous
-`snapshot`. `source_q` searches the source chooser across the snapshot. The response contains `chats`,
-`total`, `next`, `snapshot`, `sources`/`source_total`/`source_next`,
-`comparisons`/`comparison_total`/`comparison_next`, and up to 50 source `diagnostics`.
+`snapshot`. `source_q` searches the source chooser across the snapshot; `scope_q` narrows the campaign and
+world choosers by ID or title. The response contains `chats`, `total`, `next`, `snapshot`,
+`sources`/`source_total`/`source_next`, `comparisons`/`comparison_total`/`comparison_next`, up to 50
+`campaigns` (`campaign`, `title`, `world`, `chats`) with `campaign_total`, up to 50 `worlds` (`world`,
+`campaigns`, `chats`) with `world_total`, and up to 50 source `diagnostics`. The choosers list only scopes
+some chat stands in; a deep-linked campaign or world that is not listed stays selected by its ID.
 Continuation refuses with `changed` if canonical navigation, source names, manifests, definition bytes
-or ancestry changed; the page offers an explicit restart. The current implementation loads the full
-file-backed library once per request and scans navigation. Bounded replies do not imply constant-time
-index lookup. Legacy `chats` requests retain unpinned behavior; additive `match=exact` preserves pins.
+or ancestry changed; the page offers an explicit restart. Legacy `chats` requests retain unpinned
+behavior; additive `match=exact` preserves pins.
+
+**Large libraries.** `chats.workspace`, the legacy `chats` listing and the campaign list/hub
+(`TextApi.listed_chats`) share one *navigation basis*: the index, source names, validated composition
+paths, the continuation fingerprint and every chat's listing row and search text, built from one
+`store.load()` (`grimoire.textapi.navcache`). It is reused while the library's *stamp* is unchanged: the
+store's in-process commit generation plus a metadata-only walk of the store tree (each entry's path, type,
+size, `mtime_ns`, `ctime_ns` and inode; links are recorded, never followed). Nothing is read or parsed, so
+paging, searching and choosing a source in a large library no longer reparse it. A commit in this process,
+or any write from outside it (another app, a sync folder, a hand edit; a rewrite moves `ctime` even when a
+tool preserves `mtime`), changes the stamp and the next request rebuilds; a pending transaction journal is
+a new entry, so the next load refuses exactly as before. The stamp is taken before the load, so a racing
+write can only make the held basis newer than its stamp, never let a stale one look current. Limits: a
+rewrite that keeps size, both timestamps and inode is not detected (that needs a filesystem whose
+timestamps do not move on write); the stamp walk is still linear in file count, though far cheaper than a
+load; the basis is per process and not persisted, so the first request after a start pays one load.
+Campaigns list every chat of the library, not the most recent 1000, so a campaign whose chats are all old
+is still listed and its hub still finds them.
 
 Up to 20 named workspace filters can be saved, reapplied and deleted in device-local browser storage.
 Selections include query, source, match, grouping and sorting. They are explicitly unsynchronized;

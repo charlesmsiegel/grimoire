@@ -359,6 +359,21 @@ function written(ctx, read) {
   return nodes;
 }
 
+// Ways into the Chats workspace (065) for the same threads: a character's or scenario's chats by its exact qualified
+// reference, or with the portrayals validly derived from it; a world's chats by the world its campaigns stand in.
+// Each is a link, so the composer drafts of every chat stay where the shell keeps them.
+function browseChats(ctx, read) {
+  if (!ctx.registered("chats")) return [];
+  const { ui } = ctx;
+  const links = [];
+  if (["character", "scenario"].includes(read.kind)) {
+    links.push(ui.link("Browse these chats", "chats", [], { filter: read.kind, source: read.entity }));
+    if (read.family === "entity") links.push(ui.link("Include derived portrayals", "chats", [], { filter: read.kind, source: read.entity, match: "derived" }));
+  }
+  if (typeof read.source === "string" && read.source.startsWith("world:")) links.push(ui.link("Chats in this world", "chats", [], { filter: "world", world: read.source }));
+  return links.length ? [ui.el("div", { class: "g-row" }, ...links)] : [];
+}
+
 // The right column: the chats that use it, its portrayals, entries of the same name and the links its source
 // declares.
 function aside(ctx, page) {
@@ -374,7 +389,8 @@ function aside(ctx, page) {
     return ctx.registered("chat") ? el("a", { class: "g-rowcard source-chat", href: ctx.href("chat", [chat.chat]), title: chat.chat }, el("span", { class: "g-stack g-grow source-chat-text" }, ...body))
       : el("div", { class: "g-rowcard source-chat", title: chat.chat }, el("span", { class: "g-stack g-grow source-chat-text" }, ...body));
   });
-  column.append(labelled(el, "In these chats", ...(chats.length ? chats : [el("span", { class: "g-muted" }, "Not in any chat yet.")])));
+  column.append(labelled(el, "In these chats", ...(chats.length ? chats : [el("span", { class: "g-muted" }, "Not in any chat yet.")]),
+    ...browseChats(ctx, read)));
   if (read.family === "entity") {
     const derive = deriveForm(ctx, read, pinned);
     column.append(labelled(el, "Portrayals",

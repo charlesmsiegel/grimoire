@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -54,7 +55,8 @@ from grimoire.sync.turns import open_conflicts
 
 from .errors import ApiRefused
 from .continuity import configure_extractor
-from .workspace import workspace
+from .navcache import NavigationCache
+from .workspace import basis_of, workspace
 from .views import (
     FILTER_ROLES,
     art_view,
@@ -164,6 +166,8 @@ class TextApi:
         configure_extractor(self, getattr(runtime, "continuity_extractor", None))
         self._startup_agendas = startup_agendas
         self.chats = ChatLibrary(store, self.owner_handle, clock=clock, new_id=new_id, owner=owner)
+        # 065: listings and the workspace reuse one validated navigation basis while the library is unchanged
+        self.navigation_cache = NavigationCache(store)
         self.quick = QuickStart(self.chats, self.runner)
         self.images = ImageLibrary(store, self.owner_handle, owner=owner)
         self.runtime = runtime
@@ -277,8 +281,8 @@ class TextApi:
         limit = field(args, "limit", int, required=False, default=50)
         if isinstance(limit, bool) or not 1 <= limit <= MAX_LIMIT:
             raise ApiRefused("invalid_field", f"limit must be 1 to {MAX_LIMIT}")
-        view = self.store.load()
-        index = self.chats.navigation(view=view)
+        basis = basis_of(self)  # one validated snapshot (065): the rows are the ones a fresh load would list
+        index = basis.index
         if which == "recent":
             found = index.recent(limit)
         elif which in FILTER_ROLES:
@@ -289,10 +293,9 @@ class TextApi:
             found = tuple(ref for ref in index.all_chats() if ref in matched)[:limit]  # newest first, uncapped
         else:
             raise ApiRefused("invalid_field", "filter must be recent, character or scenario")
-        entries: list[NavEntry] = [index.entry(ref) for ref in index.all_chats()]
-        names = self._mention_names(view, entries)
-        return {"filter": which, "chats": self._entries(view, index, found, names),
-                "sources": filter_sources(entries, names)}
+        entries: list[NavEntry] = [index.entry(ref) for ref in basis.order]
+        return {"filter": which, "chats": copy.deepcopy([basis.rows[str(ref)] for ref in found]),
+                "sources": filter_sources(entries, basis.names)}
 
     def _mention_names(self, view, entries) -> dict[str, str | None]:  # type: ignore[no-untyped-def]
         refs = {source_key(key) for entry in entries for _role, key, _rev, _active in entry.mentions}
@@ -310,6 +313,13 @@ class TextApi:
                     record = None
             chats.append(chat_entry(index.entry(ref), index.scope(ref.campaign_id), record, names))
         return chats
+
+    def listed_chats(self, campaign: str | None = None) -> list[dict]:
+        """Every chat as the ``chats`` op lists it, newest activity first, or a campaign's alone: the whole
+        library from the validated navigation basis (065), with no page cap. For the app's campaign list and hub."""
+        basis = basis_of(self)
+        return copy.deepcopy([basis.rows[str(ref)] for ref in basis.order
+                              if campaign is None or ref.campaign_id == campaign])
 
     def chat_entries(self, refs) -> list[dict]:  # type: ignore[no-untyped-def]
         """``refs`` as the ``chats`` op lists them, in the order given; a ref the library does not know is left out.

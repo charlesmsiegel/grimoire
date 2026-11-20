@@ -115,7 +115,7 @@ export async function mount(root, ctx) {
       match: ctx.query.get("match") || "exact", campaign: campaign || undefined,
       world: world || undefined, pins: [...pinnedChats(shelf)],
       offset: at, source_offset: sourcesAt, comparison_offset: comparisonsAt,
-      source_q: ctx.query.get("source_q") || "",
+      source_q: ctx.query.get("source_q") || "", scope_q: ctx.query.get("scope_q") || "",
       snapshot: (at || sourcesAt || comparisonsAt) && page ? page.snapshot : undefined };
     const response = await request(args);
     if (!response) return;
@@ -150,9 +150,22 @@ export async function mount(root, ctx) {
       if (page.source_next !== null) picker.append(ui.button("Next sources", () => load(offset, page.source_next, comparisonOffset, "sources")));
     }
     if (filter === "campaign" || filter === "world") {
-      picker.append(ui.search(filter === "campaign" ? "Exact campaign ID" : "Exact world source ID", {
-        value:ctx.query.get(filter) || "", oninput:value => { clearTimeout(timer); timer = setTimeout(() => ctx.navigate(address({[filter]:value})), 300); }
-      }));
+      // Choose from the campaigns and worlds the library's chats stand in (065), narrowed by a search, rather than
+      // typing an exact ID. A deep-linked value that is not listed stays chosen and shown by its ID.
+      const listed = (filter === "campaign" ? page.campaigns : page.worlds) || [];  // none from a server without facets
+      const total = (filter === "campaign" ? page.campaign_total : page.world_total) || listed.length;
+      const current = ctx.query.get(filter) || "";
+      const named = (item) => filter === "campaign" ? (item.title || item.campaign) + " · " + item.campaign : item.world;
+      const choices = [{ value: "", label: "Choose a " + filter },
+        ...listed.map((item) => ({ value: item[filter], label: named(item) + " · " + plural(item.chats, "chat", "chats") }))];
+      if (current && !choices.some((x) => x.value === current)) choices.push({ value: current, label: current });
+      picker.append(ui.choice(filter === "campaign" ? "Campaign" : "World", choices, { value: current,
+        onchange: (value) => ctx.navigate(address({ [filter]: value || undefined })) }).node);
+      const scopeSearch = ui.search(filter === "campaign" ? "Search campaigns" : "Search worlds", { value: ctx.query.get("scope_q") || "",
+        oninput: (text) => { clearTimeout(timer); timer = setTimeout(() => { ctx.query.set("scope_q", text); load(); }, 200); } });
+      scopeSearch.setAttribute("data-focus-key", "chats:scope-search");
+      picker.append(scopeSearch);
+      if (total > listed.length) picker.append(el("span", { class: "g-muted" }, "Showing " + listed.length + " of " + total + ". Search to narrow."));
     }
     pager.replaceChildren();
     if (offset) pager.append(ui.button("Previous chats", () => load(Math.max(0, offset - 50), 0, 0, true)));
@@ -172,7 +185,7 @@ export async function mount(root, ctx) {
       const buttons = Array.from(controls.querySelectorAll("button"));
       (buttons.find(button => button.textContent === focusLabel) || buttons[0])?.focus();
     } else if (focus) (results.querySelector("a") || pager.querySelector("button"))?.focus();
-    else if (focusKey === "chats:source-search") picker.querySelector("[data-focus-key=\"chats:source-search\"]")?.focus();
+    else if (focusKey === "chats:source-search" || focusKey === "chats:scope-search") picker.querySelector("[data-focus-key=\"" + focusKey + "\"]")?.focus();
   }
 
   // Pin or unpin one chat at the etag this page read, then read the pins again and draw the list again, with

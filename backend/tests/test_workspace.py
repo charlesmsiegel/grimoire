@@ -1,7 +1,12 @@
 """Bounded, read-only workspace queries over synthetic canonical navigation."""
+import os
+import sys
+
 import pytest
-from textapi_fixtures import desktop_library, Device
+from textapi_fixtures import MARA_VELL, desktop_library, Device
+from grimoire.chats import Launch
 from grimoire.textapi import ApiRefused
+from grimoire.textapi.navcache import build_basis
 
 
 def test_workspace_is_bounded_and_rejects_invalid_pages(tmp_path):
@@ -74,7 +79,7 @@ def test_exact_and_validated_descendants_exclude_namesakes_and_broken_ancestry(m
         if ref == refs[-1]:
             raise ValueError('malformed ancestry')
         return NS(chain=[NS(ref=node, etag='etag') for node in paths[ref]])
-    monkeypatch.setattr(mod, 'compose_in', compose)
+    monkeypatch.setattr(importlib.import_module('grimoire.textapi.navcache'), 'compose_in', compose)  # the basis composes
     view = NS(sources={}, problems=[], index=NS(definitions=lambda: ()))
     class Api:
         store = NS(load=lambda: view)
@@ -172,3 +177,66 @@ def test_workspace_node_contracts():
     test = Path(__file__).with_name('js') / 'workspace.test.mjs'
     result = subprocess.run([node, '--test', str(test)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_navigation_basis_is_reused_until_the_library_changes_in_or_outside_this_process(tmp_path):
+    """065's large-library browsing: paging, search and the legacy listing share one validated basis, which a
+    commit here or a rewrite from outside (even one that keeps the file's size and mtime) invalidates."""
+    table, card_chat = desktop_library(tmp_path / 'desk')
+    with Device(table) as api:
+        cache = api.api.navigation_cache
+        first = api('chats.workspace')
+        assert cache.builds == 1
+        loads = []
+        real = api.api.store.load
+        api.api.store.load = lambda: loads.append(1) or real()
+        try:
+            api('chats.workspace', q='mara')
+            api('chats.workspace', filter='character', source=str(MARA_VELL), match='derived')
+            api('chats', filter='recent', limit=50)
+            assert api('chats.workspace', offset=0, snapshot=first['snapshot'])['chats'] == first['chats']
+        finally:
+            api.api.store.load = real
+        assert not loads and cache.builds == 1, 'an unchanged library is not reparsed'
+        fresh = build_basis(api.api, api.api.store.load())
+        held = cache.basis(api.api)
+        assert (held.fingerprint, held.index, held.rows) == (fresh.fingerprint, fresh.index, fresh.rows)
+
+        # a commit in this process
+        started = api.api.chats.start_chat(Launch('character', MARA_VELL)).commit().chat
+        after = api('chats.workspace')
+        assert cache.builds == 2 and after['total'] == first['total'] + 1
+        assert str(started) in {row['chat'] for row in after['chats']}
+        with pytest.raises(ApiRefused) as caught:
+            api('chats.workspace', offset=0, snapshot=first['snapshot'])
+        assert caught.value.reason == 'changed'
+
+        # a hand edit from outside this process that keeps the file's size (and, where ctime records the last
+        # change rather than creation, its modification time too)
+        chat_file = next(path for path in (api.api.store.root / 'campaigns').rglob('*.json')
+                         if b'The tide comes in' in path.read_bytes())
+        info = chat_file.stat()
+        chat_file.write_bytes(chat_file.read_bytes().replace(b'The tide comes in', b'The tide comes up'))
+        if sys.platform != 'win32':  # Windows' st_ctime is the creation time: there mtime is the signal
+            os.utime(chat_file, ns=(info.st_atime_ns, info.st_mtime_ns))
+        assert chat_file.stat().st_size == info.st_size
+        labels = {row['label'] for row in api('chats.workspace')['chats']}
+        assert 'The tide comes up' in labels and 'The tide comes in' not in labels
+        assert cache.builds == 3, 'ctime moves on any rewrite, so the basis is rebuilt'
+        api('chats.workspace', q='tide')
+        assert cache.builds == 3
+
+
+def test_scope_choosers_list_campaigns_and_worlds_with_their_chats(tmp_path):
+    table, card_chat = desktop_library(tmp_path / 'desk')
+    with Device(table) as api:
+        everything = api('chats.workspace')
+        campaigns = {item['campaign']: item for item in everything['campaigns']}
+        assert campaigns[card_chat.campaign_id]['chats'] == 1 and campaigns[card_chat.campaign_id]['world'] is None
+        imported = next(item for item in campaigns.values() if item['world'] is not None)
+        assert everything['worlds'] == [{'world': imported['world'], 'campaigns': 1, 'chats': imported['chats']}]
+        assert everything['campaign_total'] == len(campaigns) and everything['world_total'] == 1
+        narrowed = api('chats.workspace', scope_q=imported['campaign'][:6].upper())
+        assert [item['campaign'] for item in narrowed['campaigns']] == [imported['campaign']]
+        world = api('chats.workspace', filter='world', world=imported['world'])
+        assert world['total'] == imported['chats'] and all(row['scope']['world'] == imported['world'] for row in world['chats'])
