@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from grimoire.adjudication.model import PROSE_MAX
 from grimoire.core.authority import PlayerContribution, Resolution
+from grimoire.core.identity import TEXT_MAX
 from grimoire.rulesets import (
     ActionRequest, ArsStudy, D20Check, D20Result, PbtaMove, PbtaResult, WodResult, WodTest,
 )
@@ -109,6 +111,22 @@ def check_backing(request: ActionRequest, contribution: PlayerContribution) -> N
     if (contribution.campaign_id != actor.campaign_id or contribution.contribution_id != request.request_id
             or contribution.actor_id != actor.instance_id or contribution.kind != "action"):
         raise RollError("the contribution is not this actor's action under this request id", "invalid_expression")
+    # The bounds 029 holds a framed action's contribution to, so one action is never storable in one ledger
+    # and not the other, and replay never re-reads an unbounded text per roll.
+    for label in ("contribution_id", "scene_id", "turn_id", "actor_id", "submitted_by", "text"):
+        value = getattr(contribution, label)
+        if type(value) is not str or not _storable(value) or (label != "text" and len(value) > TEXT_MAX):
+            raise RollError(f"the contribution's {label} cannot be stored", "invalid_field")
+    if len(contribution.text) > PROSE_MAX:
+        raise RollError(f"the contribution is longer than {PROSE_MAX} characters", "contribution_too_long")
+
+
+def _storable(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:  # a lone surrogate could never be stored
+        return False
+    return True
 
 
 @dataclass(frozen=True)

@@ -145,7 +145,7 @@ def test_wod_and_pbta_roll_through_the_same_interface(table):
     assert (move.result.outcome, move.outcome) == ("partial", "partial")
     assert [r.attempt_id for r in library.resolutions(Q)] == ["director:director-1", "director:director-2"]
     _reopen(table)
-    assert _library(table, Dice()).state(Q).rolls == {"director-1": pool, "director-2": move}
+    assert _library(table, Dice()).state(Q).rolls == {"director:director-1": pool, "director:director-2": move}
 
 
 # -- authority -----------------------------------------------------------------------------
@@ -176,6 +176,31 @@ def test_a_director_roll_takes_no_backing_and_never_binds_a_players_attempt(tabl
     assert roll.resolution().attempt_id == "director:c10"
     # Iris's success under the same request id says nothing about Mara's attempt c10.
     assert _review(table, library, _says("failure")) == ([], [("n1", "director")])
+    # Mara still rolls her own c10, and the two rolls stay apart on record and after a reopen.
+    mara = _library(table, Dice(4)).roll(MODULE, sneak(), contribution=slip(), author=table.player())
+    _reopen(table)
+    reread = _library(table, Dice())
+    assert reread.rolled(Q, "c10") == mara and reread.rolled(Q, "director:c10") == roll
+    assert _review(table, reread, _says("success")) == ([("n1", "contradicts_resolution")], [])
+
+
+@pytest.mark.parametrize("contribution, reason", [
+    (vault("x" * 4001, cid="c10"), "contribution_too_long"),
+    (vault("I slip \ud800 past.", cid="c10"), "invalid_field"),
+    (vault(turn="t" * 600), "invalid_field"),
+])
+def test_a_contribution_no_ledger_could_hold_is_refused_before_a_die_is_drawn(table, contribution, reason):
+    library = _library(table, Dice(4))
+    assert _reason(library.roll, MODULE, sneak(), contribution=contribution, author=table.player()) == reason
+    assert library._draw.asked == [] and library.state(Q).rolls == {}
+
+
+def test_an_unusable_authority_refuses_before_a_die_is_drawn(table):
+    library = _library(table, Dice(4))
+    table.authority._poison(OSError("disk gone"))
+    with pytest.raises(Exception):
+        library.roll(MODULE, sneak("d1", actor=IRIS))
+    assert library._draw.asked == []
 
 
 @pytest.mark.parametrize("selected, request_kwargs, reason", [

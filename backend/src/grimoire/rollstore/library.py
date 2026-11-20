@@ -58,14 +58,16 @@ def ledger_for(campaign_id: str) -> str:
 
 @dataclass(frozen=True)
 class RollState:
-    """A campaign's roll ledger, replayed: every recorded roll by request id."""
+    """A campaign's roll ledger, replayed: every recorded roll by the attempt it binds (``attempt_id``).
+
+    A director's roll under request id ``c10`` is ``director:c10``, so it never takes a player's ``c10``."""
 
     campaign_id: str
     rolls: Mapping[str, RecordedRoll]
 
     def resolutions(self) -> tuple[Resolution, ...]:
         """003 resolutions for every recorded roll: narration must agree with them."""
-        return tuple(self.rolls[request_id].resolution() for request_id in sorted(self.rolls))
+        return tuple(self.rolls[attempt_id].resolution() for attempt_id in sorted(self.rolls))
 
 
 @dataclass
@@ -77,8 +79,8 @@ class _Builder:
     def check(self, roll: RecordedRoll) -> None:
         if roll.campaign_id != self.campaign_id:
             raise RollError("the roll belongs to another campaign", "campaign_mismatch")
-        if roll.request.request_id in self.rolls:
-            raise RollError(f"request {roll.request.request_id!r} is already rolled", "already_rolled")
+        if roll.attempt_id in self.rolls:
+            raise RollError(f"attempt {roll.attempt_id!r} is already rolled", "already_rolled")
 
     def state(self) -> RollState:
         return RollState(self.campaign_id, dict(self.rolls))
@@ -157,8 +159,9 @@ class RollLibrary:
         with self._authority.lock:
             return self._builder(campaign_id).state()
 
-    def rolled(self, campaign_id: str, request_id: str) -> RecordedRoll | None:
-        return self.state(campaign_id).rolls.get(request_id)
+    def rolled(self, campaign_id: str, attempt_id: str) -> RecordedRoll | None:
+        """The roll binding ``attempt_id``: a player's contribution id, or ``director:<request id>``."""
+        return self.state(campaign_id).rolls.get(attempt_id)
 
     def resolutions(self, campaign_id: str) -> tuple[Resolution, ...]:
         return self.state(campaign_id).resolutions()
@@ -186,16 +189,22 @@ class RollLibrary:
             check_backing(request, contribution)
         sides = dice_for(request.action)
         campaign_id = request.actor.campaign_id
+        attempt = request.request_id if contribution is not None else f"{DIRECTOR_ROLL}{request.request_id}"
         with self._authority.lock:  # control is read, the dice drawn and the entry appended as one step
             builder = self._builder(campaign_id)
-            done = builder.rolls.get(request.request_id)
+            done = builder.rolls.get(attempt)
             if done is not None:
                 if (done.request, done.contribution) == (request, contribution):
                     return done  # a retry reads the roll back; it never draws again
-                raise RollError(f"request {request.request_id!r} is already rolled", "already_rolled")
+                raise RollError(f"attempt {attempt!r} is already rolled", "already_rolled")
             self._check_actor(request.actor)
             self._check_authority(request.actor, contribution, author)
-            self._check_unadjudicated(request, contribution)
+            self._check_unadjudicated(attempt, request.actor.campaign_id)
+            # Everything the append could refuse is refused before a die is drawn, so no refusal ever follows a
+            # result someone could have seen: an unusable authority, text the store cannot hold, an entry no
+            # batch can hold (the highest faces bound its size).
+            self._authority._require_usable()
+            self._cost(roll_to_payload(request, contribution, sides))
             faces = tuple(self._draw(side) for side in sides)
             try:
                 roll = RecordedRoll(request, contribution, faces, self._principal)
@@ -203,7 +212,7 @@ class RollLibrary:
                 raise RollError(f"the draw gave impossible faces: {error}", "invalid_draw") from None
             builder.check(roll)
             self._append(builder, roll_to_payload(request, contribution, faces))
-            builder.rolls[request.request_id] = roll
+            builder.rolls[roll.attempt_id] = roll
             return roll
 
     # -- internals ----------------------------------------------------------------------------
@@ -231,17 +240,24 @@ class RollLibrary:
                   and getattr(author, "principal", None) == controller):
             raise RollError("only the controller's own trusted handle gives their contribution", "not_controller")
 
-    def _check_unadjudicated(self, request: ActionRequest, contribution: PlayerContribution | None) -> None:
+    def _check_unadjudicated(self, attempt: str, campaign_id: str) -> None:
         """An attempt 029 already frames is adjudicated there, not rolled: two records would bind one attempt."""
-        attempt = request.request_id if contribution is not None else f"{DIRECTOR_ROLL}{request.request_id}"
-        frames = AdjudicationLibrary(self.store, self._authority, self._handle).state(request.actor.campaign_id)
+        frames = AdjudicationLibrary(self.store, self._authority, self._handle).state(campaign_id)
         if frames.frame(attempt) is not None:
             raise RollError(f"attempt {attempt!r} is adjudicated by 029, not rolled", "attempt_adjudicated")
+
+    def _cost(self, payload: dict[str, object]) -> None:
+        """What ``_append`` would refuse for this payload, refused now."""
+        try:
+            entry_cost(envelope("roll", self._authority.now(), recorded_by=self._principal, value=payload))
+        except InvalidEnvelope as error:
+            raise RollError(str(error), "invalid_field") from None
+        except ValueError as error:
+            raise RollError(str(error), "too_large") from None
 
     def _append(self, builder: _Builder, payload: dict[str, object]) -> None:
         entry = envelope("roll", self._authority.now(), recorded_by=self._principal, value=payload)
         try:
-            entry_cost(entry)
             builder.head = self._authority._append(ledger_for(builder.campaign_id), [entry], builder.head)
         except InvalidEnvelope as error:  # text the store cannot hold; nothing was written
             raise RollError(str(error), "invalid_field") from None
@@ -273,6 +289,6 @@ def _replay(campaign_id: str, name: str, entries: Iterable[object], head: Head |
             builder.check(roll)
         except RollError as error:
             raise LedgerInvalid(f"{name} entry {index}: {error} ({error.reason})") from None
-        builder.rolls[roll.request.request_id] = roll
+        builder.rolls[roll.attempt_id] = roll
     builder.head = head
     return builder
