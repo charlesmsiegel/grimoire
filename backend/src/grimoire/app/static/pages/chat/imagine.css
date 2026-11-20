@@ -1,0 +1,13 @@
+/* 073: a hypothetical reply sits beside the composer, never in the transcript, and reads as set apart from it. */
+.chat-imagine { padding: .75rem; border: 1px dashed var(--g-border, currentColor); border-radius: .5rem; min-width: 0; }
+.chat-imagine summary { cursor: pointer; font-weight: 600; }
+.chat-imagine .g-field { margin-block: .6rem; }
+.chat-imagine-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.chat-imagine-status { overflow-wrap: anywhere; min-height: 1.2em; }
+.chat-imagine-results { list-style: none; padding: 0; margin: .5rem 0 0; display: grid; gap: .5rem; }
+.chat-imagine-card { border-style: dashed; }
+.chat-imagine-line, .chat-imagine-reply { overflow-wrap: anywhere; white-space: pre-wrap; }
+.chat-imagine-line { font-style: italic; }
+.chat-imagine-name { font-weight: 600; margin-block: .4rem .2rem; }
+.chat-imagine-reply { margin: 0 0 .4rem; padding-inline-start: .75rem; border-inline-start: 3px solid var(--g-border, currentColor); }
+.chat-imagine .g-button[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
