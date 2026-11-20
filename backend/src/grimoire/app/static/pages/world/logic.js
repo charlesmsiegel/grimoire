@@ -83,6 +83,14 @@ export function readHypotheses(text) {
   } catch { return []; }
 }
 
+// A list of ids kept in a draft (JSON), or [] when there is none or it is broken.
+export function readList(text) {
+  try {
+    const value = JSON.parse(text || "[]");
+    return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+  } catch { return []; }
+}
+
 // The moment a hypothesis is held from: its newest cited evidence (060 refuses a citation from its future).
 export function heldFrom(evidenceIds, held) {
   const moments = held.filter((item) => evidenceIds.includes(item.evidence)).map((item) => item.at);

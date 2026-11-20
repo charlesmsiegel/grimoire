@@ -12,18 +12,20 @@ per slice over the existing domain services: `TopologyLibrary` (059), 063's veri
 `grimoire.rumorledger.replay` and 020's `EvidenceLibrary` for an admitted belief, 057's `decide` and 060's
 `admit`, `recall` and `choose_tactic`. It keeps no record of its own. Every op refuses `director_only` unless
 `audience` is `director`, and no domain error escapes as a server error: each keeps its reason (an unreadable
-ledger is `ledger_unreadable`).
+ledger is `ledger_unreadable`, and a campaign the library does not hold `missing_campaign`).
 
 The two changes the page makes are each reviewed first: the plan op writes nothing and answers the files the
 change would write; the commit op takes the same args (the same `operation_id`, and `expected`, the etag that was
-shown) and makes the change as reviewed. A change made by anyone in between refuses `changed`, and the page reads
-the section again; the same operation again is `already_applied` and writes nothing; the id reused for another
-change refuses `operation_conflict`.
+shown) and makes the change as reviewed. A change made by anyone in between refuses `changed`, at the review or at
+the commit, and the page reads the section again, so the next review is made against what is there now; the same
+operation again, even after other changes, is `already_applied` and writes nothing; the id reused for another change
+refuses `operation_conflict`.
 
 ## Places and routes (059)
 
 | Op | Args | Answer |
 |---|---|---|
+| `world.topologies` | `campaign` | `{topologies[]}`: the library's topologies, listed apart from any one's view |
 | `world.places` | `campaign`, `topology` (optional: the first otherwise) | `{topologies[], topology: {topology, name, etag, places[], paths[], missing[]}}` |
 | `world.find_place` | `campaign`, `topology`, `name` | `{name, matches[]}`: every place the name or an alias matches, each by its exact ref |
 | `world.route` | `campaign`, `topology`, `from`, `to` (exact refs), `conditions[]` | `{found, route: {places[], paths[]}, conditions}` |
@@ -97,10 +99,17 @@ NPC, in the browser tab. Inferring a hypothesis from play and keeping hypotheses
 
 ## The page
 
-Each section is a card of real buttons and labelled fields, laid out in one column at phone width. What is typed
-is a draft kept across leaving the page, keyed per chat and character (a hypothesis being written is that NPC's
-own). Only the NPC chosen last is drawn, whatever answer comes back late. A review is cancelled or made with its
-own buttons; a stale one is dropped and the section read again.
+Each section is a card of real buttons and labelled fields, laid out in one column at phone width, and each reads
+on its own: a section that is refused shows the reason in its own card with **Read again**, and the others keep
+working. A topology whose view is refused still leaves the others to choose from.
+
+What the director lays out is a draft kept across leaving the page, keyed per chat and character: what is typed,
+and what is picked or ticked too (a route's two ends, a faction's leader, its members and who is told, the
+characters a hypothesis is about and the evidence it rests on). A hypothesis being written is that NPC's own.
+
+Only the newest answer is drawn: the NPC chosen last, the topology chosen last (a review of the one before is
+dropped), the last search and route. A search or route answered before a road changed is cleared once it changes.
+A review is cancelled or made with its own buttons; a stale one is dropped and the section read again.
 
 Tests: `backend/tests/test_app_world.py` (every op, its refusals, privacy, stale reviews and retries, run on a
 synthetic library) runs `js/world.e2e.mjs` against a real app server; `js/world.test.mjs` covers the page's logic

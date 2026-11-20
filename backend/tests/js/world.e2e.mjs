@@ -121,7 +121,7 @@ test("the director's world: places, rumors, a faction's choice and an NPC's mind
   const bridge = places.querySelectorAll("li").find((node) => node.textContent.startsWith("bridge"));
   assert.ok(bridge.textContent.includes("Blocked") && bridge.textContent.includes("Changed in this campaign"));
   route = await ask("");
-  assert.match(route.textContent, /^No route with no condition held/);
+  assert.match(route.textContent, /^No route from Saltmarch .* to Port Vell with no condition held/);
   route = await ask("ticket");
   assert.match(route.textContent, /^Route with ticket: Saltmarch .*, then Greywood, then Port Vell\.$/);
 

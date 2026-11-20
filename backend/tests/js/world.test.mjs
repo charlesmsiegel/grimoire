@@ -25,13 +25,21 @@ const CAST = [{ actor: MARA, name: "Mara", role: "npc", agent: true }, { actor: 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const settle = async (n = 30) => { for (let i = 0; i < n; i += 1) await tick(); };
 
-function places(etag = "g|") {
-  return { campaign: "c1", topologies: [{ topology: "world:a/topology/roads@r1", name: null }],
-    topology: { topology: "world:a/topology/roads@r1", name: "Roads", etag, missing: [],
+const ROADS = "world:a/topology/roads@r1", SEA = "world:a/topology/sea@r1";
+
+function places(etag = "g|", { topology = ROADS, blocked = false, road = "road" } = {}) {
+  return { campaign: "c1", topologies: [{ topology, name: null }],
+    topology: { topology, name: topology === ROADS ? "Roads" : "Sea", etag, missing: [],
       places: [{ place: TOWN, name: "Saltmarch", aliases: [], parent: null, missing: false },
         { place: OTHER, name: "Saltmarch", aliases: [], parent: null, missing: false },
         { place: PORT, name: "Port", aliases: [], parent: null, missing: false }],
-      paths: [{ path: "road", from: TOWN, to: PORT, two_way: false, requires: [], blocked: false, changed: false }] } };
+      paths: [{ path: road, from: TOWN, to: PORT, two_way: false, requires: [], blocked, changed: blocked }] } };
+}
+
+function refused(reason) {
+  const error = new Error(reason + " (canned)");
+  error.reason = reason;
+  return error;
 }
 
 function mind(owner, content) {
@@ -47,16 +55,22 @@ async function mounted({ audience = "director", answers = {}, drafts = new Map()
   const asked = [];
   const query = new URLSearchParams({ chat: CHAT });
   if (audience === "director") query.set("audience", "director");
+  let busy = false;  // as the shell's act: one action at a time, a second is ignored while one runs
   const ctx = {
     ui, path: ["c1"], query,
     href: (route, segments = []) => "#/" + [route, ...segments.map(encodeURIComponent)].join("/"),
     registered: () => false, setTitle() {}, setCrumb() {}, styles() {}, layout() {}, navigate() {}, notify() {},
-    draft: (key) => ({ key, get: () => drafts.get(key), set: (text) => drafts.set(key, text), clear: () => drafts.delete(key) }),
-    act: async (work) => { try { return await work(); } catch { return undefined; } },
+    draft: (key) => ({ key, get: () => drafts.get(key), set: (text) => { if (text) drafts.set(key, text); else drafts.delete(key); }, clear: () => drafts.delete(key) }),
+    act: async (work) => {
+      if (busy) return undefined;
+      busy = true;
+      try { return await work(); } catch { return undefined; } finally { busy = false; }
+    },
     api: async (op, args) => {
-      asked.push(op);
+      asked.push({ op, args });
       if (op === "campaign.chats") return { complete: true, campaigns: [{ campaign: "c1", chats: [{ chat: CHAT }] }] };
       if (answers[op]) return answers[op](args);
+      if (op === "world.topologies") return { campaign: "c1", topologies: [{ topology: ROADS, name: "Roads" }] };
       if (op === "world.cast") return { chat: CHAT, cast: CAST };
       if (op === "world.places") return places();
       if (op === "world.rumors") return { campaign: "c1", now: null, rumors: [], etag: "rumors:1" };
@@ -119,7 +133,7 @@ test("a rumor is said as who told whom, by which channel and when it arrives", (
 test("the table's view says only that the page is the director's, and asks for none of it", async () => {
   const { root, done, asked } = await mounted({ audience: "table" });
   await done;
-  assert.deepEqual(asked, ["campaign.chats"], "no world op is called for the table");
+  assert.deepEqual(asked.map((item) => item.op), ["campaign.chats"], "no world op is called for the table");
   assert.ok(section(root, "World").textContent.includes("The World page is the director's"));
   assert.equal(root.querySelectorAll("section").length, 1);
   assert.equal(section(root, "World").querySelectorAll("button").length, 0);
@@ -215,4 +229,229 @@ test("a road change reviewed before another change is refused and read again, ne
   await settle();
   assert.equal(reads, 2, "the topology is read again");
   assert.ok(!card.querySelectorAll("div").some((node) => node.getAttribute("aria-label") === "Review this change"), "the stale review is gone");
+});
+
+const placesCard = (root) => section(root, "Places and routes");
+const reviewOf = (card) => card.querySelectorAll("div").find((node) => node.getAttribute("aria-label") === "Review this change");
+const roadButton = (card, label) => card.querySelectorAll("button").find((node) => node.getAttribute("aria-label") === label);
+const planOf = (args, topology) => ({ plan: { operation: args.operation_id, already_applied: false, files: ["campaigns/c1/x.json"],
+  before: topology.paths[0], after: { ...topology.paths[0], blocked: args.blocked } }, topology });
+
+test("a review refused as stale reads the roads again, and the next review is made against the new revision", async () => {
+  let reads = 0;
+  const plans = [];
+  const { root, done } = await mounted({ answers: {
+    "world.places": () => { reads += 1; return places(reads === 1 ? "g|" : "g|o2"); },
+    "world.path_plan": (args) => {
+      plans.push(args.expected);
+      if (plans.length === 1) throw refused("changed");
+      return planOf(args, places("g|o2").topology);
+    },
+  } });
+  await done;
+  roadButton(placesCard(root), "Block road").click();
+  await settle();
+  assert.equal(reads, 2, "the stale plan reads the topology again");
+  assert.ok(!reviewOf(placesCard(root)), "no review is shown for the stale plan");
+  roadButton(placesCard(root), "Block road").click();
+  await settle();
+  assert.deepEqual(plans, ["g|", "g|o2"], "the next review sends the revision read since");
+  assert.ok(reviewOf(placesCard(root)));
+});
+
+test("a rumor's review refused as stale reads the rumors again, and the next one sends their new revision", async () => {
+  const rumor = { rumor: "letter", sender: { actor: BEA, name: "Bea", role: "npc" }, recipient: { actor: MARA, name: "Mara", role: "npc" },
+    attributed_to: null, source: { evidence: "x", content: "seen" }, text: "the banner fell", channel: "letter", confidence: 80, distortion: "none",
+    faithful: true, provenance: "p", sent: null, due: null, route: { proximity: false, affiliation: false, channel: true, attention: true },
+    status: "delivered", report: "r", belief: null, can_admit: true };
+  let reads = 0;
+  const plans = [];
+  const { root, done } = await mounted({ answers: {
+    "world.rumors": () => { reads += 1; return { campaign: "c1", now: null, rumors: [rumor], etag: "rumors:" + reads }; },
+    "world.belief_plan": (args) => {
+      plans.push(args.expected);
+      if (plans.length === 1) throw refused("changed");
+      return { plan: { belief: "admit-" + args.operation_id, holder: MARA, text: rumor.text, already_applied: false, files: ["f"] },
+        rumors: { campaign: "c1", now: null, rumors: [rumor], etag: "rumors:" + reads } };
+    },
+  } });
+  await done;
+  const card = () => section(root, "Rumors");
+  button(card(), "Review").click();
+  await settle();
+  assert.equal(reads, 2);
+  button(card(), "Review").click();
+  await settle();
+  assert.deepEqual(plans, ["rumors:1", "rumors:2"]);
+  assert.ok(reviewOf(card()));
+});
+
+test("a route answered before a road was blocked is not left on screen as current", async () => {
+  const { root, done } = await mounted({ answers: {
+    "world.route": () => ({ found: true, conditions: [], route: { places: [{ place: TOWN }, { place: PORT }], paths: ["road"] } }),
+    "world.path_plan": (args) => planOf(args, places().topology),
+    "world.path_commit": () => ({ done: { already_applied: false }, topology: places("g|o1", { blocked: true }).topology }),
+  } });
+  await done;
+  button(placesCard(root), "Find a route").click();
+  await settle();
+  assert.ok(placesCard(root).textContent.includes("Route with no condition held"));
+  roadButton(placesCard(root), "Block road").click();
+  await settle();
+  assert.ok(placesCard(root).textContent.includes("Route with no condition held"), "a review changes nothing yet");
+  button(reviewOf(placesCard(root)), "Make this change").click();
+  await settle();
+  assert.ok(!placesCard(root).textContent.includes("Route with no condition held"), "the old route is gone once the road changed");
+  assert.ok(placesCard(root).textContent.includes("Blocked"));
+});
+
+test("the route's two ends stay as picked across redraws and a return to the page", async () => {
+  const drafts = new Map();
+  const first = await mounted({ drafts, answers: { "world.find_place": () => ({ name: "Port", matches: [] }) } });
+  await first.done;
+  field(placesCard(first.root), "From").value = PORT;
+  field(placesCard(first.root), "From").dispatchEvent({ type: "change" });
+  field(placesCard(first.root), "To").value = OTHER;
+  field(placesCard(first.root), "To").dispatchEvent({ type: "change" });
+  typeInto(placesCard(first.root), "Place name", "Port");
+  button(placesCard(first.root), "Find").click();  // an unrelated redraw
+  await settle();
+  assert.equal(field(placesCard(first.root), "From").value, PORT);
+  assert.equal(field(placesCard(first.root), "To").value, OTHER);
+  const again = await mounted({ drafts });
+  await again.done;
+  assert.equal(field(placesCard(again.root), "From").value, PORT);
+  assert.equal(field(placesCard(again.root), "To").value, OTHER);
+});
+
+test("choosing another topology while an action runs shows its roads and drops the review of the first", async () => {
+  let release;
+  const { root, done } = await mounted({ answers: {
+    "world.topologies": () => ({ campaign: "c1", topologies: [{ topology: ROADS, name: "Roads" }, { topology: SEA, name: "Sea" }] }),
+    "world.places": (args) => places("g|", { topology: args.topology, road: args.topology === SEA ? "ferry" : "road" }),
+    "world.path_plan": (args) => new Promise((resolve) => { release = () => resolve(planOf(args, places().topology)); }),
+  } });
+  await done;
+  roadButton(placesCard(root), "Block road").click();  // the action is still running
+  await settle(3);
+  const choose = field(placesCard(root), "Topology");
+  choose.value = SEA;
+  choose.dispatchEvent({ type: "change" });
+  await settle();
+  assert.ok(roadButton(placesCard(root), "Block ferry"), "the sea's roads are shown");
+  release();
+  await settle();
+  assert.ok(!reviewOf(placesCard(root)), "the first topology's late plan is not reviewed under the second");
+  assert.equal(field(placesCard(root), "Topology").value, SEA);
+  assert.ok(roadButton(placesCard(root), "Block ferry"));
+});
+
+test("one section refused leaves the others working, and it can be read again", async () => {
+  let rumorReads = 0;
+  const { root, done } = await mounted({ answers: {
+    "world.topologies": () => ({ campaign: "c1", topologies: [{ topology: ROADS, name: "Roads" }, { topology: SEA, name: "Sea" }] }),
+    "world.places": (args) => { if (args.topology === ROADS) throw refused("unsupported_schema"); return places("g|", { topology: SEA, road: "ferry" }); },
+    "world.rumors": () => { rumorReads += 1; if (rumorReads === 1) throw refused("ledger_unreadable"); return { campaign: "c1", now: null, rumors: [], etag: "r" }; },
+  } });
+  await done;
+  await settle();
+  const places_ = placesCard(root);
+  assert.ok(places_.textContent.includes("unsupported_schema"), "the topology's refusal is shown in its card");
+  assert.ok(field(places_, "Topology"), "the other topologies are still offered");
+  assert.ok(section(root, "Rumors").textContent.includes("ledger_unreadable"));
+  assert.ok(section(root, "Faction decision").querySelector("button"), "the faction section works");
+  assert.ok(minds(root).textContent.includes("Mara's own sight"), "the minds section works");
+  button(section(root, "Rumors"), "Read again").click();
+  await settle();
+  assert.ok(section(root, "Rumors").textContent.includes("No rumor has been sent"));
+  const choose = field(placesCard(root), "Topology");
+  choose.value = SEA;
+  choose.dispatchEvent({ type: "change" });
+  await settle();
+  assert.ok(roadButton(placesCard(root), "Block ferry"));
+});
+
+test("a refused cast is shown in both sections that lay it out, and read again", async () => {
+  let reads = 0;
+  const { root, done } = await mounted({ answers: { "world.cast": () => { reads += 1; if (reads === 1) throw refused("missing_chat"); return { chat: CHAT, cast: CAST }; } } });
+  await done;
+  await settle();
+  assert.ok(section(root, "Faction decision").textContent.includes("missing_chat"));
+  assert.ok(placesCard(root).textContent.includes("Roads"), "the places still show");
+  button(section(root, "Faction decision"), "Read again").click();
+  await settle();
+  assert.ok(button(section(root, "Faction decision"), "Show the decision"));
+});
+
+test("what is picked and ticked for a faction or a mind is kept across leaving the page", async () => {
+  const drafts = new Map();
+  const first = await mounted({ drafts });
+  await first.done;
+  await settle();
+  const faction = section(first.root, "Faction decision");
+  field(faction, "Leader").value = BEA;
+  field(faction, "Leader").dispatchEvent({ type: "change" });
+  const tickIn = (root, label, on) => {
+    const box = root.querySelectorAll("label").find((node) => node.textContent === label).querySelector("input");
+    box.checked = on;
+    box.dispatchEvent({ type: "change" });
+  };
+  tickIn(faction, "Mara is a member", false);
+  tickIn(faction, "Anya", true);
+  const mind = minds(first.root);
+  field(mind, "About").value = ANYA;
+  field(mind, "About").dispatchEvent({ type: "change" });
+  field(mind, "And about (optional)").value = BEA;
+  field(mind, "And about (optional)").dispatchEvent({ type: "change" });
+  tickIn(mind, "Mara's own sight (perception, sight)", true);
+
+  const again = await mounted({ drafts });
+  await again.done;
+  await settle();
+  const ticked = (root, label) => root.querySelectorAll("label").find((node) => node.textContent === label).querySelector("input").checked;
+  const kept = section(again.root, "Faction decision");
+  assert.equal(field(kept, "Leader").value, BEA);
+  assert.equal(ticked(kept, "Mara is a member"), false);
+  assert.equal(ticked(kept, "Bea is a member"), true);
+  assert.equal(ticked(kept, "Anya"), true);
+  const keptMind = minds(again.root);
+  assert.equal(field(keptMind, "About").value, ANYA);
+  assert.equal(field(keptMind, "And about (optional)").value, BEA);
+  assert.equal(ticked(keptMind, "Mara's own sight (perception, sight)"), true);
+});
+
+test("a hypothesis can be about two characters, and what was laid out is what is sent", async () => {
+  let sent = null;
+  const { root, done } = await mounted({ answers: {
+    "world.mind_preview": (args) => { sent = args; return { saved: false, owner: CAST[0], as_of: 2, admitted: ["h1"], unchanged: true, current: [], tactic: null, truth: { rulings: [], beliefs: [] } }; },
+    "world.faction_preview": (args) => { sent = args; return { saved: false, group: "G", goals: [], policy: "p", proposal: "x", decision: { choice: "no", leader: CAST[1] }, members: [], dissent: [], agreeing: [], told: [] }; },
+  } });
+  await done;
+  await settle();
+  const mind = minds(root);
+  field(mind, "About").value = ANYA;
+  field(mind, "And about (optional)").value = BEA;
+  typeInto(mind, "What Mara thinks they think", "Anya thinks Bea read it");
+  typeInto(mind, "How sure", "0.6");
+  const box = mind.querySelectorAll("input").find((node) => node.getAttribute("value") === "e-Mara");
+  box.checked = true;
+  box.dispatchEvent({ type: "change" });
+  button(mind, "Add this hypothesis").click();
+  assert.ok(minds(root).textContent.includes("h1: about Anya and Bea"));
+  button(minds(root), "Show what Mara would do").click();
+  await settle();
+  assert.deepEqual(sent.hypotheses[0].about, [ANYA, BEA]);
+
+  const faction = section(root, "Faction decision");
+  for (const [label, value] of [["Group", "G"], ["Goals", "a\nb"], ["How it decides", "p"], ["What is proposed", "x"], ["The leader's choice", "no"]]) typeInto(faction, label, value);
+  field(faction, "Leader").value = BEA;
+  field(faction, "Leader").dispatchEvent({ type: "change" });
+  const member = faction.querySelectorAll("label").find((node) => node.textContent === "Mara is a member").querySelector("input");
+  member.checked = false;
+  member.dispatchEvent({ type: "change" });
+  button(faction, "Show the decision").click();
+  await settle();
+  assert.equal(sent.leader, BEA);
+  assert.deepEqual(sent.members.map((item) => item.actor), [BEA], "Mara, unticked, is not laid out as a member");
+  assert.deepEqual(sent.goals, ["a", "b"]);
 });

@@ -11,7 +11,13 @@ from grimoire.calendarstore import CalendarLibrary
 from grimoire.campaignapi import parse
 from grimoire.chats.codec import ChatCodecError
 from grimoire.core.authority import AuthorityError
-from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, validate_segment
+from grimoire.core.identity import (
+    ChatRef,
+    InstanceRef,
+    ScopeRef,
+    SourceRef,
+    validate_segment,
+)
 from grimoire.core.index import MissingDefinition
 from grimoire.core.knowledge import KnowledgeError
 from grimoire.evidencestore.library import EvidenceWriteError
@@ -82,6 +88,20 @@ def campaign(args: Mapping[str, object]) -> str:
 
 def chat(args: Mapping[str, object]) -> ChatRef:
     return parse.chat_of(args)
+
+
+def number(value: object, message: str) -> float:
+    """A JSON number (never a boolean), as the domain checks its own range; ``invalid_field`` otherwise."""
+    if type(value) is int or type(value) is float:
+        return value
+    raise ApiRefused("invalid_field", message)
+
+
+def present(ctx: AdapterContext, campaign_id: str) -> str:
+    """``campaign_id`` when its campaign exists in the library; ``missing_campaign`` otherwise."""
+    if ctx.store.campaign_presence(campaign_id) != "present":
+        raise ApiRefused("missing_campaign", "this library has no such campaign")
+    return campaign_id
 
 
 def segment(args: Mapping[str, object], key: str) -> str:
@@ -161,5 +181,5 @@ def instance_name(ctx: AdapterContext, ref: InstanceRef, names: Mapping[Instance
     return local if isinstance(local, str) and local.strip() else None
 
 
-__all__ = ["DOMAIN_ERRORS", "actor", "actors", "calendar_state", "campaign", "chat", "director",
-           "expected", "guarded", "instance_name", "moment_view", "pinned", "reason_of", "segment", "text"]
+__all__ = ["DOMAIN_ERRORS", "actor", "actors", "calendar_state", "campaign", "chat", "director", "expected", "guarded",
+           "instance_name", "moment_view", "number", "pinned", "present", "reason_of", "segment", "text"]

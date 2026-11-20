@@ -87,6 +87,12 @@ def _places(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
             "topology": None if ref is None else _view(ctx, ref, campaign)}
 
 
+def _list(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
+    """Only the library's topologies: a page can still offer the others when one of them cannot be read."""
+    common.director(args)
+    return {"campaign": common.present(ctx, common.campaign(args)), "topologies": _topologies(ctx)}
+
+
 def _index(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no-untyped-def]
     common.director(args)
     campaign = common.campaign(args)
@@ -163,4 +169,4 @@ def _path_commit(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     return {"done": {**plan, "already_applied": receipt.replayed}, "topology": _view(ctx, ref, campaign)}
 
 
-OPS = {"places": _places, "find_place": _find, "route": _route, "path_plan": _path_plan, "path_commit": _path_commit}
+OPS = {"topologies": _list, "places": _places, "find_place": _find, "route": _route, "path_plan": _path_plan, "path_commit": _path_commit}

@@ -5,14 +5,15 @@
 // Everything is read from, and written through, the world.* ops, and the table's view calls none of them. The two
 // changes it makes (a road blocked or opened in this campaign, a rumor's recipient's belief admitted) are reviewed
 // first (a plan writes nothing) and made as reviewed, with the same operation id and the revision shown: anything
-// changed in between refuses it. A faction's decision and an NPC's theory of mind are previews of the domain's
-// answer for what the director lays out, and nothing of them is saved. What the domain does not do is named, never
-// offered.
+// changed in between refuses it, and the section is read again. A faction's decision and an NPC's theory of mind are
+// previews of the domain's answer for what the director lays out, and nothing of them is saved. What the domain does
+// not do is named, never offered. Each section reads on its own: one that is refused shows why, with "Read again",
+// and leaves the others working. What the director lays out (typed, picked or ticked) is kept as a draft.
 
 import { campaignName, count } from "../campaign/logic.js";
 import {
   heldFrom, latest, newOperationId, nextHypothesisId, parseConditions, parseConfidence, pathPlanText, pathText, percent,
-  placeLabels, readHypotheses, routeText, rumorLine, rumorStatus,
+  placeLabels, readHypotheses, readList, routeText, rumorLine, rumorStatus,
 } from "./logic.js";
 
 const AUDIENCES = [{ value: "table", label: "Table view" }, { value: "director", label: "Director view" }];
@@ -58,12 +59,14 @@ export async function mount(root, ctx) {
   root.append(cards);
   const placesCard = el("div", {}), rumorsCard = el("div", {}), factionCard = el("div", {}), mindsCard = el("div", {});
   cards.append(placesCard, rumorsCard, factionCard, mindsCard);
-  const cast = chat ? ctx.api("world.cast", { chat, ...D }).then((answer) => answer.cast) : Promise.resolve(null);
+  // the chat's cast, read once for both sections that lay it out (and again after a refusal)
+  let castAsk = null;
+  const castOf = () => castAsk || (castAsk = ctx.api("world.cast", { chat, ...D }).then((answer) => answer.cast, (error) => { castAsk = null; throw error; }));
   await Promise.all([
     showPlaces(placesCard, ctx, campaign),
     showRumors(rumorsCard, ctx, campaign, chat),
-    chat ? cast.then((members) => showFaction(factionCard, ctx, chat, members)) : noChat(factionCard, ctx, "Faction decision", listing.complete),
-    chat ? cast.then((members) => showMinds(mindsCard, ctx, chat, members)) : noChat(mindsCard, ctx, "What an NPC thinks", listing.complete),
+    chat ? showFaction(factionCard, ctx, chat, castOf) : noChat(factionCard, ctx, "Faction decision", listing.complete),
+    chat ? showMinds(mindsCard, ctx, chat, castOf) : noChat(mindsCard, ctx, "What an NPC thinks", listing.complete),
   ]);
 }
 
@@ -77,6 +80,17 @@ function noChat(slot, ctx, title, complete) {
   const { ui } = ctx;
   slot.replaceWith(card(ui, title, ui.empty(complete ? "This campaign has no chat in this library, so no cast to lay out."
     : "None of this campaign's chats is among the most recent ones listed.")));
+}
+
+// Run one section's read into `body`. A refusal is shown there with its reason and a "Read again" button: it
+// never blanks the page or another section. A page left meanwhile shows nothing.
+async function sectionRead(ctx, body, read) {
+  try {
+    await read();
+  } catch (error) {
+    if (error && error.reason === "left") return;
+    body.replaceChildren(ctx.ui.errorBox(error), ctx.ui.actions(ctx.ui.button("Read again", () => ctx.act(() => sectionRead(ctx, body, read)))));
+  }
 }
 
 function reviewBox(ui, text, files, onCancel, onMake) {
@@ -101,6 +115,24 @@ function checkbox(ui, label, { checked = false, value, onchange } = {}) {
   return ui.el("label", { class: "g-row world-check" }, box, ui.el("span", { class: "g-grow" }, label));
 }
 
+// A choice whose pick is kept in the draft `slot`: what was picked last, while it is still offered, else `fallback`.
+function keptChoice(ui, label, options, slot, fallback) {
+  const kept = slot.get();
+  const value = options.some((option) => option.value === kept) ? kept : fallback;
+  return ui.choice(label, options, { value, onchange: (picked) => slot.set(picked) });
+}
+
+// A set of ids kept in the draft `slot` (as JSON), for ticked boxes.
+function keptSet(slot) {
+  const ids = new Set(readList(slot.get()));
+  return {
+    has: (id) => ids.has(id),
+    set(id, on) { if (on) ids.add(id); else ids.delete(id); slot.set(ids.size ? JSON.stringify([...ids].sort()) : ""); },
+    values: () => [...ids].sort(),
+    clear() { ids.clear(); slot.clear(); },
+  };
+}
+
 // -- places and routes (059) ----------------------------------------------------------------------------------
 
 async function showPlaces(slot, ctx, campaign) {
@@ -111,40 +143,67 @@ async function showPlaces(slot, ctx, campaign) {
   const body = el("div", { class: "g-stack" });
   node.append(body, ui.unavailable("Weighted routes, hazards and travel time", "059 finds the route with the fewest roads; it has no distances, dangers or journeys."),
     ui.unavailable("A map of the places", "059's places have no positions to draw."));
-  let shown = null;
-  let review = null;  // { args, plan }: committed exactly as reviewed, with its own operation id
+  let topologies = [];  // the library's topologies, listed apart from any one's view
+  let current = null;   // the topology chosen
+  let shown = null;     // its view in this campaign, or null when it could not be read (viewError)
+  let viewError = null;
+  let review = null;    // { args, plan }: committed exactly as reviewed, with its own operation id
   let found = null, routed = null;
   const reading = latest(), finding = latest(), routing = latest();
   const DRAFT = "places:" + campaign + ":";
+  const chosen = ctx.draft(DRAFT + "topology"), fromSlot = ctx.draft(DRAFT + "from"), toSlot = ctx.draft(DRAFT + "to");
   const find = ui.field("Place name", { draft: ctx.draft(DRAFT + "find"), hint: "Every place this name or an alias matches is listed; none is picked for you" });
   const conditions = ui.field("Conditions held", { draft: ctx.draft(DRAFT + "conditions"), hint: "Words separated by commas, like ticket, night" });
 
-  const load = async (topology) => {
+  // The view replaced: a search or a route answered for another revision no longer stands for this one.
+  const replaced = (topology) => {
+    if (!shown || shown.topology !== topology.topology || shown.etag !== topology.etag) { found = null; routed = null; }
+    shown = topology;
+  };
+  // Read one topology's view. Only the newest read is drawn, and a pending review goes only once it lands.
+  const view = async (ref) => {
     const turn = reading.start();
-    const answer = await ctx.api("world.places", { campaign, ...D, topology: topology || undefined });
+    let answer = null, failure = null;
+    if (ref) {
+      try { answer = await ctx.api("world.places", { campaign, ...D, topology: ref }); }
+      catch (error) { if (error && error.reason === "left") return; failure = error; }
+    }
     if (!reading.current(turn)) return;
-    shown = answer;
-    found = null;
-    routed = null;
+    current = ref;
+    review = null;
+    viewError = failure;
+    if (answer && answer.topology) replaced(answer.topology); else { shown = null; found = null; routed = null; }
     draw();
   };
+  const readAll = async () => {
+    topologies = (await ctx.api("world.topologies", { campaign, ...D })).topologies;
+    const kept = chosen.get();
+    await view(topologies.some((item) => item.topology === kept) ? kept : topologies.length ? topologies[0].topology : null);
+  };
   const plan = (path, blocked) => ctx.act(async () => {
-    const args = { campaign, ...D, topology: shown.topology.topology, path: path.path, blocked, operation_id: newOperationId(), expected: shown.topology.etag };
-    const answer = await ctx.api("world.path_plan", args);
-    review = { args, plan: answer.plan };
-    shown = { ...shown, topology: answer.topology };
-    draw();
+    const args = { campaign, ...D, topology: shown.topology, path: path.path, blocked, operation_id: newOperationId(), expected: shown.etag };
+    try {
+      const answer = await ctx.api("world.path_plan", args);
+      if (!shown || shown.topology !== args.topology) return true;  // another topology was chosen meanwhile
+      review = { args, plan: answer.plan };
+      replaced(answer.topology);
+      draw();
+    } catch (error) {
+      if (error && error.reason === "changed") { review = null; await view(args.topology); }  // review it again, from now
+      throw error;
+    }
     return true;
   });
   const commit = () => ctx.act(async () => {
+    const reviewed = review;
+    if (!reviewed) return true;
     try {
-      const answer = await ctx.api("world.path_commit", review.args);
-      review = null;
-      shown = { ...shown, topology: answer.topology };
+      const answer = await ctx.api("world.path_commit", reviewed.args);
       ctx.notify(answer.done.already_applied ? "That change was already made; nothing was changed again." : "The road is changed in this campaign.");
-      draw();
+      if (review === reviewed) review = null;
+      if (shown && shown.topology === reviewed.args.topology) { replaced(answer.topology); draw(); }
     } catch (error) {
-      if (error && error.reason === "changed") { review = null; await load(shown.topology.topology); }
+      if (error && error.reason === "changed") { review = null; await view(reviewed.args.topology); }
       throw error;
     }
     return true;
@@ -153,32 +212,45 @@ async function showPlaces(slot, ctx, campaign) {
     find.setError(find.value.trim() ? "" : "Type a name to look for.");
     if (!find.value.trim()) return false;
     const turn = finding.start();
-    const answer = await ctx.api("world.find_place", { campaign, ...D, topology: shown.topology.topology, name: find.value.trim() });
-    if (finding.current(turn)) { found = answer; draw(); }
+    const asked = shown;
+    const answer = await ctx.api("world.find_place", { campaign, ...D, topology: asked.topology, name: find.value.trim() });
+    if (finding.current(turn) && shown === asked) { found = answer; draw(); }
+    return true;
+  });
+  const go = (from, to) => ctx.act(async () => {
+    const turn = routing.start();
+    const asked = shown;
+    const ends = { from, to };
+    const answer = await ctx.api("world.route", { campaign, ...D, topology: asked.topology, ...ends, conditions: parseConditions(conditions.value) });
+    if (routing.current(turn) && shown === asked) { routed = { ...ends, answer }; draw(); }
     return true;
   });
 
   function draw() {
-    if (!shown.topology) {
+    const parts = [];
+    if (!topologies.length) {
       body.replaceChildren(ui.empty("This library has no topology: its places and roads come from an imported or written source."));
       return;
     }
-    const topology = shown.topology;
-    const labels = placeLabels(topology.places);
-    const parts = [];
-    if (shown.topologies.length > 1) {
-      parts.push(ui.choice("Topology", shown.topologies.map((item) => ({ value: item.topology, label: item.name || item.topology })),
-        { value: topology.topology, onchange: (value) => { review = null; ctx.act(() => load(value)); } }).node);
+    if (topologies.length > 1) {
+      parts.push(ui.choice("Topology", topologies.map((item) => ({ value: item.topology, label: item.name || item.topology })),
+        { value: current, onchange: (value) => { chosen.set(value); view(value); } }).node);
     } else {
-      parts.push(el("p", { class: "g-muted" }, "Topology: " + (topology.name || topology.topology)));
+      parts.push(el("p", { class: "g-muted" }, "Topology: " + ((shown && shown.name) || topologies[0].name || topologies[0].topology)));
     }
-    parts.push(el("h3", { class: "world-sub" }, "Places"), el("ul", { class: "world-lines" }, topology.places.map((place) => el("li", { class: "g-row" },
+    if (!shown) {
+      parts.push(ui.errorBox(viewError || { message: "This topology could not be read." }), ui.actions(ui.button("Read again", () => ctx.act(() => view(current)))));
+      body.replaceChildren(...parts);
+      return;
+    }
+    const labels = placeLabels(shown.places);
+    parts.push(el("h3", { class: "world-sub" }, "Places"), el("ul", { class: "world-lines" }, shown.places.map((place) => el("li", { class: "g-row" },
       el("span", { class: "g-grow" }, el("strong", {}, labels.get(place.place)),
         place.aliases.length ? el("span", { class: "g-muted" }, " · also " + place.aliases.join(", ")) : null,
         place.parent ? el("span", { class: "g-muted" }, " · in " + (labels.get(place.parent) || place.parent)) : null),
       place.missing ? ui.pill("Missing", { kind: "bad" }) : null))));
-    if (topology.missing.length) parts.push(el("p", { class: "g-muted" }, count(topology.missing.length, "place") + " has no definition in this library: a route to or from it is refused."));
-    parts.push(el("h3", { class: "world-sub" }, "Roads"), el("ul", { class: "world-lines" }, topology.paths.map((path) => el("li", { class: "g-row world-road" },
+    if (shown.missing.length) parts.push(el("p", { class: "g-muted" }, count(shown.missing.length, "place") + " has no definition in this library: a route to or from it is refused."));
+    parts.push(el("h3", { class: "world-sub" }, "Roads"), el("ul", { class: "world-lines" }, shown.paths.map((path) => el("li", { class: "g-row world-road" },
       el("span", { class: "g-grow" }, el("strong", {}, path.path), " · " + pathText(path, labels)),
       path.blocked ? ui.pill("Blocked", { kind: "bad" }) : null,
       path.changed ? ui.pill("Changed in this campaign", { kind: "accent" }) : null,
@@ -192,34 +264,30 @@ async function showPlaces(slot, ctx, campaign) {
         el("strong", {}, item.name || item.place), el("span", { class: "g-muted world-ref" }, " · " + item.place),
         item.missing ? ui.pill("Missing", { kind: "bad" }) : null)))
         : ui.empty("No place is called \"" + found.name + "\".")) : null));
-    parts.push(routeForm(topology, labels));
+    parts.push(routeForm(labels));
     body.replaceChildren(...parts);
   }
 
-  function routeForm(topology, labels) {
-    const options = topology.places.map((place) => ({ value: place.place, label: labels.get(place.place) }));
-    const from = ui.choice("From", options, { value: routed ? routed.from : options[0] && options[0].value });
-    const to = ui.choice("To", options, { value: routed ? routed.to : options[1] ? options[1].value : options[0] && options[0].value });
-    const go = () => ctx.act(async () => {
-      const turn = routing.start();
-      const asked = { from: from.value, to: to.value };
-      const answer = await ctx.api("world.route", { campaign, ...D, topology: topology.topology, ...asked, conditions: parseConditions(conditions.value) });
-      if (routing.current(turn)) { routed = { ...asked, answer }; draw(); }
-      return true;
-    });
+  function routeForm(labels) {
+    const options = shown.places.map((place) => ({ value: place.place, label: labels.get(place.place) }));
+    // the two ends stay as picked (kept as drafts) across every redraw
+    const from = keptChoice(ui, "From", options, fromSlot, options[0] && options[0].value);
+    const to = keptChoice(ui, "To", options, toSlot, options[1] ? options[1].value : options[0] && options[0].value);
     let result = null;
     if (routed) {
       const answer = routed.answer;
       const held = answer.conditions.length ? " with " + answer.conditions.join(", ") : " with no condition held";
+      const ends = " from " + (labels.get(routed.from) || routed.from) + " to " + (labels.get(routed.to) || routed.to);
       result = answer.found
         ? el("div", { class: "g-stack world-route", role: "status" }, el("p", {}, "Route" + held + ": " + answer.route.places.map((place) => labels.get(place.place) || place.name || place.place).join(", then ") + "."),
           el("p", { class: "g-muted" }, "By " + answer.route.paths.join(", ") + " (" + count(answer.route.paths.length, "road") + ")."))
-        : el("p", { class: "world-route", role: "status" }, "No route" + held + ": every way is blocked or needs a condition not held.");
+        : el("p", { class: "world-route", role: "status" }, "No route" + ends + held + ": every way is blocked or needs a condition not held.");
     }
-    return group(ui, "Find a route", el("div", { class: "g-row world-pair" }, from.node, to.node), conditions.node, ui.actions(ui.button("Find a route", go)), result);
+    return group(ui, "Find a route", el("div", { class: "g-row world-pair" }, from.node, to.node), conditions.node,
+      ui.actions(ui.button("Find a route", () => go(from.value, to.value))), result);
   }
 
-  await load(null);
+  await sectionRead(ctx, body, readAll);
 }
 
 // -- rumors (063) ---------------------------------------------------------------------------------------------
@@ -237,24 +305,31 @@ async function showRumors(slot, ctx, campaign, chat) {
   let review = null;
   const stances = new Map();  // the stance picked for each rumor, kept across a review
   const base = { campaign, chat: chat || undefined, ...D };
-  const load = async () => { shown = await ctx.api("world.rumors", base); draw(); };
+  const load = async () => { shown = await ctx.api("world.rumors", base); review = null; draw(); };
   const plan = (rumor) => ctx.act(async () => {
     const args = { ...base, rumor: rumor.rumor, stance: stances.get(rumor.rumor) || "believed", operation_id: newOperationId(), expected: shown.etag };
-    const answer = await ctx.api("world.belief_plan", args);
-    review = { args, plan: answer.plan, rumor };
-    shown = answer.rumors;
-    draw();
+    try {
+      const answer = await ctx.api("world.belief_plan", args);
+      review = { args, plan: answer.plan, rumor };
+      shown = answer.rumors;
+      draw();
+    } catch (error) {
+      if (error && error.reason === "changed") await load();  // review it again, from now
+      throw error;
+    }
     return true;
   });
   const commit = () => ctx.act(async () => {
+    const reviewed = review;
+    if (!reviewed) return true;
     try {
-      const answer = await ctx.api("world.belief_commit", review.args);
-      review = null;
+      const answer = await ctx.api("world.belief_commit", reviewed.args);
+      if (review === reviewed) review = null;
       shown = answer.rumors;
       ctx.notify(answer.done.already_applied ? "That belief was already admitted; nothing was changed again." : "The belief is admitted.");
       draw();
     } catch (error) {
-      if (error && error.reason === "changed") { review = null; await load(); }
+      if (error && error.reason === "changed") await load();
       throw error;
     }
     return true;
@@ -303,22 +378,29 @@ async function showRumors(slot, ctx, campaign, chat) {
       belief);
   }
 
-  await load();
+  await sectionRead(ctx, body, load);
 }
 
 // -- a faction's decision (057) -------------------------------------------------------------------------------
 
-function showFaction(slot, ctx, chat, cast) {
+async function showFaction(slot, ctx, chat, castOf) {
   const { ui } = ctx;
   const { el } = ui;
   const node = card(ui, "Faction decision");
   slot.replaceWith(node);
-  node.append(el("p", { class: "g-muted" }, "Lay out a group from this chat's cast and its leader's choice, and see what 057 decides: the dissent it keeps, and who is told."));
+  const body = el("div", { class: "g-stack" });
+  node.append(el("p", { class: "g-muted" }, "Lay out a group from this chat's cast and its leader's choice, and see what 057 decides: the dissent it keeps, and who is told."),
+    body, ui.unavailable("Accepting a dissenting member's help as an event", "057 keeps a member's preference as an intention; its help becomes canon only as a separately accepted event, which this page does not make."),
+    ui.unavailable("A faction deciding by itself", "057 decides only on its leader's explicit choice: there are no autonomous politics."));
+  await sectionRead(ctx, body, async () => layOut(ctx, body, chat, await castOf()));
+}
+
+function layOut(ctx, body, chat, cast) {
+  const { ui } = ctx;
+  const { el } = ui;
   const npcs = cast.filter((member) => member.role === "npc" && member.agent);
-  const after = [ui.unavailable("Accepting a dissenting member's help as an event", "057 keeps a member's preference as an intention; its help becomes canon only as a separately accepted event, which this page does not make."),
-    ui.unavailable("A faction deciding by itself", "057 decides only on its leader's explicit choice: there are no autonomous politics.")];
   if (!npcs.length) {
-    node.append(ui.empty("No NPC in this chat's cast can lead a group: only a director-controlled character decides."), ...after);
+    body.replaceChildren(ui.empty("No NPC in this chat's cast can lead a group: only a director-controlled character decides."));
     return;
   }
   const KEY = "faction:director:" + chat + ":";
@@ -326,20 +408,21 @@ function showFaction(slot, ctx, chat, cast) {
   const goals = ui.field("Goals", { draft: ctx.draft(KEY + "goals"), multiline: true, hint: "One a line, at most 16" });
   const policy = ui.field("How it decides", { draft: ctx.draft(KEY + "policy"), hint: "Like: the head of the house decides" });
   const proposal = ui.field("What is proposed", { draft: ctx.draft(KEY + "proposal") });
-  const leader = ui.choice("Leader", npcs.map((member) => ({ value: member.actor, label: member.name || member.actor })), { value: npcs[0].actor });
+  const leader = keptChoice(ui, "Leader", npcs.map((member) => ({ value: member.actor, label: member.name || member.actor })), ctx.draft(KEY + "leader"), npcs[0].actor);
   const choice = ui.field("The leader's choice", { draft: ctx.draft(KEY + "choice") });
-  const joined = new Set(npcs.map((member) => member.actor));
-  const told = new Set();
+  // every NPC is a member unless unticked, and no one is told unless ticked: both kept as drafts
+  const out = keptSet(ctx.draft(KEY + "not-members"));
+  const told = keptSet(ctx.draft(KEY + "told"));
   const prefers = new Map(npcs.map((member) => [member.actor, ui.field((member.name || member.actor) + " prefers", {
     draft: ctx.draft(KEY + "prefers:" + member.actor), hint: "Leave empty for no preference" })]));
   const members = el("fieldset", { class: "world-set" }, el("legend", {}, "Members and what each prefers"),
     npcs.map((member) => el("div", { class: "g-stack world-member" },
-      checkbox(ui, (member.name || member.actor) + " is a member", { checked: true, value: member.actor,
-        onchange: (on) => { if (on) joined.add(member.actor); else joined.delete(member.actor); } }),
+      checkbox(ui, (member.name || member.actor) + " is a member", { checked: !out.has(member.actor), value: member.actor,
+        onchange: (on) => out.set(member.actor, !on) }),
       prefers.get(member.actor).node)));
   const audience = el("fieldset", { class: "world-set" }, el("legend", {}, "Who is told"),
-    cast.map((member) => checkbox(ui, member.name || member.actor, { value: member.actor,
-      onchange: (on) => { if (on) told.add(member.actor); else told.delete(member.actor); } })));
+    cast.map((member) => checkbox(ui, member.name || member.actor, { checked: told.has(member.actor), value: member.actor,
+      onchange: (on) => told.set(member.actor, on) })));
   const result = el("div", { class: "g-stack", "aria-live": "polite" });
   const asking = latest();
   const go = () => {
@@ -349,18 +432,19 @@ function showFaction(slot, ctx, chat, cast) {
     for (const [field, message] of missing) { field.setError(field.value.trim() ? "" : message); ok = ok && Boolean(field.value.trim()); }
     goals.setError(lines.length ? "" : "Give at least one goal.");
     if (!ok || !lines.length) return;
-    const laidOut = npcs.filter((member) => joined.has(member.actor) || member.actor === leader.value).map((member) => ({
+    const laidOut = npcs.filter((member) => !out.has(member.actor) || member.actor === leader.value).map((member) => ({
       actor: member.actor, choice: prefers.get(member.actor).value.trim() || null }));
+    const audienceIds = told.values().filter((actor) => cast.some((member) => member.actor === actor));
     ctx.act(async () => {
       const turn = asking.start();
       const answer = await ctx.api("world.faction_preview", { chat, ...D, group: groupName.value.trim(), leader: leader.value, goals: lines,
-        policy: policy.value.trim(), proposal: proposal.value.trim(), choice: choice.value.trim(), members: laidOut, told: [...told].sort() });
+        policy: policy.value.trim(), proposal: proposal.value.trim(), choice: choice.value.trim(), members: laidOut, told: audienceIds });
       if (asking.current(turn)) result.replaceChildren(...decision(ui, answer));
       return true;
     });
   };
-  node.append(group(ui, "Lay out the decision", groupName.node, goals.node, policy.node, proposal.node, leader.node, choice.node, members, audience,
-    ui.actions(ui.button("Show the decision", go, { kind: "primary" }))), result, ...after);
+  body.replaceChildren(group(ui, "Lay out the decision", groupName.node, goals.node, policy.node, proposal.node, leader.node, choice.node, members, audience,
+    ui.actions(ui.button("Show the decision", go, { kind: "primary" }))), result);
 }
 
 function decision(ui, answer) {
@@ -381,24 +465,31 @@ function decision(ui, answer) {
 
 // -- what an NPC thinks others think (060) --------------------------------------------------------------------
 
-async function showMinds(slot, ctx, chat, cast) {
+async function showMinds(slot, ctx, chat, castOf) {
   const { ui } = ctx;
   const { el } = ui;
   const node = card(ui, "What an NPC thinks");
   slot.replaceWith(node);
+  const body = el("div", { class: "g-stack" });
   node.append(el("p", { class: "g-muted" }, "Write what an NPC thinks another character thinks, each resting on evidence it holds, and see the tactic it proposes."
-    + " The director's truth and the NPC's own beliefs are never changed by it."));
-  const after = [ui.unavailable("Inferring a hypothesis from play", "060 admits only what the director writes; it infers nothing."),
-    ui.unavailable("Keeping these hypotheses", "060 holds them in memory for one answer: nothing is saved, and they are not used in play.")];
+    + " The director's truth and the NPC's own beliefs are never changed by it."),
+  body, ui.unavailable("Inferring a hypothesis from play", "060 admits only what the director writes; it infers nothing."),
+  ui.unavailable("Keeping these hypotheses", "060 holds them in memory for one answer: nothing is saved, and they are not used in play."));
+  await sectionRead(ctx, body, async () => minds(ctx, body, chat, await castOf()));
+}
+
+async function minds(ctx, body, chat, cast) {
+  const { ui } = ctx;
+  const { el } = ui;
   const npcs = cast.filter((member) => member.role === "npc" && member.agent);
   if (!npcs.length) {
-    node.append(ui.empty("No NPC in this chat's cast: only a director-controlled character holds a theory of mind here."), ...after);
+    body.replaceChildren(ui.empty("No NPC in this chat's cast: only a director-controlled character holds a theory of mind here."));
     return;
   }
   let owner = npcs[0].actor;
   const chips = el("nav", { class: "g-chips", "aria-label": "Whose mind" });
   const pane = el("div", { class: "g-stack" });
-  node.append(chips, pane, ...after);
+  body.replaceChildren(chips, pane);
   // Only the NPC selected now is drawn: an answer (read or preview) for one selected before it is dropped.
   const reading = latest(), previewing = latest();
   const drawChips = () => chips.replaceChildren(...npcs.map((member) => {
@@ -415,7 +506,7 @@ async function showMinds(slot, ctx, chat, cast) {
       if (reading.current(turn)) drawMind(mind, turn);
     } catch (error) {
       if (error && error.reason === "left") return;
-      if (reading.current(turn)) pane.replaceChildren(ui.errorBox(error));
+      if (reading.current(turn)) pane.replaceChildren(ui.errorBox(error), ui.actions(ui.button("Read again", () => open())));
     }
   };
 
@@ -430,13 +521,16 @@ async function showMinds(slot, ctx, chat, cast) {
     const listed = el("div", { class: "g-stack" });
     const save = () => listDraft.set(hypotheses.length ? JSON.stringify(hypotheses) : "");
 
-    const about = ui.choice("About", others.map((member) => ({ value: member.actor, label: member.name || member.actor })), { value: others[0] ? others[0].actor : "" });
+    const people = others.map((member) => ({ value: member.actor, label: member.name || member.actor }));
+    const about = keptChoice(ui, "About", people, ctx.draft(KEY + "about"), people[0] ? people[0].value : "");
+    const alsoAbout = keptChoice(ui, "And about (optional)", [{ value: "", label: "No one else" }, ...people], ctx.draft(KEY + "about-also"), "");
     const claim = ui.field("What " + who + " thinks they think", { draft: ctx.draft(KEY + "claim"), hint: "In your own words, like: Anya knows what the letter says" });
     const confidence = ui.field("How sure", { draft: ctx.draft(KEY + "confidence"), hint: "From 0 to 1, or a percentage" });
-    const picked = new Set();
+    const held = new Set(mind.evidence.map((item) => item.evidence));
+    const picked = keptSet(ctx.draft(KEY + "evidence"));
     const evidence = el("fieldset", { class: "world-set" }, el("legend", {}, "It rests on what " + who + " holds"),
       mind.evidence.length ? mind.evidence.map((item) => checkbox(ui, item.content + " (" + item.kind + ", " + item.channel + ")", { value: item.evidence,
-        onchange: (on) => { if (on) picked.add(item.evidence); else picked.delete(item.evidence); } }))
+        checked: picked.has(item.evidence), onchange: (on) => picked.set(item.evidence, on) }))
         : ui.empty(who + " holds no evidence yet: a hypothesis must rest on something it perceived or was told."));
     const supersedes = el("div", {});
     const formError = el("div", { class: "g-field-error", role: "alert", hidden: true });
@@ -460,13 +554,14 @@ async function showMinds(slot, ctx, chat, cast) {
     };
     const add = () => {
       const sure = parseConfidence(confidence.value);
+      const cited = picked.values().filter((id) => held.has(id));
       claim.setError(claim.value.trim() ? "" : "Write what " + who + " thinks.");
       confidence.setError(sure === null ? "Give a number from 0 to 1, or a percentage." : "");
-      formError.hidden = picked.size > 0;
-      formError.textContent = picked.size ? "" : "Pick the evidence it rests on.";
-      if (!claim.value.trim() || sure === null || !picked.size || !about.value) return;
-      const cited = [...picked].sort();
-      hypotheses = [...hypotheses, { id: nextHypothesisId(hypotheses), about: [about.value], claim: claim.value.trim(), confidence: sure,
+      formError.hidden = cited.length > 0;
+      formError.textContent = cited.length ? "" : "Pick the evidence it rests on.";
+      if (!claim.value.trim() || sure === null || !cited.length || !about.value) return;
+      const whom = [about.value, ...(alsoAbout.value && alsoAbout.value !== about.value ? [alsoAbout.value] : [])];
+      hypotheses = [...hypotheses, { id: nextHypothesisId(hypotheses), about: whom, claim: claim.value.trim(), confidence: sure,
         evidence: cited, at: heldFrom(cited, mind.evidence), supersedes: replaces.value || null }];
       save();
       claim.clear();
@@ -494,7 +589,8 @@ async function showMinds(slot, ctx, chat, cast) {
         el("span", { class: "g-muted" }, " · " + item.kind + ", " + item.channel)))) : ui.empty(who + " holds no evidence yet."),
       truthBlock(ui, mind.truth, who),
       el("h3", { class: "world-sub" }, "Hypotheses"), listed,
-      group(ui, "Write a hypothesis", about.node, claim.node, confidence.node, evidence, formError, supersedes, ui.actions(ui.button("Add this hypothesis", add))),
+      group(ui, "Write a hypothesis", about.node, alsoAbout.node, claim.node, confidence.node, evidence, formError, supersedes,
+        ui.actions(ui.button("Add this hypothesis", add))),
       group(ui, "Choose a tactic", tacticFor, minimum.node, credited.node, fallback.node,
         ui.actions(ui.button("Show what " + who + " would do", preview, { kind: "primary" }))),
       result);

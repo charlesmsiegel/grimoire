@@ -19,7 +19,14 @@ from grimoire.core import DIRECTOR
 from grimoire.core.knowledge import Moment
 from grimoire.core.perspective import actor_knowledge
 from grimoire.evidencestore import EvidenceLibrary
-from grimoire.social_hypotheses import MAX_RECORDS, Hypothesis, HypothesisLedger, admit, choose_tactic, recall
+from grimoire.social_hypotheses import (
+    MAX_RECORDS,
+    Hypothesis,
+    HypothesisLedger,
+    admit,
+    choose_tactic,
+    recall,
+)
 from grimoire.textapi import ApiRefused
 
 from . import common
@@ -83,9 +90,7 @@ def _hypothesis(item: object, owner, campaign: str):  # type: ignore[no-untyped-
         raise ApiRefused("invalid_field", "each hypothesis must be an object")
     hid = common.segment(item, "id")
     about = common.actors(item.get("about"), "about", campaign, maximum=2)
-    confidence = item.get("confidence")
-    if type(confidence) not in (int, float):
-        raise ApiRefused("invalid_field", "confidence must be a number from 0 to 1")
+    confidence = common.number(item.get("confidence"), "confidence must be a number from 0 to 1")
     evidence = item.get("evidence")
     if type(evidence) is not list or not all(type(value) is str for value in evidence):
         raise ApiRefused("invalid_field", "evidence must be a list of evidence ids")
@@ -123,9 +128,7 @@ def _preview(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     if asked is not None:
         if not isinstance(asked, Mapping):
             raise ApiRefused("invalid_field", "tactic must be an object")
-        minimum = asked.get("minimum")
-        if type(minimum) not in (int, float):
-            raise ApiRefused("invalid_field", "minimum must be a number from 0 to 1")
+        minimum = common.number(asked.get("minimum"), "minimum must be a number from 0 to 1")
         chosen = choose_tactic(ledger, member.actor, common.segment(asked, "hypothesis"), as_of=as_of,
                                minimum_confidence=minimum, credited_tactic=common.text(asked.get("credited"), "credited"),
                                fallback_tactic=common.text(asked.get("fallback"), "fallback"))

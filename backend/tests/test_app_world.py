@@ -27,11 +27,21 @@ from textapi_fixtures import Device, desktop_library, keep, say
 
 from grimoire.app import AppServer
 from grimoire.app.adapters.chronicle import FEATURES
+from grimoire.app.adapters.world import ADAPTER as WORLD
 from grimoire.app.appapi import AppApi
 from grimoire.app.pages import load_pages
 from grimoire.calendars import CalendarDefinition, Duration
 from grimoire.calendarstore import CalendarLibrary
-from grimoire.core import DIRECTOR, Belief, Event, Moment, Perception, Proposition, Ruling, Subject
+from grimoire.core import (
+    DIRECTOR,
+    Belief,
+    Event,
+    Moment,
+    Perception,
+    Proposition,
+    Ruling,
+    Subject,
+)
 from grimoire.core.identity import InstanceRef, ScopeRef, SourceRef
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.ledgers import ControlChange, SovereigntyLedger
@@ -41,7 +51,8 @@ from grimoire.rumorstore import RumorLibrary
 from grimoire.security import Grant, Permission, ResourcePath
 from grimoire.store import RecordEnvelope, SourceManifest
 from grimoire.textapi import ApiRefused
-from grimoire.topology import Path as Road, Place, Topology
+from grimoire.topology import Path as Road
+from grimoire.topology import Place, Topology
 from grimoire.topologystore import TopologyLibrary
 
 STATIC = Path(__file__).resolve().parents[1] / "src" / "grimoire" / "app" / "static"
@@ -229,7 +240,9 @@ def test_every_world_op_is_the_directors(desk):
                 "world.belief_commit": {"campaign": campaign, "rumor": "letter", "stance": "believed",
                                         "operation_id": "x", "expected": "x"},
                 "world.cast": {"chat": str(chat)}, "world.mind": {"chat": str(chat), "owner": refs["mara"]},
-                "world.faction_preview": {"chat": str(chat)}, "world.mind_preview": {"chat": str(chat)}}
+                "world.faction_preview": {"chat": str(chat)}, "world.mind_preview": {"chat": str(chat)},
+                "world.topologies": {"campaign": campaign}}
+        assert {op.removeprefix("world.") for op in asks} == set(WORLD.ops), "every world op is asked here"
         before = scope_bytes(device, campaign)
         for op, args in asks.items():
             assert refused(app, op, **args).reason == "director_only", op
@@ -315,6 +328,12 @@ def test_places_routes_and_a_road_blocked_once_as_reviewed(desk):
         assert not next(item for item in opened["paths"] if item["path"] == "bridge")["changed"]
         source = TopologyLibrary(device.table.store, device.table.owner).view(GRAPH, requested_by=DIRECTOR)
         assert source.index.topology == roads()
+        # the first block retried after other changes were made (its answer lost): made already, nothing changes
+        settled = scope_bytes(device, campaign)
+        retried = app.call("world.path_commit", block)
+        assert retried["done"]["already_applied"] is True and scope_bytes(device, campaign) == settled
+        assert not next(item for item in retried["topology"]["paths"] if item["path"] == "bridge")["blocked"]
+        assert app.call("world.path_plan", block)["plan"]["already_applied"] is True
 
 
 def test_topology_requests_the_domain_would_not_take_are_refused_with_its_reason(desk):
@@ -327,6 +346,13 @@ def test_topology_requests_the_domain_would_not_take_are_refused_with_its_reason
             .reason == "unavailable_topology"
         assert refused(app, "world.places", **ask, topology=str(TOWN)).reason == "invalid_field"
         assert refused(app, "world.places", campaign="nowhere", **D, topology=str(GRAPH)).reason == "missing_campaign"
+        # every campaign-scoped read says so the same way, never with a store path
+        for op in ("world.topologies", "world.rumors"):
+            missing = refused(app, op, campaign="nowhere", **D)
+            assert missing.reason == "missing_campaign" and "/" not in str(missing), op
+        assert refused(app, "world.belief_plan", campaign="nowhere", **D, rumor="letter", stance="believed",
+                       operation_id="o", expected="x").reason == "missing_campaign"
+        assert app.call("world.topologies", ask)["topologies"] == [{"topology": str(GRAPH), "name": None}]
         etag = app.call("world.places", ask)["topology"]["etag"]
         base = {**ask, "topology": str(GRAPH), "blocked": True, "operation_id": "op", "expected": etag}
         assert refused(app, "world.path_plan", **base, path="tunnel").reason == "no_path"
@@ -350,6 +376,18 @@ def test_an_unreadable_campaign_override_is_refused_with_its_reason_never_a_serv
         app = AppApi(device.api)
         assert refused(app, "world.places", **ask).reason == "unsupported_schema"
         assert refused(app, "world.route", **ask, **{"from": str(TOWN), "to": str(PORT)}).reason == "unsupported_schema"
+        # the page can still list the topologies, and every other section still reads
+        assert app.call("world.topologies", {"campaign": campaign, **D})["topologies"] == [
+            {"topology": str(GRAPH), "name": None}]
+        assert [item["rumor"] for item in app.call("world.rumors", {"campaign": campaign, "chat": str(chat), **D})[
+            "rumors"]] == ["evening", "letter", "gossip"]
+        mara = next(item["actor"] for item in app.call("world.cast", {"chat": str(chat), **D})["cast"]
+                    if item["role"] == "npc")
+        assert app.call("world.mind", {"chat": str(chat), **D, "owner": mara})["evidence"]
+        assert app.call("world.faction_preview", {"chat": str(chat), **D, "group": "House Vell", "leader": mara,
+                                                  "goals": ["Hold the quay"], "policy": "The head decides",
+                                                  "proposal": "Sell passage", "choice": "refuse",
+                                                  "members": []})["decision"]["choice"] == "refuse"
 
 
 # -- rumors (063) --------------------------------------------------------------------------------------------
@@ -403,10 +441,15 @@ def test_rumors_are_traced_and_the_directors_admission_of_a_belief_is_reviewed(d
         for rumor, reason in (("gossip", "not_delivered"), ("letter", "already_admitted"), ("nothing", "no_rumor")):
             assert refused(app, "world.belief_plan", **{**admit, "rumor": rumor, "operation_id": "next",
                                                         "expected": latest}).reason == reason
-        # Bryn heard the faithful telling, but Bryn is not this page's to decide for a player; for an NPC it is
+        # Bryn heard the faithful telling; Bryn is an NPC too, so the director admits that belief as well
         bryn = app.call("world.belief_commit", {**admit, "rumor": "evening", "operation_id": "bryn-hears",
                                                 "stance": "suspected", "expected": latest})
         assert {item["rumor"]: item for item in bryn["rumors"]["rumors"]}["evening"]["belief"]["stance"] == "suspected"
+        # Mara's admission retried after that other change (its answer lost): made already, nothing changes
+        settled = scope_bytes(device, campaign)
+        assert app.call("world.belief_commit", admit)["done"]["already_applied"] is True
+        assert app.call("world.belief_plan", admit)["plan"]["already_applied"] is True
+        assert scope_bytes(device, campaign) == settled
         assert refused(app, "world.belief_plan", **{**admit, "stance": "certain"}).reason == "invalid_field"
         # once the gossip reaches Anya, a player character's belief is still not this page's: 020 refuses it
         coast = Coast(device, chat)

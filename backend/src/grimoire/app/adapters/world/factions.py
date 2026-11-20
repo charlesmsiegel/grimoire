@@ -18,7 +18,12 @@ from grimoire.core.entity import EntityInstance
 from grimoire.core.identity import InstanceRef, RelationRef
 from grimoire.core.knowledge import Moment
 from grimoire.graph.model import Relation
-from grimoire.institutions import Institution, InstitutionState, MemberPreference, decide
+from grimoire.institutions import (
+    Institution,
+    InstitutionState,
+    MemberPreference,
+    decide,
+)
 from grimoire.textapi import ApiRefused
 
 from . import common

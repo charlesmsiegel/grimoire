@@ -16,9 +16,9 @@ from collections.abc import Mapping
 
 from grimoire.app.adapter import AdapterContext
 from grimoire.core import DIRECTOR, Belief
+from grimoire.core.authority import AuthorityError, controller_of
 from grimoire.core.identity import InstanceRef
 from grimoire.core.knowledge import STANCES, Moment, Perception
-from grimoire.core.authority import AuthorityError, controller_of
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.rumorledger import ledger_name, output_id, replay
@@ -59,9 +59,7 @@ def _belief(knowledge, holder: InstanceRef, proposition: str):  # type: ignore[n
     return max(standing, key=lambda item: (item.moment.sequence, item.belief_id)) if standing else None
 
 
-def _who(ctx: AdapterContext, ref: InstanceRef | None, controls, names) -> dict | None:  # type: ignore[no-untyped-def]
-    if ref is None:
-        return None
+def _who(ctx: AdapterContext, ref: InstanceRef, controls, names) -> dict:  # type: ignore[no-untyped-def]
     try:
         controller = controller_of(ref.campaign_id, ref.instance_id, controls)
     except AuthorityError:  # an ambiguous control is shown as no single controller, never guessed
@@ -106,7 +104,7 @@ def _view(ctx: AdapterContext, campaign: str, names: Mapping) -> dict:
         status = _status(row, None if state is None else state.now)
         shown.append({
             "rumor": rid, "sender": _who(ctx, rumor.sender, controls, names), "recipient": recipient,
-            "attributed_to": _who(ctx, rumor.attributed_to, controls, names),
+            "attributed_to": None if rumor.attributed_to is None else _who(ctx, rumor.attributed_to, controls, names),
             "source": {"evidence": rumor.source_evidence_id, "content": _content(knowledge, rumor.source_evidence_id)},
             "text": rumor.text, "channel": rumor.channel, "confidence": rumor.confidence,
             "distortion": rumor.distortion, "faithful": rumor.distortion.strip().casefold() == "none",
@@ -127,7 +125,7 @@ def _view(ctx: AdapterContext, campaign: str, names: Mapping) -> dict:
 
 def _rumors(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     common.director(args)
-    campaign = common.campaign(args)
+    campaign = common.present(ctx, common.campaign(args))
     return _view(ctx, campaign, _names(ctx, args, campaign))
 
 
@@ -135,7 +133,7 @@ def _admission(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore
     """The belief the request names and the 020 append that would admit it (nothing is written), or, for an
     operation already made, the belief it admitted."""
     common.director(args)
-    campaign = common.campaign(args)
+    campaign = common.present(ctx, common.campaign(args))
     names = _names(ctx, args, campaign)
     rid = common.segment(args, "rumor")
     operation_id = common.segment(args, "operation_id")
