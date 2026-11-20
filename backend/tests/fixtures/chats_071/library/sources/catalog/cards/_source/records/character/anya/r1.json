@@ -1,0 +1,9 @@
+{
+  "address": "catalog:cards/character/anya@r1",
+  "format": "grimoire.record/1",
+  "name": "Anya",
+  "payload": {
+    "bio": "a harbor pilot"
+  },
+  "previous": null
+}

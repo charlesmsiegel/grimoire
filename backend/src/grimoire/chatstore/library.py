@@ -26,9 +26,9 @@ from dataclasses import dataclass, field, replace
 from grimoire.adjudicationstore import adjudication_actor_ids
 from grimoire.cards import scenario_lorebook
 from grimoire.chats import (
-    ACTOR_ROLES, CAMPAIGN_CONTINUITY, CHAT_SCHEMA, NOT_WITNESSED, ROLE_KINDS, SCOPE_SCHEMA, ChatCodecError,
-    ChatRecord, Launch, NavigationIndex, NewBinding, PlayScope, ScopeEntry, WorldBinding, chat_from_payload,
-    chat_to_payload, nav_entry, scope_entry, scope_from_payload, scope_to_payload,
+    CAMPAIGN_CONTINUITY, CHAT_SCHEMA, NOT_WITNESSED, SCOPE_SCHEMA, ChatCodecError, ChatRecord, Launch,
+    NavigationIndex, NewBinding, PlayScope, RoleRule, ScopeEntry, WorldBinding, chat_from_payload, chat_to_payload,
+    nav_entry, role_rule, scope_entry, scope_from_payload, scope_to_payload,
 )
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_from_payload, instance_to_payload
@@ -374,9 +374,11 @@ class _LazyTaken:
         self._get().add(value)
 
 
-def _check_role(ref: SourceRef, role: str) -> None:
-    if role not in ROLE_KINDS or (ROLE_KINDS[role] is not None and ref.kind != ROLE_KINDS[role]):
+def _check_role(ref: SourceRef, role: str) -> RoleRule:
+    rule = role_rule(role)
+    if rule is None or not rule.binds(ref):
         raise InvalidBinding(f"role {role!r} cannot bind {ref}", "role_kind")
+    return rule
 
 
 def campaign_plays(store: LibraryStore, actor: InstanceRef, ref: SourceRef,
@@ -717,13 +719,13 @@ class ChatLibrary:
         reused actor it is pinned to the revision that actor plays (``_plays``), never to a newer head
         nobody reviewed for it; when it plays the head, or the revision it plays no longer resolves (the
         broken reference that detach and attach repair), to the revision it resolves to now."""
-        _check_role(ref, role)
-        if role == "actor" and reuse is None:
+        rule = _check_role(ref, role)
+        if rule.by_instance and reuse is None:
             raise InvalidBinding("an actor binding needs an existing instance", "actor_required")
-        if role not in ACTOR_ROLES and reuse is not None:
+        if not rule.has_actor and reuse is not None:
             raise InvalidBinding(f"a {role} binding has no actor", "role_kind")
         if reuse is not None:
-            etag, stored = self._check_reuse(campaign, reuse, ref, role=role)
+            etag, stored = self._check_reuse(campaign, reuse, ref, rule)
             if not follow and not ref.pinned:
                 plays = self._plays(reuse, ref, stored, reads)
                 if plays is not None and not isinstance(self.store.check_definition(plays), str):
@@ -736,12 +738,12 @@ class ChatLibrary:
         revision, definition_etag = self._resolve(ref, role)
         if not follow and not ref.pinned:
             ref = ref.at(revision)
-        if role not in ACTOR_ROLES:
+        if not rule.has_actor:
             return NewBinding(ref, role, revision), None, None
         base, number = ref.entity_id[:100] + self._device_tag(), 1
         while f"{base}-{number}" in taken:
             number += 1
-        actor = InstanceRef(campaign, "character", f"{base}-{number}")
+        actor = InstanceRef(campaign, ref.kind, f"{base}-{number}")  # a per-source actor is of its definition's kind
         taken.add(actor.instance_id)
         extra: dict[str, object] = {"schema": ENTITY_SCHEMA}
         if ref.pinned:  # 046: a pinned actor keeps the pictures its revision shows now, until a reviewed rebase
@@ -794,10 +796,10 @@ class ChatLibrary:
         except DeviceIdentityUnusable as error:
             raise InvalidBinding(str(error), "device_identity") from error
 
-    def _check_reuse(self, campaign: str, actor: InstanceRef, ref: SourceRef, *,
-                     role: str = "character") -> tuple[str, RecordEnvelope]:
+    def _check_reuse(self, campaign: str, actor: InstanceRef, ref: SourceRef,
+                     rule: RoleRule) -> tuple[str, RecordEnvelope]:
         """The etag of the actor's file as checked, and the file: the commit binds only these very bytes."""
-        if actor.campaign_id != campaign or (role != "actor" and actor.kind != "character"):
+        if actor.campaign_id != campaign or not rule.admits(actor):
             raise InvalidBinding(f"{actor} is not an eligible actor of {campaign}", "actor_mismatch")
         try:
             stored = self.store.read(actor)
@@ -807,7 +809,7 @@ class ChatLibrary:
             source = SourceRef.parse(stored.envelope.derived_from)  # type: ignore[union-attr]
         except ValueError:
             source = None
-        if role == "actor":
+        if rule.by_instance:
             # 033: native individualized creatures can carry their source only in the typed
             # payload. Decode it rather than trust an arbitrary payload field; never reconcile
             # contradictory provenance by choosing whichever happens to match the request.

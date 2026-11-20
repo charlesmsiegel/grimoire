@@ -1,0 +1,10 @@
+{
+  "address": "campaign:c/character/mara",
+  "format": "grimoire.record/1",
+  "owner": "human:owner",
+  "payload": {
+    "local_name": "Mara"
+  },
+  "previous": null,
+  "schema": "grimoire.entity/0"
+}

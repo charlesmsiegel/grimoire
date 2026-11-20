@@ -1,0 +1,54 @@
+{
+  "address": "campaign:c#chat/t-3",
+  "format": "grimoire.scope-record/1",
+  "owner": "human:owner",
+  "payload": {
+    "bindings": [
+      {
+        "actor": "campaign:c/creature/goblin-1",
+        "introduced_at": "2026-10-31T10:00:05Z",
+        "introduced_seq": 0,
+        "ref": "world:emberfall/species/goblin@r1",
+        "resolved_revision": "r1",
+        "role": "actor"
+      },
+      {
+        "actor": "campaign:c/creature/goblin-2",
+        "detached_at": "2026-10-31T10:00:06Z",
+        "detached_seq": 1,
+        "introduced_at": "2026-10-31T10:00:05Z",
+        "introduced_seq": 0,
+        "ref": "world:emberfall/species/goblin@r1",
+        "resolved_revision": "r1",
+        "role": "actor"
+      }
+    ],
+    "created_at": "2026-10-31T10:00:05Z",
+    "last_activity": "2026-10-31T10:00:06Z",
+    "launch": {
+      "kind": "premise",
+      "premise": "A quiet camp"
+    },
+    "roster": [
+      {
+        "actor": "campaign:c/creature/goblin-1",
+        "introduced_at": "2026-10-31T10:00:05Z",
+        "introduced_seq": 0,
+        "prior_history": "campaign_continuity",
+        "role": "actor",
+        "source": "world:emberfall/species/goblin@r1"
+      },
+      {
+        "actor": "campaign:c/creature/goblin-2",
+        "introduced_at": "2026-10-31T10:00:05Z",
+        "introduced_seq": 0,
+        "prior_history": "campaign_continuity",
+        "role": "actor",
+        "source": "world:emberfall/species/goblin@r1"
+      }
+    ],
+    "seq": 1
+  },
+  "previous": "sha256:a793a048063ad023144125d459cfad5336b2ea30d226b02730bd631147ef88bd",
+  "schema": "grimoire.chat/1"
+}

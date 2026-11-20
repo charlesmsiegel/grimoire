@@ -1,0 +1,25 @@
+{
+  "address": "campaign:q-1/character/mara-1",
+  "art_pin": {
+    "base": "catalog:cards/character/mara@r1",
+    "format": "grimoire.art-pin/0",
+    "layers": [
+      {
+        "derived": false,
+        "entity": "catalog:cards/character/mara",
+        "placements": {}
+      }
+    ],
+    "problems": []
+  },
+  "base": "catalog:cards/character/mara@r1",
+  "base_etag": "sha256:7d57de63f0cae119676b05868f99a497ad2b0ac511257d3cc9bb4fb5e505731d",
+  "derived_from": "catalog:cards/character/mara@r1",
+  "format": "grimoire.record/1",
+  "owner": "human:owner",
+  "payload": {
+    "source": "catalog:cards/character/mara@r1"
+  },
+  "previous": null,
+  "schema": "grimoire.entity/0"
+}
