@@ -209,6 +209,5 @@ missing-analysis probe behaved as designed: upstream 100.0, profile score withhe
 
 Still unproven: a complete defect panel, a `sonnet` false-negative rate, theory
 discrimination and theory grade repeatability for the cohesive unit. Closing them needs a
-new capture with its own approval; this capture must not be re-run or re-scored under
-looser parsing to get a better result.
+new capture with its own approval.
 
