@@ -17,6 +17,7 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   position: relative;
+  grid-auto-flow: row dense;
   min-height: 10rem;
   isolation: isolate;
   overflow: hidden;
@@ -46,6 +47,13 @@
 .vn-focus {
   outline: 3px solid currentColor;
 }
+/* Focus is shown twice: an outline on the focused actor and a dimmer stage for the rest (never colour alone). */
+.vn-has-focus .vn-actor:not(.vn-focus) {
+  opacity: 0.6;
+}
+.vn-empty {
+  grid-column: 1 / -1;
+}
 .vn-background {
   position: absolute;
   inset: 0;
@@ -72,10 +80,43 @@
     opacity: 1;
   }
 }
+/* A cue's "move" slides each actor whose place changed from its old column (072). The page's policy drops
+   inline styles, so the distance is a class: p = it came from the right, m = from the left, by 1 or 2 columns. */
+.vn-move {
+  animation: 0.35s ease-out both;
+}
+.vn-shift-p1 { animation-name: vn-from-p1; }
+.vn-shift-p2 { animation-name: vn-from-p2; }
+.vn-shift-m1 { animation-name: vn-from-m1; }
+.vn-shift-m2 { animation-name: vn-from-m2; }
+@keyframes vn-from-p1 { from { transform: translateX(calc(100% + 0.8rem)); } }
+@keyframes vn-from-p2 { from { transform: translateX(calc(200% + 1.6rem)); } }
+@keyframes vn-from-m1 { from { transform: translateX(calc(-100% - 0.8rem)); } }
+@keyframes vn-from-m2 { from { transform: translateX(calc(-200% - 1.6rem)); } }
+.vn-enter {
+  animation: vn-enter 0.3s ease-in;
+}
 @media (prefers-reduced-motion: reduce) {
-  .vn-fade {
+  .vn-fade,
+  .vn-move,
+  .vn-enter {
     animation: none;
   }
+}
+.vn-nav,
+.vn-timeline li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+.vn-timeline ol,
+.vn-directions ul {
+  margin: 0.25rem 0;
+  padding-left: 1.2rem;
+}
+.vn-timeline li[aria-current="true"] {
+  font-weight: bold;
 }
 @media (max-width: 500px) {
   .vn-actor {
@@ -98,4 +139,13 @@
 }
 .chat-stage .chat-log {
   min-height: 100px;
+}
+/* The live announcement repeats the visible stage directions for assistive technology only. */
+.vn-announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

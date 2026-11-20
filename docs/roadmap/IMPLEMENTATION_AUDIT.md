@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067 and 061 proofs to **74/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072 and 061 proofs to **75/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -41,7 +41,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 17/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 061, 062, 063, 064, 066, 067 and 070 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 18/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -498,7 +498,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 061, 062, 063, 064, 066, 067 and 070 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -659,9 +659,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-072"></a>
 ### 072 — VN Staging And Cues
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/vn-staging-and-cues.md)).
-- Evidence: Existing UI scene reader and image slots render transcript/media.
-- Scope / gap: No authored VN stage cue timeline, multi-character blocking/focus or cue transitions separated from transcript.
+- [x] Scheduled first-useful slice ([requirements](sprints/vn-staging-and-cues.md)).
+- Evidence: [`app/static/pages/chat/cues.js`](../../backend/src/grimoire/app/static/pages/chat/cues.js); [`chat/staging.js`](../../backend/src/grimoire/app/static/pages/chat/staging.js); [`textapi/views.py`](../../backend/src/grimoire/textapi/views.py) `table_present`; [`backend/tests/js/staging_timeline.test.mjs`](../../backend/tests/js/staging_timeline.test.mjs); [`backend/tests/js/staging.test.mjs`](../../backend/tests/js/staging.test.mjs); [`backend/tests/test_textapi.py`](../../backend/tests/test_textapi.py). An authored cue timeline over kept turns carries blocking (place, outfit art, off stage) and background forward, with per-turn focus, none/fade/move transitions on arrival, reduced motion and plain-text stage directions. Staging is limited to each kept take's historical `present` (on a 041 stage only player characters and heard speakers). The proving scenario stages one character in two outfits and a portrait-only NPC with authored and automatic focus and historical arrival/departure, and switching to the transcript leaves its text and the scene payload unchanged with no library call.
+- Scope / gap: Cues are device-local and unsynced; art is the current decorative art for the authored slot, not a historical snapshot. Rule-based or inferred cue suggestions, line-level cues and adaptive cinematic composition (milestones 2–3) are not implemented; real-browser motion and screen-reader output are not certified.
 
 <a id="slice-115"></a>
 ### 115 — Wave 8 UI Exit: Reliable Campaign Play
