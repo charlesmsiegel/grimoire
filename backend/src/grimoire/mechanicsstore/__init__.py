@@ -2,9 +2,9 @@
 docs/MECHANICS_AUTHORING.md."""
 
 from .store import (
-    CONFIG, DRAFTS, MAX_DRAFT_BYTES, MECHANICS, MODULES, Draft, DraftCheck, MechanicsStore, MechanicsStoreError,
-    decode,
+    CONFIG, DRAFTS, MAX_DRAFT_BYTES, MAX_MODULE_BYTES, MECHANICS, MODULES, Draft, DraftCheck, MechanicsStore,
+    MechanicsStoreError, decode,
 )
 
-__all__ = ["CONFIG", "DRAFTS", "MAX_DRAFT_BYTES", "MECHANICS", "MODULES", "Draft", "DraftCheck", "MechanicsStore",
-           "MechanicsStoreError", "decode"]
+__all__ = ["CONFIG", "DRAFTS", "MAX_DRAFT_BYTES", "MAX_MODULE_BYTES", "MECHANICS", "MODULES", "Draft", "DraftCheck",
+           "MechanicsStore", "MechanicsStoreError", "decode"]

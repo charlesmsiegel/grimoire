@@ -285,7 +285,7 @@ def test_a_check_without_a_difficulty_needs_one_supplied():
     assert run_check(module, sheet, "thrust", dice=(5,), difficulty=5).outcome == "hit"
 
 
-def test_a_forged_sheet_is_not_trusted():
+def test_a_forged_sheet_is_not_trusted_either_way():
     from dataclasses import replace
     module = parse_module(minimal())
     sheet = fill_sheet(module, "fencer", {"blade": 2})
@@ -330,3 +330,78 @@ def test_a_tampered_record_does_not_confirm():
         confirm(module, replace(record, outcome="miss"))
     with pytest.raises(CheckError, match="does not match"):
         confirm(module, replace(record, total=1))
+
+
+# -- found in review ---------------------------------------------------------------------------------------
+@pytest.mark.parametrize("sheet", [["fencer"], {"x": 1}, 7, None])
+def test_a_check_naming_its_sheet_with_a_non_text_value_is_a_problem_not_a_crash(sheet):
+    document = minimal()
+    document["checks"]["thrust"]["sheet"] = sheet
+    assert any(p.startswith("checks.thrust.sheet: names no sheet type") for p in problems(document))
+
+
+def test_text_that_is_not_unicode_is_a_problem_not_a_crash():
+    document = minimal()
+    document["name"] = "Du\ud800el"
+    assert problems(document) == ["$: holds a value that is not plain JSON text (such as a lone surrogate)"]
+
+
+def test_a_derived_value_using_a_broken_one_is_not_reported_twice():
+    document = minimal()
+    document["sheets"]["fencer"]["derived"] = {"edge": "blade +", "big": "edge + 1", "odd": "blade > 1",
+                                               "worse": "odd + 1"}
+    found = problems(document)
+    assert len(found) == 2 and found[0].startswith("sheets.fencer.derived.edge:"), found
+    assert found[1] == "sheets.fencer.derived.odd: must be a number, not a condition"
+
+
+def test_bad_dice_do_not_hide_the_totals_and_outcomes_problems():
+    document = minimal()
+    document["checks"]["thrust"]["dice"]["count"] = "nope"
+    document["checks"]["thrust"]["total"] = "qqq"
+    document["checks"]["thrust"]["outcomes"][0]["when"] = "zzz"
+    paths = [p.split(":")[0] for p in problems(document)]
+    assert paths == ["checks.thrust.dice.count", "checks.thrust.total", "checks.thrust.outcomes[0].when"]
+
+
+@pytest.mark.parametrize("formula, reason", [("blade / 2", "not a whole number"),
+                                             ("10 / (blade - blade)", "division by zero")])
+def test_a_sheet_type_that_cannot_fill_with_its_own_defaults_is_a_problem(formula, reason):
+    document = minimal()
+    document["sheets"]["fencer"]["derived"]["edge"] = formula
+    assert any(p.startswith("sheets.fencer.derived.edge:") and reason in p for p in problems(document))
+
+
+def test_a_forged_module_cannot_stamp_a_record_with_another_revision():
+    from dataclasses import replace
+    original = parse_module(minimal())
+    edited_document = minimal()
+    edited_document["sheets"]["fencer"]["derived"]["edge"] = "blade * 50"
+    forged = replace(parse_module(edited_document), revision=original.revision)
+    sheet = fill_sheet(original, "fencer", {"blade": 2})
+    for call in (lambda: run_check(forged, sheet, "thrust", dice=(6,)), lambda: fill_sheet(forged, "fencer", {})):
+        with pytest.raises(CheckError, match="parse it again"):
+            call()
+
+
+def test_a_forged_sheet_is_refused_as_a_check_error():
+    from dataclasses import replace
+    module = parse_module(minimal())
+    sheet = fill_sheet(module, "fencer", {"blade": 2})
+    for forged in (replace(sheet, values={**sheet.values, "blade": 50}), replace(sheet, sheet_type="nope"),
+                   replace(sheet, values=None), replace(sheet, derived={"edge": 99})):
+        with pytest.raises(CheckError):
+            run_check(module, forged, "thrust", dice=(5,))
+    record = run_check(module, sheet, "thrust", dice=(5,))
+    with pytest.raises(CheckError):
+        confirm(module, replace(record, values=None))
+
+
+@pytest.mark.parametrize("text, reason", [("１２ + ٣", "unexpected character"), ("café", "unexpected character")])
+def test_only_ascii_digits_and_names(text, reason):
+    with pytest.raises(ExprError, match=reason):
+        parse(text)
+
+
+def test_leading_zeros_are_just_a_number():
+    assert evaluate(parse("00000001"), {}) == 1

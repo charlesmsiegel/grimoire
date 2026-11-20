@@ -190,3 +190,49 @@ def test_recover_sweeps_only_temp_files(tmp_path):
     store.recover()
     assert _files(tmp_path) == ["config/mechanics/drafts/notes.txt", "config/mechanics/drafts/pool_basic.json",
                                 f"config/mechanics/modules/pool_basic/{module.revision[7:]}.json"]
+
+
+def _big(text: int) -> dict:
+    fields = [{"key": "blade", "label": "Blade", "type": "number", "min": 0, "max": 5, "default": 1}]
+    fields += [{"key": f"t{i}", "label": "T", "type": "text", "default": "x" * text} for i in range(1, 64)]
+    outcomes = [{"label": f"o{k}", "when": "true"} for k in range(16)]
+    return {"format": "grimoire.mechanics/1", "id": "big", "name": "Big", "version": "1",
+            "sheets": {f"s{j}": {"label": "S", "fields": fields} for j in range(4)},
+            "checks": {f"c{n}": {"label": "C", "sheet": "s0", "dice": {"count": "1", "sides": 6},
+                                 "outcomes": outcomes} for n in range(64)}}
+
+
+def test_whatever_publishes_loads_even_at_the_size_bound(tmp_path, monkeypatch):
+    """The published form is indented, so it is what is measured, not the draft: a module whose published form
+    would be over the bound is a problem of its draft, and nothing publishes that load would refuse."""
+    import grimoire.mechanicsstore.store as store_module
+    from grimoire.store.jsonfmt import render
+    near = json.dumps(_big(800), separators=(",", ":")).encode()
+    assert MAX_DRAFT_BYTES * 0.9 < len(near) < MAX_DRAFT_BYTES < len(render(json.loads(near)))
+    store = MechanicsStore(tmp_path)
+    module = store.publish("big", store.save_draft("big", near, None))
+    assert store.load("big", module.revision) == module
+    monkeypatch.setattr(store_module, "MAX_MODULE_BYTES", len(near) + 100)  # the draft fits; its published form not
+    other = MechanicsStore(tmp_path / "other")
+    tag = other.save_draft("big", near, None)
+    checked = other.check_draft("big")
+    assert checked.module is None and "published, this module would be" in checked.problems[0].message
+    with pytest.raises(ModuleInvalid):
+        other.publish("big", tag)
+    assert other.revisions("big") == ()
+
+
+def test_a_published_revision_laid_out_differently_is_the_same_revision(tmp_path):
+    store = MechanicsStore(tmp_path)
+    tag = store.save_draft("pool_basic", raw(template("pool_basic")), None)
+    module = store.publish("pool_basic", tag)
+    path = tmp_path / "config/mechanics/modules/pool_basic" / f"{module.revision[7:]}.json"
+    path.write_bytes(json.dumps(json.loads(path.read_bytes()), separators=(",", ":")).encode())
+    assert store.load("pool_basic", module.revision) == module
+    assert store.publish("pool_basic", tag) == module  # agrees with load: not 'altered'
+
+
+def test_removing_a_draft_that_is_not_there(tmp_path):
+    store = MechanicsStore(tmp_path)
+    _refused("no_draft", lambda: store.remove_draft("duel", "sha256:" + "0" * 64))
+    _refused("invalid_field", lambda: store.remove_draft("duel", None))  # type: ignore[arg-type]

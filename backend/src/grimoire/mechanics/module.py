@@ -21,7 +21,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from grimoire.mechanics.expr import FUNCTIONS, KEYWORDS, NAME, Expr, ExprError, Kind, kind_of, parse
+from fractions import Fraction
+
+from grimoire.mechanics.expr import (
+    FUNCTIONS, KEYWORDS, NAME, Expr, ExprError, Kind, Value, evaluate, integer, kind_of, parse,
+)
 
 FORMAT = "grimoire.mechanics/1"
 FAMILIES = ("generic", "d20", "pool")
@@ -210,7 +214,8 @@ def _expr(report: _Report, path: str, value: object, scope: Mapping[str, Kind], 
         report.add(path, str(error))
         return None
     if kind != want:
-        report.add(path, "must be a condition (true or false)" if want == "bool" else "must be a number, not a condition")
+        report.add(path, "must be a condition (true or false)" if want == "bool"
+                   else "must be a number, not a condition")
         return None
     return expr
 
@@ -309,6 +314,7 @@ def _derived(report: _Report, path: str, raw: object, fields: tuple[Field, ...],
             parsed[key] = parse(formula)
         except ExprError as error:
             report.add(f"{path}.{key}", str(error))
+            broken = broken | {key}
     # Order derived values so each uses only fields and those before it; a cycle is a problem.
     numeric = {f.key for f in fields if f.type in NUMERIC} | (broken - taken)
     ordered: list[tuple[str, Expr]] = []
@@ -327,7 +333,7 @@ def _derived(report: _Report, path: str, raw: object, fields: tuple[Field, ...],
         checked = _expr(report, f"{path}.{key}", expr.text, scope, "number", text_fields)
         if checked is not None:
             good.append((key, checked))
-            scope[key] = "number"
+        scope[key] = "number"  # a broken one has its own problem; what uses it is not told it is unknown
     return tuple(good)
 
 
@@ -356,6 +362,15 @@ def _sheet(report: _Report, path: str, sheet_id: str, raw: object) -> SheetType 
     derived = _derived(report, f"{path}.derived", value.get("derived", {}), tuple(fields), frozenset(broken))
     if label is None or len(report.problems) != before:
         return None
+    # A sheet type must at least fill with its own defaults: a derived value that is a fraction or divides by
+    # zero there is a problem now, not a surprise on the first sheet.
+    scope: dict[str, Value] = {f.key: Fraction(f.default) for f in fields if f.type in NUMERIC}  # type: ignore[arg-type]
+    for key, expr in derived:
+        try:
+            scope[key] = Fraction(integer(evaluate(expr, scope), f"with every field at its default, {key!r}"))
+        except ExprError as error:
+            report.add(f"{path}.derived.{key}", str(error))
+            return None
     return SheetType(sheet_id, label, tuple(fields), derived)
 
 
@@ -388,10 +403,11 @@ def _check(report: _Report, path: str, check_id: str, raw: object, sheets: Mappi
     target = None
     if "target" in dice:
         target = _expr(report, f"{path}.dice.target", dice["target"], sheet_scope, "number", hint)
-    if count is None or sides is None or ("target" in dice and target is None):
-        return None
-    roll = Dice(count, sides, target)
-    single = count.text.strip() == "1"
+    dice_ok = count is not None and sides is not None and ("target" not in dice or target is not None)
+    # The dice's shape (one die? a target?) is read from the text even when a formula has a problem, so the
+    # total and outcomes are still checked and reported.
+    single = type(dice["count"]) is str and dice["count"].strip() == "1"
+    has_target = "target" in dice
     rolled: dict[str, Kind] = {**sheet_scope, **{name: "number" for name in DICE_NAMES}}
     why = {"natural": "'natural' is the one die of a single-die check; this check's dice.count is not 1",
            "successes": "'successes' needs dice.target, the face a die must reach to count",
@@ -399,11 +415,11 @@ def _check(report: _Report, path: str, check_id: str, raw: object, sheets: Mappi
            "total": "'total' is known only once it is computed; use it in outcomes", **hint}
     if single:
         rolled["natural"] = "number"
-    if target is not None:
+    if has_target:
         rolled["successes"] = "number"
-    if family == "d20" and (not single or sides != 20 or target is not None):
+    if family == "d20" and (not single or (sides is not None and sides != 20) or has_target):
         report.add(f"{path}.dice", "a d20 module's check rolls exactly one d20 (count 1, sides 20) and has no target")
-    if family == "pool" and (target is None or "total" in value):
+    if family == "pool" and (not has_target or "total" in value):
         report.add(f"{path}.dice", "a pool module's check counts successes: it needs dice.target and no total "
                    "(its total is the successes)")
     total = None
@@ -427,9 +443,10 @@ def _check(report: _Report, path: str, check_id: str, raw: object, sheets: Mappi
                     report.add(f"{at}.label", f"{outcome_label!r} is already an outcome of this check")
                 else:
                     outcomes.append(Outcome(outcome_label, when))
-    if len(report.problems) != before or label is None:
+    if len(report.problems) != before or label is None or not dice_ok:
         return None
-    return Check(check_id, label, sheet.id, roll, total, difficulty, tuple(outcomes))
+    assert count is not None and sides is not None
+    return Check(check_id, label, sheet.id, Dice(count, sides, target), total, difficulty, tuple(outcomes))
 
 
 # -- the document ----------------------------------------------------------------------------------------------
@@ -503,7 +520,7 @@ def _build(document: object) -> tuple[MechanicsModule | None, tuple[Problem, ...
             if not _ident(report, f"checks.{check_id}", check_id, "a check id"):
                 continue
             named = raw.get("sheet") if isinstance(raw, Mapping) else None
-            if named in attempted and named not in sheets:
+            if type(named) is str and named in attempted and named not in sheets:
                 continue  # its sheet type has problems of its own; the check is checked once that sheet is valid
             made_check = _check(report, f"checks.{check_id}", check_id, raw, sheets, family)  # type: ignore[arg-type]
             if made_check is not None:
@@ -512,8 +529,8 @@ def _build(document: object) -> tuple[MechanicsModule | None, tuple[Problem, ...
         return None, tuple(report.problems)
     try:
         revision = revision_of(value)
-    except TypeError as error:
-        return None, (Problem("$", str(error)),)
+    except (TypeError, ValueError):
+        return None, (Problem("$", "holds a value that is not plain JSON text (such as a lone surrogate)"),)
     return MechanicsModule(value["id"], value["name"], value["version"], family,  # type: ignore[arg-type]
                            MappingProxyType(sheets), MappingProxyType(checks), revision,
                            _freeze(value)), ()  # type: ignore[arg-type]

@@ -42,7 +42,8 @@ later edit changes new checks and never one already recorded. It is headless: th
   short texts, `max_items`). Only the first four hold numbers a formula may use. `ref` fields are refused
   for now: a reference must name a source-qualified record, which this slice cannot check.
 - **Derived values** are formulas over the sheet's numeric fields and other derived values. They are ordered
-  so each uses only what comes before it; a loop is a problem.
+  so each uses only what comes before it; a loop is a problem, and so is a derived value that is not a whole
+  number (or divides by zero) with every field at its default.
 - **A check** belongs to one sheet type. `dice.count` is a formula; `sides` is 2 to 1000; with a
   `dice.target` formula, each face at or above it is a success. `total` is a formula; without one the total
   is the successes when there is a target, and the dice sum otherwise. `outcomes` are conditions tried in
@@ -70,8 +71,8 @@ expression is at most 256 characters, 32 levels deep, with literals up to 1,000,
 ### Rules never run code
 
 A key asking for executable behaviour (`hooks`, `script`, `code`, `python`, `javascript`, `lua`, `exec`)
-is refused wherever it appears. This keeps Sprint 007's obligation: authored rules compute with formulas;
-untrusted rule scripts are not run in-process with library authority.
+is refused as a key at any level of the document. This keeps Sprint 007's obligation: authored rules
+compute with formulas; untrusted rule scripts are not run in-process with library authority.
 
 ### Problems
 
@@ -79,8 +80,8 @@ untrusted rule scripts are not run in-process with library authority.
 `checks.stealth.total: unknown name 'stelth' (did you mean 'stealth'?)` or
 `checks.stealth.total: unknown name 'gear': 'gear' is a list field and holds no number`. Unknown keys are
 problems too. A check of a sheet type that has problems is checked once that sheet is valid, so one mistake
-is not reported many times. `parse_module` returns the validated `MechanicsModule` or raises `ModuleInvalid`
-with the same list: a module with any problem has no value at all, so it cannot be published, loaded or
+is not reported many times, and neither is a formula that only uses a broken field or derived value.
+`parse_module` returns the validated `MechanicsModule` or raises `ModuleInvalid` with the same list: a module with any problem has no value at all, so it cannot be published, loaded or
 bound.
 
 ### Revisions
@@ -98,7 +99,9 @@ typed values are each a problem; absent fields take their defaults) and computes
 `run_check(module, sheet, check, dice=(...), modifier=0, difficulty=None)` grades a check from dice the
 caller recorded: this package never rolls. The dice must be exactly as many as the count formula gives,
 each face 1 to `sides`. A sheet filled under another revision is refused ("fill it again"), and a `Sheet`
-value whose numbers are not what its module computes is not trusted. The `CheckRecord` carries the module,
+value whose numbers are not what its module computes is not trusted. Nor is a `MechanicsModule` value that is
+not what its own document validates to (say, an edited module stamped with an older revision): `fill_sheet`,
+`run_check` and `confirm` refuse it. The `CheckRecord` carries the module,
 revision, sheet values, modifier, effective difficulty, dice, total, successes and outcome.
 
 `confirm(module, record)` re-derives a record under the revision it names and refuses any other revision:
@@ -122,11 +125,13 @@ config/mechanics/modules/<id>/<digest>.json  one published revision, named by it
 ```
 
 - `save_draft(id, data, expected)` keeps any bytes (up to 256 KiB), even unfinished JSON, so work is never
-  refused or lost. `check_draft(id)` lists its problems (a JSON error is a problem of `$`; an `id` that is
-  not the one it is saved under is one too) or gives the module it would publish as.
+  refused or lost. The published form is indented; one that would be over 512 KiB is a problem of the draft,
+  so nothing publishes that `load` would refuse. `check_draft(id)` lists its problems (a JSON error is a
+  problem of `$`; an `id` that is not the one it is saved under is one too) or gives the module it would
+  publish as.
 - `publish(id, expected)` writes the revision file only when the draft read at `expected` has no problem.
-  Publishing the same content again writes nothing. An edited draft publishes a new file beside the old one;
-  a revision file is never rewritten, and one found with other content is refused (`altered`) and left alone.
+  Publishing the same content again writes nothing (a revision file laid out differently but holding the same
+  module counts as the same). An edited draft publishes a new file beside the old one; a revision file is never rewritten, and one found with other content is refused (`altered`) and left alone.
 - `load(id, revision)` returns exactly that revision. It is refused when it was never published
   (`unpublished`), no longer validates (`invalid`) or no longer has its digest (`altered`); there is no
   fallback to another revision or to the draft.

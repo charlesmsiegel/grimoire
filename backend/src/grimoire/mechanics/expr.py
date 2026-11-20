@@ -33,11 +33,11 @@ MAX_TEXT = 256
 MAX_DEPTH = 32
 MAX_LITERAL = 1_000_000
 MAX_MAGNITUDE = 10 ** 12
-NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
+NAME = re.compile(r"[a-z][a-z0-9_]{0,63}", re.ASCII)
 KEYWORDS = frozenset({"and", "or", "not", "true", "false"})
 FUNCTIONS = {"floor": (1, 1), "ceil": (1, 1), "abs": (1, 1), "min": (2, 8), "max": (2, 8)}
 COMPARE = ("==", "!=", "<=", ">=", "<", ">")
-_TOKEN = re.compile(r"\s*(?:(\d+)|([A-Za-z_][A-Za-z0-9_]*)|(==|!=|<=|>=|[-+*/(),<>]))")
+_TOKEN = re.compile(r"\s*(?:([0-9]+)|([A-Za-z_][A-Za-z0-9_]*)|(==|!=|<=|>=|[-+*/(),<>]))", re.ASCII)
 
 Kind = Literal["number", "bool"]
 
@@ -120,7 +120,8 @@ class _Parser:
     def take(self, expected: str | None = None) -> str:
         token = self.peek()
         if token is None:
-            raise ExprError("the expression ends too early" if expected is None else f"expected {expected!r} at the end")
+            raise ExprError("the expression ends too early" if expected is None
+                            else f"expected {expected!r} at the end")
         if expected is not None and token != expected:
             raise ExprError(f"expected {expected!r}, found {token!r}")
         self.at += 1
@@ -202,8 +203,8 @@ class _Parser:
 
     def atom(self) -> Node:
         token = self.take()
-        if token.isdigit():
-            if len(token) > 7 or int(token) > MAX_LITERAL:
+        if "0" <= token[0] <= "9":
+            if int(token) > MAX_LITERAL:
                 raise ExprError(f"number {token} is larger than {MAX_LITERAL}")
             return Num(int(token))
         if token == "(":

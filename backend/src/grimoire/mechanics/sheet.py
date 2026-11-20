@@ -18,7 +18,9 @@ from fractions import Fraction
 from types import MappingProxyType
 
 from grimoire.mechanics.expr import ExprError, Value, evaluate, integer
-from grimoire.mechanics.module import MAX_DICE, NUMERIC, MechanicsModule, Problem, SheetType
+from grimoire.mechanics.module import (
+    MAX_DICE, NUMERIC, MechanicsModule, ModuleInvalid, Problem, SheetType, parse_module,
+)
 
 MAX_MODIFIER = 1_000_000
 
@@ -86,11 +88,24 @@ def _derive(sheet: SheetType, values: Mapping[str, SheetValue]) -> dict[str, int
     return derived
 
 
+def _trusted(module: object, use: str) -> MechanicsModule:
+    """``module`` if it is exactly what its own document validates to; a value built or altered by hand (say, an
+    edited module stamped with an older revision) is refused, so a record never names rules it was not graded by."""
+    if type(module) is not MechanicsModule:
+        raise TypeError(f"{use} needs a validated MechanicsModule")
+    try:
+        same = parse_module(module.document) == module
+    except ModuleInvalid:
+        same = False
+    if not same:
+        raise CheckError(f"module {module.id} is not what its own document validates to; parse it again")
+    return module
+
+
 def fill_sheet(module: MechanicsModule, sheet_type: str, values: Mapping[str, object]) -> Sheet:
     """``values`` as a sheet of ``sheet_type``: unknown keys and wrong values are refused, absent fields
     take their defaults. ``SheetInvalid`` lists every field at fault."""
-    if type(module) is not MechanicsModule:
-        raise TypeError("fill_sheet needs a validated MechanicsModule")
+    _trusted(module, "fill_sheet")
     sheet = module.sheets.get(sheet_type) if type(sheet_type) is str else None
     if sheet is None:
         raise SheetInvalid((Problem("sheet_type", f"module {module.id} has no sheet type {sheet_type!r}"),))
@@ -194,12 +209,18 @@ def run_check(module: MechanicsModule, sheet: Sheet, check_id: str, *, dice: tup
               modifier: int = 0, difficulty: int | None = None) -> CheckRecord:
     """Grade ``check_id`` for ``sheet`` from recorded ``dice``. The sheet must be valid under this very
     revision: a sheet filled under another revision is refused, never silently reinterpreted."""
-    if type(module) is not MechanicsModule or type(sheet) is not Sheet:
-        raise TypeError("run_check needs a validated MechanicsModule and a filled Sheet")
+    _trusted(module, "run_check")
+    if type(sheet) is not Sheet:
+        raise TypeError("run_check needs a filled Sheet")
     if (sheet.module, sheet.revision) != (module.id, module.revision):
         raise CheckError(f"this sheet was filled under {sheet.module} {sheet.revision}, not {module.id} "
                          f"{module.revision}; fill it again under the module it is checked with")
-    refilled = fill_sheet(module, sheet.sheet_type, dict(sheet.values))  # a forged Sheet value is not trusted
+    if not isinstance(sheet.values, Mapping):
+        raise CheckError("this sheet holds no field values")
+    try:
+        refilled = fill_sheet(module, sheet.sheet_type, dict(sheet.values))  # a forged Sheet value is not trusted
+    except SheetInvalid as error:
+        raise CheckError(f"this sheet's values do not fit its module: {error}") from None
     if refilled != sheet:
         raise CheckError("this sheet's values or derived values are not what its module computes")
     return _grade(module, sheet, check_id, dice, modifier, difficulty)
@@ -208,11 +229,14 @@ def run_check(module: MechanicsModule, sheet: Sheet, check_id: str, *, dice: tup
 def confirm(module: MechanicsModule, record: CheckRecord) -> None:
     """Re-derive ``record`` under the exact revision it names; ``CheckError`` if it disagrees or the module is
     another revision. A record is never re-graded under an edited module."""
-    if type(module) is not MechanicsModule or type(record) is not CheckRecord:
-        raise TypeError("confirm needs a MechanicsModule and a CheckRecord")
+    _trusted(module, "confirm")
+    if type(record) is not CheckRecord:
+        raise TypeError("confirm needs a CheckRecord")
     if (record.module, record.revision) != (module.id, module.revision):
         raise CheckError(f"this record was graded under {record.module} {record.revision}; it is confirmed "
                          "only against that revision, never re-graded under another")
+    if not isinstance(record.values, Mapping):
+        raise CheckError("the record holds no sheet values")
     try:
         sheet = fill_sheet(module, record.sheet_type, dict(record.values))
     except SheetInvalid as error:

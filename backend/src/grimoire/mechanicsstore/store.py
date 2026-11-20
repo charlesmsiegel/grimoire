@@ -35,8 +35,10 @@ from grimoire.store.layout import is_noise
 CONFIG, MECHANICS, DRAFTS, MODULES = "config", "mechanics", "drafts", "modules"
 SUFFIX = ".json"
 TEMP_PREFIX, TEMP_SUFFIX = ".mechanics-", ".tmp"
-#: A module is a few hundred lines; a larger file is not one.
+#: A draft as saved, and a module in its published (indented) form: a few hundred lines, so a larger file is not
+#: one. A draft whose published form would be larger is a problem, so nothing publishes that ``load`` refuses.
 MAX_DRAFT_BYTES = 256 * 1024
+MAX_MODULE_BYTES = 512 * 1024
 _DIGEST = 64
 
 
@@ -85,8 +87,8 @@ def _temp(name: str) -> bool:
 
 def decode(data: bytes, expected_id: str | None = None) -> tuple[MechanicsModule | None, tuple[Problem, ...]]:
     """The module ``data`` holds, or why it holds none. JSON errors are problems of the whole (``$``)."""
-    if len(data) > MAX_DRAFT_BYTES:
-        return None, (Problem("$", f"a module is at most {MAX_DRAFT_BYTES} bytes"),)
+    if len(data) > MAX_MODULE_BYTES:
+        return None, (Problem("$", f"a module file is at most {MAX_MODULE_BYTES} bytes"),)
     try:
         document = thaw(parse_strict(data))
     except JsonError as error:
@@ -97,6 +99,10 @@ def decode(data: bytes, expected_id: str | None = None) -> tuple[MechanicsModule
         return None, error.problems
     if expected_id is not None and module.id != expected_id:
         return None, (Problem("id", f"is {module.id!r}, but this module is saved as {expected_id!r}"),)
+    size = len(render(module.document))
+    if size > MAX_MODULE_BYTES:
+        return None, (Problem("$", f"published, this module would be {size} bytes; a module is at most "
+                                   f"{MAX_MODULE_BYTES} (shorten its labels or text defaults)"),)
     return module, ()
 
 
@@ -199,7 +205,11 @@ class MechanicsStore:
         return etag(data)
 
     def remove_draft(self, module_id: str, expected: str) -> None:
-        """Remove the draft (published revisions stay)."""
+        """Remove the draft read at ``expected`` (published revisions stay)."""
+        if type(expected) is not str or not expected.startswith("sha256:"):
+            raise MechanicsStoreError("invalid_field", "expected must be the etag of the draft that was read")
+        if self.draft(module_id) is None:
+            raise MechanicsStoreError("no_draft", f"there is no draft of {module_id}")
         unchanged = self._unchanged(module_id, expected)
         unchanged()
         self._check_write()
@@ -227,9 +237,10 @@ class MechanicsStore:
         path = self.revision_path(module_id, module.revision)
         held = self._read(path)
         if held is not None:
-            if held != data:
+            already, _ = decode(held, module_id)
+            if already is None or already.revision != module.revision:
                 raise MechanicsStoreError("altered", f"{path} exists with other content; it is left as it is")
-            return module
+            return module  # the same module, however it is laid out: nothing to write
         self._write(path, data, self._unchanged(module_id, expected))
         return module
 
@@ -281,5 +292,5 @@ class MechanicsStore:
                 self._sweep(modules / name)
 
 
-__all__ = ["CONFIG", "DRAFTS", "MAX_DRAFT_BYTES", "MECHANICS", "MODULES", "Draft", "DraftCheck", "MechanicsStore",
-           "MechanicsStoreError", "decode"]
+__all__ = ["CONFIG", "DRAFTS", "MAX_DRAFT_BYTES", "MAX_MODULE_BYTES", "MECHANICS", "MODULES", "Draft", "DraftCheck",
+           "MechanicsStore", "MechanicsStoreError", "decode"]
