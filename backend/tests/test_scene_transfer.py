@@ -354,3 +354,22 @@ def test_a_page_damaged_while_the_copy_is_planned_refuses_it(cards, monkeypatch)
 
         monkeypatch.setattr(SceneTransfer, "_scan", damaging)
         refused("history_incomplete", transfer(at).plan, imported, storm.scope, cast={anya: target_anya, mara: NEW})
+
+
+def test_a_lorebook_left_out_of_sources_is_carried_as_an_opt_out(cards):
+    folder, chat, storm = cards
+    with Table(folder) as at:
+        chats = ChatLibrary(at.store, at.owner, clock=Clock(), new_id=Tagged("s"), owner=OWNER)
+        anya, target_anya = persona(at, chat), persona(at, storm)
+        scan = transfer(at).scan(chat, storm.scope)
+        mara = next(member.actor for member in scan.cast if member.role == "character")
+        (lore,) = scan.sources
+        plan = transfer(at).plan(chat, storm.scope, cast={anya: target_anya, mara: NEW}, sources=[])
+        plan.commit()
+        copied, _ = chats.read_chat(plan.chat)
+        assert [(binding.ref, binding.active) for binding in copied.bindings if binding.role == "lorebook"] == [
+            (lore.ref, False)]
+        kept = transfer(at, "y").plan(chat, storm.scope, cast={anya: target_anya, mara: NEW})
+        kept.commit()
+        copied, _ = chats.read_chat(kept.chat)
+        assert [binding.ref for binding in copied.active_bindings("lorebook")] == [lore.ref]  # carried by default

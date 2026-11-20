@@ -58,7 +58,7 @@ The copy holds the origin's history as its table saw it, in order: its imported 
 - **A turn's posts** become `user` posts labelled with their character's name, with an action in asterisks, as the runner shows it.
 - **A kept take's shown lines** become `character` posts with the line's speaker label, or `narrator` posts for narration. On a 041 stage, only a line a player character of its take heard is copied (`table_lines`' rule).
 
-The new chat opens as the origin did: its premise, or its launch source when that is carried (otherwise the first carried character or source). A lorebook the origin bound and detached, with none of that entity bound now, is carried as the same opt-out (bound and detached), so a carried scenario's own lorebook stays out of the copy as it stayed out of the origin.
+The new chat opens as the origin did: its premise, or its launch source when that is carried (otherwise the first carried character or source). Every lorebook the origin ever bound that the copy does not carry (one the origin detached, or one the caller left out of `sources`) is carried as an opt-out (bound and detached), so a carried scenario's own lorebook cannot bring it back.
 
 Each copied post records its origin turn and post or line under `copied_from`. The new pages get new post ids (`p000001` onward). Page 1's `origin` is `{"format": "grimoire-scene-transfer", "from": <origin chat>, "cast": {<origin actor>: <target actor or null>}, "posts": n, "pages": k}`. No source header is carried.
 

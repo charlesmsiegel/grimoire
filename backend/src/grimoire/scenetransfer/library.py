@@ -498,15 +498,15 @@ def _launch(began: Launch, wanted: Sequence[tuple[SourceRef, str]]) -> Launch:
 
 def _with_opt_outs(change: ChatChange, record: ChatRecord, chosen: Sequence[SourceChoice], at: str,
                    owner: str | None) -> ChatChange:
-    """The planned chat with the origin's lorebook opt-outs: a lorebook it bound and detached, with none of its
-    entity bound now, keeps a carried scenario's own lorebook out of the copy as it kept it out of the origin
-    (``grimoire.effective``'s rule: a lorebook the chat ever bound is the chat's choice)."""
+    """The planned chat with a lorebook opt-out (bound, then detached) for every lorebook the origin ever bound
+    that the copy does not carry: one the origin detached, and one the caller left out of ``sources``. Either way a
+    carried scenario's own lorebook stays out of the copy (``grimoire.effective``'s rule: a lorebook the chat ever
+    bound is the chat's choice), rather than coming back through the scenario."""
     carried = {choice.ref.entity_key for choice in chosen if choice.role == "lorebook"}
-    active = {binding.ref.entity_key for binding in record.active_bindings("lorebook")}
     opted: dict[tuple[str, str, str], SourceBinding] = {}
-    for binding in record.bindings:
+    for binding in sorted(record.bindings, key=lambda each: each.introduced_seq, reverse=True):  # latest first
         key = binding.ref.entity_key
-        if binding.role == "lorebook" and not binding.active and key not in active and key not in carried:
+        if binding.role == "lorebook" and key not in carried:
             opted.setdefault(key, binding)
     if not opted:
         return change
