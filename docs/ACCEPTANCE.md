@@ -75,6 +75,23 @@ separate owners; this suite does not repair or duplicate their feature work.
 After those changes integrate, rerun this suite and the ordinary CI gates against
 that exact integrated head before making a full acceptance claim.
 
+## Connection bursts and overload
+
+The app retains eight active HTTP handlers. One accepted connection can wait in
+the accept loop for up to one second before its handler starts; the existing
+header/body deadlines then apply unchanged. This absorbs short navigation/module
+bursts without spawning more handlers or an application queue. Persistent
+saturation receives a fixed, generic HTTP 503 with connection close, sent with a
+0.1-second write deadline. Delivery is best-effort if a peer disconnects or does
+not read. Sustained overload cannot guarantee availability, but cannot create
+unbounded waiting threads or disclose request/library data.
+
+Event-controlled real-server tests verify burst admission, the eight-handler
+cap, bounded overload/shutdown and permit recovery after failures. A supplemental
+browser test exercises twelve Chats/back/reload cycles with draft and required
+JavaScript transport assertions. It contains no sleeps or retries; it does not
+replace the deterministic capacity regression or certify physical devices.
+
 ## Manual release evidence still required
 
 Use the same synthetic library and a local/offline provider. On an actual phone,
