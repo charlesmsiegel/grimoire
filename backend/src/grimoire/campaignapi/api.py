@@ -78,7 +78,6 @@ UNAVAILABLE = (
     {"feature": "proposed_by_narration", "blocker": "035/047",
      "reason": "no model proposes an effect from narration yet; effects are proposed here, in structured form"},
     {"feature": "campaign_ledger", "blocker": "053", "reason": "memory consolidation (the long-term ledger) is Wave 8"},
-    {"feature": "story_graph", "blocker": "081", "reason": "story graph and navigation is Wave 9"},
     {"feature": "clocks", "blocker": "055", "reason": "calendar and clocks are Wave 8"},
     {"feature": "npc_autonomy", "blocker": "039",
      "reason": "NPC agendas are the app's configuration; no screen edits them in this slice"},

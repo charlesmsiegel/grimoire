@@ -64,7 +64,9 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   const views = ui.segments("Whose view", AUDIENCES, { value: audience, onchange: (value) => ctx.navigate(address({ audience: value })) });
   const view = el("div", { class: "g-stack campaign-hub" });
   root.append(el("div", { class: "g-row campaign-views" }, views.node, el("span", { class: "g-grow g-muted" }, NOTES[audience]),
-    ctx.registered("chat") ? ui.buttonLink("Open the chat", "chat", [chat]) : null), view);
+    ctx.registered("chat") ? ui.buttonLink("Open the chat", "chat", [chat]) : null,
+    // 081: follow one thread of the story (a promise, a rumour) to how canon says it ended
+    ctx.registered("story") ? ui.buttonLink("Story threads", "story", [chat], { audience }) : null), view);
 
   const call = (op, args) => ctx.api("campaign." + op, { chat, audience, ...args });
   // Every write answers the hub as it now stands: show that, never the one from before the write.

@@ -17,4 +17,8 @@ from . import voice  # noqa: E402 -- 061's private local voice input (docs/SPEEC
 
 ADAPTERS = tuple(sorted((*ADAPTERS, voice.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import story  # noqa: E402 -- 081's story explorer: threads of the ledger and their outcomes (docs/STORY.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, story.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]
