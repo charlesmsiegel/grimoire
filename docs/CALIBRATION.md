@@ -86,14 +86,21 @@ where `model_config` is the app's model configuration (`provider_id`, `base_url`
 judge's pin (provider, endpoint, model, temperature, output bound, attempts and the
 prompt version) is hashed into the capture; replay refuses a capture made for a
 different pin or prompt. An answer served by any model other than the pin or its dated
-snapshot is `unknown` (`model_mismatch`). The report counts distinct models; using
+snapshot is `unknown` (`model_mismatch`), and a judge served by more than one model
+during a capture (an alias moved to a new snapshot) loses every answer (`model_drift`);
+the report lists each judge's served models. The report counts distinct models; using
 three different models is recommended for independence but not enforced.
+
+**Blind units.** Corpus ids and file names describe their labels (`discarded`,
+`ledger_scrambled`), so a judge sees only a per-run alias such as `unit_3f9c….py`;
+a test checks that no corpus id or file name reaches a judge.
 
 **Coverage, not trust.** Every listing is line-numbered and carries one unnumbered
 coverage canary in its middle, new per judge, case and trial. An answer that does not
 echo it is `unknown` (`coverage`), however confident. So are malformed answers,
 `cannot_assess`, a `defect` without findings, findings on lines that do not exist,
-refused or failed calls, and an unparseable source (never sent). Unknown is never
+theory evidence citing anything but `<alias>:<line>` on a listed line, refused or
+failed calls, and an unparseable source of either task (never sent). Unknown is never
 clean and never scored. The canary proves the listing reached the judge and was
 read through its middle; it does not prove the reasoning was sound.
 
@@ -112,7 +119,8 @@ exclude `bool`).
 
 **Theory.** Theory verdicts (`theory-verdict/1`) are scored by the pinned
 `coding-skills` rubric itself (`theory_rubric.score_panel`, run in an isolated
-subprocess from a verified clean checkout; exemption off, since calibration measures
+subprocess from a verified clean checkout, with a fresh bytecode cache so no `.pyc` beside
+the source is loaded; ignored files also make a checkout unclean; exemption off, since calibration measures
 the judgment). The Grimoire profile adds one rule: a trial's panel is scored only when
 all three judges are covered and valid. Each unit reports per-trial scores, their range
 and whether the grade repeats; `ledger_cohesive` must score above `ledger_scrambled`,
@@ -120,15 +128,17 @@ the same logic with its names and documentation removed.
 
 **Reproduced upstream inaccuracy.** At the pin, `score_panel` awards **100 (A+)** to
 three verdicts that claim every dimension holds from judges that never read the
-unit; it has no notion of coverage. Every report carries this probe:
-`upstream_score` 100.0, `profile_score` null. The opt-in test
+unit; it has no notion of coverage. Every report scores this probe through the same
+path as captured trials: with the pinned checkout, `upstream_score` 100.0 and
+`profile_score` null (without it, both null). The opt-in test
 `test_pinned_upstream_rubric_awards_a_perfect_score_to_unread_verdicts` reproduces
 it against a real checkout (`GRIMOIRE_CODING_SKILLS`). The fix lives in the Grimoire
 profile, not upstream.
 
 **Proof.** `proof.established` requires the facade not penalized, the planted
-defect found, missing analysis unscored, every theory unit scored, and every
-answer provider-reported. Scripted and replayed test captures meet the first three
+defect found, missing analysis unscored, a complete defect panel (no unknown or
+inconsistent case), every theory unit scored with `ledger_cohesive` above
+`ledger_scrambled` in every trial, and every answer provider-reported. Scripted and replayed test captures meet the first three
 and the fourth with the pinned rubric, but are synthetic, so `established` is false.
 
 ### Spending approval

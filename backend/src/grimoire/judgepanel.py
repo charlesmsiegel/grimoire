@@ -24,6 +24,7 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
 import uuid
 
 from grimoire.calibration import REVISION as RUBRIC_REVISION, verify_checkout
@@ -36,6 +37,7 @@ MIN_TRIALS = 3
 TASKS = ('defect', 'theory')
 DIMENSIONS = ('absorption', 'world_mapping', 'abstraction', 'justification', 'honest_limits')
 LADDER = (0.0, 0.25, 0.5, 1.0)
+SPEND_CAP = re.compile(r'(0|[1-9]\d{0,5})(\.\d{1,2})? [A-Z]{3}')
 _SNAPSHOT = re.compile(r'-(\d{8}|\d{4}-\d{2}-\d{2})$')
 
 DEFECT_PROMPT = """You are one of three independent code reviewers. You see no other reviewer's work.
@@ -63,7 +65,7 @@ A step below 1.0 must cite evidence as "<file>:<line>". Give at least three rehe
 
 Each listing line starts with its line number. One unnumbered line holds a coverage canary;
 copy its token exactly. Answer with one JSON object and nothing else:
-{"schema": "theory-verdict/1", "unit": "<case id>",
+{"schema": "theory-verdict/1", "unit": "<unit>",
  "files": [{"file": "<file name>", "canary": "<token>"}],
  "theory": "<at most 3 sentences>", "instead_of": "<the other reading and why not>",
  "trivial": false, "trivial_reason": "",
@@ -168,6 +170,8 @@ def load_corpus(corpus: Path) -> list[dict]:
         if path.is_symlink():
             raise ValueError('corpus sources must be ordinary files')
         source_bytes = path.read_bytes()
+        if any(n > len(source_bytes.decode('utf-8').splitlines()) for n in case.get('defect_lines', [])):
+            raise ValueError(f'{case["id"]}: a defect line is past the end of its file')
         out.append({**case, 'source': source_bytes.decode('utf-8'),
                     'source_sha256': hashlib.sha256(source_bytes).hexdigest()})
     for case in out:
@@ -181,6 +185,11 @@ def canary(salt: str, judge_id: str, case_id: str, trial: int) -> str:
     return hashlib.sha256(f'{salt}:{judge_id}:{case_id}:{trial}'.encode()).hexdigest()[:16]
 
 
+def alias(salt: str, case_id: str) -> str:
+    """The file name a judge sees. Corpus ids and names describe the label, so they are never sent."""
+    return 'unit_' + hashlib.sha256(f'{salt}:alias:{case_id}'.encode()).hexdigest()[:10] + '.py'
+
+
 def listing(source: str, token: str) -> str:
     """Number every line and put the canary, unnumbered, in the middle, so cited lines stay true."""
     lines = source.splitlines()
@@ -190,9 +199,10 @@ def listing(source: str, token: str) -> str:
     return '\n'.join(out)
 
 
-def messages_for(case: dict, token: str) -> list[tuple[str, str]]:
+def messages_for(case: dict, token: str, salt: str) -> list[tuple[str, str]]:
     system = DEFECT_PROMPT if case['task'] == 'defect' else THEORY_PROMPT
-    user = (f'Case: {case["id"]}\nFile: {case["file"]}\n\n' + listing(case['source'], token))
+    name = alias(salt, case['id'])
+    user = f'Unit: {name[:-3]}\nFile: {name}\n\n' + listing(case['source'], token)
     return [('system', system), ('user', user)]
 
 
@@ -214,20 +224,20 @@ def _object(text: object) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def covered(data: dict, case: dict, token: str) -> bool:
+def covered(data: dict, name: str, token: str) -> bool:
     files = data.get('files')
     return (isinstance(files, list) and len(files) == 1 and isinstance(files[0], dict)
-            and files[0].get('file') == case['file'] and files[0].get('canary') == token)
+            and files[0].get('file') == name and files[0].get('canary') == token)
 
 
-def parse_defect(text: object, case: dict, token: str) -> dict:
+def parse_defect(text: object, case: dict, token: str, name: str) -> dict:
     """``defect``/``clear`` only for a covered, self-consistent answer; anything else is unknown."""
     def unknown(reason: str) -> dict:
         return {'state': 'unknown', 'lines': [], 'reason': reason}
     data = _object(text)
     if data is None or data.get('schema') != DEFECT_SCHEMA:
         return unknown('malformed')
-    if not covered(data, case, token):
+    if not covered(data, name, token):
         return unknown('coverage')
     verdict, findings = data.get('verdict'), data.get('findings')
     count = len(case['source'].splitlines())
@@ -246,14 +256,31 @@ def parse_defect(text: object, case: dict, token: str) -> dict:
             'lines': sorted({finding['line'] for finding in findings}), 'reason': None}
 
 
-def parse_theory(text: object, case: dict, token: str) -> dict:
+def _cites(evidence: object, name: str, count: int) -> bool:
+    """Every citation is ``<file>:<line>`` on a line the listing has."""
+    if not isinstance(evidence, list):
+        return False
+    for cite in evidence:
+        file, _, line = cite.rpartition(':') if isinstance(cite, str) else ('', '', '')
+        if file != name or not line.isdigit() or not 1 <= int(line) <= count:
+            return False
+    return True
+
+
+def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
     """The verdict without its coverage block. Upstream validation happens at scoring."""
     data = _object(text)
     if data is None or data.get('schema') != THEORY_SCHEMA:
         return {'state': 'unknown', 'reason': 'malformed', 'verdict': None}
     verdict = {key: value for key, value in data.items() if key != 'files'}
     verdict['unit'] = case['id']
-    if not covered(data, case, token):
+    count = len(case['source'].splitlines())
+    dimensions = data.get('dimensions')
+    if not isinstance(dimensions, dict) or not all(
+            isinstance(entry, dict) and _cites(entry.get('evidence', []), name, count)
+            for entry in dimensions.values()):
+        return {'state': 'unknown', 'reason': 'citation', 'verdict': verdict}
+    if not covered(data, name, token):
         # Kept, so the report can show what an uncovered verdict would have been awarded.
         return {'state': 'unknown', 'reason': 'coverage', 'verdict': verdict}
     return {'state': 'verdict', 'reason': None, 'verdict': verdict}
@@ -267,7 +294,8 @@ class ReplayJudge:
     def __init__(self, capture: Path) -> None:
         self.capture = Path(capture)
         manifest = json.loads((self.capture / 'capture.json').read_text(encoding='utf-8'))
-        if not isinstance(manifest, dict) or manifest.get('format') != FORMAT:
+        if (not isinstance(manifest, dict) or manifest.get('format') != FORMAT
+                or not isinstance(manifest.get('salt'), str) or not isinstance(manifest.get('pins'), dict)):
             raise ValueError('not a judge-panel capture')
         self.salt = manifest['salt']
         self.pins = manifest['pins']
@@ -279,6 +307,9 @@ class ReplayJudge:
         if not path.exists():
             return None
         record = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(record, dict) or not isinstance(record.get('attempts', []), list) or not all(
+                isinstance(attempt, dict) for attempt in record.get('attempts', [])):
+            raise ValueError(f'malformed capture record {pin.judge_id}/{case["id"]}/{trial}')
         if record.get('prompt_sha256') != prompt_sha256(messages):
             raise ValueError(f'capture is stale for {pin.judge_id}/{case["id"]}/{trial}')
         return record
@@ -354,10 +385,10 @@ def _parses(case: dict) -> bool:
 
 
 def planned(cases: list[dict], trials: int) -> int:
-    return sum(PANEL_SIZE * trials for case in cases if case['task'] == 'theory' or _parses(case))
+    return sum(PANEL_SIZE * trials for case in cases if _parses(case))
 
 
-def trial_result(record: dict | None, pin: JudgePin, case: dict, token: str) -> dict:
+def trial_result(record: dict | None, pin: JudgePin, case: dict, token: str, name: str) -> dict:
     parse = parse_defect if case['task'] == 'defect' else parse_theory
     base = {'state': 'unknown', 'lines': [], 'verdict': None}
     if record is None:
@@ -368,7 +399,8 @@ def trial_result(record: dict | None, pin: JudgePin, case: dict, token: str) -> 
         return {**base, 'reason': f'call_{record.get("status")}', 'measurement': measured}
     if not pin.serves(record.get('served_model')):
         return {**base, 'reason': 'model_mismatch', 'measurement': measured}
-    return {**base, **parse(record.get('reply'), case, token), 'measurement': measured}
+    return {**base, **parse(record.get('reply'), case, token, name), 'measurement': measured,
+            'served_model': record.get('served_model')}
 
 
 def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: str) -> list[dict]:  # type: ignore[no-untyped-def]
@@ -376,7 +408,7 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
     out = []
     for case in cases:
         entry = {key: case[key] for key in case if key != 'source'}
-        if case['task'] == 'defect' and not _parses(case):
+        if not _parses(case):
             entry.update(analysis='unknown', reason='syntax', judges={})
             out.append(entry)
             continue
@@ -385,11 +417,26 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
             results = []
             for trial in range(trials):
                 token = canary(salt, pin.judge_id, case['id'], trial)
-                messages = messages_for(case, token)
-                results.append(trial_result(judge.respond(pin, case, trial, messages), pin, case, token))
+                messages = messages_for(case, token, salt)
+                results.append(trial_result(judge.respond(pin, case, trial, messages), pin, case, token,
+                                            alias(salt, case['id'])))
             entry['judges'][pin.judge_id] = results
         out.append(entry)
     return out
+
+
+def void_drift(cases: list[dict]) -> dict:
+    """A judge served by two models (an alias moved mid-capture) has no repeatable answers at all."""
+    served: dict[str, set] = {}
+    for case in cases:
+        for judge_id, results in case.get('judges', {}).items():
+            served.setdefault(judge_id, set()).update(r['served_model'] for r in results if r.get('served_model'))
+    for case in cases:
+        for judge_id, results in case.get('judges', {}).items():
+            if len(served[judge_id]) > 1:
+                for result in results:
+                    result.update(state='unknown', lines=[], verdict=None, reason='model_drift')
+    return {judge_id: sorted(models) for judge_id, models in served.items()}
 
 
 def _settled(trials: list[dict], defect_lines: list[int]) -> dict:
@@ -485,9 +532,11 @@ else:
 def upstream_score(checkout: Path, verdicts: list[dict], size: dict) -> dict:
     """The pinned rubric's own panel score, run in an isolated subprocess (it is external code)."""
     scripts = Path(checkout) / 'skills/code-overview/scripts'
-    run = subprocess.run([sys.executable, '-I', '-B', '-c', UPSTREAM, str(scripts)],
-                         input=json.dumps({'verdicts': verdicts, 'size': size}),
-                         capture_output=True, text=True, timeout=60)
+    with tempfile.TemporaryDirectory(prefix='grimoire-rubric-cache-') as cache:
+        # A fresh bytecode cache: a stale or planted .pyc beside the pinned source is never loaded.
+        run = subprocess.run([sys.executable, '-I', '-B', '-X', f'pycache_prefix={cache}', '-c', UPSTREAM,
+                              str(scripts)], input=json.dumps({'verdicts': verdicts, 'size': size}),
+                             capture_output=True, text=True, timeout=60)
     if run.returncode or run.stderr:
         return {'error': 'upstream rubric failed'}
     try:
@@ -528,6 +577,10 @@ def _score_trial(results: list[dict], size: dict, checkout: Path | None) -> dict
 def score_theory(cases: list[dict], trials: int, checkout: Path | None) -> dict:
     units = {}
     for case in (c for c in cases if c['task'] == 'theory'):
+        if case.get('analysis') == 'unknown':
+            units[case['id']] = {'trials': [], 'scored': False, 'score_range': None, 'grades_repeat': False,
+                                 'reason': case['reason']}
+            continue
         size = {'files': 1, 'loc': len(case['source_lines'])}
         trial_scores = [_score_trial([results[trial] for results in case['judges'].values()], size, checkout)
                         for trial in range(trials)]
@@ -546,20 +599,27 @@ def score_theory(cases: list[dict], trials: int, checkout: Path | None) -> dict:
     return {'units': units, 'missing_analysis_probe': _score_trial(probe, {'files': 1, 'loc': 40}, checkout)}
 
 
-def proof(cases: list[dict], theory: dict) -> dict:
+def proof(cases: list[dict], defects: dict, theory: dict) -> dict:
     """The sprint's proving scenario, read off the report; ``established`` also needs live evidence."""
     by_role = {c.get('role'): c for c in cases if c.get('role')}
     facade, planted = by_role.get('compatibility_facade'), by_role.get('planted_defect')
     facade_ok = bool(facade and facade.get('panel', {}).get('state') == 'clear')
     planted_ok = bool(planted and planted.get('panel', {}).get('located'))
-    missing_ok = theory['missing_analysis_probe']['profile_score'] is None
+    # Computed through the same scoring path as the captured trials, never asserted.
+    unread_scored = any(t['profile_score'] is not None and t['reason'] is not None
+                        for unit in theory['units'].values() for t in unit['trials'])
+    missing_ok = (theory['missing_analysis_probe']['profile_score'] is None and not unread_scored
+                  and not any(c.get('judges') or 'panel' in c for c in cases if c.get('analysis') == 'unknown'))
+    panel = defects['panel']
+    complete = panel['unknown'] == 0 and panel['inconsistent'] == 0 and panel['judged'] > 0
     measured = {t.get('measurement') for c in cases for results in c.get('judges', {}).values() for t in results}
     live = measured == {'provider_reported'}
-    theory_ok = bool(theory['units']) and all(unit['scored'] for unit in theory['units'].values())
+    theory_ok = bool(theory['units']) and all(unit['scored'] for unit in theory['units'].values()) and all(
+        unit['discriminates'] is True for unit in theory['units'].values() if 'discriminates' in unit)
     return {'compatibility_facade_not_penalized': facade_ok, 'planted_defect_found': planted_ok,
-            'missing_analysis_not_perfect': missing_ok, 'theory_panel_scored': theory_ok,
-            'provider_reported_only': live,
-            'established': facade_ok and planted_ok and missing_ok and theory_ok and live}
+            'missing_analysis_not_perfect': missing_ok, 'defect_panel_complete': complete,
+            'theory_panel_scored_and_discriminates': theory_ok, 'provider_reported_only': live,
+            'established': facade_ok and planted_ok and missing_ok and complete and theory_ok and live}
 
 
 def run(corpus: Path, pins: list[JudgePin], trials: int, judge, salt: str,  # type: ignore[no-untyped-def]
@@ -569,6 +629,7 @@ def run(corpus: Path, pins: list[JudgePin], trials: int, judge, salt: str,  # ty
         verify_checkout(checkout)
     cases = load_corpus(Path(corpus))
     collected = collect(cases, pins, trials, judge, salt)
+    served = void_drift(collected)
     for entry, case in zip(collected, cases):
         entry['source_lines'] = case['source'].splitlines()
     defects = score_defects(collected, trials, [pin.judge_id for pin in pins])
@@ -580,7 +641,8 @@ def run(corpus: Path, pins: list[JudgePin], trials: int, judge, salt: str,  # ty
     return {'format': FORMAT, 'blocking': False, 'prompt_version': PROMPT_VERSION, 'trials': trials,
             'pins': [pin.record() for pin in pins], 'distinct_models': len({(p.provider_id, p.model) for p in pins}),
             'rubric_revision': None if checkout is None else RUBRIC_REVISION,
-            'cases': collected, 'defects': defects, 'theory': theory, 'proof': proof(collected, theory),
+            'served_models': served, 'cases': collected, 'defects': defects, 'theory': theory,
+            'proof': proof(collected, defects, theory),
             'confirmed_defects': [], 'note': 'Panel defect verdicts are candidates; labels are confirmed '
                                              'only by the executed checks in the test suite.'}
 
@@ -605,16 +667,16 @@ def main(argv: list[str] | None = None) -> None:
         cases = load_corpus(args.corpus)
         calls = planned(cases, trials)
         if args.command == 'plan':
-            chars = sum(len(c) for case in cases if case['task'] == 'theory' or _parses(case)
-                        for _, c in messages_for(case, '0' * 16))
+            chars = sum(len(c) for case in cases if _parses(case) for _, c in messages_for(case, '0' * 16, ''))
             print(json.dumps({'planned_calls': calls,
                               'request_ceiling': sum(calls // PANEL_SIZE * pin.attempts for pin in pins),
                               'prompt_characters_per_judge_trial': chars,
                               'max_output_tokens': {p.judge_id: p.max_output_tokens for p in pins}}, indent=2))
             return
         if args.command == 'capture':
-            if not args.confirm_billing or not args.spend_cap or args.max_calls < calls:
-                parser.exit(2, f'capture refused: needs --confirm-billing, --spend-cap and '
+            if (not args.confirm_billing or not SPEND_CAP.fullmatch(args.spend_cap or '')
+                    or args.max_calls < calls):
+                parser.exit(2, f'capture refused: needs --confirm-billing, --spend-cap "<amount> <CUR>" and '
                                f'--max-calls of at least {calls}\n')
             salt = secrets.token_hex(16)
             judge = LiveJudge(pins, configs, args.out, salt, args.max_calls, spend_cap=args.spend_cap)

@@ -112,14 +112,32 @@ def answer(verdict='defect', findings=None, token='tok', file='c.py.txt', schema
     (answer(findings=[{'line': 1, 'explanation': ' '}]), 'malformed'),
 ])
 def test_missing_or_inconsistent_answers_are_unknown(text, reason):
-    result = jp.parse_defect(text, CASE, 'tok')
+    result = jp.parse_defect(text, CASE, 'tok', 'c.py.txt')
     assert result['state'] == 'unknown' and result['reason'] == reason
 
 
 def test_covered_answers_are_verdicts_even_in_a_fence():
-    assert jp.parse_defect('```json\n' + answer() + '\n```', CASE, 'tok') == {
+    assert jp.parse_defect('```json\n' + answer() + '\n```', CASE, 'tok', 'c.py.txt') == {
         'state': 'defect', 'lines': [2], 'reason': None}
-    assert jp.parse_defect(answer('no_defect'), CASE, 'tok')['state'] == 'clear'
+    assert jp.parse_defect(answer('no_defect'), CASE, 'tok', 'c.py.txt')['state'] == 'clear'
+
+
+def test_judges_never_see_corpus_ids_or_file_names():
+    for case in jp.load_corpus(CORPUS):
+        text = jp.messages_for(case, 'tok', 'salt')[1][1]  # the system prompt is the same for every case
+        stems = {case['id'], case['file'], case['file'].split('.')[0]}
+        assert not any(stem in text for stem in stems), case['id']
+        assert jp.alias('salt', case['id']) in text and jp.alias('other', case['id']) not in text
+
+
+def test_theory_citations_must_point_into_the_listing():
+    case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\nb = 2\n'}
+    verdict = jp.perfect_uncovered_verdict('u')
+    for evidence, state in ((['f.py:2'], 'verdict'), (['f.py:3'], 'unknown'), (['other.py:1'], 'unknown'),
+                            (['f.py'], 'unknown'), ([7], 'unknown')):
+        verdict['dimensions']['absorption']['evidence'] = evidence
+        text = json.dumps({**verdict, 'files': [{'file': 'f.py', 'canary': 'tok'}]})
+        assert jp.parse_theory(text, case, 'tok', 'f.py')['state'] == state
 
 
 def test_listing_keeps_line_numbers_and_hides_one_canary():
@@ -172,12 +190,13 @@ class Scripted:
         token = jp.canary('salt', pin.judge_id, case['id'], trial)
         assert token in messages[1][1]
         verdict, lines, covered = self.decide(pin.judge_id, case, trial)
-        files = [{'file': case['file'], 'canary': token if covered else 'skipped'}]
+        name = jp.alias('salt', case['id'])
+        files = [{'file': name, 'canary': token if covered else 'skipped'}]
         if case['task'] == 'theory':
             reply = {**jp.perfect_uncovered_verdict(case['id']), 'files': files}
             if verdict == 'weak':
                 for entry in reply['dimensions'].values():
-                    entry.update(step=0.25, evidence=[case['file'] + ':1'])
+                    entry.update(step=0.25, evidence=[name + ':1'])
         else:
             reply = {'schema': jp.DEFECT_SCHEMA, 'files': files, 'verdict': verdict,
                      'findings': [{'line': n, 'explanation': 'fails'} for n in lines]}
@@ -212,7 +231,8 @@ def test_accurate_panel_meets_the_scenario_but_synthetic_answers_establish_nothi
     proof = result['proof']
     assert proof['compatibility_facade_not_penalized'] and proof['planted_defect_found']
     assert proof['missing_analysis_not_perfect']
-    assert not proof['theory_panel_scored']  # no pinned rubric supplied
+    assert not proof['theory_panel_scored_and_discriminates']  # no pinned rubric supplied
+    assert proof['defect_panel_complete']
     assert not proof['provider_reported_only'] and not proof['established']
     assert result['blocking'] is False and result['confirmed_defects'] == []
 
@@ -251,6 +271,33 @@ def test_trials_that_disagree_are_inconsistent_not_counted(tmp_path):
     judge_a = result['defects']['judges']['a']
     assert judge_a['inconsistent'] == 1 and judge_a['repeatable'] == 9
     assert result['defects']['panel']['confusion']['tp'] == 5  # two of three still agree each trial
+
+
+def test_an_incomplete_panel_does_not_establish_the_proof(tmp_path):
+    def mostly_unread(judge_id, case, trial):
+        verdict, lines, _ = accurate(judge_id, case, trial)
+        return verdict, lines, case['id'] in ('facade', 'discarded') or case['task'] == 'theory'
+    result, _ = report(tmp_path, mostly_unread)
+    assert result['proof']['planted_defect_found'] and result['proof']['compatibility_facade_not_penalized']
+    assert not result['proof']['defect_panel_complete'] and result['defects']['panel']['unknown'] == 8
+
+
+def test_a_model_that_changes_mid_capture_voids_that_judge(tmp_path):
+    judge = Scripted(accurate)
+    respond = judge.respond
+
+    def drifting(pin, case, trial, messages):
+        record = respond(pin, case, trial, messages)
+        if pin.judge_id == 'a' and trial == 2:
+            record['served_model'] = 'judge-model-20270101'
+        return record
+    judge.respond = drifting
+    pins, trials, _ = jp.load_panel(panel_file(tmp_path))
+    result = jp.run(CORPUS, pins, trials, judge, 'salt')
+    assert result['served_models']['a'] == ['judge-model', 'judge-model-20270101']
+    assert result['defects']['judges']['a']['unknown'] == 10
+    assert result['defects']['judges']['b']['unknown'] == 0
+    assert result['defects']['panel']['confusion']['tp'] == 5  # b and c still agree
 
 
 def test_a_different_served_model_voids_every_answer(tmp_path):
@@ -296,7 +343,7 @@ def test_theory_scores_only_covered_panels_and_reports_what_upstream_would_award
     units = result['theory']['units']
     assert units['ledger_cohesive']['scored'] and units['ledger_cohesive']['score_range'] == 0
     assert units['ledger_cohesive']['discriminates'] is True
-    assert result['proof']['theory_panel_scored']
+    assert result['proof']['theory_panel_scored_and_discriminates']
     probe = result['theory']['missing_analysis_probe']
     assert probe == {'profile_score': None, 'upstream_score': 100.0, 'grade': None, 'disputed': None,
                      'reason': 'coverage'}
@@ -317,6 +364,39 @@ def test_a_modified_rubric_checkout_is_refused(tmp_path, stub_checkout):
         report(tmp_path, accurate, checkout=stub_checkout)
 
 
+def test_planted_bytecode_beside_the_rubric_is_never_loaded(tmp_path, stub_checkout):
+    import py_compile
+    scripts = stub_checkout / 'skills/code-overview/scripts'
+    planted = tmp_path / 'planted.py'
+    planted.write_text(STUB_RUBRIC.replace('score = 100.0 *', 'score = 0.0 *'))
+    py_compile.compile(str(planted), cfile=str(scripts / '__pycache__/theory_rubric.cpython-'
+                                               f'{__import__("sys").version_info[0]}{__import__("sys").version_info[1]}.pyc'),
+                       invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+    (stub_checkout / '.gitignore').write_text('__pycache__/\n')
+    with pytest.raises(ValueError, match='clean'):  # an untracked .gitignore
+        report(tmp_path, accurate, checkout=stub_checkout)
+    subprocess.run(['git', '-C', str(stub_checkout), 'add', '.gitignore'], check=True)
+    subprocess.run(['git', '-C', str(stub_checkout), '-c', 'user.name=T', '-c', 'user.email=t@example.invalid',
+                    'commit', '-qm', 'ignore'], check=True)
+    revision = subprocess.check_output(['git', '-C', str(stub_checkout), 'rev-parse', 'HEAD'], text=True).strip()
+    calibration.REVISION = jp.RUBRIC_REVISION = revision
+    with pytest.raises(ValueError, match='clean'):  # an ignored file is still not clean
+        report(tmp_path, accurate, checkout=stub_checkout)
+    scores = jp.upstream_score(stub_checkout, [jp.perfect_uncovered_verdict('u')] * 3, {'files': 1, 'loc': 3})
+    assert scores['score'] == 100.0  # the source ran, not the planted bytecode
+
+
+def test_malformed_captures_fail_cleanly(tmp_path, capsys):
+    capture = tmp_path / 'capture'
+    capture.mkdir()
+    for manifest in ({'format': jp.FORMAT}, {'format': jp.FORMAT, 'salt': 's', 'pins': []}):
+        (capture / 'capture.json').write_text(json.dumps(manifest))
+        with pytest.raises(SystemExit) as stop:
+            jp.main(['score', '--corpus', str(CORPUS), '--panel', str(panel_file(tmp_path)),
+                     '--capture', str(capture)])
+        assert stop.value.code == 2 and 'unavailable' in capsys.readouterr().err
+
+
 # -- capture and replay; billed calls need every guard --------------------------------------------
 
 def test_replay_reproduces_a_capture_and_refuses_a_stale_one(tmp_path, monkeypatch):
@@ -334,7 +414,7 @@ def test_replay_reproduces_a_capture_and_refuses_a_stale_one(tmp_path, monkeypat
                 continue
             for trial in range(trials):
                 token = jp.canary('salt', judge_id, case['id'], trial)
-                messages = jp.messages_for(case, token)
+                messages = jp.messages_for(case, token, 'salt')
                 pin = next(p for p in pins if p.judge_id == judge_id)
                 steps.append(Reply(deltas=(scripted.respond(pin, case, trial, messages)['reply'],),
                                    model='judge-model'))
@@ -351,7 +431,7 @@ def test_replay_reproduces_a_capture_and_refuses_a_stale_one(tmp_path, monkeypat
     assert replayed['defects']['panel']['confusion'] == {'tp': 5, 'fp': 0, 'fn': 0, 'tn': 5}
     assert not replayed['proof']['provider_reported_only']  # a scripted transport is synthetic
     with pytest.raises(RuntimeError, match='ceiling'):
-        live.respond(pins[0], cases[0], 0, jp.messages_for(cases[0], 'x'))
+        live.respond(pins[0], cases[0], 0, jp.messages_for(cases[0], 'x', 'salt'))
 
     record = capture / 'calls/a/facade/0.json'
     record.write_text(record.read_text().replace('"prompt_sha256": "', '"prompt_sha256": "0'))
@@ -363,6 +443,8 @@ def test_replay_reproduces_a_capture_and_refuses_a_stale_one(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize('extra', [[], ['--confirm-billing'], ['--confirm-billing', '--spend-cap', '5 USD'],
+                                   ['--confirm-billing', '--spend-cap', ' ', '--max-calls', '108'],
+                                   ['--confirm-billing', '--spend-cap', 'lots', '--max-calls', '108'],
                                    ['--confirm-billing', '--spend-cap', '5 USD', '--max-calls', '107']])
 def test_capture_is_refused_before_any_call_without_every_guard(tmp_path, extra, capsys):
     out = tmp_path / 'out'
