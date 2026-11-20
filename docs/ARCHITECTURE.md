@@ -69,6 +69,13 @@ requirement and progress beside the calendar in the same scope record. Each purs
 span of campaign time as a 055 advance with its own operation id and credits effort in the same
 write, so a retry neither spends time nor adds progress twice. See [DOWNTIME.md](DOWNTIME.md).
 
+### Offscreen faction plans (headless first slice: `grimoire.offscreen`, `grimoire.offscreenstore`)
+
+An institution's plan, adopted under its recorded 057 decision, progresses across each committed
+calendar advance, applied once by that advance's own id. Only adopted plans are read, under a
+deterministic relevance budget, with no model call or roster scan; developments are director-only
+and teach no character. See [OFFSCREEN.md](OFFSCREEN.md).
+
 ### Library location and V1 isolation (implemented: `grimoire.library`)
 
 `resolve_library()` returns the V2 library and what selected it (`default` or `env`); `python -m grimoire.library` prints the same. Resolution is **read-only**: it creates nothing and never opens or lists a V1 directory.
