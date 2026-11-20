@@ -145,8 +145,9 @@ def fold_one(ledger: CommitmentLedger, commitment_id: str, support: Mapping[str,
         if as_of is not None and step.at.sequence > as_of:
             continue
         value, cited = _step_support(step, support)
-        if alive and NEXT[status] and step.operation_id not in voids and value in ("missing", "unreadable"):
-            certain = False  # an unchecked step that could still apply could change how the rest folds
+        could_apply = alive and step.status in NEXT[status] and step.at.sequence >= moment.sequence
+        if could_apply and step.operation_id not in voids and value in ("missing", "unreadable"):
+            certain = False  # an unchecked step that would apply if supported could change how the rest folds
         if step.operation_id in voids:
             outcome = "voided"
         elif value == "revoked":

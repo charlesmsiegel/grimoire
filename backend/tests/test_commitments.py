@@ -198,6 +198,13 @@ def test_a_dead_history_stays_certain_and_a_backing_counts_once():
         == "pc_authorship"
     assert reason(lambda: Transition("op-2", "m-tower", "refused", ("e-no",), at(2), controls=(("wren", "human:ana"),),
                                      authorship=(backing("refused", ("e-no",)),) * 2)) == "pc_authorship"
+    shared = tuple(Authorship("c-1", actor, "human:ana", "commitment", "s1", "t2", "Yes.",
+                              transition_fingerprint(C, "m-tower", "accepted", ("e-yes",), "")) for actor in ("mara", "wren"))
+    assert reason(lambda: Transition("op-2", "m-tower", "accepted", ("e-yes",), at(2), authorship=shared,
+                                     controls=(("mara", "human:ana"), ("wren", "human:ana")))) == "pc_authorship"
+    dead = ledger(offer(), decide("accepted"), outcome("partially_fulfilled", "op-3", ("e-half",), 3))
+    stranded = fold_one(dead, "m-tower", supported("e-ask", **{"e-no": "revoked", "e-half": "unreadable"}), {})
+    assert (stranded.status, stranded.certain) == ("offered", True)  # it strands however e-half reads
 
 
 def test_a_void_cannot_be_used_to_replay_or_skip_a_players_consent():

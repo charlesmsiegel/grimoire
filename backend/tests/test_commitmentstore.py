@@ -83,6 +83,17 @@ def test_an_offer_and_its_deadline_land_in_one_scope_write(world):
         {k: v for k, v in before.items() if k not in ("commitments", "calendar")}
 
 
+def test_two_plans_of_one_offer_id_cannot_both_land_with_different_deadlines(world):
+    store, handles, library = world
+    tag = etag(library)
+    first = library.offer(SCOPE, "op-1", mission(), cites=["e-ask"], expected=tag, due=TOWER)
+    second = library.offer(SCOPE, "op-1", mission(), cites=["e-ask"], expected=tag, due=Due("2024-04-01", "Full moon"))
+    same = library.offer(SCOPE, "op-1", mission(), cites=["e-ask"], expected=tag, due=TOWER)
+    first.commit()
+    assert reason(second.commit) == "operation_mismatch"  # its preview promised a deadline that never landed
+    assert same.commit().commitment("m-tower").deadline.label == "New moon"
+
+
 def test_retries_are_no_ops_and_a_reused_id_or_stale_read_is_refused(world):
     store, handles, library = world
     stale = etag(library)

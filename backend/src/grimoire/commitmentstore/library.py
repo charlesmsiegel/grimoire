@@ -17,7 +17,7 @@ never an NPC's memory.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from grimoire.calendars import (
     CALENDAR_KEY, CalendarError, CalendarState, Deadline, Schedule, apply, state_from_payload, state_to_payload,
@@ -104,6 +104,7 @@ class CommitmentChange:
     already_applied: bool
     _envelope: ScopeRecord | None = field(repr=False)
     _expected: str = field(repr=False)
+    _due: Due | None = field(default=None, repr=False)  # an offer's schedule, which its request() leaves out
 
     def _transaction(self):
         txn = self.library.store.transaction()
@@ -121,7 +122,8 @@ class CommitmentChange:
             current, record, ledger, calendar = library._read_scope(self.scope)
             old = None if ledger is None else ledger.operation(op.operation_id)
             if old is not None:
-                if old.request() != op.request():
+                if old.request() != op.request() or (self._due is not None and not library._scheduled(
+                        calendar, op.operation_id, op.commitment, self._due)):  # type: ignore[union-attr]
                     raise CommitmentError("operation changed since planning", "operation_mismatch")
                 return library.read(self.scope, requested_by=DIRECTOR)
             if self.already_applied:
@@ -213,7 +215,7 @@ class CommitmentLibrary:
             if retry is not None:
                 if due is not None and not self._scheduled(calendar, operation_id, commitment, due):
                     raise CommitmentError("operation id already belongs to a different deadline", "operation_mismatch")
-                return retry
+                return replace(retry, _due=due)
             self._fresh(scope, etag, expected)
             if commitment.campaign_id != scope.campaign_id:
                 raise CommitmentError("the commitment belongs to another campaign", "campaign_mismatch")
@@ -226,7 +228,8 @@ class CommitmentLibrary:
             at, support = self._cited(scope.campaign_id, ledger, probe.cites)
             op = Offer(operation_id, commitment, probe.cites, at, None if calendar is None else _clock(calendar.now),
                        due is not None)
-            return self._plan(scope, record, etag, ledger, op, calendar_after if due is not None else None)
+            change = self._plan(scope, record, etag, ledger, op, calendar_after if due is not None else None)
+            return replace(change, _due=due)
 
     def record(self, scope: ScopeRef, operation_id: str, commitment_id: str, status: str, *,
                cites: Iterable[str], expected: str, note: str = "", controls: Iterable[ControlAssignment] = (),
@@ -403,7 +406,8 @@ class CommitmentLibrary:
                     campaign_id, at.scene_id, at.turn_id) or contribution.actor_id not in needed \
                     or contribution.submitted_by != needed[contribution.actor_id] \
                     or "commitment" not in CONTRIBUTION_DOMAINS[contribution.kind] \
-                    or contribution.actor_id in by_actor:
+                    or contribution.actor_id in by_actor \
+                    or contribution.contribution_id in {c.contribution_id for c in by_actor.values()}:
                 raise CommitmentError("a contribution is not one obligor's own commitment for this scene and "
                                       "turn", "pc_authorship")
             by_actor[contribution.actor_id] = contribution

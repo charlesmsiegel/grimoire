@@ -67,8 +67,8 @@ A `Void` needs the endorsement of every player who backed the voided step (`void
 withdraws the whole commitment, and with it every step on it not already voided. So it needs the endorsement of
 every player who backed any of those steps (`pc_authorship`).
 
-One player contribution backs one step. A contribution id reused on a later step is refused
-(`reused_contribution`), so an endorsement given before a void cannot be replayed.
+One player contribution backs one step and one obligor. Two obligors backed by one contribution id are refused
+(`pc_authorship`), and a contribution id reused on a later step is refused (`reused_contribution`), so an endorsement given before a void cannot be replayed.
 
 The fingerprints cover the campaign, the commitment (or the voided operation), the status, the sorted citations
 and the note (or the void reason). They are length-prefixed, so a note cannot pass for a citation.
@@ -95,7 +95,8 @@ Support is read from the director's ledger: `read_support` refuses anyone else.
   is no longer a legal next step, and a step earlier than the commitment's current moment. So a retcon never
   leaves a later scene claiming what the undone fiction alone supported.
 - A `missing` or `unreadable` citation keeps its step but marks the state `certain=False`. It is reported as
-  uncertainty, never guessed either way.
+  uncertainty, never guessed either way. A step that would be skipped however its citation reads (voided,
+  stranded, or after a final status) adds no uncertainty.
 - The library records no new step on an uncertain history (`uncertain_history`) or on an unsupported or voided
   commitment (`unsupported_commitment`).
 - A new step's own citations must all be `supported` (`citation_missing`, `citation_unreadable`,
@@ -156,7 +157,7 @@ See [REFEREE](REFEREE.md).
 
 Every method takes an operation id (at most 100 characters) and the reviewed scope etag. A retry with the same
 request is a no-op whose `preview()` is empty. The same id with a different request is `operation_mismatch`. A
-retried offer that schedules a different `due` is `operation_mismatch` too. A stale etag raises `StaleWrite`, at plan
+retried offer that schedules a different `due` is `operation_mismatch` too, including a plan whose twin landed first. A stale etag raises `StaleWrite`, at plan
 time or, when another write lands between planning and commit, at commit. A status, note, reason or citation list of
 the wrong type is `invalid_record`. Other refusals are `CommitmentError` with a machine `reason`: the ones above, plus
 `invalid_record`, `campaign_mismatch`, `duplicate_commitment`, `unknown_party`, `unknown_commitment`,

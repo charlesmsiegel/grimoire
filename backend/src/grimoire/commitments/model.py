@@ -256,7 +256,8 @@ class Transition:
             raise CommitmentError(f"{self.status} is an adjudicated outcome: it has no backing", "unexpected_backing")
         if self.status in DECISIONS and not controls:
             raise CommitmentError(f"{self.status} is the obligors' decision: record their control", "no_controls")
-        if len(authorship) != len(players) or {a.actor_id: a.submitted_by for a in authorship} != players or any(
+        if len(authorship) != len(players) or {a.actor_id: a.submitted_by for a in authorship} != players \
+                or len({a.contribution_id for a in authorship}) != len(authorship) or any(
                 (a.scene_id, a.turn_id) != (self.at.scene_id, self.at.turn_id) for a in authorship):
             raise CommitmentError("a decision needs exactly one backing per player-controlled obligor, "
                                   "for its own scene and turn", "pc_authorship")
