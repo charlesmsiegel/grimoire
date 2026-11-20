@@ -9,6 +9,7 @@ same-named place in another source is never substituted. 059 has no weighted rou
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import replace
 
@@ -47,9 +48,20 @@ def _name(ctx: AdapterContext, ref: SourceRef) -> str | None:
     return found.envelope.name or None
 
 
-def _etag(view) -> str:  # type: ignore[no-untyped-def]
-    """The revision a change is reviewed against: the source graph's and the campaign's replacements together."""
-    return f"{view.graph_etag}|{view.overlay_etag or ''}"
+def _places_etag(ctx: AdapterContext, view) -> str:  # type: ignore[no-untyped-def]
+    """One digest of every place definition the topology names, as 059 pins them for a change (its revision, or why
+    it is missing): a place renamed or moved after the review is a change the review did not show."""
+    digest = hashlib.sha256()
+    with ctx.store.read_pass():
+        for place in sorted(view.index.topology.places, key=lambda item: str(item.ref)):
+            found = ctx.store.check_definition(place.ref)
+            digest.update(f"{place.ref}={found if isinstance(found, str) else found.etag}\n".encode())
+    return digest.hexdigest()[:32]
+
+
+def _etag(ctx: AdapterContext, view) -> str:  # type: ignore[no-untyped-def]
+    """The revision a change is reviewed against: the source graph's, the campaign's replacements and the places'."""
+    return f"{view.graph_etag}|{view.overlay_etag or ''}|{_places_etag(ctx, view)}"
 
 
 def _path_view(path: Path) -> dict:
@@ -64,7 +76,7 @@ def _view(ctx: AdapterContext, ref: SourceRef, campaign: str) -> dict:
     graph = view.index.topology
     missing = set(view.index.missing)
     names = {place.ref: _name(ctx, place.ref) for place in graph.places}
-    return {"topology": str(ref), "name": _name(ctx, ref), "etag": _etag(view),
+    return {"topology": str(ref), "name": _name(ctx, ref), "etag": _etag(ctx, view),
             "places": [{"place": str(place.ref), "name": names[place.ref], "aliases": list(place.aliases),
                         "parent": None if place.parent is None else str(place.parent),
                         "missing": place.ref in missing} for place in graph.places],
@@ -155,7 +167,10 @@ def _change(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no
         raise ApiRefused("invalid_field", "blocked must be true or false")
     path_id = common.segment(args, "path")
     operation_id = common.segment(args, "operation_id", maximum=common.OPERATION_MAX)
-    graph_etag, _, overlay = common.expected(args).partition("|")
+    parts = common.expected(args).split("|")
+    if len(parts) != 3:
+        raise ApiRefused("changed", "this review is from another revision of the page; read the topology again")
+    graph_etag, overlay, places = parts
     if graph_etag != view.graph_etag:  # the source graph itself was replaced since the review
         raise ApiRefused("changed", "the topology changed since it was reviewed; read it again")
     current = next((path for path in view.index.topology.paths if path.path_id == path_id), None)
@@ -166,6 +181,8 @@ def _change(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no
         # a retry: the change as 059 recorded it, not rebuilt from the road as later changes left it
         wanted = recorded
     else:  # a new change (or this id reused for another one, which 059 refuses as operation_conflict)
+        if places != _places_etag(ctx, view):  # a place was renamed, moved or lost since the review showed it
+            raise ApiRefused("changed", "a place on this topology changed since it was reviewed; read it again")
         wanted = replace(current, blocked=blocked)
     change = _library(ctx).change_path(ref, campaign, wanted, operation_id=operation_id, provenance=PROVENANCE,
                                        expected=overlay or None, requested_by=DIRECTOR)
