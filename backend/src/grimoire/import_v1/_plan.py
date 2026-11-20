@@ -101,6 +101,14 @@ class Receipts:
     head_etag: str | None
     mapping: Mapping = field(default_factory=dict)  # every run's mapping rows, cumulative
     desired: Mapping[str, str] = field(default_factory=dict)  # path -> digest of the content it was written for
+    #: the newest applied run's own report, as its receipt keeps it (``REPORT_KEYS``, each a list of rows, and
+    #: ``applied_at``), so what was not carried over stays readable after the import; a key the receipt holds in
+    #: another shape is listed under ``unreadable`` rather than shown as empty
+    report: Mapping = field(default_factory=dict)
+
+
+#: The parts of an applied run's review its receipt keeps, which ``Receipts.report`` reads back.
+REPORT_KEYS = ("losses", "not_imported", "unresolved", "manifest_unresolved", "flags", "skipped")
 
 
 def read_receipts(store: LibraryStore, archive_id: str) -> Receipts:
@@ -129,7 +137,24 @@ def read_receipts(store: LibraryStore, archive_id: str) -> Receipts:
                        for k, v in mapping.items())):
         raise ImportRefused(f"the newest receipt of {archive_id} is not a {RECEIPT_SCHEMA} receipt",
                             "receipt_unavailable")
-    return Receipts(run, dict(written), found.etag, head.etag, thaw(mapping), dict(desired))  # type: ignore[arg-type]
+    return Receipts(run, dict(written), found.etag, head.etag, thaw(mapping), dict(desired),  # type: ignore[arg-type]
+                    _report_of(fields))
+
+
+def _report_of(fields: Mapping) -> dict:
+    """The newest run's report from its receipt payload: each ``REPORT_KEYS`` list, and when it was applied."""
+    report: dict = {"run": fields.get("run")}
+    if type(fields.get("applied_at")) is str:
+        report["applied_at"] = fields["applied_at"]
+    unreadable = []
+    for key in REPORT_KEYS:
+        value = fields.get(key, [])
+        if isinstance(value, (list, tuple)):
+            report[key] = thaw(list(value))
+        else:
+            unreadable.append(key)
+    report["unreadable"] = unreadable
+    return report
 
 
 def _text_map(value: object) -> bool:

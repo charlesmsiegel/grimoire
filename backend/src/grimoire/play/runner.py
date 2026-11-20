@@ -8,7 +8,9 @@ docs/SCENES.md for the contract.
 Authority is never passed in: who controls an actor comes from 003's sovereignty ledger, who may act
 is an authenticated handle the library's authority issued, and every generated line is a proposal
 until the table keeps it. The only world state written here is an accepted effect (021), and only once
-it holds every key (``play/accept.py``); nothing writes events, evidence or rulings.
+it holds every key (``play/accept.py``), with what it leaves in 020: its 012 bridge event and the perceptions of
+those who saw it on the chat's stage (``play/witness.py``). Nothing here writes a proposition, a report, a
+belief, a ruling or a disclosure.
 """
 
 from __future__ import annotations
@@ -47,7 +49,8 @@ from grimoire.memorystore import MemoryLibrary
 from grimoire.obstaclestore import ObstacleLibrary
 from grimoire.partystore import PartyLibrary
 from grimoire.play.accept import (
-    approve_effect, effect_problems, endorse_effect, propose_effect, recover_effects,
+    approve_effect, decline_effect, effect_problems, endorse_effect, propose_effect, recover_effects,
+    withdraw_effect,
 )
 from grimoire.play.boundaries import HELD, Boundaries, change as change_boundary, check_presented, in_force
 from grimoire.play.boundaries import view as boundary_view
@@ -261,11 +264,15 @@ class SceneRunner:
 
     @traced("open")
     def open(self, chat: ChatRef) -> Scene:
-        """The chat as it stands now; nothing is written. With an effects library, its problems also name
+        """The chat as it stands now. Nothing is written but 020 knowledge of accepted effects still pending (see
+        below), so every read that opens a chat (the hub, the knowledge view, the inbox, the story page) may write
+        it. With an effects library, its problems also name
         every 021 problem of the campaign (``effects``) and each acceptance cut short (``effect_unsettled``,
         ``<turn id>:<event id>:<shape>``) for ``recover_effects``, or, one another device started, for that device
         (``effect_elsewhere``, ``<turn id>:<event id>:<device tag>``), or one of unknown device for the owner's
-        word (``effect_untagged``, ``<turn id>:<event id>``)."""
+        word (``effect_untagged``, ``<turn id>:<event id>``). It first writes every accepted effect's pending 020
+        knowledge it can (``play/witness.py``), and counts this chat's that stays (``unbridged``,
+        ``<count>:<reason>``, naming no effect)."""
         scene = self._context(chat).scene
         found = effect_problems(self, scene)
         try:  # 016: a configuration that cannot be read holds every narration; said, never hidden
@@ -1140,6 +1147,19 @@ class SceneRunner:
         """A player's own key on the exact effect shown (its fingerprint); the last key accepts it."""
         return endorse_effect(self, chat, by, turn, number, fingerprint)
 
+    @traced("withdraw_effect")
+    def withdraw_effect(self, chat: ChatRef, by, turn: str, number: int):
+        """End a live (proposed or approved) effect without accepting it, written ``refused`` (``withdrawn``): by
+        the director (the owner), or by the player who proposed it for their own post's turn. Its keys go with it;
+        the turn may be proposed for again."""
+        return withdraw_effect(self, chat, by, turn, number)
+
+    @traced("decline_effect")
+    def decline_effect(self, chat: ChatRef, by, turn: str, number: int, fingerprint: str):
+        """A named endorser refuses the exact effect shown (its fingerprint), given their key or not: it is ended
+        without being accepted, written ``refused`` (``declined``); the turn may be proposed for again."""
+        return decline_effect(self, chat, by, turn, number, fingerprint)
+
     @traced("recover_effects")
     def recover_effects(self, chat: ChatRef, by, *, abort: bool = False, endorsers=(), own: bool = False):
         """Settle every acceptance of this chat that was cut short, by what landed (030); the owner only.
@@ -1147,7 +1167,8 @@ class SceneRunner:
         An endorser present stands in for an endorsement the authority holds no record of (shape B only).
         An acceptance another device started is never settled here (``accepted_elsewhere``, after this device's),
         nor one that names no device and of which nothing is here, unless ``own`` says it is this library's
-        (``untagged_acceptance``)."""
+        (``untagged_acceptance``). Then, whatever stopped it, every accepted effect's pending 020 knowledge
+        is written as far as it can be now (never a refusal: ``open`` counts what stays)."""
         return recover_effects(self, chat, by, abort=abort, endorsers=endorsers, own=own)
 
     # -- the table's choices ------------------------------------------------------------------------

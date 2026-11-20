@@ -1,7 +1,7 @@
 // Sprint 113's campaign page end to end, in fakedom against a real app server: from the menu to the list, a campaign and
-// its chat, the table's and the director's views, and one effect accepted with two keys given in two calls
-// (the director proposes and approves; the player endorses exactly what was shown, in the inbox the table's
-// view links to).
+// its chat, the table's and the director's views, one effect withdrawn by the director and one declined by the
+// player, and one effect accepted with two keys given in two calls (the director proposes and approves; the
+// player endorses exactly what was shown, in the inbox the table's view links to).
 // Run by test_campaign_page.py, which serves a synthetic library whose card chat has a kept turn by the seated
 // player, and passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHAT (that chat) and GRIMOIRE_CAMPAIGN (its campaign).
 import assert from "node:assert/strict";
@@ -78,22 +78,54 @@ test("a campaign's chat, its two views and an effect accepted with two keys", { 
   assert.ok(section(main, "World truth") && section(main, "NPC goals"));
   const cast = section(main, "Cast and stage").querySelectorAll("span.campaign-name").map((node) => node.textContent);
   assert.deepEqual(cast.sort(), ["Anya Rook", "Mara Vell"]);
-  byText(propose, "button", "Add an operation").at(-1).click();
-  const fields = propose.querySelectorAll("input,select,textarea");
-  const pick = (labelText) => {
-    const label = propose.querySelectorAll("label").find((node) => node.textContent === labelText);
-    return fields.find((node) => node.getAttribute("id") === label.getAttribute("for"));
+  const proposeMeeting = async () => {
+    const card = await until(() => section(main, "Propose an effect"), 15000, "the proposal card");
+    byText(card, "button", "Add an operation").at(-1).click();
+    const fields = card.querySelectorAll("input,select,textarea");
+    const pick = (labelText) => {
+      const label = card.querySelectorAll("label").find((node) => node.textContent === labelText);
+      return fields.find((node) => node.getAttribute("id") === label.getAttribute("for"));
+    };
+    const actor = (name) => pick("Subject").querySelectorAll("option").find((node) => node.textContent === name).getAttribute("value");
+    pick("What happens").value = "Anya pays Mara a coin.";
+    pick("What happens").dispatchEvent({ type: "input" });
+    pick("Relation").value = "knows";
+    pick("Subject").value = actor("Mara Vell");
+    pick("Object").value = actor("Anya Rook");
+    pick("Done by").value = actor("Anya Rook");
+    byText(card, "button", "Propose").at(-1).click();
+    await idle();
   };
-  const actor = (name) => pick("Subject").querySelectorAll("option").find((node) => node.textContent === name).getAttribute("value");
-  pick("What happens").value = "Anya pays Mara a coin.";
-  pick("What happens").dispatchEvent({ type: "input" });
-  pick("Relation").value = "knows";
-  pick("Subject").value = actor("Mara Vell");
-  pick("Object").value = actor("Anya Rook");
-  pick("Done by").value = actor("Anya Rook");
-  byText(propose, "button", "Propose").at(-1).click();
-  await idle();
   const waiting = () => section(main, "Changes waiting on approval");
+  const record = (number) => section(main, "Turns and effects").querySelectorAll("div.campaign-effect")
+    .find((node) => byText(node, "strong", "Effect " + number + " (").length);
+
+  // a change can be ended without being accepted: the director withdraws one, and the player declines another
+  // (on the hub, beside the inbox link); the turn takes a new proposal each time
+  assert.ok(propose);
+  await proposeMeeting();
+  const withdraw = await until(() => waiting() && byText(waiting(), "button", "Withdraw")[0], 15000, "the first proposal");
+  assert.ok(withdraw.getAttribute("aria-label").startsWith("Withdraw effect 1 of turn "), "its name says which change");
+  withdraw.click();
+  await answerDialog("Withdraw");
+  await idle();
+  const withdrawn = await until(() => record(1), 15000, "the withdrawn effect");
+  assert.ok(byText(withdrawn, "strong", "Effect 1 (withdrawn)").length, withdrawn.textContent);
+  assert.equal(document.activeElement, withdrawn, "focus moves to the record of how it ended");
+  assert.equal(waiting().querySelector("div.campaign-effect"), null);
+  await proposeMeeting();
+  await until(() => waiting() && waiting().querySelector("div.campaign-effect"), 15000, "the second proposal");
+  view(main, "Table view").click();
+  const decline = await until(() => waiting() && byText(waiting(), "button", "Decline")[0], 15000, "the player's refusal");
+  assert.ok(!byText(waiting(), "button", "Withdraw").length, "the director's proposal is not the table's to withdraw");
+  decline.click();
+  await answerDialog("Decline");
+  await idle();
+  const declined = await until(() => record(2), 15000, "the declined effect");
+  assert.ok(byText(declined, "strong", "Effect 2 (declined)").length, declined.textContent);
+  assert.equal(waiting().querySelector("div.campaign-effect"), null);
+  view(main, "Director view").click();
+  await proposeMeeting();
   const effect = await until(() => waiting() && waiting().querySelector("div.campaign-effect"), 15000, "the proposed effect");
   assert.ok(effect.textContent.includes("Anya pays Mara a coin."), effect.textContent);
   assert.ok(effect.textContent.includes("Your key: not given"));

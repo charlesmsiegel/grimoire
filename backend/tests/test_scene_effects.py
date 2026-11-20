@@ -561,6 +561,226 @@ def test_a_turn_changed_while_the_last_key_accepts_commits_nothing(cards, monkey
         assert events(at, chat).events == () and stored_effect(at, chat, turn).state == "proposed"
 
 
+# -- ending a live effect without accepting it -----------------------------------------------------------
+
+def _revive(at: Table, chat, turn: str, number: int = 1) -> None:
+    """Set an ended effect live again in its turn file, as a hand edit or a peer could."""
+    path = at.store.root / "campaigns" / chat.campaign_id / "turns" / f"{turn}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    body = data.get("payload", data)
+    effect = body["effects"][number - 1]
+    effect["state"], effect["reason"] = "proposed", None
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _turn_ref(at: Table, chat, turn: str):
+    (record,) = [record for record in at.runner.open(chat).records if record.turn_id == turn]
+    return record.ref
+
+
+def test_the_director_withdraws_a_live_effect_and_the_turn_takes_a_new_one(cards):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, effect = proposed(at, chat)  # Ana's own proposal
+        at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        withdrawn = at.runner.withdraw_effect(chat, at.owner, turn, 1)
+        assert (withdrawn.state, withdrawn.reason, withdrawn.event_id) == ("refused", "withdrawn", None)
+        assert [item.principal for item in withdrawn.endorsements] == [ANA]  # the record of the keys stays
+        assert stored_effect(at, chat, turn) == withdrawn
+        refused("not_proposed", at.runner.approve_effect, chat, at.owner, turn, 1)
+        refused("not_proposed", at.runner.withdraw_effect, chat, at.owner, turn, 1)
+        refused("not_proposed", at.runner.decline_effect, chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        assert events(at, chat).events == ()
+    with restart(folder) as again:  # the turn file keeps it, and a new proposal is accepted as any other
+        assert stored_effect(again, chat, turn) == withdrawn
+        refused("not_proposed", again.runner.approve_effect, chat, again.owner, turn, 1)
+        new = again.runner.propose_effect(chat, again.owner, turn, "Mara knows Anya.", knowing(again, chat))
+        assert new.number == 2 and new.proposal.moment.sequence > effect.proposal.moment.sequence
+        assert stored_effect(again, chat, turn) == withdrawn  # an ended effect is not superseded again
+        assert again.runner.approve_effect(chat, again.owner, turn, 2).state == "accepted"
+        assert len(events(again, chat).events) == 1
+
+
+def test_the_proposing_player_withdraws_their_own_proposal_and_no_one_elses(cards):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, anya, mara = decided(at, chat)
+        at.runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, mara.instance_id, BOB),
+                                     at.owner)  # Bob plays Mara: at the table, but not Anya's player
+        directors = at.runner.propose_effect(chat, at.owner, turn, MET, meeting(anya, mara, turn))
+        refused("not_proposer", at.runner.withdraw_effect, chat, at.player(), turn, 1)  # the director's proposal
+        assert stored_effect(at, chat, turn) == directors
+        at.runner.propose_effect(chat, at.player(), turn, MET, meeting(anya, mara, turn))
+        refused("not_proposer", at.runner.withdraw_effect, chat, at.player(BOB), turn, 2)
+        refused("not_authenticated", at.runner.withdraw_effect, chat, at.authority.handle_for(ANA), turn, 2)
+        withdrawn = at.runner.withdraw_effect(chat, at.player(), turn, 2)
+        assert (withdrawn.state, withdrawn.reason) == ("refused", "withdrawn")
+        assert at.runner.propose_effect(chat, at.player(), turn, MET, meeting(anya, mara, turn)).number == 3
+
+
+def test_an_endorser_declines_the_effect_shown_and_only_their_own(cards):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, anya, mara = decided(at, chat)
+        at.runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, mara.instance_id, BOB),
+                                     at.owner)
+        effect = at.runner.propose_effect(chat, at.owner, turn, MET, meeting(anya, mara, turn))
+        shown = effect.proposal.fingerprint
+        refused("fingerprint_mismatch", at.runner.decline_effect, chat, at.player(), turn, 1, "sha256:" + "0" * 64)
+        refused("not_endorser", at.runner.decline_effect, chat, at.player(BOB), turn, 1, shown)
+        refused("not_endorser", at.runner.decline_effect, chat, at.owner, turn, 1, shown)  # the director withdraws
+        refused("invalid_field", at.runner.decline_effect, chat, at.player(), turn, "1", shown)
+        refused("unknown_effect", at.runner.decline_effect, chat, at.player(), turn, 2, shown)
+        refused("unknown_turn", at.runner.decline_effect, chat, at.player(), "nope", 1, shown)
+        at.runner.approve_effect(chat, at.owner, turn, 1)  # an approved effect still waits on Ana's key
+        declined = at.runner.decline_effect(chat, at.player(), turn, 1, shown)
+        assert (declined.state, declined.reason, declined.approved_by) == ("refused", "declined", OWNER)
+        refused("not_proposed", at.runner.endorse_effect, chat, at.player(), turn, 1, shown)
+        assert events(at, chat).events == ()
+    with restart(folder) as again:
+        assert stored_effect(again, chat, turn) == declined
+
+
+def test_a_player_may_decline_after_endorsing_but_never_once_it_is_being_accepted(cards, monkeypatch):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, effect = proposed(at, chat)
+        at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        assert at.runner.decline_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint).reason == "declined"
+        scene = at.runner.open(chat)
+        (mara,) = [actor for actor in scene.cast if actor != scene.persona]
+        second = at.runner.propose_effect(chat, at.owner, turn, MET, meeting(scene.persona, mara, turn))
+        at.runner.endorse_effect(chat, at.player(), turn, 2, second.proposal.fingerprint)
+        crash_after(monkeypatch, relations=False, event=False)
+        with pytest.raises(Crash):
+            at.runner.approve_effect(chat, at.owner, turn, 2)
+    monkeypatch.undo()
+    with restart(folder) as again:  # an acceptance under way is never ended: it is recovered
+        refused("effect_accepting", again.runner.decline_effect, chat, again.player(), turn, 2,
+                second.proposal.fingerprint)
+        refused("effect_accepting", again.runner.withdraw_effect, chat, again.owner, turn, 2)
+        again.runner.recover_effects(chat, again.owner)
+        assert again.runner.approve_effect(chat, again.owner, turn, 2).state == "accepted"
+        refused("already_accepted", again.runner.decline_effect, chat, again.player(), turn, 2,
+                second.proposal.fingerprint)
+        refused("already_accepted", again.runner.withdraw_effect, chat, again.owner, turn, 2)
+
+
+def test_a_superseded_effect_and_a_paused_or_handed_over_chat_end_nothing(cards):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, first = proposed(at, chat)
+        scene = at.runner.open(chat)
+        (mara,) = [actor for actor in scene.cast if actor != scene.persona]
+        second = at.runner.propose_effect(chat, at.player(), turn, "Anya greets Mara.",
+                                          meeting(scene.persona, mara, turn))
+        refused("not_proposed", at.runner.withdraw_effect, chat, at.owner, turn, 1)
+        refused("not_proposed", at.runner.decline_effect, chat, at.player(), turn, 1, first.proposal.fingerprint)
+        at.runner.request(chat, at.player(), "pause")
+        refused("paused", at.runner.withdraw_effect, chat, at.owner, turn, 2)
+        refused("paused", at.runner.decline_effect, chat, at.player(), turn, 2, second.proposal.fingerprint)
+        assert stored_effect(at, chat, turn, 2).state == "proposed"
+        at.runner.resume(chat, at.player())
+        for actor, player in ((scene.persona, BOB), (mara, ANA)):  # the players swap characters
+            at.runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, actor.instance_id, player),
+                                         at.owner)
+        refused("control_changed", at.runner.decline_effect, chat, at.player(), turn, 2, second.proposal.fingerprint)
+        assert at.runner.withdraw_effect(chat, at.owner, turn, 2).reason == "withdrawn"  # the director still may
+
+
+def test_a_key_landing_while_an_effect_is_ended_ends_nothing_and_records_nothing(cards, monkeypatch):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, effect = proposed(at, chat)
+        write = at.runner.scenes.write
+        raced = []
+
+        def racing(record, base, **kwargs):  # the director's key lands while Ana's decline is written
+            if not raced:
+                raced.append(True)
+                at.runner.approve_effect(chat, at.owner, turn, 1)
+            return write(record, base, **kwargs)
+        monkeypatch.setattr(at.runner.scenes, "write", racing)
+        refused("turn_changed", at.runner.decline_effect, chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        monkeypatch.setattr(at.runner.scenes, "write", write)
+        assert stored_effect(at, chat, turn).state == "approved"  # the approval stands; nothing was ended
+        address = accepting.end_address(_turn_ref(at, chat, turn), 1, "declined", effect.fingerprint)
+        assert not any(item.resource == address for item in at.authority.audit())
+        assert at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint).state == "accepted"
+
+
+@pytest.mark.parametrize("how", ["declined", "withdrawn"])
+def test_control_changing_while_an_effect_is_ended_ends_nothing_and_records_nothing(cards, monkeypatch, how):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, effect = proposed(at, chat)  # Ana's own proposal, Anya's act: Ana both declines and withdraws it
+        write = at.runner.scenes.write
+        raced = []
+
+        def racing(record, base, **kwargs):  # Anya goes to Bob after Ana's call read the scene, before its write
+            if not raced:
+                raced.append(True)
+                _hand_over(at, chat)
+            return write(record, base, **kwargs)
+        monkeypatch.setattr(at.runner.scenes, "write", racing)
+        if how == "declined":
+            refused("control_changed", at.runner.decline_effect, chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        else:
+            refused("control_changed", at.runner.withdraw_effect, chat, at.player(), turn, 1)
+        monkeypatch.setattr(at.runner.scenes, "write", write)
+        assert raced and stored_effect(at, chat, turn).state == "proposed"  # the turn file never took it
+        address = accepting.end_address(_turn_ref(at, chat, turn), 1, how, effect.fingerprint)
+        assert not any(item.resource == address for item in at.authority.audit())
+        assert at.runner.withdraw_effect(chat, at.owner, turn, 1).reason == "withdrawn"  # the director's needs none
+
+
+@pytest.mark.parametrize("failure", [StaleWrite([("turn", "another process wrote it")]), OSError("disk full")])
+def test_an_ending_whose_turn_commit_fails_records_nothing_and_the_effect_stays_acceptable(cards, monkeypatch,
+                                                                                         failure):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, effect = proposed(at, chat)
+        store = at.runner.scenes.store
+        transaction = store.transaction
+
+        def failing():  # the turn write passes every check and then its commit fails
+            txn = transaction()
+
+            def commit(*args, **kwargs):
+                raise failure
+            txn.commit = commit
+            return txn
+        monkeypatch.setattr(store, "transaction", failing)
+        with pytest.raises((SceneRefused, OSError)):
+            at.runner.decline_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        monkeypatch.setattr(store, "transaction", transaction)
+        assert stored_effect(at, chat, turn).state == "proposed"  # the turn never recorded it
+        address = accepting.end_address(_turn_ref(at, chat, turn), 1, "declined", effect.fingerprint)
+        assert not any(item.resource == address for item in at.authority.audit())
+        # Ana thinks again and endorses: the last key accepts it, never refused as declined
+        at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        accepted = at.runner.approve_effect(chat, at.owner, turn, 1)
+        assert accepted.state == "accepted" and len(events(at, chat).events) == 1
+
+
+@pytest.mark.parametrize("how", ["declined", "withdrawn"])
+def test_an_ended_effect_set_live_again_in_its_turn_file_is_never_accepted(cards, how):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, effect = proposed(at, chat)
+        at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        if how == "declined":
+            at.runner.decline_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        else:
+            at.runner.withdraw_effect(chat, at.player(), turn, 1)  # Ana's own proposal
+    with restart(folder) as again:  # the authority's record of the ending outlives the process
+        _revive(again, chat, turn)
+        assert stored_effect(again, chat, turn).live
+        ended = again.runner.approve_effect(chat, again.owner, turn, 1)  # the last key: refused, never accepted
+        assert (ended.state, ended.reason) == ("refused", how)
+        assert events(again, chat).events == () and stored_effect(again, chat, turn) == ended
+
+
 # -- who hears it ----------------------------------------------------------------------------------------
 
 def test_an_effect_proposal_never_reaches_a_model_prompt(cards):

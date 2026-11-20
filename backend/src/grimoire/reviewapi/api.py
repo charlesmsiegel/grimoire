@@ -612,7 +612,8 @@ class ReviewApi:
         except (ValueError, UnstorableIdentifier) as error:
             raise ReviewRefused("invalid_field", str(error)) from None
         return {"archive_id": archive_id, "runs": receipts.run, "written": len(receipts.written),
-                "mapping": {key: len(rows) for key, rows in receipts.mapping.items()}}
+                "mapping": {key: len(rows) for key, rows in receipts.mapping.items()},
+                "report": _receipt_report_view(receipts.report) if receipts.run else None}
 
     # -- 042: rebase ----------------------------------------------------------------------------
     def _rebase_candidates(self, args: Mapping[str, object]) -> dict:
@@ -751,6 +752,15 @@ def _selection(value: object, manifest: Mapping) -> Selection:
     if not isinstance(skip, list) or not all(type(item) is str for item in skip):
         raise ReviewRefused("invalid_field", "selection.skip is a list of legacy ids")
     return Selection(dict(worlds), dict(campaigns), frozenset(skip))
+
+
+def _receipt_report_view(report: Mapping) -> dict:
+    """The newest applied run's report, kept with its receipt: what it did not carry over, bounded like a preview."""
+    view: dict = {"run": report.get("run"), "applied_at": report.get("applied_at"),
+                  "unreadable": list(report.get("unreadable", []))}
+    for key in ("losses", "not_imported", "unresolved", "manifest_unresolved", "flags", "skipped"):
+        view[key] = bounded(list(report.get(key, [])), MAX_ROWS)
+    return view
 
 
 def _v1_review_view(review: Mapping) -> dict:

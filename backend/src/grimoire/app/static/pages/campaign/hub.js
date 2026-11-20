@@ -5,7 +5,8 @@
 // change to endorse) is decided in the inbox ("Needs you"), which the table's view links to; the director's own
 // deciding stays here.
 
-import { campaignName, chatName, count, hubSections, isDirector, knowledgeTabs, pendingEffects } from "./logic.js";
+import { campaignName, chatName, count, effectState, hubSections, isDirector, knowledgeTabs, mayDecline, mayWithdraw,
+  pendingEffects } from "./logic.js";
 import { effectDetails, weighed } from "./shown.js";
 import { itemHref, itemId, served as inboxServed } from "../inbox/feed.js";
 import { coverBand } from "../art/covers.js";
@@ -109,6 +110,18 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   // Whose knowledge is showing: kept across re-renders, and read again each time the hub is drawn.
   const knowing = { actor: "", asked: 0 };
 
+  // After a change is ended its buttons are gone: focus goes to its record under "Turns and effects", which says
+  // how it ended, or else to the card of changes still waiting.
+  const focusEffect = (turn, number) => {
+    const key = effectKey(turn, number);
+    const record = [...view.querySelectorAll("[data-effect]")].find((node) => node.getAttribute("data-effect") === key);
+    const card_ = view.querySelector('section[aria-label="Changes waiting on approval"]');
+    const target = record || (card_ && card_.querySelector("h2"));
+    if (!target) return;
+    if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");  // focused by the page, not tabbed to
+    target.focus();
+  };
+
   function render(hub) {
     const director = isDirector(hub, audience);
     const names = new Map(hub.cast.map((member) => [member.actor, member.name]));
@@ -118,7 +131,7 @@ export async function showHub(root, ctx, campaign, asked, audience) {
     const reviewedWrite = (op, args, ...rest) => write(op,
       ["label", "confirm", "decide"].includes(op) && hub.open_action
         ? { ...args, turn: hub.open_action.turn, expected: hub.open_action.expected } : args, ...rest);
-    const at = { ctx, hub, nameOf, write: reviewedWrite, director, call, knowing, chat, numberOf: (turn) => numbers.get(turn) };
+    const at = { ctx, hub, nameOf, write: reviewedWrite, director, call, knowing, chat, numberOf: (turn) => numbers.get(turn), focusEffect };
     const make = { action: actionCard, recover: recoverCard, cast: castCard, holdings: holdingsCard, changes: changesCard,
       obstacles: obstaclesCard, truth: truthCard, goals: goalsCard, knowledge: knowledgeCard, propose: () => proposal(hub),
       turns: turnsCard, sources: sourcesCard, unavailable: unavailableCard };
@@ -379,15 +392,20 @@ function turnsCard(at) {
   return card(ui, "Turns and effects", { wide: true }, blocks.length ? blocks : ui.empty("No turn has been labelled or given an effect yet."));
 }
 
-function effectBlock({ ctx, hub, nameOf, write, director, chat }, turn, effect, can, waiting) {
+function effectBlock({ ctx, hub, nameOf, write, director, chat, focusEffect }, turn, effect, can, waiting) {
   const { ui } = ctx;
   const { el } = ui;
   const box = el("div", { class: "campaign-effect" },
     waiting ? el("div", { class: "g-muted campaign-small" }, "Turn " + turn.number + " · effect " + effect.number + " · " + effect.state) : null,
     waiting ? el("p", { class: "campaign-summary" }, effect.summary)
-      : el("p", {}, el("strong", {}, "Effect " + effect.number + " (" + effect.state + "): "), effect.summary),
+      : el("p", {}, el("strong", {}, "Effect " + effect.number + " (" + effectState(effect) + "): "), effect.summary),
     effectDetails(ui, effect, nameOf, hub.player));
-  if (!waiting) return box;
+  if (!waiting) {
+    // the record a change's ending moves focus to (focusEffect)
+    box.setAttribute("data-effect", effectKey(turn.turn, effect.number));
+    box.setAttribute("tabindex", "-1");
+    return box;
+  }
   const mine = effect.endorsers.some((key) => key.principal === hub.player && !key.given);
   const args = { turn: turn.turn, number: effect.number };
   // Two keys, two calls: the player endorses exactly what is shown here; the director approves. One person may
@@ -410,8 +428,31 @@ function effectBlock({ ctx, hub, nameOf, write, director, chat }, turn, effect, 
       if (await ui.confirm(message, { confirmLabel: "Approve", danger: last })) write("approve_effect", args, last ? "Accepted." : "Approved.");
     }, { kind: "primary" }))));
   }
+  // Ending it without accepting it: the director (or the player who proposed it) withdraws it; a player whose
+  // character acts in it declines it, naming it as shown. Either ends it for good: the turn takes a new proposal.
+  const named = "effect " + effect.number + " of turn " + turn.number;
+  const ending = (label, op, extra, message, said) => {
+    const node = ui.button(label, async () => {
+      if (!(await ui.confirm(message, { confirmLabel: label, danger: true }))) return;
+      if (await write(op, { ...args, ...extra }, said)) focusEffect(turn.turn, effect.number);
+    });
+    node.setAttribute("aria-label", label + " " + named);
+    return node;
+  };
+  if (mayDecline(hub, effect, director)) {
+    put(box, available(ctx, can.decline_effect, "Declining this effect", () => ui.actions(ending("Decline", "decline_effect",
+      { fingerprint: effect.fingerprint }, "Decline effect " + effect.number + ", exactly as shown: " + effect.summary
+        + "? It is ended without being accepted, and none of it becomes world truth.", "You declined effect " + effect.number + "."))));
+  }
+  if (mayWithdraw(hub, effect, director, turn)) {
+    put(box, available(ctx, can.withdraw_effect, "Withdrawing this effect", () => ui.actions(ending("Withdraw", "withdraw_effect", {},
+      "Withdraw effect " + effect.number + "? It is ended without being accepted, and any key given to it goes with it. "
+        + "The turn can be given a new proposal.", "Effect " + effect.number + " is withdrawn."))));
+  }
   return box;
 }
+
+function effectKey(turn, number) { return turn + "#" + number; }
 
 // The director proposes a turn's effect whole, in structured form: what an obstacle attempt made due comes
 // first, by itself; operations and holdings lines are added here. Nothing is proposed from narration.
@@ -494,21 +535,30 @@ function proposeCard(ctx, hub, chat, kept, write, made) {
 
 // What 035 reports for this chat's cut-short acceptances: unsettled ones this library settles, untagged ones only
 // on the owner's word that this library accepted them, and ones another device accepted, which that device settles.
+// Also accepted effects whose knowledge (020) is not written yet (``unbridged``, a count and a reason, never which
+// effect): play goes on, and recovery writes what it can now.
 function recoverCard({ ctx, hub, write, director }) {
   const { ui } = ctx;
   const { el } = ui;
-  const title = "Acceptance cut short";
   const codes = new Set(hub.problems.map((problem) => problem.code));
   const here = codes.has("effect_unsettled"), untagged = codes.has("effect_untagged"), elsewhere = codes.has("effect_elsewhere");
-  if (!here && !untagged && !elsewhere) return null;
-  const parts = [el("p", {}, "An effect's acceptance was cut short.")];
+  const unbridged = codes.has("unbridged"), cut = here || untagged || elsewhere;
+  if (!cut && !unbridged) return null;
+  const title = cut ? "Acceptance cut short" : "Knowledge not written yet";
+  const parts = cut ? [el("p", {}, "An effect's acceptance was cut short.")] : [];
   if (elsewhere) parts.push(el("p", {}, "One was accepted on another device: settle it there."));
+  if (unbridged) parts.push(el("p", {}, "What the characters saw of an accepted change is not in their knowledge yet."));
   if (!director) {
-    if (here || untagged) parts.push(el("p", { class: "g-muted" }, "The director settles it, in the director's view."));
+    if (here || untagged || unbridged) parts.push(el("p", { class: "g-muted" }, "The director settles it, in the director's view."));
     return card(ui, title, { kind: "alert" }, ...parts);
   }
-  if (!here && !untagged) return card(ui, title, { kind: "alert" }, ...parts);
   const can = hub.actions.find((item) => item.op === "recover_effects");
+  if (!here && !untagged) {
+    if (unbridged) parts.push(available(ctx, can, "Writing it", () => ui.actions(ui.button("Write it now", () =>
+      write("recover_effects", { abort: false, player_key: false, own: false }, () => "Written where it could be."),
+      { kind: "primary" }))));
+    return card(ui, title, { kind: "alert" }, ...parts);
+  }
   const tick = (text) => {
     const id = ui.id("campaign-tick");
     const input = el("input", { type: "checkbox", id });
