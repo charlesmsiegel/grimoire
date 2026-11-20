@@ -92,12 +92,21 @@ def test_proving_scenario_a_v1_library_and_a_separate_card_are_previewed_approve
         assert applied["state"] == "applied" and applied["result"]["receipt"].startswith("import:")
         after = files_of(desk.folder)
         assert {row["path"] for row in proposal["files"]} <= set(after)
-        assert desk("v1.receipts", archive_id=ARCHIVE)["runs"] == 1
+        receipts = desk("v1.receipts", archive_id=ARCHIVE)
+        assert receipts["runs"] == 1
+        # what the preview warned of stays readable after the write, from the receipt itself
+        kept = receipts["report"]
+        assert kept["run"] == 1 and kept["applied_at"] and kept["unreadable"] == []
+        for key in ("losses", "not_imported", "unresolved", "manifest_unresolved", "flags"):
+            assert kept[key] == proposal["report"][key], key
+        assert kept["unresolved"]["total"] and kept["not_imported"]["total"]  # the fixture leaves things behind
 
         again = desk("v1.preview", scan=desk("v1.scan", source=str(v1), archive_id=ARCHIVE)["scan"])
         assert again["writes"] == 0 and again["files"] == []
         apply_checked(desk, again)
         assert files_of(desk.folder) == after  # the rerun duplicated nothing
+        # a rerun that wrote nothing wrote no receipt: the first run's report is still the one kept
+        assert desk("v1.receipts", archive_id=ARCHIVE)["report"] == kept
 
         card_proposal = desk("card.preview", card=b64(CARD), origin="mara.json", portrait=b64(PORTRAIT))
         report = card_proposal["report"]
@@ -384,6 +393,8 @@ def test_a_v1_folder_that_is_missing_or_gone_since_its_scan_is_refused(tmp_path)
         gone = refused(lambda: desk("v1.preview", scan=scanned["scan"]))
         assert gone.reason in ("no_source", "not_a_v1_library", "source_changed")
         assert refused(lambda: desk("v1.receipts", archive_id="A/B")).reason == "invalid_field"
+        never = desk("v1.receipts", archive_id="never-imported")
+        assert never["runs"] == 0 and never["report"] is None
 
 
 def test_a_denied_apply_writes_nothing_and_stays_open_to_retry(desk):

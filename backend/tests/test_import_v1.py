@@ -172,6 +172,15 @@ def test_v2_edits_are_kept_deletions_stay_deleted_and_new_selections_add_only(en
     receipts = read_receipts(env.store, ARCHIVE)
     assert receipts.run == 2
     assert "campaigns/the-drowned-ledger/scope.json" in receipts.written  # cumulative across runs
+    assert receipts.report["run"] == 2 and receipts.report["unreadable"] == []  # the newest run's own report
+
+
+def test_a_receipt_report_in_another_shape_is_named_unreadable_never_shown_empty():
+    from grimoire.import_v1._plan import REPORT_KEYS, _report_of
+    report = _report_of({"run": 3, "applied_at": "2026-11-20T00:00:00Z", "losses": "lost", "flags": [{"code": "x"}]})
+    assert report["unreadable"] == ["losses"] and "losses" not in report
+    assert report["flags"] == [{"code": "x"}] and report["run"] == 3
+    assert all(report[key] == [] for key in REPORT_KEYS if key not in ("losses", "flags"))
 
 
 def test_an_untrusted_handle_needs_a_grant_and_an_approval_of_every_target(env):

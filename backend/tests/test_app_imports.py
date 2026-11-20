@@ -27,6 +27,7 @@ from grimoire.changesets import encode as encode_changeset
 from grimoire.changesetstore import ChangeSetLibrary
 from grimoire.textapi import ApiRefused
 from png_fixtures import png, png_card
+from import_fixtures import ARCHIVE, build_two_npc_library
 from review_fixtures import secured
 from store_helpers import owner_handle
 from test_reviewapi import files_of
@@ -185,3 +186,24 @@ def test_the_import_page_finds_a_card_and_says_every_review_state(app, tmp_path)
     written = set(files_of(folder)) - set(before)
     cards = {path for path in written if path.startswith("sources/card")}
     assert cards and all(path == "sources/card" or path.startswith("sources/card/mara-vell") for path in cards)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is not installed")
+def test_the_import_page_keeps_a_v1_runs_report_after_the_write(tmp_path):
+    v1 = build_two_npc_library(tmp_path / "v1")
+    folder = secured(tmp_path / "lib")
+    with Device(folder) as device:
+        server = AppServer(device.api)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.address
+            result = subprocess.run([shutil.which("node"), "--test", "--test-reporter=tap", str(JS / "import_v1.e2e.mjs")],
+                                    capture_output=True, text=True, timeout=180, check=False,
+                                    env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": server.token,
+                                         "GRIMOIRE_V1": str(v1), "GRIMOIRE_ARCHIVE": ARCHIVE})
+        finally:
+            server.close()
+            thread.join(10)
+    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
+    assert "# pass 1" in result.stdout
