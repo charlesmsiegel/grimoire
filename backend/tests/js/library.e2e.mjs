@@ -281,7 +281,8 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   assert.ok(fieldRow(page, "personality").textContent.includes("Wry, patient"));
   assert.ok(block(page, "Opens with").querySelectorAll("p.g-quote").some((quote) => quote.textContent === "The tide is late tonight."));
   assert.equal(block(page, "Lorebooks bound").querySelector("a").getAttribute("href"), at(LORE + "@r1"));
-  assert.equal(block(page, "In these chats").querySelectorAll("a").length, 1);
+  assert.equal(block(page, "In these chats").querySelectorAll("a.source-chat").length, 1);  // one chat row, then the ways into Chats
+  assert.ok(byText(block(page, "In these chats"), "a", "Browse these chats").length);
   assert.equal(byText(page, "a", "Start a chat")[0].getAttribute("href"), "#/start?source=" + encodeURIComponent(MARA));
 
   // its pictures, and the way to the Art page for exactly this character
