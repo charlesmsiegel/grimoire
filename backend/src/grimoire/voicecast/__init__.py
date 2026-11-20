@@ -2,7 +2,8 @@
 
 ``model`` holds the casting (who speaks with which synthesized voice, and the right to use it), ``plan`` reads a
 chat's accepted turns into cues without changing a word, and ``render`` turns cues into timed audio through a local
-synthesizer (``flite``). See docs/VOICE_CASTING.md.
+synthesizer it is given (the engines are the adapter ``grimoire.voiceengines``). Pure: no I/O, clock or engine of
+its own. See docs/VOICE_CASTING.md.
 """
 
 from .model import (

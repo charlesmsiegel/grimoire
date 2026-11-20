@@ -13,8 +13,6 @@ could hold the line), and with ``audio=False`` nothing is synthesized at all: th
 
 from __future__ import annotations
 
-import io
-import wave
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -70,21 +68,44 @@ class Rendering:
                    default=0.0)
 
 
+def _u16(data: bytes, at: int) -> int:
+    return int.from_bytes(data[at:at + 2], "little")
+
+
+def _u32(data: bytes, at: int) -> int:
+    return int.from_bytes(data[at:at + 4], "little")
+
+
 def wav_seconds(data: object) -> float | None:
-    """How long a WAV lasts, or ``None`` when ``data`` is not a readable, nonempty, bounded WAV."""
+    """How long a WAV lasts, or ``None`` when ``data`` is not a readable, nonempty, bounded PCM WAV: a RIFF/WAVE
+    file whose ``fmt `` chunk is PCM with sane fields and whose ``data`` chunk is whole (a truncated file, whose
+    header promises samples it does not hold, is not a recording). Read by hand, so the core stays pure."""
     if not isinstance(data, bytes) or not 44 <= len(data) <= MAX_AUDIO:
         return None
-    try:
-        with wave.open(io.BytesIO(data), "rb") as reader:
-            frames, rate = reader.getnframes(), reader.getframerate()
-            if reader.getnchannels() < 1 or rate <= 0 or frames <= 0:
-                return None
-            # the header's count must be backed by samples: a truncated file is not a recording
-            if len(reader.readframes(frames)) < frames * reader.getsampwidth() * reader.getnchannels():
-                return None
-    except (wave.Error, EOFError, ValueError):
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
         return None
-    return frames / rate
+    at, fmt = 12, None
+    while at + 8 <= len(data):
+        kind, size = data[at:at + 4], _u32(data, at + 4)
+        body = at + 8
+        if body + size > len(data):
+            return None  # a chunk longer than the file: truncated
+        if kind == b"fmt ":
+            if size < 16:
+                return None
+            fmt = (_u16(data, body), _u16(data, body + 2), _u32(data, body + 4), _u16(data, body + 12),
+                   _u16(data, body + 14))
+        elif kind == b"data":
+            if fmt is None:
+                return None
+            code, channels, rate, align, bits = fmt
+            if code != 1 or not 1 <= channels <= 8 or rate <= 0 or bits not in (8, 16, 24, 32) \
+                    or align != channels * bits // 8:
+                return None
+            frames = size // align
+            return frames / rate if frames > 0 else None
+        at = body + size + (size & 1)  # chunks are padded to an even length
+    return None
 
 
 def _engines(synthesizers: Mapping[str, Synthesizer] | Iterable[Synthesizer]) -> dict[str, Synthesizer]:

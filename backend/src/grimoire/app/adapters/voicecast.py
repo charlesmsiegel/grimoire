@@ -32,7 +32,7 @@ from grimoire.voicecast import (
     RIGHTS, TARGETS, CastEntry, Casting, CastingError, Cue, SpeechVoice, explain, plan_performance,
     render_performance,
 )
-from grimoire.voicecast.flite import FliteSynthesizer
+from grimoire.voiceengines.flite import FliteSynthesizer
 from grimoire.voicecaststore import CastingStore
 
 #: How many cues one ``render`` covers by default, and at most: synthesis runs under the library's lock, so one

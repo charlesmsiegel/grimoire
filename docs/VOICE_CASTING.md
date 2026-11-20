@@ -4,7 +4,7 @@
 It is implemented as three parts:
 
 - the pure package `grimoire.voicecast`, which holds the casting, the performance plan and rendering;
-- the local engine `grimoire.voicecast.flite`;
+- the local engine `grimoire.voiceengines.flite`;
 - the file adapter `grimoire.voicecaststore`.
 
 The app's `voicecast` adapter ops (`backend/src/grimoire/app/adapters/voicecast.py`) put them together. A scene's

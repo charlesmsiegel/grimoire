@@ -81,7 +81,9 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.ar
                       "grimoire.play", "grimoire.preparation", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
                       "grimoire.runtime", "grimoire.scenestore", "grimoire.shelfstore", "grimoire.sourceapi", "grimoire.speech",
                       "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi",
-                      "grimoire.topologystore"})
+                      "grimoire.topologystore",
+                      # 083: the casting's file and the local speech engines (``ffmpeg``) of voice performance.
+                      "grimoire.voicecaststore", "grimoire.voiceengines"})
 
 
 @dataclass(frozen=True)
@@ -168,6 +170,10 @@ PURE_PACKAGES = (
     PurePackage("grimoire.security", ("grimoire.security",)),
     # Tags, pins and saved filters: values, tag rules and codec; the files are the adapter ``grimoire.shelfstore``.
     PurePackage("grimoire.shelf", ("grimoire.shelf", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Voice performance (083): the casting, the plan of a chat's accepted text and its rendering through an engine it
+    # is given; the casting's file is ``grimoire.voicecaststore`` and the engines are ``grimoire.voiceengines``.
+    PurePackage("grimoire.voicecast", ("grimoire.voicecast", "grimoire.core", "grimoire.scene"),
+                never_import=("grimoire.core.inference",)),
     # World Change Sets (043): values, codec and diffs; reviewing and applying is an adapter.
     PurePackage("grimoire.changesets", ("grimoire.changesets", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),

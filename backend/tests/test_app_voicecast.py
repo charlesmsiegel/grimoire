@@ -19,7 +19,7 @@ from grimoire.app.adapters.voicecast import configure
 from grimoire.app.appapi import AppApi
 from grimoire.textapi import ApiRefused
 from grimoire.voicecast import wav_seconds
-from grimoire.voicecast.flite import FliteSynthesizer
+from grimoire.voiceengines.flite import FliteSynthesizer
 
 MARA = "card:mara-vell/character/mara-vell"
 GONE = "world:nowhere/character/nobody"
