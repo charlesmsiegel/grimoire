@@ -16,11 +16,11 @@ Code: `grimoire.scenetransfer` (`SceneTransfer`, with the pure history reader in
 `scan` reports:
 
 - **`cast`**: every actor of the origin's roster, active or not. Each gives its role, the definition the origin bound it to (pinned as the origin pinned it), its name, and two lists:
-  - `candidates`: the target campaign's instances of that same definition entity. These are the only actors it may be reused as.
+  - `candidates`: the target campaign's instances of that same definition entity. These are the only actors it may be reused as. A 033 creature bound by instance gets none: one species is many individuals, so the same definition is no evidence of the same one, and this slice can only leave a creature out.
   - `namesakes`: target actors of another entity with the same name (`name_key`). They are shown so a reviewer sees them, and are never offered.
 - **`sources`**: the origin's scenario and lorebook bindings, each with `broken` when it does not resolve now.
 - **`history`**: counts (`pages`, `page_posts`, `turns`).
-- **`history_problems`**: why the history cannot be copied whole now: a damaged or missing page (`imported_history_unreadable`, by the runner's own rule), unreadable turns, an unresolved fork (028), or a sync conflict. `plan` refuses while any stands.
+- **`history_problems`**: why the history cannot be copied whole now: a damaged or missing page (`imported_history_unreadable`, by the runner's own rule), unreadable turns, an unresolved fork (028), a sync conflict, or a 016 pause (`paused`: a copy must not play on past a player's safety stop; resume first). `plan` refuses while any stands, judged on the very reads it copies from.
 - **`notes`**: `world_differs` when the target plays another world (or none), and the origin snapshot's own problems.
 
 ## Every actor is decided
@@ -28,7 +28,7 @@ Code: `grimoire.scenetransfer` (`SceneTransfer`, with the pure history reader in
 `cast` maps **every** origin roster actor to one of:
 
 - **a target actor**: reused. It must be in that member's `candidates`. A reused actor binds its definition unpinned, so 107 pins it to the revision that actor already plays in the target (042's rule). The plan notes `revision_differs` when that is not the revision the origin played.
-- **`NEW`**: created in the target from the very definition revision the origin played, as a new `not_witnessed` actor with a fresh id.
+- **`NEW`**: created in the target from the very definition revision the origin played, as a new `not_witnessed` actor with a fresh id. The plan notes `new_beside_existing` when the target already holds instances of that definition.
 - **`LEAVE`**: not carried over. Its posts are still copied when they qualify, with their label and no actor.
 
 Nothing is matched by name. Refusals (`TransferRefused.reason`, with `.actor` for a cast refusal) are:
@@ -41,7 +41,7 @@ Nothing is matched by name. Refusals (`TransferRefused.reason`, with `.actor` fo
 | `actor_mismatch` | a reuse names a target actor of another definition |
 | `foreign_actor` | a reuse names an actor outside the target campaign |
 | `merged_actors` | two origin actors map to one target actor |
-| `cannot_create` | `NEW` for an actor the origin cannot show, or for a 033 creature bound by instance (reuse or leave it) |
+| `cannot_create` | `NEW` for an actor the origin cannot show, or for a 033 creature bound by instance (leave it out) |
 | `second_persona` | two origin personas are carried over (a chat has one) |
 | `same_definition_twice` | two origin actors would be one binding of one definition |
 | `same_campaign` | the target is the origin's own campaign. That is a fork, not a transfer |
@@ -57,6 +57,8 @@ The copy holds the origin's history as its table saw it, in order: its imported 
 - **Page posts** travel whole: every variant (an unchosen swipe stays unchosen), `hidden`, the speaker's role and label, and `extras`. The speaker's actor is mapped, or dropped for `LEAVE`. `source` records where the post came from (`copied_from`: chat, page, post), with the source's own provenance kept beneath it.
 - **A turn's posts** become `user` posts labelled with their character's name, with an action in asterisks, as the runner shows it.
 - **A kept take's shown lines** become `character` posts with the line's speaker label, or `narrator` posts for narration. On a 041 stage, only a line a player character of its take heard is copied (`table_lines`' rule).
+
+The new chat opens as the origin did: its premise, or its launch source when that is carried (otherwise the first carried character or source). A lorebook the origin bound and detached, with none of that entity bound now, is carried as the same opt-out (bound and detached), so a carried scenario's own lorebook stays out of the copy as it stayed out of the origin.
 
 Each copied post records its origin turn and post or line under `copied_from`. The new pages get new post ids (`p000001` onward). Page 1's `origin` is `{"format": "grimoire-scene-transfer", "from": <origin chat>, "cast": {<origin actor>: <target actor or null>}, "posts": n, "pages": k}`. No source header is carried.
 

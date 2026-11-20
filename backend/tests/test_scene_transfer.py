@@ -19,6 +19,7 @@ from store_helpers import OWNER
 
 from chat_fixtures import Clock
 from grimoire.archaeologystore import StImporter
+from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import InstanceRef, SourceRef
@@ -285,3 +286,71 @@ def test_a_late_joiner_carried_over_gets_no_post_it_never_heard(cards):
         assert all(item.missed == (tamsin,) for item in plan.omitted)
         left_out = transfer(at).plan(imported, storm.scope, cast={anya: target_anya, mara: NEW, tamsin: LEAVE})
         assert texts(left_out) == [LAMPS, HIDDEN, NARRATED, TIDE] and left_out.omitted == ()
+
+
+# -- what the copy keeps of the origin's setup ----------------------------------------------------------
+
+def test_a_paused_scene_is_not_copied_until_it_is_resumed(cards):
+    folder, chat, storm = cards
+    with Table(folder) as at:
+        anya, target_anya = persona(at, chat), persona(at, storm)
+        mara = next(member.actor for member in transfer(at).scan(chat, storm.scope).cast if member.role == "character")
+        at.runner.seat(chat, ANA)
+        at.runner.post(chat, at.player(), NEWS)
+        at.runner.request(chat, at.player(), "pause")
+        assert ("paused", "a player paused the scene; resume it before copying") in transfer(at).scan(
+            chat, storm.scope).history_problems
+        refused("history_incomplete", transfer(at).plan, chat, storm.scope, cast={anya: target_anya, mara: NEW})
+        at.runner.resume(chat, at.player())
+        assert texts(transfer(at).plan(chat, storm.scope, cast={anya: target_anya, mara: NEW})) == [NEWS_SAID]
+
+
+def test_a_lorebook_the_origin_opted_out_of_stays_out_of_the_copy(cards):
+    folder, chat, storm = cards
+    with Table(folder) as at:
+        chats = ChatLibrary(at.store, at.owner, clock=Clock(), new_id=Tagged("o"), owner=OWNER)
+        record, etag = chats.read_chat(chat)
+        (lore,) = record.active_bindings("lorebook")
+        chats.detach_source(chat, lore.ref, "lorebook", expected=etag).commit()
+        anya, target_anya = persona(at, chat), persona(at, storm)
+        scan = transfer(at).scan(chat, storm.scope)
+        mara = next(member.actor for member in scan.cast if member.role == "character")
+        assert scan.sources == ()
+        plan = transfer(at).plan(chat, storm.scope, cast={anya: target_anya, mara: NEW})
+        plan.commit()
+        copied, _ = chats.read_chat(plan.chat)
+        assert [(binding.ref, binding.active) for binding in copied.bindings if binding.role == "lorebook"] == [
+            (lore.ref, False)]  # the opt-out, carried: no scenario's own lore brings it back
+        assert copied.launch.ref.entity_key == MARA_VELL.entity_key  # the origin's own launch
+
+
+def test_a_premise_chat_is_copied_with_its_own_premise(cards):
+    folder, _chat, storm = cards
+    with Table(folder) as at:
+        chats = ChatLibrary(at.store, at.owner, clock=Clock(), new_id=Tagged("m"), owner=OWNER)
+        origin = chats.start_chat(Launch("premise", premise="Fog over the docks at dawn."), persona=ANYA).commit().chat
+        anya, target_anya = persona(at, origin), persona(at, storm)
+        plan = transfer(at).plan(origin, storm.scope, cast={anya: target_anya})
+        assert plan.pages == ()
+        plan.commit()
+        copied, _ = chats.read_chat(plan.chat)
+        assert copied.launch == Launch("premise", premise="Fog over the docks at dawn.")
+        assert copied.persona.actor == target_anya
+
+
+def test_a_page_damaged_while_the_copy_is_planned_refuses_it(cards, monkeypatch):
+    folder, _chat, storm = cards
+    with Table(folder) as at:
+        imported = import_st(at)
+        anya, target_anya = persona(at, imported), persona(at, storm)
+        mara = next(member.actor for member in transfer(at).scan(imported, storm.scope).cast
+                    if member.role == "character")
+        scan = SceneTransfer._scan
+
+        def damaging(self, origin, target):  # another writer breaks the page after the plan's first read
+            page = folder / "campaigns" / imported.campaign_id / "transcripts" / imported.chat_id / "0000000001.json"
+            page.write_text("{not json", encoding="utf-8")
+            return scan(self, origin, target)
+
+        monkeypatch.setattr(SceneTransfer, "_scan", damaging)
+        refused("history_incomplete", transfer(at).plan, imported, storm.scope, cast={anya: target_anya, mara: NEW})

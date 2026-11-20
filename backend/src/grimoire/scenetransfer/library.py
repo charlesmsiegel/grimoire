@@ -29,7 +29,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from grimoire.archaeologystore.library import PAGE_BUDGET, measure_post
-from grimoire.chats import ChatCodecError, ChatRecord, Launch, chat_from_payload, role_rule, scope_from_payload
+from grimoire.chats import (
+    CHAT_SCHEMA, ChatCodecError, ChatRecord, Launch, NewBinding, SourceBinding, chat_from_payload, chat_to_payload,
+    role_rule, scope_from_payload,
+)
 from grimoire.chatstore import ChatChange, ChatCommit, ChatLibrary, InvalidBinding
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, TranscriptRef
 from grimoire.core.index import name_key
@@ -180,7 +183,9 @@ class SceneTransfer:
         cannot be read, or a target that is the origin's own campaign (that is a fork, not a transfer)."""
         return self._scan(origin, target)[0]
 
-    def _scan(self, origin: ChatRef, target: ScopeRef) -> tuple[TransferScan, ChatRecord, Mapping[InstanceRef, str]]:
+    def _scan(self, origin: ChatRef, target: ScopeRef):  # type: ignore[no-untyped-def]
+        """The scan, and the reads it rests on (the chat record, actor names, pages and turns): a plan copies
+        from these very reads, so what it copies is what the scan found complete."""
         if type(origin) is not ChatRef or type(target) is not ScopeRef:
             raise TransferRefused("origin is a ChatRef and target a ScopeRef", "invalid_field")
         if origin.campaign_id == target.campaign_id:
@@ -212,9 +217,14 @@ class SceneTransfer:
                 names[entry.actor] = name
             name = name or entry.actor.instance_id
             key = None if definition is None else definition.entity_key
-            candidates = tuple(sorted((ref for ref, (source, _) in targets.items()
-                                       if key is not None and source is not None and source.entity_key == key
-                                       and ref.kind == entry.actor.kind), key=str))
+            rule = role_rule(entry.role)
+            # a creature bound by instance (033) shares its definition with every other of its species: the
+            # same entity is no evidence of the same individual, so this slice offers none to reuse
+            creature = rule is not None and rule.by_instance
+            candidates = () if creature else tuple(sorted(
+                (ref for ref, (source, _) in targets.items()
+                 if key is not None and source is not None and source.entity_key == key
+                 and ref.kind == entry.actor.kind), key=str))
             namesakes = tuple(sorted((ref for ref, (source, label) in targets.items()
                                       if ref not in candidates and label is not None
                                       and name_key(label) == name_key(name)), key=str))
@@ -228,6 +238,8 @@ class SceneTransfer:
         history_problems += [("turns", f"{path}:{code}") for path, code in turns.problems]
         if turns.fork is not None:
             history_problems.append(("fork", turns.fork.describe()))
+        if turns.paused or turns.kept_pauses:  # 016's pause is a safety stop: a copy must not play on past it
+            history_problems.append(("paused", "a player paused the scene; resume it before copying"))
         history_problems += [("conflicted", turn_id) for turn_id in turns.conflicted]
         notes = [("snapshot", problem) for problem in captured.problems]
         world = _world(view, target)
@@ -236,7 +248,7 @@ class SceneTransfer:
         history = {"pages": len(pages), "page_posts": sum(len(page.posts) for page in pages),
                    "turns": len(turns.turns)}
         scan = TransferScan(origin, target, tuple(cast), sources, history, tuple(history_problems), tuple(notes))
-        return scan, record, names
+        return scan, record, names, pages, turns
 
     # -- planning --------------------------------------------------------------------------------
 
@@ -245,7 +257,8 @@ class SceneTransfer:
         """Plan the copy. ``cast`` maps **every** origin roster actor to a target actor of the same definition
         entity (reused), ``NEW`` or ``LEAVE``. ``sources`` are the origin's scenario and lorebook bindings to copy
         (all of them by default, as the origin pins them). ``label`` names the new chat."""
-        scan, record, names = self._scan(origin, target)
+        state = self._origin_state(origin)  # first: a change after it fails the commit's check
+        scan, record, names, pages_found, turns = self._scan(origin, target)
         if scan.history_problems:
             raise TransferRefused("the origin's history cannot all be read now: "
                                   + "; ".join(f"{kind} {detail}" for kind, detail in scan.history_problems),
@@ -254,24 +267,22 @@ class SceneTransfer:
             raise TransferRefused("label must be text of at most 1000 characters", "invalid_field")
         mapping = self._decide(scan, cast)
         chosen = self._sources(scan, sources)
-        launch, attach, persona, reuse, actors = self._bindings(scan, mapping, chosen)
+        launch, attach, persona, reuse, actors = self._bindings(scan, mapping, chosen, record.launch)
         library = ChatLibrary(self.store, self.handle, clock=self._clock, new_id=self._new_id, owner=self._owner)
         try:
             change = library.start_chat(launch, attach=attach, persona=persona, label=label, scope=target,
                                         reuse_actors=reuse, actors=actors)
         except InvalidBinding as error:
             raise TransferRefused(str(error), error.reason) from None
+        change = _with_opt_outs(change, record, chosen, self._clock(), self._owner)
         planned = _planned_record(change)
         targets = self._mapped(scan, mapping, planned)
-        state = self._origin_state(origin)
-        pages_found, _ = history_pages(self.store, origin)
-        turns = self._scenes.turns(origin)
         items = page_items(origin, pages_found, imported_cast(record))
         played, left = turn_items(origin, turns.records(), names)
         carried = frozenset(actor for actor, decided in targets.items() if decided is not None)
         copy, omitted = _select((*items, *played), carried, left)
         posts, copied = _remap(copy, targets)
-        notes = [*scan.notes, *_revision_notes(scan, mapping, planned)]
+        notes = [*scan.notes, *_revision_notes(scan, mapping, planned), *_beside_notes(scan, mapping, targets)]
         pages = self._pages(change.chat, posts, origin, targets)
         puts = tuple((ScopeRecord(page.ref, TRANSCRIPT_SCHEMA, page_to_payload(page), owner=self._owner), None)
                      for page in pages)
@@ -306,8 +317,8 @@ class SceneTransfer:
                     raise TransferRefused(f"{member.actor} cannot be created: the origin cannot show it "
                                           f"({member.problem})", "cannot_create", member.actor)
                 if role_rule(member.role) is None or role_rule(member.role).by_instance:
-                    raise TransferRefused(f"{member.actor} is an existing creature (033): reuse a target "
-                                          "instance or leave it out", "cannot_create", member.actor)
+                    raise TransferRefused(f"{member.actor} is a creature bound by instance (033): this slice "
+                                          "can only leave it out", "cannot_create", member.actor)
                 decided[member.actor] = NEW
                 continue
             if type(choice) is not InstanceRef:
@@ -338,7 +349,7 @@ class SceneTransfer:
         return tuple(bound[ref] for ref in dict.fromkeys(sources))
 
     def _bindings(self, scan: TransferScan, mapping: Mapping[InstanceRef, InstanceRef | str],
-                  sources: Sequence[SourceChoice]):  # type: ignore[no-untyped-def]
+                  sources: Sequence[SourceChoice], began: Launch):  # type: ignore[no-untyped-def]
         """107's start: the launch, attachments, persona, reuse map and creature actors the decisions make.
 
         A new actor binds the very revision the origin pinned. A reused actor binds its definition unpinned, so
@@ -377,15 +388,9 @@ class SceneTransfer:
                 characters.append(ref)
             if type(choice) is InstanceRef:
                 reuse[key] = choice
-        attach: list[tuple[SourceRef, str]] = [(ref, "character") for ref in characters[1:]]
-        attach += [(choice.ref, choice.role) for choice in sources]
-        if characters:
-            launch = Launch("character", characters[0])
-        elif sources:
-            launch = Launch(sources[0].role, sources[0].ref)
-            attach = attach[1:]
-        else:
-            launch = Launch("premise", premise=COPIED_PREMISE)
+        wanted = [*((ref, "character") for ref in characters), *((choice.ref, choice.role) for choice in sources)]
+        launch = _launch(began, wanted)
+        attach = [pair for pair in wanted if launch.ref is None or pair != (launch.ref, launch.kind)]
         return launch, attach, persona, reuse, creatures
 
     def _mapped(self, scan: TransferScan, mapping: Mapping[InstanceRef, InstanceRef | str], planned: ChatRecord
@@ -475,6 +480,53 @@ def _remap(items: Sequence[HistoryItem], targets: Mapping[InstanceRef, InstanceR
         posts.append(dataclasses.replace(post, post_id=post_id, speaker=Speaker(speaker.role, actor, speaker.label)))
         copied.append((item.where, post_id))
     return tuple(posts), tuple(copied)
+
+
+def _launch(began: Launch, wanted: Sequence[tuple[SourceRef, str]]) -> Launch:
+    """The origin's own launch when the copy carries it (its premise always), else the first carried binding,
+    else a premise saying what the chat is. A copy that keeps no history opens as the origin opened."""
+    if began.kind == "premise":
+        return began
+    for ref, role in wanted:
+        if role == began.kind and began.ref is not None and ref.entity_key == began.ref.entity_key:
+            return Launch(role, ref)
+    for ref, role in wanted:
+        if role in ("character", "scenario", "lorebook"):
+            return Launch(role, ref)
+    return Launch("premise", premise=COPIED_PREMISE)
+
+
+def _with_opt_outs(change: ChatChange, record: ChatRecord, chosen: Sequence[SourceChoice], at: str,
+                   owner: str | None) -> ChatChange:
+    """The planned chat with the origin's lorebook opt-outs: a lorebook it bound and detached, with none of its
+    entity bound now, keeps a carried scenario's own lorebook out of the copy as it kept it out of the origin
+    (``grimoire.effective``'s rule: a lorebook the chat ever bound is the chat's choice)."""
+    carried = {choice.ref.entity_key for choice in chosen if choice.role == "lorebook"}
+    active = {binding.ref.entity_key for binding in record.active_bindings("lorebook")}
+    opted: dict[tuple[str, str, str], SourceBinding] = {}
+    for binding in record.bindings:
+        key = binding.ref.entity_key
+        if binding.role == "lorebook" and not binding.active and key not in active and key not in carried:
+            opted.setdefault(key, binding)
+    if not opted:
+        return change
+    planned = _planned_record(change)
+    for binding in opted.values():
+        planned = planned.attach(NewBinding(binding.ref, "lorebook", binding.resolved_revision), at)
+        planned = planned.detach(binding.ref, "lorebook", at)
+    envelope = ScopeRecord(planned.ref, CHAT_SCHEMA, chat_to_payload(planned), owner=owner)
+    puts = tuple((envelope, expected) if isinstance(found, ScopeRecord) and found.address == change.chat
+                 else (found, expected) for found, expected in change.puts)
+    return dataclasses.replace(change, puts=puts)
+
+
+def _beside_notes(scan: TransferScan, mapping: Mapping[InstanceRef, InstanceRef | str],
+                  targets: Mapping[InstanceRef, InstanceRef | None]) -> list[tuple[str, str]]:
+    """A new actor created beside the target's own instances of its definition: two actors of one definition
+    now, which the reviewer chose over reusing one of them."""
+    return [("new_beside_existing", f"{targets[member.actor]} is new beside {', '.join(map(str, member.candidates))}")
+            for member in scan.cast
+            if type(mapping[member.actor]) is str and mapping[member.actor] == NEW and member.candidates]
 
 
 def _revision_notes(scan: TransferScan, mapping: Mapping[InstanceRef, InstanceRef | str], planned: ChatRecord
