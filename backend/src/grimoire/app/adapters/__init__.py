@@ -17,4 +17,8 @@ from . import voice  # noqa: E402 -- 061's private local voice input (docs/SPEEC
 
 ADAPTERS = tuple(sorted((*ADAPTERS, voice.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import dictation  # noqa: E402 -- 080's speech to draft, over 061's local voice (docs/SPEECH.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, dictation.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]

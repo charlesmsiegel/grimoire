@@ -728,9 +728,9 @@ Scheduled domain slices and UI exit 116 are not complete.
 <a id="slice-080"></a>
 ### 080 — Speech To Draft
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/speech-to-draft.md)).
-- Evidence: intent can classify supplied speech-origin transcripts; drafts persist editable text.
-- Scope / gap: No STT provider/microphone transcription-to-editable-draft workflow; synthetic intent tests are insufficient.
+- [x] Scheduled first-useful slice ([requirements](sprints/speech-to-draft.md)).
+- Evidence: the chat page's **Dictate** ([`dictate.js`](../../backend/src/grimoire/app/static/pages/chat/dictate.js)) records through 061's on-device route (the `dictation.*` ops in [`adapters/dictation.py`](../../backend/src/grimoire/app/adapters/dictation.py) wrap `voice.*`'s session, capture token and recognizer) and puts what was heard in the composer as unsent text; only Post posts, and "post it" is answered, never acted on. [`speech/dictation.py`](../../backend/src/grimoire/speech/dictation.py) revises the draft with fidelity first: verbatim words always shown, a spoken correction ("no, I meant the west gate") replaces only the part of the last dictated passage it lines up with, "scratch that" removes it, each with the words-as-said reading one press away, Undo, and scene names only suggested ([`test_speech_dictation.py`](../../backend/tests/test_speech_dictation.py)). [`dictate.e2e.mjs`](../../backend/tests/js/dictate.e2e.mjs) runs the proving scenario on the real page against a real app server: an invented name dictated, corrected to the west gate, "post it" ignored, the name typed over, then Post; [`test_app_dictation.py`](../../backend/tests/test_app_dictation.py) checks the library on disk gained nothing until Post and then exactly the one turn, refusals and stale recordings, and the installed engine on synthetic speech. [`dictate.test.mjs`](../../backend/tests/js/dictate.test.mjs) covers Cancel/Esc/leaving, typing during recognition and stale offers. Docs: [SPEECH](../SPEECH.md#speech-to-draft-080).
+- Scope / gap: verified with a stand-in recognizer and synthetic Flite speech only; a real microphone, room and voice are untried. US English only (the bundled model); no streaming partials, spoken punctuation, per-word confidence, recognizer vocabulary for scene names or mixed speech/typing (milestones 2–3). Corrections line up by shared words or sound, an untuned heuristic; the words-as-said reading and Undo are the safety net.
 
 <a id="slice-081"></a>
 ### 081 — Story Graph And Navigation

@@ -1,0 +1,321 @@
+"""080's speech-to-draft revision: what one dictated utterance does to the composer's unsent text.
+
+Pure and deterministic: no recognizer, no file, no library. The page sends the composer's draft, the passage it
+last dictated into it and the names in the scene; this answers the new draft and what changed, for the page to
+show. Nothing here posts, advances a scene or writes anything: the draft is only ever the player's own unsent
+text, and Post stays the one way it leaves the composer (docs/SPEECH.md, "Speech to draft").
+
+Transcription fidelity comes first. What the recognizer heard is always returned verbatim beside the revision,
+and only a few spoken edits change the draft other than by appending what was said:
+
+- **a correction** ("no, I meant the west gate", "I meant ...", "correction ..."), applied only when the words
+  line up with part of the last dictated passage ("the east gate"); the passage is otherwise left alone and the
+  words are kept as said, with the correction offered as the other reading;
+- **scratch that** (or "delete that", "strike that"), which removes the last dictated passage;
+- **post it** (or "send it", "submit"...), which never posts: voice cannot submit a fictional action.
+
+Each of these carries the verbatim reading as its ``alternative``, because the player may have been dictating a
+character's line ("No, I meant what I said") rather than editing. Appended speech gets a capital at a sentence's
+start and a capital "I", and nothing else: no punctuation, rephrasing or name is ever inserted silently.
+Names from the scene that sound like part of what was heard are only *suggested*.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from difflib import SequenceMatcher
+
+#: The composer's own limit (the chat page's maxlength): a revision never makes a longer draft.
+MAX_DRAFT = 20000
+#: A recognizer confidence below this flags the passage for checking. Untuned: pocketsphinx's posterior is a rough
+#: guide, and it should be tuned against real speech later.
+LOW_CONFIDENCE = 0.5
+MAX_NAMES = 64
+MAX_NAME = 80
+MAX_SUGGESTIONS = 3
+
+_WORD = re.compile(r"[\w']+")
+_FILLERS = frozenset({"no", "sorry", "wait", "oh", "um", "uh", "er", "actually"})
+_SCRATCH = frozenset({("scratch", "that"), ("delete", "that"), ("strike", "that")})
+_SUBMIT_VERBS = frozenset({"post", "send", "submit"})
+_SUBMIT_OBJECTS = frozenset({(), ("it",), ("that",), ("this",), ("my", "turn"), ("the", "turn"), ("my", "reply"),
+                             ("the", "reply")})
+_POLITE = frozenset({"please", "now"})
+#: Words that do not anchor a correction or a name on their own.
+_STOP = frozenset({"a", "an", "the", "to", "of", "and", "or", "in", "on", "at", "for", "by", "with", "from", "i",
+                   "we", "you", "he", "she", "it", "they", "is", "are", "was", "my", "our", "your", "his", "her",
+                   "its", "their", "that", "this", "me", "us", "him", "them", "so", "but", "as", "be", "do"})
+#: Soundex-style groups: letters a recognizer readily swaps for one another in a name it does not know.
+_GROUPS = {**dict.fromkeys("bfpv", "p"), **dict.fromkeys("cgjkqsxz", "k"), **dict.fromkeys("dt", "t"),
+           **dict.fromkeys("mn", "m"), "l": "l", "r": "r"}
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """A scene name that sounds like ``heard``, a span of the new passage, offered to replace it on a tap."""
+
+    heard: str
+    name: str
+
+    def as_dict(self) -> dict:
+        return {"heard": self.heard, "name": self.name}
+
+
+@dataclass(frozen=True)
+class Revision:
+    """One utterance's effect on the draft.
+
+    ``kind``: ``added`` (appended as said), ``corrected``, ``scratched``, ``not_posted`` (a request to post, which
+    voice never does), ``nothing`` (nothing heard) or ``too_long`` (the draft would pass the composer's limit).
+    ``text`` is the whole draft afterwards, ``passage`` the dictated passage a following correction or scratch
+    would act on (``None`` when there is none). ``before``/``after`` name what a correction or scratch changed.
+    ``alternative`` is the other reading of the same words, for the player to choose instead."""
+
+    kind: str
+    text: str
+    passage: str | None
+    heard: str
+    before: str | None = None
+    after: str | None = None
+    uncertain: bool = False
+    suggestions: tuple[Suggestion, ...] = ()
+    alternative: Revision | None = None
+
+    def as_dict(self) -> dict:
+        return {"kind": self.kind, "text": self.text, "passage": self.passage, "heard": self.heard,
+                "before": self.before, "after": self.after, "uncertain": self.uncertain,
+                "suggestions": [suggestion.as_dict() for suggestion in self.suggestions],
+                "alternative": self.alternative.as_dict() if self.alternative is not None else None}
+
+
+def _tokens(text: str) -> list[tuple[str, int, int]]:
+    return [(match.group().lower(), match.start(), match.end()) for match in _WORD.finditer(text)]
+
+
+def key(text: str) -> str:
+    """A rough sound key: the first letter, then consonant groups, vowels and h/w/y dropped, repeats collapsed."""
+    letters = re.sub(r"[^a-z]", "", text.lower()).replace("ph", "f").replace("ck", "k")
+    if not letters:
+        return ""
+    out = letters[0]
+    last = _GROUPS.get(letters[0], "")
+    for letter in letters[1:]:
+        group = _GROUPS.get(letter, "")
+        if group and group != last:
+            out += group
+        if letter not in "hw":  # h and w do not separate a repeated sound; a vowel does
+            last = group
+    return out
+
+
+def _ratio(left: str, right: str) -> float:
+    return SequenceMatcher(None, left, right).ratio() if left and right else 0.0
+
+
+def _speech(words: list[str]) -> list[str]:
+    """Leading fillers ("no", "sorry", "wait") dropped, and a trailing "please"."""
+    at = 0
+    while at < len(words) and words[at] in _FILLERS:
+        at += 1
+    rest = words[at:]
+    while rest and rest[-1] in _POLITE:
+        rest = rest[:-1]
+    return rest
+
+
+def _correction(heard: str) -> str | None:
+    """The replacement a spoken correction asks for, as heard, or ``None`` when this is not one."""
+    tokens = _tokens(heard)
+    words = [word for word, _start, _end in tokens]
+    at = 0
+    while at < len(words) and words[at] in _FILLERS:
+        at += 1
+    said_no = "no" in words[:at]
+    if words[at:at + 2] == ["i", "meant"]:
+        begin = at + 2
+    elif said_no and words[at:at + 2] == ["i", "mean"]:
+        begin = at + 2
+    elif words[at:at + 1] == ["correction"]:
+        begin = at + 1
+    else:
+        return None
+    if begin >= len(tokens):
+        return None
+    return heard[tokens[begin][1]:].strip(" ,.;:!?-")
+
+
+def _scratch(heard: str) -> bool:
+    return tuple(_speech([word for word, _s, _e in _tokens(heard)])) in _SCRATCH
+
+
+def _submit(heard: str) -> bool:
+    words = _speech([word for word, _s, _e in _tokens(heard)])
+    return bool(words) and words[0] in _SUBMIT_VERBS and tuple(words[1:]) in _SUBMIT_OBJECTS
+
+
+def _align(passage: str, replacement: str) -> tuple[int, int] | None:
+    """The character span of ``passage`` that ``replacement`` corrects, or ``None`` when nothing lines up.
+
+    A window of about the replacement's length lines up when it shares a word that is not a stop word, or sounds
+    like the replacement as a whole (a misheard name). The best window wins; a tie goes to one of the
+    replacement's own length, then to the latest, since a correction usually follows what it corrects."""
+    words = _tokens(passage)
+    wanted = [word for word, _s, _e in _tokens(replacement)]
+    if not words or not wanted:
+        return None
+    spoken = [word for word, _s, _e in words]
+    if any(spoken[at:at + len(wanted)] == wanted for at in range(len(spoken))):
+        return None  # already said just so: there is nothing to correct
+    wanted_key = key("".join(word for word in wanted if word not in _STOP))
+    best: tuple[float, int, int, int, int] | None = None
+    for size in sorted({len(wanted), len(wanted) - 1, len(wanted) + 1}):
+        if not 1 <= size <= len(words):
+            continue
+        for at in range(len(words) - size + 1):
+            window = [word for word, _s, _e in words[at:at + size]]
+            if all(word in window for word in wanted):
+                continue  # nothing of the replacement is new here: dropping words is not a correction
+            shared = [word for word in wanted if word in window]
+            content = [word for word in shared if word not in _STOP]
+            heard_key = key("".join(word for word in window if word not in _STOP))
+            sound = _ratio(heard_key, wanted_key) if min(len(heard_key), len(wanted_key)) >= 3 else 0.0
+            if not content and sound < 0.85:
+                continue
+            score = (len(shared) + sound, 1 if size == len(wanted) else 0, at)
+            if best is None or score > best[:3]:
+                best = (*score, words[at][1], words[at + size - 1][2])
+    return (best[3], best[4]) if best is not None else None
+
+
+def _sentence_start(prefix: str) -> bool:
+    stripped = prefix.rstrip(" \t")
+    return not stripped.strip() or stripped.endswith(("\n", ".", "!", "?"))
+
+
+def _capital_i(text: str) -> str:
+    return re.sub(r"\bi\b(?='(?:m|ll|d|ve)\b|\s|$|[,.!?;:])", "I", text)
+
+
+def _format(passage: str, prefix: str) -> str:
+    """Capital "I", and a capital first letter at a sentence's start: the only change made to what was heard."""
+    passage = _capital_i(passage.strip())
+    if passage and _sentence_start(prefix):
+        passage = passage[0].upper() + passage[1:]
+    return passage
+
+
+def _join(prefix: str, passage: str) -> str:
+    if not prefix or prefix[-1].isspace():
+        return prefix + passage
+    return prefix + " " + passage
+
+
+def _uncertain(confidence: float | None) -> bool:
+    return confidence is not None and confidence < LOW_CONFIDENCE
+
+
+def _names(names: tuple[str, ...]) -> list[str]:
+    """Each name, then each word of a longer name ("Mara Vell", then "Mara", "Vell"), once, longest first."""
+    found: list[str] = []
+    for name in names:
+        for part in (" ".join(name.split()), *name.split()):
+            if len(key(part)) >= 3 and part.lower() not in _STOP and part not in found:
+                found.append(part)
+    return sorted(found, key=lambda part: -len(part.split()))  # stable: scene order within a length
+
+
+def suggest(passage: str, names: tuple[str, ...]) -> tuple[Suggestion, ...]:
+    """Spans of ``passage`` that sound like a scene name without being it: one suggestion per span and name."""
+    words = _tokens(passage)
+    present = {word for word, _s, _e in words}
+    taken: list[tuple[int, int]] = []
+    found: list[Suggestion] = []
+    for name in _names(names):
+        name_words = [word for word, _s, _e in _tokens(name)]
+        if all(word in present for word in name_words):
+            continue  # the name is already spelled out
+        name_key = key(name)
+        best: tuple[float, int, int] | None = None
+        for size in range(1, len(name_words) + 2):
+            for at in range(len(words) - size + 1):
+                window = words[at:at + size]
+                spoken = [word for word, _s, _e in window]
+                if all(word in _STOP for word in spoken):
+                    continue
+                start, end = window[0][1], window[-1][2]
+                if any(start < stop and begin < end for begin, stop in taken):
+                    continue
+                sound = _ratio(key("".join(spoken)), name_key)
+                spelling = _ratio("".join(spoken), re.sub(r"[^a-z]", "", name.lower()))
+                if sound >= 0.85 and spelling >= 0.6 and (best is None or sound + spelling > best[0]):
+                    best = (sound + spelling, start, end)
+        if best is not None:
+            taken.append((best[1], best[2]))
+            found.append(Suggestion(passage[best[1]:best[2]], name))
+        if len(found) >= MAX_SUGGESTIONS:
+            break
+    return tuple(found)
+
+
+def _added(draft: str, heard: str, confidence: float | None, names: tuple[str, ...]) -> Revision:
+    passage = _format(heard, draft)
+    text = _join(draft, passage)
+    if len(text) > MAX_DRAFT:
+        return Revision("too_long", draft, None, heard)
+    return Revision("added", text, passage, heard, uncertain=_uncertain(confidence), suggestions=suggest(passage, names))
+
+
+def _last(draft: str, last: str | None) -> int:
+    return draft.rfind(last) if last else -1
+
+
+def revise(draft: str, last: str | None, heard: str, *, confidence: float | None = None,
+           names: tuple[str, ...] = ()) -> Revision:
+    """What saying ``heard`` does to ``draft``, whose most recently dictated passage is ``last`` (``None`` when
+    nothing was dictated, or the player has since removed it). ``names`` are the scene's, for suggestions."""
+    if len(draft) > MAX_DRAFT:
+        return Revision("too_long", draft, last, heard)
+    heard = heard.strip()
+    if not _tokens(heard):
+        return Revision("nothing", draft, last, heard)
+    verbatim = _added(draft, heard, confidence, names)
+    at = _last(draft, last)
+    if _submit(heard):
+        return Revision("not_posted", draft, last, heard, alternative=verbatim)
+    if _scratch(heard):
+        if at < 0:
+            return verbatim
+        head = draft[:at]
+        tail = draft[at + len(last):]
+        text = (head.rstrip(" ") if not tail.strip() else head) + tail
+        return Revision("scratched", text, None, heard, before=last, alternative=verbatim)
+    replacement = _correction(heard)
+    if replacement is None or at < 0:
+        return verbatim
+    span = _align(last, replacement)
+    if span is None:
+        # Nothing lines up: keep the words as said, and offer replacing the whole last passage instead.
+        whole = _format(replacement, draft[:at])
+        text = draft[:at] + whole + draft[at + len(last):]
+        if len(text) > MAX_DRAFT:
+            return verbatim
+        offered = Revision("corrected", text, whole, heard, before=last, after=whole,
+                           uncertain=_uncertain(confidence), suggestions=suggest(whole, names))
+        return Revision(verbatim.kind, verbatim.text, verbatim.passage, heard, uncertain=verbatim.uncertain,
+                        suggestions=verbatim.suggestions, alternative=offered)
+    start, end = span
+    replaced = last[start:end]
+    put = _capital_i(replacement)
+    if replaced[:1].isupper():
+        put = put[:1].upper() + put[1:]
+    passage = last[:start] + put + last[end:]
+    text = draft[:at] + passage + draft[at + len(last):]
+    if len(text) > MAX_DRAFT:
+        return Revision("too_long", draft, last, heard)
+    return Revision("corrected", text, passage, heard, before=replaced, after=put, uncertain=_uncertain(confidence),
+                    suggestions=suggest(put, names), alternative=verbatim)
+
+
+__all__ = ["LOW_CONFIDENCE", "MAX_DRAFT", "MAX_NAME", "MAX_NAMES", "Revision", "Suggestion", "key", "revise",
+           "suggest"]

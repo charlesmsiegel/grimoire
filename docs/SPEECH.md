@@ -3,7 +3,9 @@
 `grimoire.speech` implements the headless first-useful boundaries for 061 and
 067, and 061's optional local recognizer with its measurements. The app's Voice
 page (settings) records from the microphone and recognizes on the device; see
-[Local recognizer and the Voice page](#local-recognizer-and-the-voice-page-061).
+[Local recognizer and the Voice page](#local-recognizer-and-the-voice-page-061);
+a chat's **Dictate** speaks a draft into its composer through the same route; see
+[Speech to draft](#speech-to-draft-080).
 It does **not** implement speech synthesis, playback, streaming recognition or
 live voice roleplay. `grimoire.voice` continues to own written
 characterization. Existing `intent` values remain unexecuted hypotheses.
@@ -280,8 +282,9 @@ sends nothing. The page resamples to 16 kHz, encodes WAV and sends it to `voice.
 app's loopback server, which never leaves the device. The capture token and
 sequence are latched when recording starts, so a recording made before a change
 of settings is dropped as `stale_capture`. The transcript is shown as text with a
-Copy button; **nothing is posted**: speaking into a chat, speech output and hands-free
-play are shown as not available yet. With the microphone or voice off, typed play
+Copy button; **nothing is posted**: speech output and hands-free play are shown as
+not available yet, and speaking a draft into a chat is the chat page's Dictate
+([Speech to draft](#speech-to-draft-080), below). With the microphone or voice off, typed play
 is exactly as before. 067's chat voice strip and read-aloud (`speech.*`, above)
 still start on the `unsupported` backend: installing this backend there, and
 running it through `evaluate_audio`, is the next step.
@@ -334,4 +337,63 @@ and say nothing of real voices, accents or rooms. The acoustic tests
 (`test_speech_local.py`, the last test of `test_app_voice.py`) run where
 pocketsphinx and an `ffmpeg` with Flite are installed, as in CI's `local voice`
 job, and are skipped elsewhere.
+
+## Speech to draft (080)
+
+The chat page's **Dictate** (`static/pages/chat/dictate.js`) lets a player speak
+their reply instead of typing it. What was heard goes into the composer as unsent
+text, to read, edit and post themselves: **nothing is posted, advanced or written
+until they press Post**, and saying "post it" (or "send it", "submit") is answered
+with "Voice doesn't post", never a post.
+
+It records through 061's private route: the `dictation.*` ops wrap `voice.*`'s
+session, capture token, sequence and recognizer, so dictation is off until the
+Voice page turns speech input on (this device only) with the microphone on, and
+there is nothing new to consent to. The strip says why it cannot record (voice
+off, microphone off, recognizer missing, a browser that cannot record) and shows
+**Dictate** only when it can. Dictate opens the microphone; **Stop dictating**
+sends the recording; **Cancel** or Esc closes it unsent; leaving the page or the
+recording limit (Settings, 1 to 60 s) closes it too. Pauses do not end a
+recording, so a long post is one recording. The token and sequence are latched at
+Dictate, so a recording made before a change of settings is dropped as
+`stale_capture`, and one recording is heard at a time.
+
+`grimoire.speech.dictation.revise` decides what one utterance does to the draft.
+It is pure (no recognizer, file or library) and keeps fidelity first: the verbatim
+words are always shown ("Heard …"), and appended speech changes only a capital at
+a sentence's start and a capital "I". Three spoken edits act on the **last
+dictated passage** only, never on typed text:
+
+| Said | Does | The other reading (one press) |
+|---|---|---|
+| "no, I meant the west gate", "I meant …", "correction …" | replaces the part of the passage it lines up with ("the east gate"): a shared word that is not a stop word, or a whole that sounds alike (a misheard name) | keep the words as said, in case they were a character's line |
+| the same, when nothing lines up | keeps the words as said | replace the whole last passage instead |
+| "scratch that", "delete that", "strike that" | removes the last passage | keep the words as said |
+| "post it", "send it", "submit" … | nothing: voice never posts | keep the words as said |
+
+**Undo** puts the draft back as it was before the recording. Names in the scene's
+cast that sound like part of what was heard ("mara bell" for Mara Vell) are only
+offered ("Use Mara Vell for “mara bell”"); an invented name the recognizer
+cannot know is the player's to type over. A recognizer confidence under 0.5
+(untuned) adds "check it". The player's own typing always wins: a draft typed in
+while a recording was heard is revised as it is now (`dictation.revise`), and an
+offer whose text has since changed does nothing and says so.
+
+| Op | Arguments | Answer |
+|---|---|---|
+| `dictation.status` | none | `status` (061's, but `off` whenever speech input is off), `capture_token` and `next_sequence` only when ready, `max_seconds`, `language`, `kept` |
+| `dictation.hear` | `audio`, `sequence`, `capture_token` as `voice.transcribe`; `draft` (≤ 20 000 characters), `last` (the passage last dictated, or null), `names` (≤ 64 of ≤ 80 characters) | `status`, `heard`, `confidence`, `revision` (`kind`, `text`, `passage`, `before`, `after`, `uncertain`, `suggestions`, `alternative`), `next_sequence`, `kept` |
+| `dictation.revise` | `draft`, `last`, `names`, `heard`, `confidence` | `revision` |
+
+The ops touch no library state and run without its writer lock. A bad draft or
+name list is refused before anything is recognized.
+
+The language is US English only, the bundled recognizer's one model, and the
+strip says so rather than offering a choice it cannot keep. Not built yet:
+streaming or partial transcripts, spoken punctuation, per-word confidence, scene
+names in the recognizer's own vocabulary, other languages and mixed speech and
+typing while recording (the sprint's later milestones). The proof is a stand-in
+recognizer on the real page (`test_app_dictation.py`, `js/dictate.e2e.mjs`) and
+the installed engine on synthetic speech (CI's `local voice` job): **no real
+microphone, room or voice has been tried**.
 

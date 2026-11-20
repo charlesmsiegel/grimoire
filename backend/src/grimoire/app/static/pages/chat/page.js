@@ -5,6 +5,7 @@
 // only once posted. Everything shown from the library (card text, model output) is set as text, never as markup.
 
 import { makeReferenceIntent } from "./reference-intent.js";
+import { makeDictation } from "./dictate.js";
 import { makeVoice } from "./voice.js";
 import { makeStaging } from "./staging.js";
 import { makeCompare } from "./compare.js";
@@ -86,6 +87,10 @@ export async function mount(root, ctx) {
   // voice as an optional assist beside the composer (./voice.js, 067): shown only where the app serves it
   const voice = makeVoice(ctx, { composer });
   if (voice.node) foot.prepend(voice.node);
+  // speech to draft (./dictate.js, 080): dictated words land in the composer as unsent text; only Post posts
+  const dictation = makeDictation(ctx, { composer, names: () => (page.scene
+    ? [...page.scene.cast.map((member) => member.name), page.scene.persona && page.scene.persona.name] : []) });
+  if (dictation.node) foot.prepend(dictation.node);
   const panelBody = el("div", { class: "chat-panel-body" });
   // The panel's tabs. Each has something to show for every chat; a tab that might have nothing is left out here.
   const PANEL_TABS = [
