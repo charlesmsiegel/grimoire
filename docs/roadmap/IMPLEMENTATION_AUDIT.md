@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 4/16 | ☐ | 075, 076, 079 and 082 are complete at their bounded headless first-proof boundaries. Other domain slices and UI exit 116 remain incomplete. |
+| [9](#wave-9) | 7/16 | ☐ | 073, 074, 075, 076, 079, 082 and 086 meet their bounded headless first slices; the other domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,21 +674,21 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-075, 076 and 082 are complete at their bounded first-proof boundaries; other scheduled domain slices and UI exit 116 are not.
+075 (recorded rolls), 076 (offscreen plan steps), 082 (read-only world audits) and 086 (validated module authoring with pinned revisions) meet their headless first slices; the other domain slices and UI exit 116 are not complete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/auxiliary-writing-tools.md)).
-- Evidence: Scene generation produces fictional turns; draft persistence stores user text.
-- Scope / gap: No explicitly hypothetical noncanonical auxiliary reply-generation workflow.
+- [x] Scheduled first-useful slice ([requirements](sprints/auxiliary-writing-tools.md)).
+- Evidence: [`play/hypothetical.py`](../../backend/src/grimoire/play/hypothetical.py) `imagine`; [`app/adapters/play_imagine.py`](../../backend/src/grimoire/app/adapters/play_imagine.py) `play.imagine`; [`app/static/pages/chat/imagine.js`](../../backend/src/grimoire/app/static/pages/chat/imagine.js); [`backend/tests/test_play_hypothetical.py`](../../backend/tests/test_play_hypothetical.py); [`backend/tests/test_app_play_imagine.py`](../../backend/tests/test_app_play_imagine.py); [`backend/tests/js/imagine.test.mjs`](../../backend/tests/js/imagine.test.mjs); [`backend/tests/test_imagine_page.py`](../../backend/tests/test_imagine_page.py) with [`js/imagine.e2e.mjs`](../../backend/tests/js/imagine.e2e.mjs); [CHAT_PLAY](../CHAT_PLAY.md#a-hypothetical-reply). A hypothetical reply reads the player's line as the next post would be read, briefs one present NPC as the next turn's generation would (the same prompt a real post of that line gets: its own knowledge, only what it heard, the line included), makes one screened `npc_generation` call and writes nothing; the answer is marked `canonical: false`. It is refused as a real reply would be (paused, unseated, session-zero limits before and after the call, no model), and also while a turn is open, for a typed table request, and when the NPC would not hear the line. The proving scenario asks how an NPC might take a confession, copies the reply from a card marked "Hypothetical · not in the story", discards it, and posts the player's own line: the composer's draft is never touched, the library gains only that post's turn, and the next prompt holds neither the confession nor the reply.
+- Scope / gap: The only way into the story is the player's own post: there is no explicit accept action that inserts a hypothetical as a post after review (milestone 2). Polishing the player's own draft (the rest of milestone 1) and multilingual or style variants (milestone 3) are not implemented. A hypothetical asks one NPC once, with no decision call, presentation suggestion or continuity review; its calls and tokens are shown on its card but not priced, and the per-chat cost totals (built from stored takes) leave them out. Tested under fakedom and against a scripted model only; no real browser, clipboard or billed provider run.
 
 <a id="slice-074"></a>
 ### 074 — Downtime And Long Activities
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/downtime-and-long-activities.md)).
-- Evidence: effectstore supports durable exactly-once accepted effects.
-- Scope / gap: No campaign clock or long-activity scheduling/completion; cannot prove 20-day study advances time once.
+- [x] Scheduled first-useful slice ([requirements](sprints/downtime-and-long-activities.md)).
+- Evidence: [`downtimestore/library.py`](../../backend/src/grimoire/downtimestore/library.py) and [`DOWNTIME.md`](../DOWNTIME.md); [`test_downtimestore.py`](../../backend/tests/test_downtimestore.py)::test_twenty_day_study_completes_and_advances_time_once_even_after_reopen proves a 20-day study completing with its outcome, one calendar advance and deadline flag, and a retry after reopen that adds neither time nor progress; partial effort during travel, replay tampering, offline conflicts and crash/I/O-error recovery are in `test_downtimestore.py`, `test_downtimestore_sync.py` and `test_downtimestore_recovery.py`.
+- Scope / gap: Headless milestone 1 only: compressed-narration activities with effort requirements, progress, completion and abandonment on the 055 calendar. No downtime UI (116), supplies or food checks, deadlines that interrupt a stretch, overlapping commitments, pauses, ruleset study tables (Ars Magica seasons), played-out interim scenes, or controller authority for the actor's choice.
 
 <a id="slice-075"></a>
 ### 075 — Mechanical Resolution
@@ -770,9 +770,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-086"></a>
 ### 086 — Mechanics Module Authoring
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/mechanics-module-authoring.md)).
-- Evidence: Existing entity editor validates ordinary facets.
-- Scope / gap: No mechanics-module sheet editor, family-specific schema validation or isolated recorded check authoring.
+- [x] Scheduled first-useful slice ([requirements](sprints/mechanics-module-authoring.md)).
+- Evidence: [`mechanics/module.py`](../../backend/src/grimoire/mechanics/module.py), [`mechanics/sheet.py`](../../backend/src/grimoire/mechanics/sheet.py), [`mechanics/expr.py`](../../backend/src/grimoire/mechanics/expr.py) and [`mechanicsstore/store.py`](../../backend/src/grimoire/mechanicsstore/store.py), with [`test_mechanics_authoring.py`](../../backend/tests/test_mechanics_authoring.py), [`test_mechanicsstore.py`](../../backend/tests/test_mechanicsstore.py) and [`test_mechanicsstore_recovery.py`](../../backend/tests/test_mechanicsstore_recovery.py). An author drafts a module (sheet types, derived values, named checks) as an owned JSON file kept exactly as saved; validation lists the problems it finds by path with did-you-mean hints, checks every formula name and type statically, applies d20/pool family shapes and refuses executable hooks (007). Only a module with no problem publishes, as an immutable content-named revision; a malformed draft cannot publish, load or bind. Sheets and recorded-dice checks pin the revision: the proving scenario edits a module, a fresh check changes and the earlier record still confirms under its own revision and is never re-graded. V0.2.1's d20-basic/pool-basic ship as templates. [Contract](../MECHANICS_AUTHORING.md).
+- Scope / gap: Headless first slice. No editor page (116), campaign selection of a published revision, compatibility/migration preview (milestone 2), interactive rule tests (3), rules compilation (4) or durable roll journal (075); `ref` fields, creation pools and advancement are not yet expressible.
 
 <a id="slice-087"></a>
 ### 087 — World Authoring Assistant

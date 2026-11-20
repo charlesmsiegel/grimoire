@@ -69,6 +69,13 @@ one retained operation receipt. Gregorian, Hebrew and bounded portable custom ca
 fixed-day axis. Retries do not advance twice; unresolved scope sync conflicts refuse authority.
 Historical scene dates and actor knowledge stay untouched. See [CALENDARS.md](CALENDARS.md).
 
+### Downtime and long activities (headless first slice: `grimoire.downtime`, `grimoire.downtimestore`)
+
+An actor's bounded long activity (study, research, recovery, travel) records its effort
+requirement and progress beside the calendar in the same scope record. Each pursuit spends an exact
+span of campaign time as a 055 advance with its own operation id and credits effort in the same
+write, so a retry neither spends time nor adds progress twice. See [DOWNTIME.md](DOWNTIME.md).
+
 ### Offscreen faction plans (headless first slice: `grimoire.offscreen`, `grimoire.offscreenstore`)
 
 An institution's plan, adopted under its recorded 057 decision, progresses across each committed
@@ -118,6 +125,7 @@ and teach no character. See [OFFSCREEN.md](OFFSCREEN.md).
     images/, placements/              # the campaign's own image objects and placements (018)
   assets/blobs/                       # content-addressed image bytes (018)
   config/shelf/                       # the person's tags, pins and saved filters (SHELF.md); not synced yet
+  config/mechanics/                   # authored mechanics drafts and immutable revisions (MECHANICS_AUTHORING.md); not synced yet
   .txn/, .conflicts/, .sync/          # writer journal, preserved conflict versions, device-local sync state
 ```
 
