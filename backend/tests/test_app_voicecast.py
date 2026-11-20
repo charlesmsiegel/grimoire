@@ -308,8 +308,37 @@ def test_an_empty_flite_list_is_asked_again_only_after_a_while(monkeypatch):
     engine = FliteSynthesizer(tool="ffmpeg-without-flite")
     monkeypatch.setattr(engine, "_list", lambda: asked.append(1) or ())
     now = [1000.0]
-    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(module, "_now", lambda: now[0])
     assert engine.voices() == () and engine.voices() == () and len(asked) == 1
     now[0] += module.RETRY_AFTER
     monkeypatch.setattr(engine, "_list", lambda: asked.append(1) or ("kal",))
     assert engine.voices() == ("kal",) and engine.voices() == ("kal",) and len(asked) == 2
+
+
+def test_a_decided_outcome_is_read_by_the_narrator_as_the_table_read_it(tmp_path):
+    from test_campaign_page import labelled_action
+    folder, chat = desktop_library(tmp_path / "desk")
+    labelled_action(folder, chat)
+    with Device(folder, [say("Mara pockets the coins.")]) as device:
+        configure(device.api, (Tones(),))
+        api = AppApi(device.api)
+        review = api.call("campaign.hub", {"chat": str(chat)})["open_action"]
+        if api.call("campaign.confirm", {"chat": str(chat), "turn": review["turn"],
+                                         "expected": review["expected"]})["done"]["outcome"] is None:
+            review = api.call("campaign.hub", {"chat": str(chat)})["open_action"]
+            api.call("campaign.decide", {"chat": str(chat), "audience": "director", "result": "success",
+                                         "turn": review["turn"], "expected": review["expected"],
+                                         "fingerprint": review["framed"]["fingerprint"]})
+        device("generate", chat=str(chat))
+        keep(device, str(chat))
+        api.call("voicecast.cast", {"target": "narrator", "engine": "tone", "voice": "slt", "expected": None})
+        plan = api.call("voicecast.plan", {"chat": str(chat)})
+        rendered = api.call("voicecast.render", {"chat": str(chat), "fingerprint": plan["fingerprint"]})
+    assert [cue["kind"] for cue in plan["cues"]] == ["post", "outcome", "line"]
+    outcome = plan["cues"][1]
+    # the table's full outcome line (who acted, what, the result and why), not the bare result an NPC hears
+    assert outcome["text"].startswith("Anya Rook's action (") and "succeeds" in outcome["text"]
+    assert (outcome["status"], outcome["voice"]["voice"]) == ("voiced", "slt")
+    assert [(segment["kind"] if "kind" in segment else segment["item"].endswith(".outcome"), segment["status"])
+            for segment in rendered["segments"]][1] == (True, "audio")
+    assert not any(problem["code"] == "outcomes_unreadable" for problem in plan["problems"])

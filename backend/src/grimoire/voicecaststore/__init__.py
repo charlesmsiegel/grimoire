@@ -28,7 +28,8 @@ from grimoire.voicecast import Casting, CastingError, casting_from_document, cas
 CONFIG, VOICES, FILE = "config", "voices", "casting.json"
 PATH = f"{CONFIG}/{VOICES}/{FILE}"
 TEMP_PREFIX, TEMP_SUFFIX = ".casting-", ".tmp"
-#: A casting of a thousand entries with the longest notes is under this (about 700 KiB); a larger file is not one.
+#: A larger file is not a casting. A thousand entries with 500-character plain-text notes fit (about 700 KiB);
+#: notes in other scripts are written escaped and take more, so such a casting is refused ``too_large`` sooner.
 MAX_BYTES = 1024 * 1024
 
 

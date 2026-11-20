@@ -252,6 +252,10 @@ def test_planning_changes_no_text_and_refuses_what_is_not_one_chat():
     assert script_of("Run. *She leans in, voice low. Now.", narrator=False) == "Run."
     assert script_of("*sighs\nFine, I will go.", narrator=False) == "Fine, I will go."
     assert script_of("*a* Go. *b\nNow listen.", narrator=False) == "Go. Now listen."
+    # a direction never pairs across lines: the dialogue after it stays, the next line's direction goes
+    assert script_of("*sighs\nFine. *smiles* Let's go.", narrator=False) == "Fine. Let's go."
+    assert script_of("Hello *wave\nThen I say *hi* there", narrator=False) == "Hello Then I say there"
+    assert script_of("I said 5*3 is 15.", narrator=False) == "I said 5 3 is 15."
 
 
 # -- the casting -----------------------------------------------------------------------------------------------

@@ -28,6 +28,11 @@ TIMEOUT = 30
 LIST_TIMEOUT = 10
 #: An empty voice list (no ffmpeg, no Flite, a listing that failed) is asked for again only after this long.
 RETRY_AFTER = 300.0
+
+
+def _now() -> float:
+    """The clock the voice list's retry is timed by (a seam for tests)."""
+    return time.monotonic()
 _SCRIPT_FILE = "line.txt"
 
 
@@ -63,10 +68,10 @@ class FliteSynthesizer:
         kept; an empty one is asked again after ``RETRY_AFTER`` seconds, so one failed listing does not last and
         an ``ffmpeg`` without Flite is not run on every call."""
         with self._lock:
-            if self._voices or (self._voices is not None and time.monotonic() - self._asked_at < RETRY_AFTER):
+            if self._voices or (self._voices is not None and _now() - self._asked_at < RETRY_AFTER):
                 return self._voices
             self._voices = self._list()
-            self._asked_at = time.monotonic()
+            self._asked_at = _now()
             return self._voices
 
     def _list(self) -> tuple[str, ...]:

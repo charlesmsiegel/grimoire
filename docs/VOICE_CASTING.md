@@ -61,8 +61,8 @@ The writes are explored under the fault harness (`backend/tests/test_voicecastst
 
 ## The plan: which voice speaks each cue
 
-`voicecast.plan` reads a chat's turns the way opening the chat shows them, and makes one **cue** per item the
-table heard, in order:
+`voicecast.plan` reads a chat's turns as the play page opens them, adds each decided action's outcome line as the
+table's transcript reads it, and makes one **cue** per item the table heard, in order:
 
 - each non-private post of a turn, then a decided action's outcome line;
 - then the kept take's shown lines, filtered as the table's transcript filters them (`table_lines`): on a staged
@@ -79,7 +79,9 @@ The following are never cued:
 **The text is never changed.** A cue carries the accepted `text` and its `digest` (sha256). It also carries a
 derived `script`, which is what the voice says:
 
-- In a character's line, `*stage directions*` are left unspoken, and one never closed runs to the end of the line.
+- In a character's line, `*stage directions*` are left unspoken. A direction never pairs across lines, and one never
+  closed (an asterisk at the start of a line or after a space) runs to the end of its line. An asterisk inside a
+  word (`5*3`) is only dropped.
 - Narration is read with its asterisks dropped.
 - An action post is text only (`action`), and so is a line that is all stage direction (`no_speech`).
 
@@ -93,7 +95,7 @@ slice.
   portrayal with none of its own (an outfit, a disguise), the nearest base's (`generation/voice.py`).
 
 The voice is chosen from those recorded refs, never from the source's head. Making a new revision changes no
-earlier line's voice. A pinned entry (`...@r2`) applies only to lines that recorded that exact revision, either as
+earlier line's voice. (A card chat's opening greeting records neither ref, so it is voiced as a post is, below.) A pinned entry (`...@r2`) applies only to lines that recorded that exact revision, either as
 the revision spoken or as the voice profile written with (so `wren@r1` also voices an outfit of Wren's written
 with `wren@r1`'s profile).
 
@@ -200,3 +202,5 @@ The following are left for later:
 - Engines with licensed or consented voices: the casting records their rights, but this slice ships no such engine.
 - The page that plays a scene, which is sprint 116's.
 - A run with real speakers and listeners, to judge whether the voices can be told apart by ear.
+- Recording `actor_revision` on a card chat's opening greeting (the runner's change), so the greeting keeps the
+  voice of the revision it was spoken in rather than following the instance's revision now.

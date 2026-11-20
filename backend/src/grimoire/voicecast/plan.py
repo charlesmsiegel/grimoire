@@ -42,9 +42,11 @@ NARRATOR_LABEL = "Narrator"
 #: Cue statuses and the reasons a cue is text only.
 VOICED, TEXT_ONLY = "voiced", "text_only"
 REASONS = ("not_cast", "action", "no_speech")
-#: A stage direction runs from one asterisk to the next; one never closed runs to the end of its line.
-_DIRECTION = re.compile(r"\*[^*]*\*")
-_UNCLOSED = re.compile(r"\*[^\n]*")
+#: A stage direction runs from one asterisk to the next on its line; one never closed (an asterisk that opens a
+#: word, at the start of a line or after a space) runs to the end of its line. An asterisk inside a word ("5*3")
+#: opens nothing and is only dropped.
+_DIRECTION = re.compile(r"\*[^*\n]*\*")
+_UNCLOSED = re.compile(r"(?:^|(?<=\s))\*[^\n]*", re.MULTILINE)
 _SPACE = re.compile(r"\s+")
 
 
@@ -119,7 +121,8 @@ def digest(text: str) -> str:
 def script_of(text: str, *, narrator: bool) -> str:
     """What a voice says for ``text``: a character's ``*stage directions*`` left unsaid, a narrator's asterisks
     dropped, and whitespace made single. The text itself is never changed."""
-    spoken = text.replace("*", " ") if narrator else _UNCLOSED.sub(" ", _DIRECTION.sub(" ", text))
+    spoken = text if narrator else _UNCLOSED.sub(" ", _DIRECTION.sub(" ", text))
+    spoken = spoken.replace("*", " ")
     return _SPACE.sub(" ", spoken).strip()
 
 
