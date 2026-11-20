@@ -110,6 +110,15 @@ def _imported_line(post: ImportedPost, names: Mapping[InstanceRef, str], player:
     return None
 
 
+def cast_heard(post: ImportedPost) -> bool:
+    """Whether a chat's imported cast heard ``post`` by ``imported_history``'s rule: a shown post with words, by
+    the player, a character or a source's reply that names its speaker. Narration, a ``system`` notice, a hidden
+    post and a post with no chosen text are heard by no actor (narration is the table's only). 084 asks it, so a
+    copied post is never given to a listener its origin's cast did not include."""
+    found = _imported_line(post, {}, None)
+    return found is not None and found[1]
+
+
 def imported_history(pages: Iterable[TranscriptPage], listeners: Iterable[InstanceRef],
                      names: Mapping[InstanceRef, str], *, player: str | None = None,
                      limit: int = MAX_HEARD) -> ImportedHistory:
@@ -228,5 +237,5 @@ def segments(turn: TurnRecord) -> tuple[NarrationSegment, ...]:
     return tuple(found)
 
 
-__all__ = ["NARRATOR", "ImportedHistory", "audible", "heard_for", "imported_history", "imported_table", "render",
-           "segments", "table_lines"]
+__all__ = ["NARRATOR", "ImportedHistory", "audible", "cast_heard", "heard_for", "imported_history", "imported_table",
+           "render", "segments", "table_lines"]
