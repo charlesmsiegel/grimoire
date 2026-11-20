@@ -43,6 +43,8 @@ export function makeTable(ctx, chat, { run, posted, redraw }) {
   let choose = null;  // the "Who is at the keyboard" strip, and the seated players it was built for
   let chooseFor = "";
   const keyed = (control, key) => { control.setAttribute("data-focus-key", "table:" + chat + ":" + key); return control; };
+  // where the focus goes if `control` is gone after a redraw (a Move up that made its part the first, say)
+  const fallback = (control, ...keys) => { control.setAttribute("data-focus-also", JSON.stringify(keys.map((key) => "table:" + chat + ":" + key))); return control; };
 
   const summary = el("summary", { class: "chat-table-summary" });
   const note = el("p", { class: "g-muted chat-table-note" },
@@ -54,6 +56,12 @@ export function makeTable(ctx, chat, { run, posted, redraw }) {
   const order = el("div", { class: "chat-table-order" });
   const reviewSlot = el("div", {});
   const seating = el("div", {});
+  // "Who plays whom" is one node for the panel's life, so it stays open (or shut) as the person left it
+  const seatList = el("ul", { class: "chat-table-list" });
+  const seatingDetails = el("details", { class: "chat-table-seating" }, el("summary", {}, "Who plays whom"),
+    el("p", { class: "g-muted" }, "The library owner hands a character to someone at this device, or back to the director. A character whose part is still in an open turn keeps its player until that turn is kept or passed."),
+    seatList);
+  const picked = new Map();  // actor -> the player chosen for it in "Who plays whom", until it is handed over
   const node = el("details", { class: "chat-table", "aria-label": "Shared turn" }, summary,
     el("div", { class: "g-stack chat-table-body" }, note, keyboard, mine, order, reviewSlot, seating));
   node.hidden = true;
@@ -85,11 +93,19 @@ export function makeTable(ctx, chat, { run, posted, redraw }) {
   // Draw, keeping the person's place: if the control they were in was rebuilt, focus goes to its successor.
   function draw() {
     const active = document.activeElement;
-    const focusKey = active && active !== node && node.contains(active) && active.getAttribute ? active.getAttribute("data-focus-key") : null;
+    const inside = active && active !== node && node.contains(active) && active.getAttribute;
+    const focusKey = inside ? active.getAttribute("data-focus-key") : null;
+    let also = [];
+    try { also = inside ? JSON.parse(active.getAttribute("data-focus-also") || "[]") : []; } catch { also = []; }
     drawPanel();
     if (!focusKey || node.contains(document.activeElement)) return;
-    const next = [...node.querySelectorAll("[data-focus-key]")].find((item) => item.getAttribute("data-focus-key") === focusKey);
-    if (next && !next.disabled && !next.hidden) next.focus({ preventScroll: true });
+    const keyedNodes = [...node.querySelectorAll("[data-focus-key]")];
+    for (const key of [focusKey, ...also]) {
+      const next = keyedNodes.find((item) => item.getAttribute("data-focus-key") === key);
+      if (!next || next.disabled) continue;
+      next.focus({ preventScroll: true });
+      if (document.activeElement === next) return;
+    }
   }
 
   function drawPanel() {
@@ -180,8 +196,11 @@ export function makeTable(ctx, chat, { run, posted, redraw }) {
     const rows = drafts.map((item, index) => {
       const own = item.by === player;
       const move = (at) => () => run(async () => redraw(await ctx.api("draft", { chat, actor: item.actor, by: item.by, at })));
-      const up = own && index > 0 ? keyed(ui.button("Move up", move(index - 1), { size: "small" }), "up:" + item.actor + ":" + item.by) : null;
-      const down = own && index < drafts.length - 1 ? keyed(ui.button("Move down", move(index + 1), { size: "small" }), "down:" + item.actor + ":" + item.by) : null;
+      const part = item.actor + ":" + item.by;
+      // a move that takes the part to the top or the bottom leaves it no button for that way: the focus goes to
+      // its other move button, or to the part itself
+      const up = own && index > 0 ? fallback(keyed(ui.button("Move up", move(index - 1), { size: "small" }), "up:" + part), "down:" + part, "part:" + part) : null;
+      const down = own && index < drafts.length - 1 ? fallback(keyed(ui.button("Move down", move(index + 1), { size: "small" }), "down:" + part), "up:" + part, "part:" + part) : null;
       if (up) up.setAttribute("aria-label", "Move " + item.name + "'s part up");
       if (down) down.setAttribute("aria-label", "Move " + item.name + "'s part down");
       const member = scene.cast.find((cast) => cast.actor === item.actor);
@@ -192,14 +211,14 @@ export function makeTable(ctx, chat, { run, posted, redraw }) {
         redraw(await ctx.api("drop_draft", { chat, actor: item.actor, by: item.by }));
       }), { size: "small" }), "out:" + item.actor + ":" + item.by);
       if (out) out.setAttribute("aria-label", "Take " + item.name + "'s part out of the turn");
-      return el("li", { class: "chat-table-held" },
+      return keyed(el("li", { class: "chat-table-held", tabindex: "-1", "aria-label": (index + 1) + ". " + item.name + "'s part" },
         el("div", { class: "g-row" }, el("strong", { class: "g-grow" }, (index + 1) + ". " + item.name),
           el("span", { class: "g-muted" }, "by " + playerLabel(item.by, owner()) + " · " + modeLabel(item.mode)),
           theirs ? null : ui.pill("No longer theirs", { kind: "bad" })),
         own ? el("p", { class: "chat-table-text" }, item.text)
           : el("p", { class: "g-muted" }, "Held by " + playerLabel(item.by, owner()) + ". Their words show only while they are at the keyboard."),
         theirs ? null : el("p", { class: "g-muted" }, item.name + " is no longer played by " + playerLabel(item.by, owner()) + ": take this part out before the turn is posted."),
-        up || down || out ? el("div", { class: "g-row chat-table-actions" }, up, down, out) : null);
+        up || down || out ? el("div", { class: "g-row chat-table-actions" }, up, down, out) : null), "part:" + part);
     });
     const blocked = postBlocker(scene);
     order.replaceChildren(el("h3", { class: "chat-table-heading" }, "This turn, in order"), el("ol", { class: "chat-table-list" }, rows),
@@ -265,7 +284,10 @@ export function makeTable(ctx, chat, { run, posted, redraw }) {
     const options = seatOptions(players(), owner());
     const rows = others.map((member) => {
       const now = member.role === "player" ? member.controller : member.role === "npc" ? "director" : "";
-      const pick = ui.choice("Who plays " + member.name, options, { value: now });
+      // a choice not yet handed over survives a redraw (a take arriving, say)
+      const pending = picked.has(member.actor) && options.some((option) => option.value === picked.get(member.actor)) ? picked.get(member.actor) : now;
+      const pick = ui.choice("Who plays " + member.name, options, { value: pending,
+        onchange: (value) => { if (value === now) picked.delete(member.actor); else picked.set(member.actor, value); } });
       keyed(pick.select, "seat:" + member.actor);
       const hand = ui.button("Hand over", () => run(async () => {
         const to = pick.value;
@@ -274,14 +296,15 @@ export function makeTable(ctx, chat, { run, posted, redraw }) {
         const sure = await ui.confirm("Hand " + member.name + " to " + label + "? From then on only " + label
           + " posts for " + member.name + ". The change is recorded in the library's control history.", { confirmLabel: "Hand over" });
         if (!sure) return;
-        redraw(await ctx.api("seat", { chat, actor: member.actor, player: to }));
+        const seated = await ctx.api("seat", { chat, actor: member.actor, player: to });
+        picked.delete(member.actor);
+        redraw(seated);
       }), { size: "small" });
       keyed(hand, "hand:" + member.actor);
       return el("li", { class: "g-row chat-table-seat" }, pick.node, hand);
     });
-    seating.replaceChildren(el("details", { class: "chat-table-seating" }, el("summary", {}, "Who plays whom"),
-      el("p", { class: "g-muted" }, "The library owner hands a character to someone at this device, or back to the director. A character whose part is still in an open turn keeps its player until that turn is kept or passed."),
-      el("ul", { class: "chat-table-list" }, rows)));
+    seatList.replaceChildren(...rows);
+    if (seatingDetails.parentNode !== seating) seating.replaceChildren(seatingDetails);
   }
 
   return { node, update, load };

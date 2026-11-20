@@ -163,13 +163,16 @@ test("two players draft one turn, switch chats without losing a draft, and resum
   // this keyboard, and whoever is takes it out of the turn for him, so the turn is not wedged
   await hold(main, "Tamsin Hale's part");
   await until(() => shared(main).textContent.includes("1. Tamsin Hale"), 15000, "Bob's part held");
-  shared(main).querySelectorAll("details").find((node) => node.classList.contains("chat-table-seating")).open = true;
+  const seating = shared(main).querySelectorAll("details").find((node) => node.classList.contains("chat-table-seating"));
+  seating.open = true;
+  // a choice made but not yet handed over survives a redraw (here: the owner takes the keyboard)
   const seat = field(shared(main), "Who plays Tamsin Hale");
   seat.value = "director";
   seat.dispatchEvent({ type: "change" });
-  byText(shared(main), "button", "Hand over").at(-1).click();
-  const dialog = await until(() => document.body.querySelector("dialog"), 15000, "the confirmation");
-  byText(dialog, "button", "Hand over").at(-1).click();
+  segment(shared(main), "You").click();
+  await until(() => field(shared(main), ANYA), 15000, "the owner at the keyboard");
+  assert.equal(field(shared(main), "Who plays Tamsin Hale").value, "director", "the pending choice is kept");
+  await handOver(main, "Tamsin Hale", "director");
   turn = await until(() => shared(main) && shared(main).textContent.includes("No longer theirs") && shared(main), 15000, "the part flagged");
   assert.ok(!segment(turn, "bob"), "Bob plays no character here any more");
   const out = turn.querySelectorAll("button").find((node) => node.getAttribute("aria-label") === "Take Tamsin Hale's part out of the turn");
@@ -178,4 +181,46 @@ test("two players draft one turn, switch chats without losing a draft, and resum
   await until(() => shared(main).textContent.includes("No part is held for this turn yet."), 15000, "the part taken out");
   await idle();
   assert.ok(!shared(main).textContent.includes("No longer theirs"));
+  // "Who plays whom" stayed as the person left it through every redraw since: open, the same node
+  assert.ok(seating.open && shared(main).contains(seating), "the seating stays open across redraws");
+
+  // the owner takes Mara Vell too and holds a part for each; moving Mara's part to the top leaves it no Move up,
+  // so the focus goes to its Move down rather than to nowhere
+  await handOver(main, "Mara Vell", ownerValue(main, "Mara Vell"));
+  await until(() => field(shared(main), "Mara Vell's part, by you"), 15000, "Mara's part box");
+  type(field(shared(main), ANYA), "*I hold the lamp up*");
+  await hold(main, "Anya Rook's part");
+  type(field(shared(main), "Mara Vell's part, by you"), '"Who goes there?"');
+  await hold(main, "Mara Vell's part");
+  await until(() => shared(main).textContent.includes("2. Mara Vell"), 15000, "both parts held");
+  const up = shared(main).querySelectorAll("button").find((node) => node.getAttribute("aria-label") === "Move Mara Vell's part up");
+  up.focus();
+  up.click();
+  await until(() => shared(main).textContent.includes("1. Mara Vell"), 15000, "Mara's part moved up");
+  await idle();
+  const focused = document.activeElement;
+  assert.ok(shared(main).contains(focused) && focused.getAttribute("aria-label") === "Move Mara Vell's part down",
+    "the focus moves to the part's other move button: " + (focused && focused.tagName));
 });
+
+// Hand `name` to `value` with "Who plays whom", from its Hand over button, and confirm.
+async function handOver(main, name, value) {
+  const seat = field(shared(main), "Who plays " + name);
+  seat.value = value;
+  seat.dispatchEvent({ type: "change" });
+  const row = shared(main).querySelectorAll("li").find((node) => node.contains(seat));
+  const button = byText(row, "button", "Hand over").at(-1);
+  button.focus();
+  button.click();
+  const dialog = await until(() => document.body.querySelector("dialog"), 15000, "the confirmation");
+  byText(dialog, "button", "Hand over").at(-1).click();
+  await until(() => !document.body.querySelector("dialog"), 15000, "the confirmation closed");
+  await idle();
+  // the hand-over redrew the panel: the focus is back on the row's Hand over button, inside the open seating
+  const back = document.activeElement;
+  assert.ok(shared(main).contains(back) && back.textContent === "Hand over", "the focus is back on Hand over");
+}
+
+function ownerValue(main, name) {
+  return field(shared(main), "Who plays " + name).querySelectorAll("option").find((node) => node.textContent === "You").getAttribute("value");
+}

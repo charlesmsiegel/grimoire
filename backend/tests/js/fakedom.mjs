@@ -13,6 +13,30 @@ function blurInside(node) {
   if (document && document.activeElement && node.contains(document.activeElement)) document.activeElement = document.body || null;
 }
 
+// Whether a browser would let `element` take the focus: it is in the page, not disabled, and not under a hidden
+// element or a closed <details> (whose own <summary> still shows, and takes the focus).
+function focusable(element) {
+  if (element.disabled) return false;
+  const document = element.ownerDocument;
+  let child = null;
+  for (let at = element; at; child = at, at = at.parentNode) {
+    if (at instanceof Element) {
+      if (at.hidden) return false;
+      if (at.tagName === "DETAILS" && at !== element && !at.open && !(child && child.tagName === "SUMMARY")) return false;
+    }
+    if (!at.parentNode) return at === document.body || at === document.documentElement || at === document.head;
+  }
+  return false;
+}
+
+// As in a browser, a focused control that stops showing (it or what holds it is hidden, or the <details> around it
+// is closed) loses the focus to the body.
+function blurUnlessShown(node) {
+  const document = node.ownerDocument;
+  const active = document && document.activeElement;
+  if (active && active !== document.body && node.contains(active) && !focusable(active)) document.activeElement = document.body || null;
+}
+
 class Node {
   constructor(document) { this.ownerDocument = document; this.parentNode = null; this.childNodes = []; }
   get textContent() { return this.childNodes.map((child) => child.textContent).join(""); }
@@ -79,9 +103,11 @@ export class Element extends Node {
     this.listeners = new Map();
     this._value = "";
     this.files = [];
-    this.open = false;
+    this._open = false;
   }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  get open() { return this._open; }
+  set open(value) { this._open = Boolean(value); if (!this._open) blurUnlessShown(this); }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); if (name === "hidden") blurUnlessShown(this); }
   getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null; }
   hasAttribute(name) { return this.attributes.has(name); }
   removeAttribute(name) { this.attributes.delete(name); }
@@ -135,6 +161,7 @@ export class Element extends Node {
     if (!event.defaultPrevented && this.tagName === "A" && this.hasAttribute("href")) this.ownerDocument.defaultView.location.hash = this.getAttribute("href");
   }
   focus() {
+    if (!focusable(this)) return;  // as a browser: nothing happens, and the focus stays where it was
     this.ownerDocument.activeElement = this;
     // focusin bubbles, as in a browser: the shell watches it on a page's root
     for (let at = this; at instanceof Element; at = at.parentNode) at.dispatchEvent({ type: "focusin", target: this });

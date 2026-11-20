@@ -82,6 +82,7 @@ async function mounted(audience, shown, scene = null, routes = ["chat"], knowled
     const now = typeof shown === "function" ? shown() : shown;
     return op === "campaign.hub" ? now : { done: op === "campaign.recover_effects" ? { settled: [] } : {}, hub: now };
   }, { scene, routes });
+  document.body.replaceChildren(root);  // in the page, as the shell mounts it: a browser focuses nothing outside it
   await page.mount(root, ctx);
   return { root, calls, notices: seen.notices, seen };
 }
@@ -591,6 +592,7 @@ async function listed(campaigns = CAMPAIGNS, hubs = HUBS, complete = true, gate 
     if (!found) throw Object.assign(new Error("unreadable"), { reason: "chat_unreadable" });
     return found;
   });
+  document.body.replaceChildren(root);  // in the page, as the shell mounts it: a browser focuses nothing outside it
   await page.mount(root, ctx);
   const names = () => root.querySelectorAll("a.campaign-rowlink").map((node) => node.textContent);
   return { root, calls, seen, names };

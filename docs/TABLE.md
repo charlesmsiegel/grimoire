@@ -36,8 +36,11 @@ has more than one character a person plays, or this device was started for more 
   keep it or pass first, and offers neither a review nor **Post this turn**. A review on show is dropped as soon
   as the chat moves past it: other parts held, another turn posted, a take open or play paused. The table then
   answers the turn once.
-- A redraw keeps the person's place: the boxes and the keyboard choice stay the same controls while the same
-  parts are shown, and a control that had to be rebuilt takes the focus back by its `data-focus-key`.
+- A redraw keeps the person's place: the boxes, the keyboard choice and **Who plays whom** stay the same
+  controls while the same parts are shown (the seating stays open or shut as it was left, and a choice not yet
+  handed over is kept), and a control that had to be rebuilt takes the focus back by its `data-focus-key`. A
+  move that takes a part to the top or the bottom leaves it no button for that way: the focus goes to its other
+  move button, or to the part itself.
 - **Who plays whom** (the library owner) hands a character to someone at this device, or back to the director,
   with the core `seat` op, after saying exactly what changes.
 - A combined turn takes no label, framing or effect (058): nothing offers one.
@@ -51,15 +54,22 @@ has more than one character a person plays, or this device was started for more 
   `invalid_field`.
 - The drafts are posted only while `head` is still the chat's last turn and they are exactly the ones reviewed.
   Another turn posted since the review, or a part corrected, added, dropped or moved, refuses `changed`, and the
-  request posts nothing.
-- A submission retried after its answer was lost looks at the turn just after `head`, whatever was drafted or
-  played since: if its posts are exactly the ones 058 makes of the reviewed drafts (the same characters by the
-  same players, in order, each post's kind and words equal to its draft's as 008 routes it and 032 reads it,
-  never merely contained in them), the answer is `already_applied` with that turn's id, and nothing is posted
-  twice. A later turn holding the same words is not this review's. The page asks the table to answer the turn
-  only when `answered` is false, so a retried submission never asks for a second answer.
-- A draft whose character is no longer its writer's is flagged (`ready: false`); 058 refuses it when the turn is
-  posted. 058's own refusals keep their reason.
+  request posts nothing now.
+- The moment `table.submit` posts, it keeps a receipt: the chat, the review's etag and its head, and the turn
+  posted. A submission retried after its answer was lost (or the same review sent from a second tab) finds that
+  receipt and answers `already_applied` with that turn's id, whatever was drafted or played since, even the very
+  same words held again for the next turn; nothing is posted twice. Only the receipt says a review was posted: a
+  turn that merely holds the same words (the same line posted through the composer, say, while the part is still
+  held) is not this review's, and the review refuses `changed`. The page asks the table to answer the turn only
+  when `answered` is false, so a retried submission never asks for a second answer.
+- **The receipt is kept in memory**, beside the drafts (which 058 keeps in memory too), a bounded number per
+  running app. An app restart between a submission and its retry loses it: the retry then finds another turn
+  after its head and refuses `changed` ("it was not posted now"), although the first submission did post the
+  turn. The chat, read again, shows that turn; nothing is posted twice.
+- A draft whose character is not its writer's is flagged (`ready: false`): one handed to someone else while it was
+  held, or one written by a player who never played it (058 checks who plays a character when the turn is
+  posted, not when a part is held). 058 refuses it when the turn is posted (`not_your_character`, or
+  `not_at_table` for a character handed away), and nothing is posted. 058's own refusals keep their reason.
 
 ## Several NPCs answering (051)
 
@@ -127,10 +137,12 @@ has captured. A capture is reviewed first and made exactly as reviewed, once.
 Per-seat privacy here is a property of the screen, not of the API. The panel shows the person at the keyboard
 only their own parts' words, but nothing on the server enforces that:
 
-- `by` on the core `draft` and `drop_draft` ops is asserted by the client. The text API checks that `by` is one
-  of the players this device was started for (and, for a part written, that it plays the character), not that
-  the person at the keyboard is that player. Anyone at the device can draft, move or take out a part as any
-  player the device was started for.
+- `by` on the core `draft` and `drop_draft` ops is asserted by the client. The text API checks only that `by` is
+  one of the players this device was started for, and that a part held is corrected, moved or taken out by its
+  own writer. It does not check that the person at the keyboard is that player, nor, when a part is held, that
+  `by` plays the character: a part for someone else's character is held, flagged in the review, and refused
+  when the turn is posted. Anyone at the device can draft, move or take out a part as any player the device was
+  started for.
 - The core `open` op, and every scene the ops answer, returns every held draft with its text, whoever asks.
   `table.review` does the same. The page hides other players' words; a person who reads the answers (the
   browser's tools, or the app's text API directly) sees them all.
@@ -149,7 +161,8 @@ commits. Each page runs end to end in fakedom against a real app server (`js/tab
 `js/ensemble.e2e.mjs`, `js/companions.e2e.mjs`), including the sprint's proving scenario: two players draft one
 turn, switch chats without losing a draft, and resume play; a part whose character was handed away is taken
 out; and the focus survives a redraw (fakedom, like a browser, moves the focus to the body when the focused
-control is taken out of the page, even if it is put straight back). The pages' logic has node unit tests
+control is taken out of the page, even if it is put straight back, or stops showing; and refuses to focus a
+control that is out of the page, disabled, or under a hidden element or a closed `<details>`). The pages' logic has node unit tests
 (`js/table.test.mjs`, `js/ensemble.test.mjs`, `js/companions.test.mjs`).
 
 ## Not proved here

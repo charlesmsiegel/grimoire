@@ -14,11 +14,13 @@ import shutil
 from pathlib import Path
 
 import pytest
+from scene_fixtures import POLICY
 from table_fixtures import BOB, OWNER, node_e2e, played, say
 
 from grimoire.app.adapters.table import etag_of
+from grimoire.app.appapi import AppApi
 from grimoire.app.pages import load_pages
-from grimoire.textapi import ApiRefused
+from grimoire.textapi import ApiRefused, TextApi
 
 NODE = shutil.which("node")
 STATIC = Path(__file__).resolve().parents[1] / "src" / "grimoire" / "app" / "static"
@@ -63,9 +65,22 @@ def test_a_review_names_each_part_its_writer_and_where_the_drafts_are_kept(tmp_p
         assert [(item["name"], item["by"], item["ready"]) for item in review["drafts"]] == [
             ("Anya Rook", OWNER, True), ("Tamsin Hale", BOB, True)]
         assert review["etag"] != empty["etag"] and review["limits"]["chars"] > 0
-        # a player drafts only for the character they play: Bob cannot write Anya's part
-        assert refused(table, "draft", chat=chat, actor=anya, by=BOB, text="hi").reason
+        # a part held is its writer's: Bob cannot correct the owner's part for Anya
+        assert refused(table, "draft", chat=chat, actor=anya, by=BOB, text="hi").reason == "not_your_draft"
         assert table("table.review", chat=chat)["etag"] == review["etag"]
+
+
+def test_a_part_for_a_character_its_writer_does_not_play_is_held_flagged_and_refused_when_posted(tmp_path):
+    # 058 checks who plays a character when the turn is posted, not when a part is held (docs/TABLE.md)
+    with played(tmp_path) as table:
+        chat, anya = str(table.chat), table.cast["Anya Rook"]
+        held = table("draft", chat=chat, actor=anya, by=BOB, text='"Bob speaks for Anya"')
+        assert [(item["actor"], item["by"]) for item in held["drafts"]] == [(anya, BOB)]
+        review = table("table.review", chat=chat)
+        assert [(item["controller"], item["ready"]) for item in review["drafts"]] == [(OWNER, False)]
+        turns = table("open", chat=chat)["turns"]
+        assert refused(table, "table.submit", **commit_args(review)).reason == "not_your_character"
+        assert table("open", chat=chat)["turns"] == turns
 
 
 def test_the_turn_is_posted_once_as_reviewed_and_a_lost_answer_posts_nothing_twice(tmp_path):
@@ -139,7 +154,7 @@ def test_a_review_taken_before_another_turn_was_posted_posts_nothing(tmp_path):
         turns = table("open", chat=chat)["turns"]
         assert table("table.review", chat=chat)["etag"] == review["etag"] and turns[-1]["turn"] != review["head"]
         stale = refused(table, "table.submit", **commit_args(review))
-        assert stale.reason == "changed" and "posted nothing" in str(stale) and "another turn" in str(stale)
+        assert stale.reason == "changed" and "not posted now" in str(stale) and "another turn" in str(stale)
         assert table("open", chat=chat)["turns"] == turns
         # a fresh review of the same parts posts them, after the new head
         done = table("table.submit", **commit_args(table("table.review", chat=chat)))
@@ -161,8 +176,8 @@ def test_a_retry_matches_the_posted_words_exactly_never_a_part_of_them(tmp_path)
         assert table("open", chat=chat)["turns"] == turns
 
 
-def test_a_retry_reads_the_words_as_058_posts_them(tmp_path):
-    # quotes taken off by 008 and the addressee taken off a whisper by 032: the posts are still this review's
+def test_a_retry_is_answered_although_058_posted_other_words_than_the_drafts(tmp_path):
+    # quotes taken off by 008 and the addressee taken off a whisper by 032: the receipt, not the words, answers it
     with played(tmp_path, [say("The lamp gutters.")]) as table:
         chat, anya, tamsin = str(table.chat), table.cast["Anya Rook"], table.cast["Tamsin Hale"]
         table("draft", chat=chat, actor=anya, text='"Is the lamp lit?"')
@@ -210,6 +225,55 @@ def test_only_the_turn_right_after_the_head_can_be_the_reviewed_one(tmp_path):
         turns = table("open", chat=chat)["turns"]
         assert refused(table, "table.submit", **commit_args(review)).reason == "changed"
         assert table("open", chat=chat)["turns"] == turns
+
+
+def test_the_same_words_posted_through_the_composer_are_not_this_review(tmp_path):
+    with played(tmp_path) as table:
+        chat, anya = str(table.chat), table.cast["Anya Rook"]
+        table("draft", chat=chat, actor=anya, text='"Is anyone there?"')
+        review = table("table.review", chat=chat)
+        # the same line is posted through the ordinary composer (a second tab, say): the turn holds exactly the
+        # words reviewed, but the review was never submitted and its part is still held, so it is no receipt
+        table("post", chat=chat, text='"Is anyone there?"')
+        turns = table("open", chat=chat)["turns"]
+        assert [post["text"] for post in turns[-1]["posts"]] == ["Is anyone there?"]
+        stale = refused(table, "table.submit", **commit_args(review))
+        assert stale.reason == "changed" and "another turn" in str(stale)
+        after = table("open", chat=chat)
+        assert after["turns"] == turns and [item["text"] for item in after["drafts"]] == ['"Is anyone there?"']
+
+
+def test_a_retry_is_answered_from_the_receipt_even_after_the_same_words_are_held_again(tmp_path):
+    with played(tmp_path, [say("The lamp gutters.")]) as table:
+        chat, tamsin = str(table.chat), table.cast["Tamsin Hale"]
+        table("draft", chat=chat, actor=tamsin, by=BOB, text="*I check the lamp*")
+        review = table("table.review", chat=chat)
+        twin = table("table.review", chat=chat)  # the same review read in a second tab
+        first = table("table.submit", **commit_args(review))  # its answer is lost
+        # Bob holds the very same words again for the next turn: the retry is still the first turn's, and the new
+        # part stays held for the next one
+        table("draft", chat=chat, actor=tamsin, by=BOB, text="*I check the lamp*")
+        again = table("table.submit", **commit_args(review))
+        assert again["done"] == {**first["done"], "already_applied": True}
+        assert [item["text"] for item in again["scene"]["drafts"]] == ["*I check the lamp*"]
+        # the second tab's copy of the same review is the same parts, posted once
+        assert table("table.submit", **commit_args(twin))["done"]["turn"] == first["done"]["turn"]
+        assert len(table("open", chat=chat)["turns"]) == len(first["scene"]["turns"])
+
+
+def test_the_receipt_is_kept_in_memory_and_an_app_restart_loses_it(tmp_path):
+    with played(tmp_path) as table:
+        chat, anya = str(table.chat), table.cast["Anya Rook"]
+        table("draft", chat=chat, actor=anya, text='"Is the lamp lit?"')
+        args = commit_args(table("table.review", chat=chat))
+        table("table.submit", **args)  # its answer is lost, and then the app restarts
+        restarted = AppApi(TextApi(table.table.store, table.table.authority, owner=OWNER, local_players=[BOB],
+                                   runtime=table.table.harness.runtime, policy=POLICY))
+        turns = restarted.call("open", {"chat": chat})["turns"]
+        with pytest.raises(ApiRefused) as caught:
+            restarted.call("table.submit", args)
+        assert caught.value.reason == "changed" and "not posted now" in str(caught.value)
+        assert restarted.call("open", {"chat": chat})["turns"] == turns
 
 
 def test_a_part_whose_character_changed_hands_is_flagged_and_bad_requests_are_refused(tmp_path):

@@ -12,12 +12,13 @@ review a combined turn is posted from:
 - ``submit`` posts the drafts as one turn (the core ``submit``: 058's ``post_together``) only if they are still the
   ones reviewed and no turn was posted since: the request carries the reviewed drafts, their etag and the turn
   the review came after (``head``), so a draft corrected, added, dropped or moved, or another turn posted
-  meanwhile, refuses ``changed`` and the request posts nothing. A submission retried after its answer was lost
-  finds the turn written just after ``head`` holding exactly the posts 058 makes of the reviewed drafts (the same
-  characters by the same players, each post's kind and words equal to its draft's as 008 routes and 032 reads
-  it), whatever was drafted or played since, and answers ``already_applied`` with that turn's id without
-  posting again. Both answers say whether the turn has a take yet (``answered``), so a client asks the table to
-  answer it only once.
+  meanwhile, refuses ``changed`` and the request posts nothing now. The moment a submission posts, this module
+  keeps a receipt of it, by chat, etag and head, in memory beside the drafts. A submission retried after its
+  answer was lost finds that receipt and answers ``already_applied`` with the posted turn's id, whatever was
+  drafted or played since, without posting again; a turn that merely holds the same words (posted through the
+  composer, say) is never taken for it. The receipt does not survive an app restart (nor do the drafts): a retry
+  after one refuses ``changed``. Both answers say whether the turn has a take yet (``answered``), so a client
+  asks the table to answer it only once.
 
 A combined turn takes no label, framing or effect (058): nothing here offers one.
 """
@@ -26,15 +27,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import weakref
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
-from typing import Any
 
 from grimoire.app.adapter import Adapter, AdapterContext
-from grimoire.comms import TransmissionError, Unread, read_message
-from grimoire.core.identity import ChatRef, InstanceRef
-from grimoire.intent import RoutingContext, Utterance, route
-from grimoire.intent.text import wrapped
+from grimoire.core.identity import ChatRef
 from grimoire.play.drafts import MAX_DRAFT_CHARS, MODES
 from grimoire.play.together import MAX_TOGETHER
 from grimoire.textapi import ApiRefused
@@ -94,63 +93,36 @@ def _reviewed(args: Mapping[str, object]) -> list[dict]:
     return found
 
 
-def _names(scene: Mapping[str, Any]) -> dict[str, InstanceRef]:
-    """The cast's display names, for 032's reader, as 058 builds them (two actors sharing a name both stay
-    reachable under it: the keys differ only in trailing space, which the reader folds away)."""
-    index: dict[str, InstanceRef] = {}
-    for member in scene["cast"]:
-        name = member.get("name")
-        if not isinstance(name, str) or not name.strip():
-            continue
-        try:
-            actor = InstanceRef.parse(member["actor"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        key = name
-        while key in index:
-            key += " "
-        index[key] = actor
-    return index
+class _Receipts:
+    """The turns this app posted from a review, by (chat, the review's etag, its head): written the moment the core
+    ``submit`` succeeds, read by a submission retried after its answer was lost. Kept in memory with the drafts
+    themselves (058 holds those in memory too), a bounded number per text API; an app restart loses both."""
+
+    LIMIT = 256
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()  # a check and its post are one step: two tabs never post one review twice
+        self._by_api: weakref.WeakKeyDictionary[object, OrderedDict[tuple[str, str, str | None], str]] = (
+            weakref.WeakKeyDictionary())
+
+    def _of(self, api: object) -> OrderedDict[tuple[str, str, str | None], str]:
+        found = self._by_api.get(api)
+        if found is None:
+            found = self._by_api[api] = OrderedDict()
+        return found
+
+    def get(self, api: object, key: tuple[str, str, str | None]) -> str | None:
+        return self._of(api).get(key)
+
+    def put(self, api: object, key: tuple[str, str, str | None], turn: str) -> None:
+        held = self._of(api)
+        held[key] = turn
+        held.move_to_end(key)
+        while len(held) > self.LIMIT:
+            held.popitem(last=False)
 
 
-def _as_posted(draft: Mapping[str, str], names: dict[str, InstanceRef], turn: str) -> tuple[str, str] | None:
-    """(kind, words) of the post 058 makes of ``draft`` in turn ``turn``: 008 routes it and 032 reads a spoken
-    line's words, exactly as ``read_post`` does; None when it would not be posted at all."""
-    try:
-        actor = InstanceRef.parse(draft["actor"])
-        intent = route(Utterance(draft["text"], draft["mode"]),  # type: ignore[arg-type]  # Utterance checks it
-                       RoutingContext(active_pc=actor.instance_id, can_direct=False))
-    except ValueError:
-        return None
-    if intent.kind not in ("pc_speech", "pc_action"):
-        return None
-    if intent.kind == "pc_speech" and intent.reason == "explicit_mode" and \
-            wrapped(draft["text"].strip(), '"', '"') is not None:
-        intent = replace(intent, reason="quoted")
-    kind = "speech" if intent.kind == "pc_speech" else "action"
-    try:
-        read = read_message(intent, actor, names, message_id=turn)
-    except TransmissionError:
-        return None
-    if isinstance(read, Unread):
-        return (kind, intent.text) if kind == "action" else None
-    return kind, read.text
-
-
-def _posted_as_reviewed(turn: Mapping[str, object] | None, reviewed: list[dict], names: dict[str, InstanceRef]) -> bool:
-    """Whether ``turn`` holds exactly the reviewed drafts' posts: the same characters by the same players, in
-    order, each post's kind and words the ones 058 makes of its draft (equal, never merely contained)."""
-    if turn is None:
-        return False
-    posts = turn.get("posts") or []
-    if len(posts) != len(reviewed):  # type: ignore[arg-type]
-        return False
-    for post, draft in zip(posts, reviewed):  # type: ignore[call-overload]
-        if post["actor"] != draft["actor"] or post["by"] != draft["by"]:
-            return False
-        if _as_posted(draft, names, str(turn["turn"])) != (post["kind"], post["text"]):
-            return False
-    return True
+_RECEIPTS = _Receipts()
 
 
 def _answered(turn: Mapping[str, object]) -> bool:
@@ -170,27 +142,30 @@ def _submit(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     head = args.get("head")
     if head is not None and type(head) is not str:
         raise ApiRefused("invalid_field", "head is the id of the turn the review came after")
-    scene = _open(ctx, chat)
-    turns = scene["turns"]
-    last = turns[-1]["turn"] if turns else None
-    if head == last:
-        # nothing was posted since the review: post the drafts only if they are still the ones reviewed
+    key = (str(chat), expected, head)
+    with _RECEIPTS.lock:
+        scene = _open(ctx, chat)
+        turns = scene["turns"]
+        posted_turn = _RECEIPTS.get(ctx.api, key)
+        if posted_turn is not None:
+            # this very review was posted already (an earlier submission, whose answer was lost): say so, whatever
+            # was drafted or played since, and post nothing again
+            posted = next((turn for turn in turns if turn["turn"] == posted_turn), None)
+            return {"done": {"already_applied": True, "posts": len(reviewed), "turn": posted_turn,
+                             # a turn no longer in the chat (rewound since) has nothing left to answer
+                             "answered": True if posted is None else _answered(posted)},
+                    "scene": scene, "review": _review_of(ctx, chat, scene)}
+        last = turns[-1]["turn"] if turns else None
+        if head != last:
+            raise ApiRefused("changed", "another turn was posted since the review, so it was not posted now")
         if etag_of(scene["drafts"]) != expected:
-            raise ApiRefused("changed", "the parts changed since they were reviewed; this request posted nothing")
+            raise ApiRefused("changed", "the parts changed since they were reviewed, so they were not posted now")
         played = ctx.core("submit", {"chat": str(chat)})
         posted = played["turns"][-1]
-        return {"done": {"already_applied": False, "posts": len(reviewed), "turn": posted["turn"],
-                         "answered": _answered(posted)},
-                "scene": played, "review": _review_of(ctx, chat, played)}
-    # a turn was posted after the reviewed head. If it is this review's own turn (an earlier submission of this
-    # very request, whose answer was lost), it is answered as done, whatever was drafted or played since
-    at = 0 if head is None else next((n + 1 for n, turn in enumerate(turns) if turn["turn"] == head), None)
-    after = turns[at] if at is not None and at < len(turns) else None
-    if after is not None and _posted_as_reviewed(after, reviewed, _names(scene)):
-        return {"done": {"already_applied": True, "posts": len(reviewed), "turn": after["turn"],
-                         "answered": _answered(after)},
-                "scene": scene, "review": _review_of(ctx, chat, scene)}
-    raise ApiRefused("changed", "another turn was posted since the review; this request posted nothing")
+        _RECEIPTS.put(ctx.api, key, posted["turn"])
+    return {"done": {"already_applied": False, "posts": len(reviewed), "turn": posted["turn"],
+                     "answered": _answered(posted)},
+            "scene": played, "review": _review_of(ctx, chat, played)}
 
 
 ADAPTER = Adapter("table", owner="115", ops={"review": _review, "submit": _submit})
