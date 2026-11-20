@@ -24,6 +24,7 @@ from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.core.model import ControlAssignment
 from grimoire.effective import chat_snapshot
 from grimoire.evidencestore import CampaignKnowledge
+from grimoire.memory import MemoryDossier
 from grimoire.store import LibraryView, StoredDefinition
 
 __all__ = [
@@ -81,7 +82,8 @@ def actor_context(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge, a
                   budget: Budget, present: Iterable[InstanceRef] = (), scene_text: str = "",
                   readers: Mapping[str, EntryReader] | None = None, count: TokenCounter = estimate_tokens,
                   measurement: str = "estimated",
-                  exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS) -> ChatContext:
+                  exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS,
+                  memory: MemoryDossier | None = None) -> ChatContext:
     """``pack_actor_context`` for ``actor`` of ``chat``, over ``view`` and a director ``ledger`` read.
 
     ``ledger`` is ``EvidenceLibrary.read(campaign, requested_by=DIRECTOR)``: trusted, never handed on.
@@ -92,14 +94,15 @@ def actor_context(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge, a
 
     ``readers`` defaults to ``DEFAULT_READERS``, so a bound card lorebook reaches the pack without
     the caller knowing its format; ``{}`` reads no lore format at all. An NPC's pack: a player
-    character's is ``player_context``'s.
+    character's is ``player_context``'s. ``memory`` is 053's director dossier of ``actor``
+    (``MemoryLibrary.dossier``) as of ``as_of``, read over the same evidence.
     """
     captured = _captured(view, chat, ledger)
     pack = pack_actor_context(captured.snapshot, ledger.knowledge, actor, as_of=as_of, budget=budget,
                               present=present, scene_text=scene_text, claims=ledger.claims,
                               readers=DEFAULT_READERS if readers is None else readers,
                               unpack=stored_record, count=count, measurement=measurement,
-                              exclude_sections=exclude_sections)
+                              exclude_sections=exclude_sections, memory=memory)
     return _context(pack, ledger, chat, captured)
 
 
@@ -108,7 +111,8 @@ def player_context(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge, 
                    present: Iterable[InstanceRef] = (), scene_text: str = "",
                    readers: Mapping[str, EntryReader] | None = None, count: TokenCounter = estimate_tokens,
                    measurement: str = "estimated",
-                   exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS) -> ChatContext:
+                   exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS,
+                   memory: MemoryDossier | None = None) -> ChatContext:
     """``pack_player_context`` for player character ``actor`` of ``chat``, packed for its present
     ``controller``, over ``view`` and a director ``ledger`` read, as ``actor_context`` is for an NPC.
 
@@ -120,7 +124,7 @@ def player_context(view: LibraryView, chat: ChatRef, ledger: CampaignKnowledge, 
                                as_of=as_of, budget=budget, present=present, scene_text=scene_text,
                                claims=ledger.claims, readers=DEFAULT_READERS if readers is None else readers,
                                unpack=stored_record, count=count, measurement=measurement,
-                               exclude_sections=exclude_sections)
+                               exclude_sections=exclude_sections, memory=memory)
     return _context(pack, ledger, chat, captured)
 
 

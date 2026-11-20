@@ -128,5 +128,73 @@ PYTHONPATH=backend/src python -m pytest \
 It uses shared generation/evaluation fixtures, the real provider parser/meter and
 scripted transport. Its label is `scripted synthetic; not live parity`. Real matched
 V0.2.1 capture belongs to 015 and has not been performed here; 068's live measurement
-acceptance remains incomplete. This slice has no application/UI integration or schema
-migration. Removing its consumers leaves canonical campaign data unchanged.
+acceptance remains incomplete. Removing its consumers leaves canonical campaign data unchanged.
+
+## Runtime adoption
+
+The app adopts one of the experiment's stages, presentation planning, through the ordinary
+generation runtime rather than the experiment runner. Critique is not adopted: the app's
+`critique` stage is 047's continuity extraction, a different call.
+
+- `plan_generation_turn(..., planners=...)` plans one `planning` call per named speaker in a `plan`
+  phase before the main phase, within the policy's `planning` cap; a planner that does not speak is
+  `planner_not_speaking`. Requests over the cap are kept in `plan.declined`. With no cap (the default)
+  the plan is unchanged: one `npc_generation` call per speaking NPC and nothing else.
+- `GenerationRuntime.run_turn` issues each planning call before any reply, with the NPC's own sealed
+  messages (`planning_messages`) and an output cap of 256 tokens. The reply text must be at most
+  1,000 characters and pass the same `screen_reply` as a line (no copied example, no unlearned
+  secret). An accepted suggestion is appended to that same NPC's generation prompt only, labelled
+  untrusted and presentation-only (`with_suggestion`). It is never a line, never heard by anyone else
+  and never stored.
+- A failed, refused, incomplete or screened-out suggestion is recorded with its status and the turn
+  goes on as with the stage off. Cancellation stops the turn, and an exception from the adapter (an
+  approvals callback or adapter bug, not a provider answer) halts it, as it does for a reply. An NPC whose brief carries a decided
+  choice gets no planning call: it is forgone (`not_issued`, `has_choice`) and costs nothing, so no
+  suggestion competes with the decided intention.
+- The app's `planning` setting (0–16) sets the cap ([INFERENCE_UI](INFERENCE_UI.md)); 035's
+  `SceneRunner` names every chosen speaker without an agenda as a planner when the cap is set (an
+  agenda NPC is briefed with its choice, so its call would only be forgone). Every planning attempt is
+  metered and listed in usage like any other optional call, and each take (a reroll included) plans
+  again. No schema or stored format changed.
+
+## The V2-against-0.2.1 comparison
+
+`python -m grimoire.capture.v2` makes the billed comparison one step on 015's capture directory
+(`run.json` and `evidence.json`, [V021_BASELINE](evals/V021_BASELINE.md)):
+
+```sh
+PYTHONPATH=backend/src python -m grimoire.capture.v2 --scenario guild_betrayal \
+  --baseline <015 capture dir> --out <new dir outside the repo> --dry-run [--with-planning]
+```
+
+It verifies the capture's evidence, then takes its provider, served model, output budget and attempt
+limit, so V2 is recorded under the capture's own conditions. The model V2 records is the one that
+answered: if the provider serves another model than the capture's (a resolved snapshot, say, or more
+than one model), that is recorded, and the gate reports the runs as incomparable. It plays the scenario's three turns on
+`GenerationRuntime`: each speaking NPC's brief has its card's description, personality and example
+turns (read with V2's own importer), what was said aloud before the call and the turn's player text,
+which is what the 0.2.1 side had. A scenario secret is screened only for an actor that has not learned
+it by the scenario's `known_from` turn and is never shown. It writes `v2-baseline.run.json` (a `/2` run
+of source `v2-runtime`), with `--with-planning` also `v2-planning.run.json`, and
+`comparison-report.txt`: the gate's report of V2 against 0.2.1 (voice distinguishability, hard
+findings and token usage, reported apart), then V2 with planning against plain V2.
+
+- `--dry-run` sends nothing: a scripted transport answers with the scenario's dry-run replies, and
+  every number is synthetic.
+- `--live --confirm-billing --api-key-env VAR` is billed. It is refused against a dry-run capture,
+  prints the request ceiling (planned calls times attempts: 18 for the scenario at three attempts, 54
+  with planning) before sending, reads the key only from the named variable and writes nothing that
+  contains it. If it fails or is stopped, nothing is written and it prints what was already sent, as
+  counts only. Running it needs CMS's own spending approval, separate from 015's.
+- V2 speaks only the OpenAI-compatible protocol. Against an `anthropic` capture it calls Anthropic's
+  OpenAI-compatible endpoint, which offers no prompt caching and reports no cached-token counts,
+  while 0.2.1 called the Messages API. The report says so, the cost comparison is `usage_incomplete`,
+  and the token sums are not like for like. A capture whose budget is `max_tokens=unset` is
+  reported incomparable, since V2 always sends an output cap.
+- The V2 run has no capture evidence of its own, so its usage is provider-reported and unverified,
+  and its choices are unlabelled (judged on marker evidence only). Voice is the existing lexical
+  distinguishability measure; no semantic characterization score exists.
+
+Proofs: `backend/tests/test_presentation_planning.py` (runtime, play and app) and
+`backend/tests/test_capture_v2.py` (dry runs against 015's committed dry-run evidence, refusals, and
+the real HTTP transport against a loopback server). No billed comparison has been run.

@@ -299,3 +299,14 @@ def test_stored_call_without_attempts_preserves_unknown_decision_usage(tmp_path,
         assert any(c.stage is InferenceStage.DECISION for c in second.calls) == (status == 'not_issued')
         expected = 'model' if status == 'not_issued' else 'policy'
         assert ledger.get(table.runner.open(chat).last.ref, other).record.method == expected
+
+
+def test_planning_skips_an_npc_with_an_agenda_so_no_cap_is_spent_on_it(tmp_path):
+    # 068: an agenda NPC is briefed with its choice; a planning call for it would only be forgone.
+    folder, chat, actor = prepare(tmp_path)
+    policy = InferencePolicy({'planning': 1}, max_attempts_per_call=1)
+    with Table(folder, [say('Wait.')], policy=policy) as table:
+        wire(table)
+        table.runner.set_agendas([tactics(actor)])
+        take = table.runner.generate(chat, table.player())
+        assert [c.stage for c in take.calls] == [InferenceStage.NPC_GENERATION]
