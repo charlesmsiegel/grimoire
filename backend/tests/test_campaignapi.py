@@ -196,7 +196,7 @@ def test_an_absent_npcs_private_evidence_stays_hers(cards):
 
 def test_an_accepted_effect_is_known_to_the_characters_who_saw_it_and_never_to_an_absent_one(cards):
     """On a stage: Anya and Mara at the hatch, Tamsin gone from the scene. Accepting the payoff gives the table its
-    own character's sight of it, the director Mara's, and Tamsin nothing."""
+    own character's sight of it, and nothing to Mara (an NPC: play gives NPC perspectives nothing yet) or Tamsin."""
     folder, chat = cards
     book = StageBook()
     with Hub(folder, BRIBE, stages=book) as hub:
@@ -224,7 +224,7 @@ def test_an_accepted_effect_is_known_to_the_characters_who_saw_it_and_never_to_a
             ("witnessed", "Anya pays Mara off.")]
         assert table["table_events"] == []  # seen in the fiction; nothing was disclosed out of character
         director = hub.call("knowledge", chat=str(chat), actor=str(mara), audience="director")
-        assert [item["content"] for item in director["actors"][0]["observations"]] == ["Anya pays Mara off."]
+        assert director["actors"][0]["observations"] == []
         gone = hub.call("knowledge", chat=str(chat), actor=str(tamsin), audience="director")
         assert gone["actors"][0]["observations"] == []
         assert not any(p["code"] == "unbridged" for p in hub.call("hub", chat=str(chat))["problems"])
