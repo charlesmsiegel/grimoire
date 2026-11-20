@@ -8,6 +8,7 @@ import { makeReferenceIntent } from "./reference-intent.js";
 import { makeVoice } from "./voice.js";
 import { makeStaging } from "./staging.js";
 import { makeCompare } from "./compare.js";
+import { makeImagine } from "./imagine.js";
 import { makeStory } from "./story.js";
 import { makeTray } from "./tray.js";
 import { makeBackdrop } from "./backdrop.js";
@@ -83,6 +84,10 @@ export async function mount(root, ctx) {
   const attach = makeAttach(ctx, chat, { field: composer.node, run, redraw: redrawPictures });
   const staging = makeStaging(ctx, chat, { log });
   foot.prepend(makeReferenceIntent(ctx, chat, { composer, attach }));
+  // 073: what an NPC might say to a line, beside the composer and never in the story (./imagine.js)
+  const imagine = makeImagine(ctx, chat,
+    { composer, generates, mode: () => (posting === "play.post" ? page.mode : "auto") });  // read as Post reads it
+  if (imagine.node) foot.prepend(imagine.node);
   // voice as an optional assist beside the composer (./voice.js, 067): shown only where the app serves it
   const voice = makeVoice(ctx, { composer });
   if (voice.node) foot.prepend(voice.node);
@@ -198,6 +203,7 @@ export async function mount(root, ctx) {
     const reply = replyState(scene, { writing: page.writing, failure: page.failure });
     story.update(scene);
     staging.update(scene);
+    imagine.update(scene);
     drawHeader(scene);
     bars.replaceChildren(...holds(scene));
     drawSceneBar(scene);
