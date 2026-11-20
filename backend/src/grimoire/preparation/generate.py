@@ -88,7 +88,8 @@ def preparation_messages(snapshot: Snapshot, brief: str) -> tuple[tuple[str, str
         raise PreparationError('invalid_snapshot')
     data = {
         'brief': _clean(brief),
-        'evidence': [{'id': e.evidence_id, 'kind': e.kind, 'text': _clean(e.text)} for e in snapshot.evidence],
+        'evidence': [{'id': e.evidence_id, 'kind': e.kind, 'source': str(e.source), 'text': _clean(e.text)}
+                     for e in snapshot.evidence],
         'missing': list(snapshot.missing),
         'cast': [str(ref) for ref in snapshot.cast],
         'locations': [str(ref) for ref in snapshot.locations],

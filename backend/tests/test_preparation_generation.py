@@ -124,7 +124,7 @@ def test_prompt_keeps_campaign_text_as_data_and_reports_missing_categories():
     assert (system_role, user_role) == ('system', 'user')
     assert hostile.text not in system and 'Never decide what a player character does' in system
     data = json.loads(user)
-    assert data['evidence'] == [{'id': 'choice', 'kind': 'choice', 'text': hostile.text}]
+    assert data['evidence'] == [{'id': 'choice', 'kind': 'choice', 'source': str(CHOICE.source), 'text': hostile.text}]
     assert data['missing'] == ['calendar', 'goal', 'secret']
     assert data['cast'] == [str(MARA)] and data['locations'] == [str(TOWN)]
     assert 'revision' not in user
@@ -266,3 +266,12 @@ def test_ungroundable_snapshot_is_refused_before_any_spend(state, reason):
     with pytest.raises(PreparationError, match=reason):
         prepare(state, 'Prepare')
     assert not prepare.meters and not harness.transport.sends
+
+
+def test_goal_owner_reaches_the_prompt():
+    def prompt(owner):
+        goal = replace(GOAL, source=owner, text='Wants to prevent the meeting')
+        _, (_, user) = preparation_messages(Snapshot(C, '1', (goal,), (MARA, ODA), (TOWN,)), 'Prepare')
+        return json.loads(user)['evidence'][0]
+
+    assert prompt(MARA)['source'] == str(MARA) and prompt(ODA)['source'] == str(ODA)

@@ -47,7 +47,7 @@ planned call's booked attempts, failures included. The proposer runs under the
 session lock; an optional `CancelToken` can be passed when calling it directly.
 
 `preparation_messages` puts fixed instructions in the system message and the
-brief, evidence (id, kind, text), missing categories and offered cast/location
+brief, evidence (id, kind, qualified source, text), missing categories and offered cast/location
 references in one JSON data message; campaign text is never instructions. The
 reply must be exactly one JSON object (optionally one fenced json block).
 `parse_draft` rebuilds it into a `Draft` only from instance references copied
