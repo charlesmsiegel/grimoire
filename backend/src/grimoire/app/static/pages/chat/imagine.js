@@ -38,8 +38,9 @@ export function missed(answer) {
 // What one reply's call used, as the answer reports it: no take or ledger keeps it, so the card says it.
 export function usageText(usage) {
   if (!usage || !usage.attempts) return "";
-  const calls = usage.attempts === 1 ? "1 model call" : usage.attempts + " model calls";
-  if (usage.input_tokens == null || usage.output_tokens == null) return calls + " (tokens not reported)";
+  // one call is planned; a retry is another attempt of it, never another call
+  const calls = usage.attempts === 1 ? "1 model call" : "1 model call (" + usage.attempts + " attempts)";
+  if (usage.input_tokens == null || usage.output_tokens == null) return calls + ", tokens not reported";
   return calls + ", " + usage.input_tokens + " tokens in and " + usage.output_tokens + " out";
 }
 
@@ -53,6 +54,7 @@ export function makeImagine(ctx, chat, { composer, generates, mode = () => "auto
   const { el } = ui;
   const state = kept.get(chat) || { line: "", speaker: "", replies: [] };
   let scene = null, asking = false, serial = 0, shown = "";
+  let held = "";  // the reason a held click put in the status line: cleared with the hold
   const alive = () => !(ctx.signal && ctx.signal.aborted);
   const remember = () => {
     if (kept.has(chat)) kept.delete(chat);  // the newest chat goes last, so the oldest is the one let go
@@ -107,7 +109,7 @@ export function makeImagine(ctx, chat, { composer, generates, mode = () => "auto
     const speaker = again ? again.speaker : chosen();
     const how = again ? again.mode : mode();
     if (asking) return;
-    if (stopped()) { status.textContent = stopped(); return; }
+    if (stopped()) { status.textContent = held = stopped(); return; }
     if (!text.trim()) { status.textContent = "Type what you would say or do."; return; }
     if (!speaker) { status.textContent = "Choose who answers."; return; }
     asking = true;
@@ -176,6 +178,8 @@ export function makeImagine(ctx, chat, { composer, generates, mode = () => "auto
     hold(go, reason);
     why.textContent = reason || "";
     why.hidden = !reason;
+    if (!reason && held && status.textContent === held) status.textContent = "";
+    if (!reason) held = "";
     results.replaceChildren(...state.replies.map(card));
     discardAll.hidden = state.replies.length < 2;
   }

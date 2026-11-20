@@ -51,7 +51,7 @@ test("only the chat's NPCs can be asked, and what holds play up holds this too",
   assert.equal(missed({ calls: [{ status: "rejected", reason: "held_by_boundary" }] }), "No reply came (held_by_boundary).");
   assert.equal(missed({ calls: [] }), "No reply came.");
   assert.equal(usageText({ attempts: 1, input_tokens: 812, output_tokens: 40 }), "1 model call, 812 tokens in and 40 out");
-  assert.equal(usageText({ attempts: 2, input_tokens: null, output_tokens: 3 }), "2 model calls (tokens not reported)");
+  assert.equal(usageText({ attempts: 2, input_tokens: null, output_tokens: 3 }), "1 model call (2 attempts), tokens not reported");
   assert.equal(usageText({ attempts: 0 }), "");
 });
 
@@ -122,6 +122,7 @@ test("nothing is asked while play is held up, an earlier turn is open, or no mod
     assert.match(p.root.querySelector("p.chat-imagine-status").textContent, new RegExp(blocked(scene(state)).slice(0, 12)));
     p.made.update(scene());  // what stood in the way is gone
     assert.equal(p.button("Imagine a reply").getAttribute("aria-disabled"), null);
+    assert.equal(p.root.querySelector("p.chat-imagine-status").textContent, "", "the old reason goes with the hold");
     assert.equal(p.root.querySelector("p.chat-imagine-why").hidden, true);
   }
   const off = panel({ generates: false });

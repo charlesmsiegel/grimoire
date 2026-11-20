@@ -32,7 +32,7 @@ def _files(folder: Path) -> dict[str, bytes]:
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")
 def test_a_possible_reply_is_copied_and_the_real_scene_goes_on_unchanged(tmp_path):
     desk, chat = desktop_library(tmp_path / "desk")
-    with Device(desk, [say("Then you owe me a ship."), say("Fair winds tonight.")]) as device:
+    with Device(desk, [say("Then you owe me a ship."), say("Then you owe me a ship."), say("Fair winds tonight.")]) as device:
         AppApi(device.api).call("continue", {"chat": str(chat)})  # this device takes its seat
         before = _files(desk)
         app = AppServer(device.api)
@@ -52,9 +52,9 @@ def test_a_possible_reply_is_copied_and_the_real_scene_goes_on_unchanged(tmp_pat
         prompts = device.prompts()
         after = _files(desk)
         assert device.api.store.load().problems == ()
-    assert len(prompts) == 2
-    assert "I was the one who sank the Gull." in prompts[0]
-    assert "sank the Gull" not in prompts[1] and "Then you owe me a ship." not in prompts[1]
+    assert len(prompts) == 3
+    assert "I was the one who sank the Gull." in prompts[0] and "I sank the Gull, Mara." in prompts[1]
+    assert "sank the Gull" not in prompts[2] and "Then you owe me a ship." not in prompts[2]
     assert all(before[name] == after.get(name) for name in before if "/turns/" not in name and "authority" not in name), \
         "nothing already there was rewritten"
     written = [name for name in sorted(set(after) - set(before)) if not name.startswith("authority/")]

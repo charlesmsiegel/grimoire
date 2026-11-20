@@ -64,6 +64,16 @@ test("a possible reply is shown, copied and discarded, and the real scene goes o
   const after = await call("open", { chat: CHAT });
   assert.equal(JSON.stringify(after.turns), JSON.stringify(before.turns), "no turn was written for it");
 
+  // the composer's mode is how the line is read: an unquoted line, posted as speech, is a line said aloud
+  const speech = await until(() => byText(composer(), "button", "Speech")[0], 15000, "the composer's modes");
+  speech.click();
+  type(panel.querySelector('[name="imagine-line"]'), "I sank the Gull, Mara.");
+  go.click();
+  await until(() => panel.querySelectorAll("li").length === 2, 30000, "the second possible reply");
+  assert.match(panel.querySelectorAll("li")[0].textContent, /If you said: I sank the Gull, Mara\./);
+  byText(panel.querySelectorAll("li")[0], "button", "Discard").find((node) => node.textContent === "Discard").click();
+  byText(composer(), "button", "Auto")[0].click();
+
   byText(panel, "button", "Copy reply")[0].click();
   await until(() => copied.length, 15000, "the copy");
   assert.deepEqual(copied, [MIGHT]);
