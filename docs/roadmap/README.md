@@ -316,7 +316,7 @@ The wave is not **user-visible complete** until its implemented user-facing doma
 
 ### Wave 9 — Advanced mechanics, authoring and audio foundations
 
-- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (1/16 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
+- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (2/16 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
