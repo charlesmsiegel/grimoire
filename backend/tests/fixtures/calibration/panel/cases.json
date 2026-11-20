@@ -1,0 +1,15 @@
+[
+  {"id": "facade", "task": "defect", "file": "facade.py.txt", "actionable_defect": false, "role": "compatibility_facade"},
+  {"id": "awaited", "task": "defect", "file": "awaited.py.txt", "actionable_defect": false},
+  {"id": "discarded", "task": "defect", "file": "discarded.py.txt", "actionable_defect": true, "defect_lines": [5], "role": "planted_defect"},
+  {"id": "missing", "task": "defect", "file": "missing.py.txt", "actionable_defect": null},
+  {"id": "mutable_default", "task": "defect", "file": "mutable_default.py.txt", "actionable_defect": true, "defect_lines": [4, 5]},
+  {"id": "sentinel_default", "task": "defect", "file": "sentinel_default.py.txt", "actionable_defect": false},
+  {"id": "last_items", "task": "defect", "file": "last_items.py.txt", "actionable_defect": true, "defect_lines": [7]},
+  {"id": "late_binding", "task": "defect", "file": "late_binding.py.txt", "actionable_defect": true, "defect_lines": [7]},
+  {"id": "swallowed_write", "task": "defect", "file": "swallowed_write.py.txt", "actionable_defect": true, "defect_lines": [7, 8, 9]},
+  {"id": "fail_closed", "task": "defect", "file": "fail_closed.py.txt", "actionable_defect": false, "role": "odd_pattern"},
+  {"id": "exact_int", "task": "defect", "file": "exact_int.py.txt", "actionable_defect": false, "role": "odd_pattern"},
+  {"id": "ledger_cohesive", "task": "theory", "file": "ledger_cohesive.py.txt", "scores_above": "ledger_scrambled"},
+  {"id": "ledger_scrambled", "task": "theory", "file": "ledger_scrambled.py.txt"}
+]

@@ -1,0 +1,9 @@
+"""Save a note and report whether it was stored."""
+
+
+def save_note(store, note):
+    try:
+        store.write(note)
+    except OSError:
+        pass
+    return True

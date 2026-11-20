@@ -1,0 +1,9 @@
+{
+  "address": "catalog:me/character/sam@r1",
+  "format": "grimoire.record/1",
+  "name": "Sam",
+  "payload": {
+    "bio": "the player"
+  },
+  "previous": null
+}
