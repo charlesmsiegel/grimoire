@@ -1,5 +1,7 @@
 # Draft-Aware Prompt and Context Preview
 
+**Status:** milestone 1 implemented ([INFERENCE_UI](../../INFERENCE_UI.md#draft-preview-085)): on the owner's request, the Models and costs page's context inspector packs an NPC's context with an unsent draft read exactly as a post would be, and shows what the draft likely recalls (the lore it triggers, the memories whose words it shares) and what the budget would leave out, labelled as an estimate. Nothing is posted, written or sent. Retained snapshots of a submitted turn's prompt and milestones 2 and 3 remain open.
+
 **Outcome:** Show how an unsent draft may affect context selection without secretly executing a turn or spending inference continuously.
 
 ## Scope

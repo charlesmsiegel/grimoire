@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 9/16 | ☐ | 073, 074, 075, 076, 079, 082, 083, 084 and 086 meet their bounded headless first slices; the other domain slices and UI exit 116 are not complete. |
+| [9](#wave-9) | 11/16 | ☐ | 073, 074, 075, 076, 077, 079, 082, 083, 084, 085 and 086 meet their bounded first slices; the other domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-075 (recorded rolls), 076 (offscreen plan steps), 082 (read-only world audits) and 086 (validated module authoring with pinned revisions) meet their headless first slices; the other domain slices and UI exit 116 are not complete.
+073 (a hypothetical NPC reply), 074 (downtime), 075 (recorded rolls), 076 (offscreen plan steps), 079 (source upgrade previews), 082 (read-only world audits), 084 (reviewed transcript transfer), 085 (draft context preview) and 086 (validated module authoring with pinned revisions) meet their first slices; the other domain slices and UI exit 116 are not complete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -707,9 +707,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-077"></a>
 ### 077 — Quests And Commitments
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/quests-and-commitments.md)).
-- Evidence: Existing scene/turn records and graph relations record accepted fiction.
-- Scope / gap: No explicit promise/commitment deadline and fulfillment-provenance ledger; clocks unavailable.
+- [x] Scheduled first-useful slice ([requirements](sprints/quests-and-commitments.md)).
+- Evidence: [`commitments/`](../../backend/src/grimoire/commitments) (pure ledger, fold and codec), [`commitmentstore/library.py`](../../backend/src/grimoire/commitmentstore/library.py) and [`COMMITMENTS.md`](../COMMITMENTS.md); [`test_commitment_scenarios.py`](../../backend/tests/test_commitment_scenarios.py)::test_the_refusal_and_its_deadline_stay_on_the_record and ::test_later_narration_that_claims_the_mission_done_is_a_contradiction prove the proving scenario across three scenes and a reopened store: a player character's backed refusal and the 055 deadline stay recorded past the deadline, recording it fulfilled is refused, and the referee's new `fulfills` check reports a material contradiction. An accepted promise running overdue, a 021 retcon unwinding a step, a cited event still syncing (uncertain, never material), voids and every authority refusal are in `test_commitmentstore.py` and `test_commitments.py`.
+- Scope / gap: Milestone 1 plus milestone 2's recorded fulfilment, partial completion and abandonment, each citing 020 objective events. No commitment UI (116), no labeller or runner capture of `fulfills` claims (the extractor offers no commitment ids yet), no branching goals, quest stages, dependencies or planning aids (milestone 3), no delegation or transfer of a commitment, and no ledger compaction: the ledger shares `scope.json`'s native size cap with the calendar.
 
 <a id="slice-078"></a>
 ### 078 — Relationships And Reputation
@@ -763,9 +763,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-085"></a>
 ### 085 — Live Context Preview
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/live-context-preview.md)).
-- Evidence: [`app/inference.py`](../../backend/src/grimoire/app/inference.py) offers current saved actor context after the 112 follow-up; unsaved-draft retrieval is not offered. [`test_app_inference_context.py`](../../backend/tests/test_app_inference_context.py) proves the saved-state inspection boundary.
-- Scope / gap: No on-demand unsaved-draft retrieval/context preview. The 112 saved-state inspector does not implement that draft input.
+- [x] Scheduled first-useful slice ([requirements](sprints/live-context-preview.md)).
+- Evidence: [`backend/src/grimoire/play/preview.py`](../../backend/src/grimoire/play/preview.py)::preview_context; [`backend/src/grimoire/play/context_view.py`](../../backend/src/grimoire/play/context_view.py)::context_view; [`backend/src/grimoire/app/inference.py`](../../backend/src/grimoire/app/inference.py) (`providers.preview_context`); [`backend/src/grimoire/app/static/pages/providers/context.js`](../../backend/src/grimoire/app/static/pages/providers/context.js); [`backend/tests/test_context_preview.py`](../../backend/tests/test_context_preview.py)::test_a_draft_previews_the_recalled_promise_and_triggered_lore_without_any_write; [`backend/tests/test_context_preview.py`](../../backend/tests/test_context_preview.py)::test_a_recalled_memory_the_budget_sheds_is_a_warning_with_its_line; [`backend/tests/test_context_preview.py`](../../backend/tests/test_context_preview.py)::test_an_npc_that_would_not_hear_the_draft_keeps_its_saved_context.
+- Scope / gap: Milestone 1 at its bounded first-proof boundary: an explicit, owner-only, read-only preview of one NPC's context with an unsent draft read as `post` reads it, triggered lore (exact) and memories sharing the draft's words (an estimate, English stoplist), shed recalls flagged; the posted turn's context equals the preview. Inspecting the final prompt later is the saved-state inspector's rebuild; no snapshot of a submitted prompt is retained. No director or player-character preview, no phrasing deltas (milestone 2), no incremental previews (milestone 3), no chat-composer entry point (116).
 
 <a id="slice-086"></a>
 ### 086 — Mechanics Module Authoring
