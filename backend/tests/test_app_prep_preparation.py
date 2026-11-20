@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from decimal import Decimal
 
 import pytest
 from prep_app_fixtures import (
@@ -448,3 +449,25 @@ def test_a_reference_to_no_chat_keeps_no_session(desk, tmp_path):
         assert list(getattr(device.api, "_prep_sessions", {})) == []
         table.view()
         assert list(getattr(device.api, "_prep_sessions", {})) == [str(chat)]
+
+
+@pytest.mark.parametrize("cached", ["30", "1"])
+def test_the_ceiling_holds_whatever_share_of_the_prompt_is_cached(desk, tmp_path, cached):
+    """048 books a cached prompt token at the cached price, which nothing keeps under the prompt price: the
+    ceiling prices the prompt at the higher of the two, and a reply wholly cached or wholly not stays within it."""
+    folder, chat = desk
+    with Device(folder, [say("Mara pockets it.")]) as device:
+        table = Table(device, chat, tmp_path, price_cached=cached)
+        plan = table.plan("r1")
+        call = plan["call"]
+        ceiling = call["prompt_tokens_at_most"]
+        expected = (Decimal(ceiling) * max(Decimal(3), Decimal(cached)) + 800 * Decimal(15)) / 1_000_000
+        assert abs(Decimal(call["cost_at_most"]) - expected) <= Decimal("0.000001")
+        body = draft(table.cast["Mara Vell"], table.cast["harbor"], ids_of(table.view()["evidence"]["evidence"]))
+        for request, share in (("r1", ceiling), ("r2", 0)):  # every prompt token cached, then none
+            usage = {"prompt_tokens": ceiling, "completion_tokens": 800,
+                     "prompt_tokens_details": {"cached_tokens": share}}
+            table.answer(Reply(deltas=(json.dumps(body),), usage=usage))
+            done = table.prepare(request, table.plan(request)["expected"])
+            booked = next(item for item in done["preparation"]["proposals"] if item["request"] == request)
+            assert Decimal(booked["usage"]["cost"]) <= Decimal(call["cost_at_most"]), (cached, share)

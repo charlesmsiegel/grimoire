@@ -334,7 +334,8 @@ def _generator(ctx: AdapterContext, config: ModelConfig, prep: _Prep) -> Prepara
 def _estimate(config: ModelConfig | None, messages) -> dict:  # type: ignore[no-untyped-def]
     """The call's estimate. ``prompt_tokens`` is the app's estimate (about a third of the bytes), never a bound;
     ``prompt_tokens_at_most`` counts every UTF-8 byte of each message (role and text) as a token, plus
-    ``MESSAGE_OVERHEAD``, and that ceiling is what ``cost_at_most`` prices."""
+    ``MESSAGE_OVERHEAD``, and that ceiling is what ``cost_at_most`` prices, at the higher of the prompt and the
+    cached price."""
     prompt = sum(estimate_tokens(body) + MESSAGE_OVERHEAD for _role, body in messages)
     ceiling = sum(len(role.encode("utf-8")) + len(body.encode("utf-8")) + MESSAGE_OVERHEAD for role, body in messages)
     found: dict = {"stage": "planning", "calls": 1, "prompt_tokens": prompt, "prompt_tokens_at_most": ceiling,
@@ -348,7 +349,11 @@ def _estimate(config: ModelConfig | None, messages) -> dict:  # type: ignore[no-
     if not config.priced:
         return {**found, "cost_at_most": None, "cost_state": "unpriced"}
     assert config.price_prompt is not None and config.price_reply is not None
-    one = (Decimal(ceiling) * config.price_prompt + Decimal(config.max_output_tokens) * config.price_reply) \
+    # 048 books a cached prompt token at the cached price, which may be above the prompt price: the ceiling takes
+    # whichever is higher, so any split of the prompt between cached and not stays within it
+    prompt_price = max(config.price_prompt, config.price_cached) if config.price_cached is not None \
+        else config.price_prompt
+    one = (Decimal(ceiling) * prompt_price + Decimal(config.max_output_tokens) * config.price_reply) \
         / Decimal(1_000_000)
     # a retry goes to a fallback model, which has no price: only the configured model's attempts are priced
     priced_attempts = 1 if config.fallbacks else config.attempts

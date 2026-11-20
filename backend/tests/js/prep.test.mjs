@@ -270,3 +270,63 @@ test("with scene preparation off in Models and costs, the page says so and offer
   assert.equal(button(prep, "Estimate the call"), undefined);
   assert.equal(button(prep, "Approve and prepare"), undefined);
 });
+
+// The app as it answers once a request can never be estimated again: `refusal` for that id (request_conflict
+// when it was prepared from older evidence, rejected when it was discarded elsewhere), and an approve whose
+// answer is lost after the scene was prepared, so the page reloads and finds it with `outcome`.
+function refusingApp(refusal, outcome = null) {
+  const asked = [], refused = new Set();
+  let shown = PREPARATION;
+  const scene = (request) => ({ request, brief: "A night on the quay", snapshot: "r", current: refusal !== "request_conflict", outcome, usage: null,
+    draft: { premise: { text: "Mara waits on the quay", evidence: [] }, cast: [], location: { actor: "campaign:c1/location/quay", name: "The Quay" },
+      questions: [], clues: [], tensions: [], stakes: [], directions: [] } });
+  const answer = (op, args) => {
+    if (op === "prep.rulesets") return { ...RULES, audience: "director" };
+    if (op === "prep.catalogs") return { campaign: "c1", catalogs: [], chats: [], more_catalogs: false, more_chats: false, change: "", estimate: "" };
+    if (op === "prep.preparation") return shown;
+    if (op === "prep.prepare_plan") {
+      asked.push(args.request_id);
+      if (refused.has(args.request_id)) return Promise.reject(Object.assign(new Error(refusal), { reason: refusal }));
+      return { plan: { ...PLAN, request: args.request_id }, evidence: EVIDENCE };
+    }
+    if (op === "prep.prepare") {
+      refused.add(args.request_id);
+      shown = { ...PREPARATION, proposals: [scene(args.request_id)] };
+      return Promise.reject(Object.assign(new Error("lost"), { reason: "network" }));
+    }
+    throw new Error("unexpected " + op);
+  };
+  return { asked, answer };
+}
+
+async function estimatedAfterALostAnswer(app, times) {
+  const root = await mounted("director", app.answer);
+  const prep = section(root, "Scene preparation");
+  set(prep, "What the scene should be about", "A night on the quay");
+  button(prep, "Estimate the call").click();
+  await settle();
+  button(group(prep, "Approve this call"), "Approve and prepare").click();
+  await settle();
+  for (let i = 0; i < times; i += 1) { button(prep, "Estimate the call").click(); await settle(); }
+  return prep;
+}
+
+for (const refusal of ["request_conflict", "rejected"]) {
+  test("an estimate refused " + refusal + " starts a new request on the next click", async () => {
+    const app = refusingApp(refusal);
+    const prep = await estimatedAfterALostAnswer(app, 2);
+    // the first id, the one estimate refused for it, then a new id that is estimated
+    assert.equal(app.asked.length, 3);
+    assert.equal(app.asked[1], app.asked[0], "a retry first asks for the scene it may already have prepared");
+    assert.notEqual(app.asked[2], app.asked[0], "the refused id is never asked for again");
+    assert.ok(group(prep, "Approve this call"), "the new request is offered for approval");
+  });
+}
+
+test("a reload that shows the request already decided starts a new request", async () => {
+  const app = refusingApp("rejected", "rejected");  // discarded in another tab before this one reloaded
+  const prep = await estimatedAfterALostAnswer(app, 1);
+  assert.equal(app.asked.length, 2);
+  assert.notEqual(app.asked[1], app.asked[0], "the decided id is never estimated again");
+  assert.ok(group(prep, "Approve this call"), "the new request is offered for approval");
+});

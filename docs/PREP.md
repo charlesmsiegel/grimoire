@@ -81,7 +81,7 @@ plan answers `not_enabled`, `prepare` refuses it, and the page shows preparing a
 `prepare_plan` builds the exact prompt 064 would send and answers its estimate: the app's token estimate for the
 prompt (`prompt_tokens`, about a third of its bytes: not a bound), a ceiling that counts each UTF-8 byte of every
 message as a token plus a few for each message (`prompt_tokens_at_most`), the reply cap, the attempts and, when the
-model has prices, the most it can cost (`cost_at_most`, priced at that ceiling and the whole reply cap; a retry to an
+model has prices, the most it can cost (`cost_at_most`, that ceiling at the higher of the prompt and the cached price, since 048 books a cached token at the cached price, and the whole reply cap; a retry to an
 unpriced fallback model is counted apart). Its `expected` token covers the brief, the evidence, the model settings
 and the estimate. `prepare` builds everything again and refuses `changed` unless the token still matches; only then
 does it run 064's generator, under the settings' preparation policy (exactly one `planning` call when on, none when
@@ -98,7 +98,7 @@ no evidence (`no_evidence`) or no place (`no_location`), the page says so and of
   `rejected`.
 - A reply 064 refuses (`unparseable`, `incomplete_length`, `unknown_evidence`, ...) keeps nothing, and its
   approval is spent: sending again needs the estimate again. What every call used is shown (`spent`).
-- A discarded request is done on the page too: estimating the same brief again starts a new request.
+- A decided request is done on the page too: once it is accepted or discarded (here, or in another tab as a reload shows), or an estimate is refused `rejected` or `request_conflict`, estimating the same brief again starts a new request.
 
 **The result** shows the premise, cast, place, questions, clues, tensions, stakes and directions, each item
 with the evidence ids it rests on. Accepting needs all three acknowledgements; a scene whose evidence changed

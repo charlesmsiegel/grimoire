@@ -298,7 +298,13 @@ async function showPreparation(slot, ctx, chat) {
   const brief = ui.field("What the scene should be about", { draft: ctx.draft("brief:" + chat), multiline: true,
     hint: "In your own words, at most 2000 characters. The model sees this and the evidence below, nothing else." });
 
-  const reload = async () => { state = await ctx.api("prep.preparation", { chat, audience: "director" }); };
+  // What the app answered for this chat. A request already accepted or discarded is done: the same brief estimated
+  // again is a new request, never the decided one (which the app refuses for good).
+  const show = (next) => {
+    state = next;
+    if (attempt && state.proposals.some((item) => item.request === attempt.request && item.outcome)) attempt = null;
+  };
+  const reload = async () => { show(await ctx.api("prep.preparation", { chat, audience: "director" })); };
   const estimate = () => {
     const text = brief.value;
     brief.setError(text.trim() ? "" : "Say what the scene should be about.");
@@ -307,7 +313,20 @@ async function showPreparation(slot, ctx, chat) {
     const request = attempt.request;
     const turn = gate.next();
     ctx.act(async () => {
-      const answer = await ctx.api("prep.prepare_plan", { chat, audience: "director", request_id: request, brief: text });
+      let answer;
+      try {
+        answer = await ctx.api("prep.prepare_plan", { chat, audience: "director", request_id: request, brief: text });
+      } catch (error) {
+        // an id the app will never estimate again (discarded, maybe in another tab, or prepared from older
+        // evidence): the next estimate starts a new request
+        if (error && (error.reason === "rejected" || error.reason === "request_conflict")
+          && attempt && attempt.request === request) {
+          attempt = null;
+          stale = "That request cannot be prepared again: estimate the call again to start a new one.";
+          draw();
+        }
+        throw error;
+      }
       // an estimate for a brief typed over since is never offered for approval as this one's
       if (!gate.current(turn) || brief.value !== text) {
         stale = "The brief changed while the call was being estimated: estimate it again.";
@@ -329,7 +348,7 @@ async function showPreparation(slot, ctx, chat) {
       if (brief.value === sent.brief) brief.clear();
       review = null;
       attempt = null;
-      state = answer.preparation;
+      show(answer.preparation);
       ctx.notify(answer.done.replay ? "That scene was already prepared; nothing was sent again." : "The scene is prepared. Nothing is saved.");
       draw();
       const shown = node.querySelector(".prep-proposal");
@@ -347,7 +366,7 @@ async function showPreparation(slot, ctx, chat) {
     const answer = await ctx.api("prep.prepare_review", { chat, audience: "director", request_id: request, decision, ...marks });
     // a decided request is done: the same brief estimated again is a new request (a discarded id is refused)
     if (attempt && attempt.request === request) attempt = null;
-    state = answer.preparation;
+    show(answer.preparation);
     ctx.notify(decision === "accept" ? "Accepted for this session. Nothing is saved." : "Discarded.");
     draw();
     return true;
