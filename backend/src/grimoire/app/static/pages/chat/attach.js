@@ -14,7 +14,7 @@
 //                         `sent(turn)`/`removed()` callbacks. Returns a token, or { refused } when this chat keeps
 //                         no pictures ("unsupported") or the person's own chosen image waits ("busy"): a post
 //                         carries one picture, and the person's choice is never replaced for them.
-//   unstage(token)        takes that file back out, if it is still the one waiting
+//   unstage(token)        takes that file back out if it is still the one waiting for the next post; whether it did
 //   waits()               what is waiting: "own" (the person's chosen image), "retry" (a picture whose post was
 //                         made but whose upload failed, waiting for Try again or Remove), "staged" or null
 
@@ -25,7 +25,7 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
   const { ui } = ctx;
   const { el } = ui;
   const pictures = chatPictures(ctx, chat, redraw);
-  if (!pictures.served) return { writes: false, under: (_turn, row) => row, posted: () => {}, stage: () => ({ refused: "unsupported" }), unstage: () => {}, waits: () => null };
+  if (!pictures.served) return { writes: false, under: (_turn, row) => row, posted: () => {}, stage: () => ({ refused: "unsupported" }), unstage: () => false, waits: () => null };
 
   // { file, url, turn: the post it failed to reach (set after a refused upload), problem, carry: 070's staged
   // reference ({ token, note, origin, label, sent, removed }) or null for the person's own chosen image }
@@ -90,7 +90,11 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
     show();
     return token;
   }
-  function unstage(token) { if (waiting && waiting.carry && waiting.carry.token === token && !waiting.turn) drop(); }
+  function unstage(token) {
+    if (!(waiting && waiting.carry && waiting.carry.token === token && !waiting.turn)) return false;
+    drop();
+    return true;
+  }
 
   async function send(turn) {
     const held = waiting;

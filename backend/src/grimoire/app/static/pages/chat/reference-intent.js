@@ -41,7 +41,8 @@ export function draftAction(action, label) {
 // What the carried picture says of itself (its note in the campaign's art): public words only.
 export function carriedNote(label, shape, r) {
   const at = n => Number(n.toFixed(3));
-  const named = label.length > MAX_NOTE_LABEL ? label.slice(0, MAX_NOTE_LABEL) + '…' : label;
+  const points = Array.from(label);  // code points, as the server counts the note, never half a character
+  const named = points.length > MAX_NOTE_LABEL ? points.slice(0, MAX_NOTE_LABEL).join('') + '…' : label;
   return 'Player reference intent, not a world fact: ' + named + '; ' + shape + ' at x ' + at(r.x) + ', y '
     + at(r.y) + ', width ' + at(r.w) + ', height ' + at(r.h) + ' of the sketch.';
 }
@@ -278,19 +279,26 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
     if (done && done.refused) return done.refused;
     token = mine.token = done; return null;
   };
-  const unstage = () => { if (token !== null && attach && attach.unstage) attach.unstage(token); token = null; state.carried = null; };
+  // Takes the panel's marked sketch out of the tray; false when it was not there to take, or already belongs to a
+  // made post (waiting for Try again), which stays: its `sent`/`removed` still report what becomes of it.
+  const unstage = () => {
+    if (token === null) { state.carried = null; return false; }
+    if (!(attach && attach.unstage && attach.unstage(token))) return false;
+    token = null; state.carried = null; return true;
+  };
+  const inDraft = text => Boolean(text) && composer.input.value.includes(text);
   // A sketch, region or shape changed after its marked copy was attached: the copy no longer shows what the panel
   // does, so it comes off the next post rather than going with it unseen.
   const stale = () => {
     if (token === null && !state.carried) return;
-    unstage();
+    if (!unstage()) return;
     if (alive()) status.textContent = 'The sketch or region changed, so the marked sketch was taken off your next post. Use as draft to attach the new one.';
   };
   // The player took the draft text out of the composer: its sketch does not go with whatever they post instead.
   // (Posting clears the composer without an input event, so this never fires for the post itself.)
   composer.input.addEventListener('input', () => {
-    if (token === null || !state.used || ('\n\n'+composer.input.value+'\n\n').includes('\n\n'+state.used+'\n\n')) return;
-    unstage();
+    if (token === null || !state.used || inDraft(state.used)) return;
+    if (!unstage()) return;
     if (alive()) status.textContent = 'Your draft text for this reference was removed, so its marked sketch was taken off your next post.';
   }, {signal: ctx.signal});
   const use=ui.button('Use as draft',async()=>{
@@ -305,8 +313,13 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
       const text=draftAction(action, label);
       const key = sketch ? [text, state.shape, r.x, r.y, r.w, r.h].join('|') : null;
       // whether the composer still needs the text, read again after any wait: the player may have typed or
-      // posted meanwhile, and only the composer as it is now may be appended to
-      const needs = () => !(state.used === text || ('\n\n'+composer.input.value+'\n\n').includes('\n\n'+text+'\n\n'));
+      // posted meanwhile, and only the composer as it is now may be appended to. Text-only, an intent used once is
+      // not pressed on a player who edited it away; a marked sketch never goes without its text, so it is re-added.
+      const needs = () => !inDraft(text) && (carrying || state.used !== text);
+      const current = () => {
+        try { const now = region(); return [draftAction(inputs.action.value.trim(), inputs['region-label'].value.trim()), state.shape, now.x, now.y, now.w, now.h].join('|'); }
+        catch { return null; }
+      };
       const fits = () => (composer.input.value+(composer.input.value ? '\n\n' : '')+text).length
         <= (Number(composer.input.getAttribute('maxlength')) || 20000);
       const sketchFresh = carrying && !(state.carried && state.carried.key === key && state.carried.image === sketch && token !== null);
@@ -324,11 +337,15 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
         catch (error) { throw Error('Your marked sketch could not be prepared (' + (error.message || 'drawing failed') + '); nothing was added.'); }
         finally { pending = false; }
         if (epoch !== generation || !alive() || state.image !== sketch) return;
+        // the region, shape or words changed while it was drawn: this copy shows the old ones
+        if (current() !== key) { status.textContent = 'The reference changed while its sketch was drawn; nothing was added. Use as draft again.'; return; }
         if (needs() && !fits()) throw Error('Composer draft is full; shorten it before adding this intent.');
         const previous = token;
         const carried = {file:marked, key, image:sketch, note:carriedNote(label, state.shape, r)};
         const refused = restage(carried);
-        if (refused === 'busy') throw Error('Your next post already has an image attached. Remove it first: a post carries one picture.');
+        if (refused === 'busy') throw Error(attach.waits && attach.waits() === 'retry'
+          ? 'Your last post\'s picture is not attached yet. Try again or Remove it in the tray first.'
+          : 'Your next post already has an image attached. Remove it first: a post carries one picture.');
         if (refused) { token = previous; state.carried = null; }
         else state.carried = carried;
       }
@@ -364,7 +381,7 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
   ctx.signal?.addEventListener('abort',()=>{generation++;decoding?.abort();pending=false;drag=null;token=null;release();preview.replaceChildren();},{once:true});
   // Coming back to the chat: a marked sketch whose draft text is still in the composer waits for the post again
   // (the tray belongs to the page, so it was emptied when the page left).
-  if (state.carried && attach && attach.writes && state.used && ('\n\n'+composer.input.value+'\n\n').includes('\n\n'+state.used+'\n\n')) {
+  if (state.carried && attach && attach.writes && inDraft(state.used)) {
     if (restage(state.carried)) { state.carried = null; status.textContent = 'Your marked sketch was not attached again; Use as draft to attach it.'; }
   } else state.carried = null;
   draw();

@@ -42,7 +42,15 @@ function tray({writes = true, busy = false} = {}) {
       t.holding = token;
       return token;
     },
-    unstage(token) { t.unstaged.push(token); if (t.holding === token) t.holding = null; },
+    // like attach.js: only the waiting sketch can be taken back, and not once a made post waits on Try again
+    unstage(token) {
+      t.unstaged.push(token);
+      if (t.holding !== token || t.retry) return false;
+      t.holding = null;
+      return true;
+    },
+    waits: () => (t.holding === null ? null : t.retry ? 'retry' : 'staged'),
+    retry: false,
   };
   return t;
 }
@@ -286,4 +294,60 @@ test('coming back to the chat attaches the marked sketch again while its text is
   const edited = page({chat, draft: 'I changed my mind'});
   assert.equal(edited.attach.staged.length, 0, 'the player took the text out: the sketch is not attached behind their back');
   byText(edited.root, 'button', 'Clear')[0].click();
+});
+
+test('the sketch goes only with its own words, and only the outline the player sees when it was drawn', async () => {
+  // the region typed anew while the sketch is drawn (circling waits for it): the old outline is not attached
+  let finish;
+  canvases();
+  const p = page({draft: ''});
+  await sketch(p);
+  globalThis.OffscreenCanvas.prototype.convertToBlob = function ({type}) {
+    return new Promise(resolve => { finish = () => resolve(new Blob([new Uint8Array(PNG)], {type})); });
+  };
+  p.type('action', 'I hide here'); p.type('region-label', 'doorway');
+  byText(p.root, 'button', 'Use as draft')[0].click();
+  await tick();
+  circle(p, [210, 120], [410, 220]);
+  assert.deepEqual(regionOf(p), ['0', '0', '1', '1'], 'no circling while the sketch is drawn');
+  p.type('x', '0.5');
+  finish();
+  await tick(); await tick();
+  assert.equal(p.attach.staged.length, 0);
+  assert.equal(p.composer.input.value, '');
+  assert.match(p.status(), /changed while its sketch was drawn; nothing was added/);
+  byText(p.root, 'button', 'Clear')[0].click();
+
+  // editing around the drafted words keeps the sketch; replacing them takes it off, and taking the intent again
+  // puts the words back with it rather than sending the sketch under someone else's words
+  canvases();
+  const q = page({draft: ''});
+  await sketch(q);
+  q.type('action', 'I hide here'); q.type('region-label', 'doorway');
+  await q.use();
+  q.composer.input.value = 'I hide here (Reference: doorway) \nand hold my breath';
+  q.composer.input.dispatchEvent({type: 'input'});
+  assert.deepEqual(q.attach.unstaged, [], 'continuing the line is not deleting it');
+  q.composer.input.value = 'I draw my sword';
+  q.composer.input.dispatchEvent({type: 'input'});
+  assert.deepEqual(q.attach.unstaged, [1]);
+  await q.use();
+  assert.equal(q.attach.staged.length, 2);
+  assert.equal(q.composer.input.value, 'I draw my sword\n\nI hide here (Reference: doorway)');
+  byText(q.root, 'button', 'Clear')[0].click();
+
+  // after the post was made but its picture waits on Try again, the panel neither claims it was taken back nor
+  // loses track of it: Try again reporting it sent still reaches the panel
+  canvases();
+  const r = page({draft: ''});
+  await sketch(r);
+  r.type('action', 'I hide here'); r.type('region-label', 'doorway');
+  await r.use();
+  r.attach.retry = true;
+  r.composer.input.value = 'x';
+  r.composer.input.dispatchEvent({type: 'input'});
+  byText(r.root, 'button', 'Clear')[0].click();
+  assert.doesNotMatch(r.status(), /taken off|removed from/);
+  r.attach.staged[0].carry.sent('turn:2');
+  assert.match(r.status(), /went with your post/);
 });
