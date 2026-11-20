@@ -1,0 +1,11 @@
+"""Required legacy API: consumers still construct LegacyStore and call both methods."""
+
+class LegacyStore:
+    def __init__(self, backend):
+        self.backend = backend
+
+    def load(self, key):
+        return self.backend.load(key)
+
+    def save(self, key, value):
+        return self.backend.save(key, value)

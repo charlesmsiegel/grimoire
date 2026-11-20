@@ -636,8 +636,8 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 ### 069 — Coding Skills Calibration
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/coding-skills-calibration.md)).
-- Evidence: [`grimoire.calibration`](../../backend/src/grimoire/calibration.py) runs a pinned external deterministic-specialist corpus with three repeat trials, unknown-analysis handling and structural confusion counts; [calibration report and limits](../CALIBRATION.md).
-- Scope / gap: Independent actionable-defect/theory model calibration, model pins, panel repeatability and defect false-positive rates remain unavailable. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
+- Evidence: [`grimoire.calibration`](../../backend/src/grimoire/calibration.py) runs a pinned external deterministic-specialist corpus with three repeat trials, unknown-analysis handling and structural confusion counts. [`grimoire.judgepanel`](../../backend/src/grimoire/judgepanel.py) runs three pinned judges × three trials over a behavior-confirmed labelled corpus, with per-call coverage canaries, served-model pin checks, defect false-positive/negative rates, repeatability and pinned-rubric theory scoring; it reproduces the pinned rubric awarding 100 to unread verdicts and refuses to score them ([calibration report and limits](../CALIBRATION.md)).
+- Scope / gap: No live, provider-reported judge capture has been run (billed; needs an approved spend cap), so independent defect/theory accuracy, repeatability and false-positive rates are not established. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
 
 <a id="slice-070"></a>
 ### 070 — Multimodal Player Input
