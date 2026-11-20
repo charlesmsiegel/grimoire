@@ -59,7 +59,10 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   // its divergent offline scenes and the review of a retcon or fork (115), the director's
   const story = ctx.registered("story") ? ui.buttonLink("Story", "story", [campaign],
     { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
-  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, world, story,
+  // preparing it (115): its catalog bindings, ruleset contracts and a prepared scene, for the same chat and view
+  const prep = ctx.registered("prep") ? ui.buttonLink("Prep", "prep", [campaign],
+    { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
+  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, world, story, prep,
     chats.length ? el("span", { class: "g-muted" }, count(chats.length, "chat") + " in this campaign") : null,
     el("nav", { class: "g-chips", "aria-label": "This campaign's chats" }, chips));
   root.append(el("div", { class: "g-stack campaign-top" }, cover, nav));

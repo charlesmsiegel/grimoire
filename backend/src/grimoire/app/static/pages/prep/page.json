@@ -1,0 +1,13 @@
+{
+  "contract": 1,
+  "id": "prep",
+  "route": "prep",
+  "title": "Prep",
+  "slot": "hidden",
+  "order": 21,
+  "owner": "115",
+  "entry": "page.js",
+  "requires": ["campaign.chats", "prep.catalogs", "prep.rulesets", "prep.ruleset_check", "prep.preparation",
+               "prep.prepare_plan", "prep.prepare", "prep.prepare_review"],
+  "unavailable": null
+}

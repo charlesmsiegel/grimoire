@@ -83,10 +83,10 @@ person may cite for that character, newest first.
 | 054 | Reviewing a fork or retcon | `story` ([STORY](STORY.md)) | `test_app_story.py`, `js/story.e2e.mjs` | every op in the table's view refuses `director_only`; a stale review refuses `changed`; an incomplete snapshot previews with its problems and exports no correction; repair, generated continuations and promotion are named as not available |
 | 050 | Captured companions | not on a screen yet | | |
 | 051 | Several NPCs answering at once | not on a screen yet | | |
-| 056 | Source catalogs | not on a screen yet | | a campaign opts in through its chats' bindings |
+| 056 | Source catalogs | Prep (`prep`, director) | `test_app_prep_catalogs.py`, `js/prep.e2e.mjs` | the table's view refuses `director_only`; a catalog that does not compose shows 056's reason; changing a binding is the record's own reviewed Attach, and detaching one has no screen |
 | 058 | Two players at one screen | not on a screen yet | | |
-| 062 | Ruleset action contracts | not on a screen yet | | |
-| 064 | Scenario preparation | not on a screen yet | | |
+| 062 | Ruleset action contracts | Prep (`prep`) | `test_app_prep_rulesets.py`, `js/prep.e2e.mjs`, `js/prep.test.mjs` | no ruleset is pinned for a campaign, so the reference profiles are used; a check is a proposal only, and one that does not fit refuses `invalid_proposal` with 062's words |
+| 064 | Scenario preparation | Prep (`prep`, director) | `test_app_prep_preparation.py`, `js/prep.e2e.mjs`, `js/prep.test.mjs` | no model set up: the page says so and offers no call; a stale estimate refuses `changed` and sends nothing; nothing is saved |
 
 "Not on a screen yet" is said on the page, with the reason, and never offered as a control. Those rows are the
 work left before Wave 8 is user-visible complete.

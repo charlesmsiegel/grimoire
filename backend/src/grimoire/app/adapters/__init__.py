@@ -34,4 +34,8 @@ from . import story  # noqa: E402 -- 115's divergent offline scenes (049) and fo
 
 ADAPTERS = tuple(sorted((*ADAPTERS, story.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import prep  # noqa: E402 -- 115's campaign preparation: catalogs, ruleset contracts, scene prep (docs/PREP.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, prep.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]

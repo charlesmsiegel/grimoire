@@ -25,7 +25,8 @@ backend/src/grimoire/app/
                                local voice input ([SPEECH](SPEECH.md)); chronicle 115, a campaign's clock and
                                sourced memory ([CHRONICLE](CHRONICLE.md)); world/ 115, the director's places,
                                rumors, faction decisions and NPC minds ([WORLD](WORLD.md)); story 115, divergent
-                               offline scenes and the review of a fork or retcon ([STORY](STORY.md))
+                               offline scenes and the review of a fork or retcon ([STORY](STORY.md)); prep/ 115, a
+                               campaign's catalog bindings, ruleset contracts and scene preparation ([PREP](PREP.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -176,6 +177,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `chronicle` | 115 | `/<campaign id>?chat=<ChatRef>&actor=<ActorRef>&audience=director` |
 | `world` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` (the director's; the table's view says only that) |
 | `story` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` |
+| `prep` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` |
 | `art` | 114 | `?scope=<scope>&subject=<subject>&limit=<n>` |
 | `sync` | 114 | |
 
