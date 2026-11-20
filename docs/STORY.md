@@ -29,7 +29,8 @@ from the other.
 So a commitment is a proposition ("Mara will bring the harbour key back before the thaw"), and its **outcome** is
 canon's standing as of the read (012: the latest ruling; else `reported` once anyone received it; else
 `unasserted`), with the ruling that decided it and the events it rests on. A dedicated commitment record is
-077's (Quests and Commitments); until it lands, a promise is a proposition like any other claim.
+077's (Quests and Commitments, [COMMITMENTS](COMMITMENTS.md)); the story does not read that ledger yet, so here a
+promise is a proposition like any other claim.
 
 ### Grades
 
