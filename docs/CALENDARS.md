@@ -3,7 +3,7 @@
 `grimoire.calendarstore.CalendarLibrary` is a headless interface for explicit campaign-local time.
 It advances a campaign once per operation id and flags deadlines crossed by that advancement. It
 makes no model call, runs no offscreen simulation, and never changes a previously stored scene or
-transcript date. There is no calendar UI yet; Wave 8's sequential UI exit owns those controls.
+transcript date. A campaign's [Chronicle](CHRONICLE.md) page (115) is its UI: the director reviews each change before it is made.
 
 ## Read, preview and commit
 
@@ -99,7 +99,7 @@ A flag is only a flag. It invokes no callback, runs no activity, changes no reso
 actor knowledge. Consequential triggers require a later explicit decision through the applicable
 action/effect authority. The service is director-facing; callers must not treat its labels or
 canonical facts as NPC memory. Future rumors can consume a deliberately authorized time reading;
-UI exit 115 can consume `read`, previews and flagged deadlines. Neither integration is implemented
+UI exit 115 consumes `read`, previews and flagged deadlines ([CHRONICLE](CHRONICLE.md)). The rumor integration is not implemented
 here, and advancement never guesses player actions or updates other domains on their behalf.
 
 ## Authority, conflicts and recovery

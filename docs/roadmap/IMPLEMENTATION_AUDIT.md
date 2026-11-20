@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the rows to **80/119**, and with Wave 2 **5/12 scoped waves** (1, 2, 3, 4, 5) are complete. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -28,21 +28,21 @@ Historical refresh relative to #678: **+8 slices** (033, 051, 055, 057, 059, 060
 
 This is a code-and-test audit of the 119 scheduled **first-useful slices**, including inherited first-proof additions. Requirements were not narrowed to match the code. A check does not close later milestones, certify a live model, or prove physical-phone/browser accessibility. Unchecked entries distinguish missing implementation from a proof not yet established. The [ordered roadmap](README.md#implementation-checkmarks) carries the same checkmarks.
 
-The current reconciliation preserves the original proving obligations. Browser evidence is synthetic Chromium/loopback with keyboard, focus and emulated narrow viewport; it does not certify physical-phone touch, real screen-reader use or the global Wave 6/7 acceptance gates. 015 remains unchecked without the live provider-reported baseline.
+The current reconciliation preserves the original proving obligations. Browser evidence is synthetic Chromium/loopback with keyboard, focus and emulated narrow viewport; it does not certify physical-phone touch, real screen-reader use or the global Wave 6/7 acceptance gates. 015 was checked on 2026-11-20 on a live provider-reported token baseline; see its entry for the limits.
 
 ## Wave results
 
 | Wave | Checked slices | Wave complete | Exit / remaining limit |
 |---|---:|:---:|---|
 | [1](#wave-1) | 8/8 | ☑ | All eight scoped foundation contracts and their integration proof are present; this is not playable-product certification. |
-| [2](#wave-2) | 7/8 | ☐ | 015 has no live provider-reported V0.2.1 baseline capture. |
+| [2](#wave-2) | 8/8 | ☑ | 015's measured V0.2.1 baseline was captured on 2026-11-20 on a stand-in model; token counts are provider-reported, cost in money is not. |
 | [3](#wave-3) | 10/10 | ☑ | All ten scheduled headless first slices are present. Later subject-validation and other milestones remain open. |
 | [4](#wave-4) | 10/10 | ☑ | 033 follow-up adds public non-character chat rosters and scene-runner reserve proof; see its dated evidence below. |
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 1/16 | ☐ | 085 is complete at its bounded first-proof boundary. Other domain slices and UI exit 116 remain incomplete. |
+| [9](#wave-9) | 3/16 | ☐ | 075, 076 and 085 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -137,7 +137,7 @@ All eight scoped foundation contracts and their integration proof are present; t
 <a id="wave-2"></a>
 ## Wave 2
 
-015 has no live provider-reported V0.2.1 baseline capture.
+All eight scheduled first slices are checked. 015's measured V0.2.1 baseline was captured on 2026-11-20 on a stand-in model; token counts are provider-reported, cost in money is not, and no cost parity is claimed.
 
 <a id="slice-009"></a>
 ### 009 — Entity Facets And Instance Model
@@ -179,9 +179,9 @@ All eight scoped foundation contracts and their integration proof are present; t
 <a id="slice-015"></a>
 ### 015 — V1 Cost And Voice Regression
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/v1-cost-and-voice-regression.md)).
-- Evidence: [`backend/src/grimoire/evals/v021.py`](../../backend/src/grimoire/evals/v021.py); [`docs/evals/V021_BASELINE.md`](../../docs/evals/V021_BASELINE.md); [`backend/tests/test_v021_replay.py`](../../backend/tests/test_v021_replay.py); Capture conversion and receipt verification plus deterministic replay exist.
-- Scope / gap: [#686](https://github.com/charlesmsiegel/grimoire/pull/686) documents capture prerequisites only. No live provider-reported V0.2.1 measurement exists: the one live attempt (2026-11-20, `anthropic`, `claude-sonnet-5-5`) failed on the second speaker's call, because 0.2.1 ends that request with an assistant turn and the model rejects it ([details](../evals/V021_BASELINE.md#live-attempt-2026-11-20)). Baseline capture is still pending, so actual measured baseline/voice regression proof is missing.
+- [x] Scheduled first-useful slice ([requirements](sprints/v1-cost-and-voice-regression.md)).
+- Evidence: [`backend/src/grimoire/evals/v021.py`](../../backend/src/grimoire/evals/v021.py); [`docs/evals/V021_BASELINE.md`](../../docs/evals/V021_BASELINE.md); [`backend/tests/test_v021_replay.py`](../../backend/tests/test_v021_replay.py); capture conversion, receipt verification and deterministic replay. A live capture of the unmodified 0.2.1 app on 2026-11-20 (`anthropic`, `claude-sonnet-4-5-20250929`) wrote its evidence, and `grimoire.evals.story_quality` with evidence verification reports it **measured**: 6 calls, 15,618 input and 1,396 output tokens, cast distinguishability 0.833, 0 findings ([measured baseline](../evals/V021_BASELINE.md#measured-baseline-2026-11-20)).
+- Scope / limit: one stand-in model chosen by the requester, not their play model, on the two-call profile (a lower bound). The provider reports no cost, so no cost in money and no cost parity is claimed. Choices are unlabelled. The capture came from a driver copy with one unexecuted diagnostic line, and two earlier live attempts that day failed. The evidence is consistent, not authenticated. The matched V2 comparison is 068's.
 
 <a id="slice-016"></a>
 ### 016 — Session Zero Boundaries
@@ -527,7 +527,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [x] Scheduled first-useful slice ([requirements](sprints/memory-consolidation.md)).
 - Evidence: [`memory/view.py`](../../backend/src/grimoire/memory/view.py), [`memorystore/library.py`](../../backend/src/grimoire/memorystore/library.py), [`test_memory.py`](../../backend/tests/test_memory.py) and [`test_memory_store.py`](../../backend/tests/test_memory_store.py) provide durable actor-scoped selections, corrections, stale-selection suppression, evidence provenance and bounded historical views; [`test_memory_recovery.py`](../../backend/tests/test_memory_recovery.py) covers local recovery. [`memory/dossier.py`](../../backend/src/grimoire/memory/dossier.py) consolidates authored, evidence-citing accounts into per-topic dossiers ([`test_memory_dossier.py`](../../backend/tests/test_memory_dossier.py)); [`test_memory_consolidation.py`](../../backend/tests/test_memory_consolidation.py) proves the scenario end to end: an NPC's perceptions across three scenes, a recap of the first two, the unmasking's correction and a backlog recap filed afterwards, through the durable ledger, `TextApi`'s runner wiring, the context inspector and a scripted generated brief. The corrected identity is the only account packed; the obsolete percept and both recaps never reach the pack or prompt; each remembered detail resolves to its exact evidence, scene and editor. [`test_context_memory.py`](../../backend/tests/test_context_memory.py) covers contested accounts, controller and moment mismatches.
-- Scope / gap: Bounded first proof. Accounts are authored by the controller (no model or automatic summarization, no TextApi or UI write path; 115 owns the UI); identity is a topic, not a structured field; no sync adapter; thousands-of-scenes scale (milestone 3) is unmeasured. See [contract](../MEMORY.md).
+- Scope / gap: Bounded first proof. Accounts are authored by the controller (no model or automatic summarization, the app write path is 115's Chronicle page); identity is a topic, not a structured field; no sync adapter; thousands-of-scenes scale (milestone 3) is unmeasured. See [contract](../MEMORY.md).
 
 <a id="slice-054"></a>
 ### 054 — Scenes Forks And Retcons
@@ -541,7 +541,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [x] Scheduled first-useful slice ([requirements](sprints/calendar-and-clocks.md)).
 - Evidence: [`calendarstore/library.py`](../../backend/src/grimoire/calendarstore/library.py) and [`CALENDARS.md`](../CALENDARS.md); [`test_calendarstore.py`](../../backend/tests/test_calendarstore.py)::test_twenty_day_proof_preserves_old_scene_and_retries_after_reopen proves explicit 20-day advancement, one deadline flag and unchanged old transcript dates; arithmetic, offline conflict and crash/I/O retry proofs are in `test_calendars.py`, `test_calendarstore_sync.py` and `test_calendarstore_recovery.py`.
-- Scope / gap: Headless Gregorian/Hebrew/fixed-year custom chronology with explicit uncertainty resolution and retained-lineage operation receipts. No calendar UI (115), V1 plugin/data import, complex fictional leap rules, parallel schedule engine, automatic trigger effects, downtime or offscreen simulation. Existing campaign UI still reports clocks unavailable.
+- Scope / gap: Headless Gregorian/Hebrew/fixed-year custom chronology with explicit uncertainty resolution and retained-lineage operation receipts. The UI is 115's Chronicle page. No V1 plugin/data import, complex fictional leap rules, parallel schedule engine, automatic trigger effects, downtime or offscreen simulation.
 
 <a id="slice-056"></a>
 ### 056 — Catalog Composition
@@ -633,7 +633,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 - [ ] Scheduled first-useful slice ([requirements](sprints/actor-specific-inference.md)).
 - Evidence: [`actor_inference`](../../backend/src/grimoire/actor_inference), [`test_actor_inference.py`](../../backend/tests/test_actor_inference.py) and [`test_actor_inference_report.py`](../../backend/tests/test_actor_inference_report.py) provide opt-in actor-private planner/critic calls, baseline generation, conservative budget/cancellation, usage/latency reports and an injected synthetic comparison.
 - Runtime/UI adoption: the app's `planning` setting (0–16, off by default) runs one capped, untrusted presentation suggestion before each speaking NPC's reply through `GenerationRuntime`; with it off a turn is still one call per speaking NPC ([`test_presentation_planning.py`](../../backend/tests/test_presentation_planning.py)). `python -m grimoire.capture.v2` makes the billed V2-vs-V0.2.1 comparison one step on 015's capture ([`test_capture_v2.py`](../../backend/tests/test_capture_v2.py), dry run and loopback only).
-- Scope / gap: No billed comparison has been run: it waits on 015's live capture, and then needs its own spending approval. Actual billing remains unknown and matched measured V0.2.1 cost/voice evidence is absent. Against an `anthropic` capture, V2 reaches Anthropic through its OpenAI-compatible endpoint (no prompt caching, no cached-token counts), so cost will be reported `usage_incomplete`. Synthetic lexical quality and estimated/priced token usage cannot close the proving scenario; see [measurement limits](../ACTOR_INFERENCE.md).
+- Scope / gap: One billed comparison was run on 2026-11-20 against 015's measured baseline (18 calls, `claude-sonnet-4-5-20250929`) and **the gate failed both ways** ([results](../ACTOR_INFERENCE.md#billed-comparison-2026-11-20)). V2 against 0.2.1: one choice unrealized and `usage_incomplete`, because V2 reaches Anthropic through its OpenAI-compatible endpoint, which reports no cached-token counts. Planning against plain V2: a second unrealized choice and a voice regression (cast distinguishability 1.000 to 0.833) for about twice the tokens. The proving scenario is not established. Synthetic lexical quality and estimated/priced token usage cannot close the proving scenario; see [measurement limits](../ACTOR_INFERENCE.md).
 
 <a id="slice-069"></a>
 ### 069 — Coding Skills Calibration
@@ -668,13 +668,13 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 ### 115 — Wave 8 UI Exit: Reliable Campaign Play
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/wave-8-ui-exit.md)).
-- Evidence: Existing UI offers owner branch choices and reports unavailable campaign features.
-- Scope / gap: Required retcon, clocks, advanced party/story and other Wave 8 domain controls are not implemented; Wave 8 not complete.
+- Evidence: [`app/adapters/chronicle.py`](../../backend/src/grimoire/app/adapters/chronicle.py); [`app/static/pages/chronicle`](../../backend/src/grimoire/app/static/pages/chronicle); [`backend/tests/test_app_chronicle.py`](../../backend/tests/test_app_chronicle.py); [`backend/tests/js/chronicle.e2e.mjs`](../../backend/tests/js/chronicle.e2e.mjs); [`backend/tests/js/chronicle.test.mjs`](../../backend/tests/js/chronicle.test.mjs). First merge: a campaign's Chronicle page, linked from its hub, offers the director the 055 clock (start, schedule, advance; each change reviewed, a stale review refused, a retry a no-op, crossed deadlines flagged) and writes 053 accounts for a chat's cast, citing only evidence the hub shows for that character; an NPC's memory is the director's, a player writes only their own character's, and a written NPC account reaches its scene context. The page's coverage table ([CHRONICLE.md](../CHRONICLE.md)) maps every Wave 8 user-facing first slice to its screen, test and failure behavior, or names it as not on a screen yet.
+- Scope / gap: Domain-complete is not UI-complete. Fork/retcon review (054), divergent-scene reconciliation (049), companions (050), multi-NPC exchange (051), catalogs (056), factions (057), local multi-PC drafting (058), places (059), social hypotheses (060), action contracts (062), rumors (063) and preparation (064) have no screen yet and are labelled so. Real-browser, screen-reader and phone use are unverified; Wave 8 not complete.
 
 <a id="wave-9"></a>
 ## Wave 9
 
-085 is complete at its bounded first-proof boundary. Other domain slices and UI exit 116 remain incomplete.
+075, 076 and 085 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -693,16 +693,16 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-075"></a>
 ### 075 — Mechanical Resolution
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/mechanical-resolution.md)).
-- Evidence: adjudication/effects provide fiction-first reviewed outcomes and durable application.
-- Scope / gap: No rules-family mechanical roll record that narration consumes without rerolling.
+- [x] Scheduled first-useful slice ([requirements](sprints/mechanical-resolution.md)).
+- Evidence: [`rolls/model.py`](../../backend/src/grimoire/rolls/model.py), [`rolls/codec.py`](../../backend/src/grimoire/rolls/codec.py) and [`rollstore/library.py`](../../backend/src/grimoire/rollstore/library.py); [`test_rollstore.py`](../../backend/tests/test_rollstore.py), [`test_rollstore_recovery.py`](../../backend/tests/test_rollstore_recovery.py) and [`test_rolls.py`](../../backend/tests/test_rolls.py). Milestone 1: a 5e Stealth check by a player character, backed by the player's own action and handle, draws its d20 once and appends the faces to the `rolls/<campaign>` authority ledger before returning them. The roll's 003 resolution makes `review_narration` reject a narration retry that turns the failure into a success (`contradicts_resolution`); asking again, or after reopening, reads the same failure back and draws no die. The ledger stores faces only and replay re-derives each result with 062's profile, so a forged result or a second roll of one request is `LedgerInvalid`; the fault harness shows a roll is on record whole or not at all. WoD fixed-difficulty pools and PbtA moves roll through the same interface with their own result shapes. Docs: [ROLLS](../ROLLS.md).
+- Scope / gap: Headless, with no UI (116) and no scene-runner wiring (milestone 3). The action's DC, modifier and pool are the caller's, not read off a sheet, and legality is not checked; the selected module is passed by the caller. WoD opposed pools and a PbtA partial's recorded choice (milestone 2), durable effects, conditions and action journals (milestone 3) remain; 029 does not yet refuse to frame a rolled attempt, and nothing yet reviews narration against both libraries' resolutions; no-re-roll holds per attempt, not per turn (a new contribution or director request id is a new roll), until the milestone-3 runner derives attempts from the turn.
 
 <a id="slice-076"></a>
 ### 076 — Offscreen World Events
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/offscreen-world-events.md)).
-- Evidence: goals policy selects an actor’s current action.
-- Scope / gap: No offscreen clock-based faction plan scheduler or bounded absence advancement.
+- [x] Scheduled first-useful slice ([requirements](sprints/offscreen-world-events.md)).
+- Evidence: [`offscreen/schedule.py`](../../backend/src/grimoire/offscreen/schedule.py), [`offscreenstore/library.py`](../../backend/src/grimoire/offscreenstore/library.py) and [`OFFSCREEN.md`](../OFFSCREEN.md); [`test_offscreen.py`](../../backend/tests/test_offscreen.py)::test_rival_plan_progresses_during_twenty_days_of_travel advances a guild plan adopted under its 057 decision across a 20-day calendar advance (two steps flagged at their own due moments, one pending); [`test_offscreenstore.py`](../../backend/tests/test_offscreenstore.py) proves the native once-only skip, reopen retry, fail-closed replay and crash/I/O recovery. Budget deferral, deadline outcomes, ordering and the no-roster/no-model boundary are in `test_offscreen.py`.
+- Scope / gap: Headless first milestone: exact-duration plan steps only, director-facing developments that deliver no knowledge or accepted effect. No UI (116), model-backed or narrated developments, causal branching/hidden-consequence trees, multi-process cost measurement, plan withdrawal or persistent institutions.
 
 <a id="slice-077"></a>
 ### 077 — Quests And Commitments
