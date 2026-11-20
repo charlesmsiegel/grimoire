@@ -135,7 +135,11 @@ def segment(args: Mapping[str, object], key: str, *, maximum: int | None = None)
     return value
 
 
-def text(value: object, key: str, *, maximum: int = 400) -> str:
+#: The longest text a World field takes (060's ``TEXT_CHARS`` too): the page checks it before keeping a draft.
+TEXT_MAX = 400
+
+
+def text(value: object, key: str, *, maximum: int = TEXT_MAX) -> str:
     if type(value) is not str or not value.strip() or len(value) > maximum:
         raise ApiRefused("invalid_field", f"{key} must be text of at most {maximum} characters")
     return value.strip()

@@ -565,16 +565,20 @@ async function minds(ctx, body, chat, cast) {
       const ids = hypotheses.map((item) => ({ value: item.id, label: item.id + ": " + item.claim.slice(0, 50) + " (" + whose(item.about.map(nameOf)) + ")" }));
       // only a hypothesis nothing replaces yet can be replaced: 060 keeps one chain, each link replaced once
       const open = ids.filter((item) => !replacedBy(hypotheses, item.value).length);
-      replaces = ui.choice("It replaces", [{ value: "", label: "Nothing: a new hypothesis" }, ...open], { value: "" });
+      // both picks are kept as this NPC's draft, while what was picked is still offered
+      replaces = keptChoice(ui, "It replaces", [{ value: "", label: "Nothing: a new hypothesis" }, ...open], ctx.draft(KEY + "replaces"), "");
       supersedes.replaceChildren(replaces.node);
       // a tactic rests only on a hypothesis still current: 060's choose_tactic refuses a replaced one
-      tacticChoice = open.length ? ui.choice("Tactic rests on", open, { value: open[open.length - 1].value }) : null;
+      tacticChoice = open.length ? keptChoice(ui, "Tactic rests on", open, ctx.draft(KEY + "tactic"), open[open.length - 1].value) : null;
       tacticFor.replaceChildren(tacticChoice ? tacticChoice.node : ui.empty("Write a hypothesis to choose a tactic from it."));
     };
     const add = () => {
       const sure = parseConfidence(confidence.value);
       const cited = picked.values().filter((id) => held.has(id));
-      claim.setError(claim.value.trim() ? "" : "Write what " + who + " thinks.");
+      const longest = mind.max_text || 400;
+      const tooLong = claim.value.trim().length > longest;
+      claim.setError(!claim.value.trim() ? "Write what " + who + " thinks."
+        : tooLong ? "At most " + longest + " characters: this has " + claim.value.trim().length + "." : "");
       confidence.setError(sure === null ? "Give a number from 0 to 1, or a percentage." : "");
       // 060 lets a hypothesis cite at most MAX_EVIDENCE: more is refused here, before the draft keeps it
       const most = mind.max_evidence || 8;
@@ -582,7 +586,7 @@ async function minds(ctx, body, chat, cast) {
         : cited.length > most ? "A hypothesis rests on at most " + most + " pieces of evidence: untick " + (cited.length - most) + "." : "";
       formError.hidden = !citeProblem;
       formError.textContent = citeProblem;
-      if (!claim.value.trim() || sure === null || citeProblem || !about.value) return;
+      if (!claim.value.trim() || tooLong || sure === null || citeProblem || !about.value) return;
       const whom = [about.value, ...(alsoAbout.value && alsoAbout.value !== about.value ? [alsoAbout.value] : [])];
       const problem = replacementProblem(hypotheses, replaces.value, whom);
       if (problem) { formError.hidden = false; formError.textContent = problem; return; }
@@ -591,13 +595,18 @@ async function minds(ctx, body, chat, cast) {
         supersedes: replaces.value || null }];
       save();
       claim.clear();
+      ctx.draft(KEY + "replaces").clear();
       confidence.clear();
       drawList();
     };
     const preview = () => {
       const least = parseConfidence(minimum.value);
       minimum.setError(least === null ? "Give a number from 0 to 1." : "");
-      if (!hypotheses.length || least === null) return;
+      const longest = mind.max_text || 400;
+      const over = (box) => { const long = box.value.trim().length > longest;
+        box.setError(long ? "At most " + longest + " characters: this has " + box.value.trim().length + "." : ""); return long; };
+      const overlong = [over(credited), over(fallback)].some(Boolean);
+      if (!hypotheses.length || least === null || overlong) return;
       const tactic = tacticChoice && !replacedBy(hypotheses, tacticChoice.value).length && credited.value.trim() && fallback.value.trim()
         ? { hypothesis: tacticChoice.value, minimum: least, credited: credited.value.trim(), fallback: fallback.value.trim() } : undefined;
       ctx.act(async () => {

@@ -89,7 +89,7 @@ as not available.
 
 | Op | Args | Answer |
 |---|---|---|
-| `world.mind` | `chat`, `owner` (an NPC of the cast) | `{owner, now, evidence[], truth: {rulings[], beliefs[]}, max_evidence}`: one ruling entry per proposition, `{proposition, text, standing, ruling, at, earlier[]}` |
+| `world.mind` | `chat`, `owner` (an NPC of the cast) | `{owner, now, evidence[], truth: {rulings[], beliefs[]}, max_evidence, max_text}`: one ruling entry per proposition, `{proposition, text, standing, ruling, at, earlier[]}` |
 | `world.mind_preview` | `chat`, `owner`, `hypotheses[]` (`{id, about[], claim, confidence, evidence[], at, supersedes}`), `tactic` (`{hypothesis, minimum, credited, fallback}`, optional) | `{saved: false, admitted, current[], tactic, truth, unchanged}` |
 
 The director writes each hypothesis in their own words, about what another character believes, or what one character thinks a second believes (060's
@@ -120,7 +120,8 @@ working. A topology whose view is refused still leaves the others to choose from
 What the director lays out is a draft kept across leaving the page, keyed per chat and character: what is typed,
 and what is picked or ticked too (a route's two ends, a rumor's stance before it is reviewed, a faction's leader,
 its members and who is told, the characters a hypothesis is about and the evidence it rests on, at most 060's eight
-items). A hypothesis being written is that NPC's own.
+items, what it replaces and the hypothesis a tactic rests on, while each is still offered). A text over 400
+characters, the most 060 takes, is refused on the page and kept to be shortened. A hypothesis being written is that NPC's own.
 
 Only the newest answer is drawn: the NPC chosen last, the topology chosen last (a review of the one before is
 dropped), the last search and route. A review or a road change answers for the read it started from: once the

@@ -334,6 +334,65 @@ test("a hypothesis citing more evidence than 060 takes is refused on the page, n
   assert.equal(field(minds(root), "What Mara thinks they think").value, "Anya knows the letter", "the claim is not cleared");
 });
 
+test("what a hypothesis replaces and what the tactic rests on are kept across leaving the page", async () => {
+  const drafts = new Map();
+  const write = (root, claim, replaces) => {
+    typeInto(minds(root), "What Mara thinks they think", claim);
+    const box = minds(root).querySelectorAll("input").find((node) => node.getAttribute("value") === "e-Mara");
+    box.checked = true;
+    box.dispatchEvent({ type: "change" });
+    typeInto(minds(root), "How sure", "70%");
+    field(minds(root), "Whose belief").value = ANYA;
+    if (replaces) { const pick = field(minds(root), "It replaces"); pick.value = replaces; pick.dispatchEvent({ type: "change" }); }
+    button(minds(root), "Add this hypothesis").click();
+  };
+  const first = await mounted({ drafts });
+  await first.done;
+  await settle();
+  write(first.root, "Anya knows the letter");
+  write(first.root, "Bea knows it too");
+  const pick = field(minds(first.root), "It replaces");
+  pick.value = "h1";
+  pick.dispatchEvent({ type: "change" });
+  const tactic = field(minds(first.root), "Tactic rests on");
+  tactic.value = "h1";
+  tactic.dispatchEvent({ type: "change" });
+  const again = await mounted({ drafts });
+  await again.done;
+  await settle();
+  assert.equal(field(minds(again.root), "It replaces").value, "h1", "the replacement picked is kept");
+  assert.equal(field(minds(again.root), "Tactic rests on").value, "h1", "and the tactic's hypothesis");
+  write(again.root, "Anya only guesses");
+  assert.ok(minds(again.root).querySelectorAll("li").some((node) => node.textContent.startsWith("h3:") && node.textContent.includes("replacing h1")));
+  assert.equal(field(minds(again.root), "It replaces").value, "", "once used, the replacement pick starts over");
+  assert.equal(field(minds(again.root), "Tactic rests on").value, "h3", "h1 is replaced now, so the tactic falls back to the newest one still current");
+});
+
+test("text longer than 400 characters is refused on the page, kept to be shortened, and never sent", async () => {
+  const { root, done, asked } = await mounted();
+  await done;
+  await settle();
+  const long = "x".repeat(401);
+  typeInto(minds(root), "What Mara thinks they think", long);
+  const box = minds(root).querySelectorAll("input").find((node) => node.getAttribute("value") === "e-Mara");
+  box.checked = true;
+  box.dispatchEvent({ type: "change" });
+  typeInto(minds(root), "How sure", "70%");
+  field(minds(root), "Whose belief").value = ANYA;
+  button(minds(root), "Add this hypothesis").click();
+  assert.ok(minds(root).textContent.includes("At most 400 characters: this has 401."));
+  assert.ok(!minds(root).querySelectorAll("li").some((node) => node.textContent.startsWith("h1:")), "nothing is saved");
+  assert.equal(field(minds(root), "What Mara thinks they think").value, long, "the claim is kept to be shortened");
+  typeInto(minds(root), "What Mara thinks they think", "Anya knows");
+  button(minds(root), "Add this hypothesis").click();
+  typeInto(minds(root), "Tactic if credited", long);
+  typeInto(minds(root), "Tactic otherwise", "ask");
+  button(minds(root), "Show what Mara would do").click();
+  await settle();
+  assert.ok(minds(root).textContent.includes("At most 400 characters: this has 401."), "the tactic says why");
+  assert.ok(!asked.some((item) => item.op === "world.mind_preview"), "an overlong tactic is not sent");
+});
+
 test("a route answered before a road was blocked is not left on screen as current", async () => {
   const { root, done } = await mounted({ answers: {
     "world.route": () => ({ found: true, conditions: [], route: { places: [{ place: TOWN }, { place: PORT }], paths: ["road"] } }),

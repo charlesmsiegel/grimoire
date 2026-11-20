@@ -88,7 +88,7 @@ def _mind(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                           "content": item.content, "at": item.moment.sequence}
                          for item in sorted(held, key=lambda item: (-item.moment.sequence, item.evidence_id))],
             "truth": _truth(knowledge, cast), "max": MAX_RECORDS,
-            "max_evidence": MAX_EVIDENCE}
+            "max_evidence": MAX_EVIDENCE, "max_text": common.TEXT_MAX}
 
 
 def _ledger_digest(ctx: AdapterContext, campaign: str) -> str:
