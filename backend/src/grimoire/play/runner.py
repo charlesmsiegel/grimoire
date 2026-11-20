@@ -8,7 +8,9 @@ docs/SCENES.md for the contract.
 Authority is never passed in: who controls an actor comes from 003's sovereignty ledger, who may act
 is an authenticated handle the library's authority issued, and every generated line is a proposal
 until the table keeps it. The only world state written here is an accepted effect (021), and only once
-it holds every key (``play/accept.py``); nothing writes events, evidence or rulings.
+it holds every key (``play/accept.py``), with what it leaves in 020: its 012 bridge event and the perceptions of
+those who saw it on the chat's stage (``play/witness.py``). Nothing here writes a proposition, a report, a
+belief, a ruling or a disclosure.
 """
 
 from __future__ import annotations
@@ -278,7 +280,9 @@ class SceneRunner:
         every 021 problem of the campaign (``effects``) and each acceptance cut short (``effect_unsettled``,
         ``<turn id>:<event id>:<shape>``) for ``recover_effects``, or, one another device started, for that device
         (``effect_elsewhere``, ``<turn id>:<event id>:<device tag>``), or one of unknown device for the owner's
-        word (``effect_untagged``, ``<turn id>:<event id>``)."""
+        word (``effect_untagged``, ``<turn id>:<event id>``), and each of this chat's accepted effects whose 020
+        event is not written yet (``unbridged``, ``<turn id>:<event id>``, ``:backdated`` when 020 can never take
+        it)."""
         scene = self._context(chat).scene
         found = effect_problems(self, scene)
         try:  # 016: a configuration that cannot be read holds every narration; said, never hidden
@@ -1181,7 +1185,9 @@ class SceneRunner:
         An endorser present stands in for an endorsement the authority holds no record of (shape B only).
         An acceptance another device started is never settled here (``accepted_elsewhere``, after this device's),
         nor one that names no device and of which nothing is here, unless ``own`` says it is this library's
-        (``untagged_acceptance``)."""
+        (``untagged_acceptance``). Then each of this chat's accepted effects whose 020 event and witnesses are not
+        written yet is written, oldest first (``unbridged`` when one cannot be now, ``recovery_needed`` while
+        another chat's older one waits or an earlier acceptance is still cut short)."""
         return recover_effects(self, chat, by, abort=abort, endorsers=endorsers, own=own)
 
     # -- the table's choices ------------------------------------------------------------------------

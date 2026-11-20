@@ -14,12 +14,15 @@ The commit order is fixed, so a crash anywhere leaves something open-time recove
    written ``accepting``, with its keys, the allocated event id and the sovereignty ledger position whose
    control it was authorized under, by compare-and-swap;
 4. 021's commit (one store transaction);
-5. the effect is written ``accepted``.
+5. the effect is written ``accepted``;
+6. its 012 bridge event and its witnesses' perceptions are appended to 020, once (``play/witness.py``).
 
 A crash after 3 leaves an ``accepting`` effect: ``open`` reports it (``effect_unsettled``) with the shape it
 finds, and the owner's ``recover_effects`` settles it with 030's ``complete`` or ``adopt`` (or aborts it with
 021's ``revoke(partial=True)``), before any other effect is accepted. ``adopt`` replays the control recorded with
-``accepting`` from the sovereignty ledger, so a character changing hands since never strands it.
+``accepting`` from the sovereignty ledger, so a character changing hands since never strands it. A crash after 4
+(or a 020 append that cannot be made now) leaves an ``accepted`` effect whose 020 event is missing: ``open`` reports
+it (``unbridged``), and the chat's next acceptance or ``recover_effects`` writes it first, oldest first.
 
 An endorsement given with a player's own trusted handle is also recorded by the library's durable authority (a
 ``propose`` decision of that handle at ``endorsement_address``, in the ``security`` ledger, which only the
@@ -50,6 +53,8 @@ from grimoire.effectstore import Endorsement, InvalidEffect
 from grimoire.play.adjudicate import _029, _UNAVAILABLE, outcome_of
 from grimoire.play.obstacles import applied, due_changes, holds_due
 from grimoire.play.scene import NOW, WRITE_RETRIES, _readable, _refuse
+from grimoire.play.witness import bridge_chat
+from grimoire.play.witness import problems as unbridged_problems
 from grimoire.scene import MAX_EFFECTS, SceneRefused, TurnEffect, TurnRecord, Waiver, turn_from_payload
 from grimoire.scenestore import StoredTurn
 from grimoire.security import Permission, is_human
@@ -555,6 +560,7 @@ def _accepting(runner, scene, stored: StoredTurn, effect: TurnEffect, live: Mapp
             [f"{elsewhere} elsewhere in the campaign (another chat's acceptance, or a turn file that cannot be "
              "read)"] if elsewhere else [])
         raise _refuse("recovery_needed", ("recover first: " + "; ".join(named))[:200])
+    high = bridge_chat(runner, scene)  # 020: what earlier acceptances left unwritten goes first, in sequence order
     if runner.adjudication is None:
         raise _refuse("no_adjudication", "every acceptance is checked by 029 first")
     proposal = effect.proposal
@@ -585,6 +591,8 @@ def _accepting(runner, scene, stored: StoredTurn, effect: TurnEffect, live: Mapp
         return _write(runner, stored, replace(effect, state="refused", reason="ambiguous_control"))
     except StoreError as error:
         raise _refuse("effects_unavailable", type(error).__name__) from None
+    if change.duplicate_of is None and proposal.moment.sequence < high:  # 020 could never take its bridge
+        return _write(runner, stored, replace(effect, state="refused", reason="stale_sequence"))
     event_id = change.ref.event_id
     controls_at = _settled_play(runner, scene)
     if change.duplicate_of is not None:  # already in force (a retry): nothing to publish, only to record
@@ -604,6 +612,10 @@ def _accepting(runner, scene, stored: StoredTurn, effect: TurnEffect, live: Mapp
     accepted = replace(landed, state="accepted", event_id=event_id)
     if _rewrite(runner, chat, record.ref, landed, accepted) is None:
         raise _refuse("effect_unsettled", "the effect is accepted, but its turn could not be marked; recover it")
+    try:
+        bridge_chat(runner, scene)
+    except SceneRefused:  # it waits, accepted: ``open`` reports it, and the next acceptance or recovery writes it
+        pass
     return accepted
 
 
@@ -719,6 +731,7 @@ def effect_problems(runner, scene) -> list[tuple[str, str]]:
     except SceneRefused as error:
         return [("effects", f"unreadable:{error.reason}")]
     found = [("effects", f"{problem.code}:{problem.event_id or ''}") for problem in continuity.problems]
+    found += unbridged_problems(runner, scene)
     for stored in (*scene.turns.turns, *scene.turns.set_aside):  # one set aside since it was cut short too
         for effect in stored.record.effects:
             if effect.state != "accepting":
@@ -744,7 +757,7 @@ def recover_effects(runner, chat: ChatRef, by, *, abort: bool = False, endorsers
         raise _refuse("invalid_field", "abort and own are true or false")
     live = _live(runner, endorsers)
     mine = runner.scenes.device()  # a damaged identity settles nothing: whose each acceptance is cannot be told
-    settled, theirs, untagged = [], [], []
+    settled, theirs, untagged, unwritten = [], [], [], None
     with runner.store.lock:  # never while an acceptance of this process is between its steps
         turns = runner.scenes.turns(chat)
         # oldest first, set-aside turns after the line; the first that cannot be settled stops
@@ -762,6 +775,10 @@ def recover_effects(runner, chat: ChatRef, by, *, abort: bool = False, endorsers
                     continue
                 _recoverable(runner.scenes.turns(chat))  # again under the lock, before each 021 write
                 settled.append(_recover(runner, scene, stored.record, effect, abort, live))
+        try:  # 020: each accepted effect's knowledge (one cut short above, or one whose append was), oldest first
+            bridge_chat(runner, scene)
+        except SceneRefused as error:
+            unwritten = error
     # this device's own were settled above; the rest never are here (untagged ones, not without the owner's word)
     if untagged:
         raise _refuse("untagged_acceptance", f"{len(settled)} settled here; nothing of {_listed(untagged)} is in this "
@@ -769,6 +786,8 @@ def recover_effects(runner, chat: ChatRef, by, *, abort: bool = False, endorsers
     if theirs:
         raise _refuse("accepted_elsewhere", f"{len(settled)} settled here; settle on the device that accepted it: "
                                             f"{_listed(theirs)}")
+    if unwritten is not None:
+        raise _refuse(unwritten.reason, f"{len(settled)} settled here; {unwritten}"[:200])
     return tuple(settled)
 
 
