@@ -40,7 +40,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 10/24 | ☐ | 049, 050, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 11/24 | ☐ | 049, 050, 051, 054, 055, 057, 059, 060, 062, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -600,9 +600,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-064"></a>
 ### 064 — Scenario Preparation
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/scenario-preparation.md)).
-- Evidence: obstacles provide player-agency contracts and authored scene obstacles.
-- Scope / gap: No grounded noncanonical situation-preparation generator producing reviewed stakes/directions.
+- [x] Scheduled first-useful slice ([requirements](sprints/scenario-preparation.md)).
+- Evidence: [`preparation/generate.py`](../../backend/src/grimoire/preparation/generate.py) and [`test_preparation_generation.py`](../../backend/tests/test_preparation_generation.py) generate one scene through the real provider adapter (scripted transport): a metered, approved `planning` call grounded in secret, goal, calendar and choice evidence returns premise, cast, location, questions, clues, tensions, stakes and two directions. The reviewed meeting goes stale when the player decides to leave town; a new request after that choice prepares a different, roadside draft from the updated evidence, and the unplayed meeting never enters evidence (no writer exists). [`preparation/session.py`](../../backend/src/grimoire/preparation/session.py) and [`test_preparation.py`](../../backend/tests/test_preparation.py) own review, replay, rejection and staleness. Invented evidence, uncast or foreign instances, display-name matching, one direction, extra canon fields, truncated, refused, unbudgeted and unparseable replies fail closed.
+- Scope / gap: Headless first slice. Callers assemble the evidence snapshot; no store reader, app service or UI (115) wires it. In-memory session only; no linked scenario sets, multi-session kits or durable notes. Credible stakes, open agency and respect for the latest choice are director review, not automatic checks (grounding is checked by evidence ID); one call per explicit request with no aggregate budget cap; no live-model quality or cost was measured. See [contract](../PREPARATION.md).
 
 <a id="slice-065"></a>
 ### 065 — Scene Workspace

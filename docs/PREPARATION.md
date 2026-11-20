@@ -32,10 +32,42 @@ leave no request result, and retry may invoke the local proposer again. Session
 operations serialize; callbacks must not reenter. State is in-memory and scoped
 to one adapter lifetime, with no persistence or cross-process retry guarantee.
 
+## Provider-backed generation
+
+`PreparationGenerator(adapter, routes, handle, approvals=..., policy=...)` is a
+`PreparationSession` proposer over the configured provider adapter (013). Each
+explicit `prepare` that is not a replay plans one optional `planning` call for
+the scene (no actor) under the caller's `InferencePolicy`; a policy without a
+`planning` cap refuses `not_budgeted` and sends nothing. The call runs on an
+untrusted worker handle with per-attempt approval, so a denied approval sends
+nothing. The cap bounds calls per explicit request; there is no aggregate cap
+across requests, and every retry spends another approved call. A snapshot with
+no evidence or no location is refused before planning. `meters` keeps every
+planned call's booked attempts, failures included. The proposer runs under the
+session lock; an optional `CancelToken` can be passed when calling it directly.
+
+`preparation_messages` puts fixed instructions in the system message and the
+brief, evidence (id, kind, text), missing categories and offered cast/location
+references in one JSON data message; campaign text is never instructions. The
+reply must be exactly one JSON object (optionally one fenced json block).
+`parse_draft` rebuilds it into a `Draft` only from instance references copied
+exactly from the offered lists and evidence IDs from the same snapshot. Display
+names, other campaigns' references, extra fields, missing sections, fewer than
+two distinct directions, ungrounded notes, invalid or non-UTF-8 text and
+truncated, refused or unparseable replies all refuse the whole reply with a
+`PreparationError` code that retains no reply text. A refused generation leaves
+no proposal. Grounding is checked by evidence ID only: whether a draft actually
+respects the latest choice is the director's `grounded` review, aided by the
+prompt instruction, not an automatic check.
+
+The prompt carries director-only secrets to the configured provider; callers
+own that routing decision. Tests use a scripted transport only. No live-model
+quality, credibility or cost has been measured.
+
 This is a trusted director-only library seam, not an authentication boundary.
 115 must authorize callers, assemble current evidence and protect all output from
 actor-facing disclosure. 113's campaign UI is untouched. Existing obstacles remain
 owned by obstacles/obstaclestore: preparation never changes their facts, costs,
-attempts or outcomes. Live inference requires a separately authorized, budgeted
-provider adapter; none is included or called. Linked scenario sets, multi-session
+attempts or outcomes. Live inference goes only through the generator above;
+no app service or UI wires it yet. Linked scenario sets, multi-session
 kits, durable notes, obstacle conversion and UI integration remain later work.
