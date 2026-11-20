@@ -40,8 +40,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from grimoire.core import (
-    CampaignActor, CharacterDefinition, ControlAssignment, DefinitionIndex, InstanceRef, Knowledge,
-    SourceDescriptor, SourceRef, actor_knowledge,
+    CampaignActor,
+    CharacterDefinition,
+    ControlAssignment,
+    DefinitionIndex,
+    InstanceRef,
+    Knowledge,
+    SourceDescriptor,
+    SourceRef,
+    actor_knowledge,
 )
 from grimoire.core.authority import DIRECTOR
 from grimoire.core.inference import InferencePolicy, InferenceStage, TurnUsageLedger
@@ -49,25 +56,50 @@ from grimoire.core.model import ActorView
 from grimoire.evals.format import BenchmarkFormatError, Scenario
 from grimoire.evals.format2 import FORMAT_V2, RunV2, parse_run_v2
 from grimoire.evals.gate2 import compare_v2
-from grimoire.evals.loader import benchmark_file, evidence_digest, load_json, load_scenario
+from grimoire.evals.loader import (
+    benchmark_file,
+    evidence_digest,
+    load_json,
+    load_scenario,
+)
 from grimoire.evals.policy import GatePolicy
 from grimoire.evals.report import render_v2
 from grimoire.evals.runtime_record import record_runtime_run
 from grimoire.evals.v021 import verify_evidence
-from grimoire.generation import GenerationError, HeardLine, npc_brief, plan_generation_turn
+from grimoire.generation import (
+    GenerationError,
+    HeardLine,
+    npc_brief,
+    plan_generation_turn,
+)
 from grimoire.generation.imported import VoiceTexts, derive_profile
 from grimoire.providers import (
-    EnvironmentCredentials, ProviderEndpoint, ProviderRegistry, RouteChoice, StaticCredentials,
+    EnvironmentCredentials,
+    ProviderEndpoint,
+    ProviderRegistry,
+    RouteChoice,
+    StaticCredentials,
 )
 from grimoire.providers.adapter import ProviderAdapter
+from grimoire.providers.cancel import CancelToken
+from grimoire.providers.config import Secret, Timeouts
+from grimoire.providers.errors import TransportError
 from grimoire.providers.meter import TurnMeter
-from grimoire.providers.transport import HttpTransport
+from grimoire.providers.transport import Connection, HttpTransport, Response
 from grimoire.runtime import DEFAULT_MAX_OUTPUT_TOKENS, GenerationRuntime
 from grimoire.runtime.record import recorded_turn
 from grimoire.security import Authorizer, Grant, Permission, ResourcePath
-from grimoire.voice import SecretFact, VoiceCatalog, resolve_voice
+from grimoire.voice import ResolvedVoice, SecretFact, VoiceCatalog, resolve_voice
 
-from .v021 import CaptureFailed, CaptureRefused, _Parser, _write, check_key_env, check_out_dir, forbidden_roots
+from .v021 import (
+    CaptureFailed,
+    CaptureRefused,
+    _Parser,
+    _write,
+    check_key_env,
+    check_out_dir,
+    forbidden_roots,
+)
 
 #: Where V2 sends each baseline provider's calls: OpenAI-compatible chat completions only.
 ENDPOINTS = {"openrouter": "https://openrouter.ai/api/v1", "anthropic": "https://api.anthropic.com/v1"}
@@ -162,7 +194,7 @@ def _setup(name: str, scenario: Scenario) -> dict:
 @dataclass(frozen=True)
 class _Cast:
     controls: tuple[ControlAssignment, ...]
-    voices: Mapping[str, object]
+    voices: Mapping[str, ResolvedVoice]
     views: Mapping[str, tuple[InstanceRef, str, str]]  # actor id: (ref, name, card description)
     names: Mapping[InstanceRef, str]
     present: tuple[str, ...]
@@ -212,18 +244,91 @@ def _brief(cast: _Cast, scenario: Scenario, actor_id: str, turn: int, heard: Seq
                      names=dict(cast.names))
 
 
-def _dry_steps(setup: Mapping, scenario: Scenario, planning: bool) -> list:
-    from grimoire.testing.providers import Reply  # synthetic only: never on the live path
+class _DryRunResponse:
+    """One scripted 200 SSE answer, read line by line as the adapter reads a real stream."""
 
+    def __init__(self, lines: Sequence[bytes], cancel: CancelToken) -> None:
+        self.status = 200
+        self.headers: Mapping[str, str] = {"content-type": "text/event-stream"}
+        self._lines, self._index, self._cancel = list(lines), 0, cancel
+
+    def read_line(self, max_bytes: int, timeout: float) -> bytes:
+        if self._cancel.cancelled or self._index >= len(self._lines):
+            return b""  # a cancelled or finished stream reads as closed
+        line = self._lines[self._index]
+        self._index += 1
+        if len(line) > max_bytes:
+            raise TransportError("bad_response", "read")
+        return line
+
+    def error_body(self, limit: int) -> bytes:
+        rest, self._index = b"".join(self._lines[self._index:]), len(self._lines)
+        return rest[:limit]
+
+
+class _DryRunConnection:
+    peer_loopback = False
+
+    def __init__(self, lines: Sequence[bytes], cancel: CancelToken) -> None:
+        self._lines, self._cancel = lines, cancel
+
+    def send(self, body: bytes, headers: Mapping[str, str], key: Secret | None) -> Response:
+        return _DryRunResponse(self._lines, self._cancel)
+
+    def close(self) -> None:
+        pass
+
+
+class _DryRunTransport:
+    """Answers each ``connect`` with the next scripted reply; nothing leaves the process.
+
+    The product's own small fake, not the test harness's (which product code may not import): only
+    whole successful streams, one per planned call, in the order the runtime issues them.
+    """
+
+    def __init__(self, replies: Sequence[tuple[str, Mapping]]) -> None:
+        self._replies = list(replies)
+
+    def connect(self, url: str, timeouts: Timeouts, cancel: CancelToken) -> Connection:
+        if not self._replies:
+            raise CaptureFailed("the dry run asked for more calls than the scenario scripts")
+        text, usage = self._replies.pop(0)
+        return _DryRunConnection(_sse(text, usage), cancel)
+
+
+def _sse(text: str, usage: Mapping, model: str = "dry-run-model") -> list[bytes]:
+    def data(obj: object) -> bytes:
+        return b"data: " + json.dumps(obj).encode() + b"\n"
+    return [data({"model": model, "choices": [{"delta": {"content": text}, "finish_reason": None}]}),
+            data({"model": model, "choices": [{"delta": {}, "finish_reason": "stop"}]}),
+            data({"model": model, "choices": [], "usage": dict(usage)}),
+            b"data: [DONE]\n"]
+
+
+class _DryRunClock:
+    """A deterministic clock and wait, so a dry run's synthetic timings never vary."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        self.now += 0.01
+        return self.now
+
+    def wait(self, token: CancelToken, seconds: float) -> bool:
+        self.now += seconds
+        return token.cancelled
+
+
+def _dry_steps(setup: Mapping, scenario: Scenario, planning: bool) -> list[tuple[str, Mapping]]:
     replies = setup["dry_run"]["replies"]
-    steps = []
+    steps: list[tuple[str, Mapping]] = []
     for script in scenario.script:
         if planning:
-            steps += [Reply(deltas=(DRY_RUN_SUGGESTION,), usage=dict(DRY_RUN_SUGGESTION_USAGE))
-                      for _ in script.speakers]
+            steps += [(DRY_RUN_SUGGESTION, dict(DRY_RUN_SUGGESTION_USAGE)) for _ in script.speakers]
         for actor_id in script.speakers:
             reply = replies[str(script.turn)][actor_id]
-            steps.append(Reply(deltas=(reply["text"],), usage={
+            steps.append((reply["text"], {
                 "prompt_tokens": reply["prompt_tokens"], "completion_tokens": reply["completion_tokens"],
                 "prompt_tokens_details": {"cached_tokens": reply.get("cache_read_tokens", 0)}}))
     return steps
@@ -236,16 +341,15 @@ def _runtime(options: CompareOptions, baseline: Baseline, setup: Mapping, scenar
                                ResourcePath(("providers",)), OWNER))
     handle = authorizer.handle_for(PRINCIPAL, trusted=True)
     if options.mode == "live":
+        assert options.api_key_env is not None  # run_compare refuses a live run without it
         endpoint = ProviderEndpoint(baseline.provider, ENDPOINTS[baseline.provider])
         credentials = EnvironmentCredentials({baseline.provider: options.api_key_env})
         adapter = ProviderAdapter(ProviderRegistry([endpoint]), credentials, authorizer, HttpTransport())
     else:
-        from grimoire.testing.providers import ScriptedClock, ScriptedTransport
-
         endpoint = ProviderEndpoint(baseline.provider, DRY_RUN_ENDPOINT)
-        clock = ScriptedClock()
+        clock = _DryRunClock()
         adapter = ProviderAdapter(ProviderRegistry([endpoint]), StaticCredentials({baseline.provider: "dry-run"}),
-                                  authorizer, ScriptedTransport(_dry_steps(setup, scenario, planning)),
+                                  authorizer, _DryRunTransport(_dry_steps(setup, scenario, planning)),
                                   clock=clock, wait=clock.wait)
     return GenerationRuntime(adapter, (RouteChoice(baseline.provider, baseline.model),), handle,
                              max_output_tokens=baseline.sent_max_tokens)
@@ -316,9 +420,9 @@ def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup:
 
 def _report(options: CompareOptions, baseline: Baseline, scenario: Scenario, runs: Mapping[str, dict]) -> str:
     evidence = verify_evidence(baseline.run, baseline.bundle, evidence_digest(baseline.bundle), scenario)
-    parts = [f"V2 against the 0.2.1 capture: {options.mode}, provider {baseline.provider}, "
-             f"model {baseline.model}, V2 max_tokens={baseline.sent_max_tokens}, "
-             f"baseline evidence sha256 {baseline.run.source.evidence_sha256}"]
+    parts = [(f"V2 against the 0.2.1 capture: {options.mode}, provider {baseline.provider}, "
+              f"model {baseline.model}, V2 max_tokens={baseline.sent_max_tokens}, "
+              f"baseline evidence sha256 {baseline.run.source.evidence_sha256}")]
     if options.mode == "dry_run":
         parts.append("Dry run: scripted replies and synthetic numbers; nothing was sent.")
     if baseline.max_tokens is None:

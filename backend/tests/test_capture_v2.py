@@ -14,7 +14,12 @@ import pytest
 from provider_servers import base_url, sse_lines, sse_server, stream
 
 from grimoire.capture import v2
-from grimoire.evals.loader import benchmark_file, evidence_digest, load_json, load_scenario
+from grimoire.evals.loader import (
+    benchmark_file,
+    evidence_digest,
+    load_json,
+    load_scenario,
+)
 from grimoire.evals.v021 import convert
 
 FIXTURES = Path(__file__).parent / "fixtures" / "v021"
