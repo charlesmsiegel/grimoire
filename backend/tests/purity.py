@@ -72,7 +72,7 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 #: grimoire packages that are adapters or test infrastructure, not pure.
 #: Calendar arithmetic (055) is deterministic but adapts datetime and third-party pyluach,
 #: so calendars is outside this dependency-free pure boundary; calendarstore also performs I/O.
-ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.archaeologystore", "grimoire.calendars", "grimoire.calendarstore", "grimoire.calibration", "grimoire.campaignapi", "grimoire.capture", "grimoire.cardstore", "grimoire.catalogs", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.companions", "grimoire.contextstore", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
+ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.archaeologystore", "grimoire.calendars", "grimoire.calendarstore", "grimoire.calibration", "grimoire.campaignapi", "grimoire.capture", "grimoire.cardstore", "grimoire.catalogs", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.companions", "grimoire.contextstore", "grimoire.continuitystore", "grimoire.continuitywire", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       # Inference orchestration owns runtime/provider calls and replay locks.
                       "grimoire.actor_inference", "grimoire.ensemble",
@@ -111,6 +111,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.core", ("grimoire.core",), never_import=("grimoire.core.inference",)),
     PurePackage("grimoire.core.inference", ("grimoire.core.inference",)),
     PurePackage("grimoire.intent", ("grimoire.intent",)),
+    # Pure continuity graph and provenance values; native JSON/envelope codecs live in continuitywire.
+    PurePackage("grimoire.continuity", ("grimoire.continuity", "grimoire.core", "grimoire.scene"),
+                never_import=("grimoire.core.inference",)),
     # World-optional chats (107): values, codec and navigation; the store-backed service is an adapter.
     PurePackage("grimoire.chats", ("grimoire.chats", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Reviewed source rebase and chat-canon definitions (042): field review only; the store-backed service is an adapter.

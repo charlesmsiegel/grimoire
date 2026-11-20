@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Literal
 
 from grimoire.store.journal import DELETABLE_KINDS
@@ -34,12 +35,12 @@ Action = Literal["agreed", "copy", "conflict", "delete"]
 #: ``bookmark`` is a person's bookmark on a chat's turn (one file each, mutable, ordinary rows; it names its chat).
 SYNCED_KINDS = frozenset({"definition", "manifest", "instance", "scope", "chat", "relation", "knowledge",
                           "blob", "image", "placement", "transcript", "turn", "accepted", "wrapup", "holdings",
-                          "bookmark"})
+                          "bookmark", "continuity"})
 #: 018's art: own units, never source-coarse, never grouped with a definition. A blob is binary and
 #: content-addressed (listed by name and size, hashed only when copied or first seen).
 ASSET_KINDS = frozenset({"blob", "image", "placement"})
 #: Campaign-local kinds: independent of sources and of each other at commit time.
-CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript", "turn", "bookmark"})
+CAMPAIGN_LOCAL = frozenset({"instance", "scope", "chat", "relation", "knowledge", "transcript", "turn", "bookmark", "continuity"})
 #: 028's ledger: 021's accepted events and wrap-ups and 023's holder files, which their own stores commit
 #: several at a time. They are never decided file by file: a campaign's ledger files (with its 017
 #: relations, see ``HOLDS_RELATIONS``) are one unit that ``grimoire.ledgermerge`` merges (``units``).
@@ -55,8 +56,8 @@ HELD_BACK_KINDS: frozenset[str] = frozenset()
 HOLDS_RELATIONS = "accepted"
 #: Create-only kinds: copied only onto an absent file, and a changed one is a conflict, never a copy.
 #: ``knowledge`` is 020's events, evidence and knowledge-log batches; ``image`` and ``blob`` are 018's;
-#: ``transcript`` is 036's append-only transcript pages.
-IMMUTABLE_KINDS = frozenset({"definition", "knowledge", "image", "blob", "transcript"})
+#: ``transcript`` is 036's append-only transcript pages; ``continuity`` archives immutable review evidence.
+IMMUTABLE_KINDS = frozenset({"definition", "knowledge", "image", "blob", "transcript", "continuity"})
 #: Kinds whose one-sided deletion of the agreed version propagates (028, row 9): the store's own
 #: deletable kinds. 020 knowledge records and 036 transcript pages are create-only with no delete (a
 #: missing one is damage), 018 image objects are create-only and blobs are content-addressed: for
@@ -124,3 +125,19 @@ class Decision:
     def mirrored(self) -> Decision:
         flip = {"left": "right", "right": "left", None: None}
         return Decision(self.action, self.code, flip[self.origin])  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True)
+class Conflict:
+    path: str
+    code: str
+    detail: str = ""
+    #: device -> whether it now holds the other device's version under ``.conflicts``
+    kept: Mapping[str, bool] = field(default_factory=dict)
+    #: devices that dismissed the other device's current version (``dismiss``): not kept for them again
+    #: while the conflict stands on the same archive base
+    dismissed: tuple[str, ...] = ()
+    #: ``merge_review`` (028): every reason the campaign's ledger merge stopped (``ledgermerge.ReviewItem``)
+    review: tuple = ()
+    #: ``merge_review``: what the review was made on (``units.token``); ``resolve_ledger`` must name it
+    token: str = ""

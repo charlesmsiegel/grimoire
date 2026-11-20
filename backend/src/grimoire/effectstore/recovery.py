@@ -34,6 +34,7 @@ from grimoire.holdingstore import HoldingsChange
 from grimoire.store import ScopeRecord, StaleWrite
 from grimoire.store.layout import address_parts
 
+from .continuity import capture_scene_sources
 from . import parts
 from .errors import InvalidEffect
 from .errors import refused as _refused
@@ -228,8 +229,9 @@ class EffectRecovery:
             holdings_change, accepted, written = self._adopt_holdings(proposal, snap, orphan, landed, entries,
                                                                       holders, authorization.holdings_domains)
             ordinal = 1 + max((e.ordinal for e in snap.events.values()), default=0)
+            sources = capture_scene_sources(lib.store, proposal.chat)
             event = lib._event(ref, proposal, authorization, records, receipts, accepted, ordinal,
-                               causal_after(snap, tag))
+                               causal_after(snap, tag), sources)
             for number in landed:  # the very check continuity makes, on the changes this event now claims
                 why = receipt_failure(event, number, snap.graph.index)
                 if why is not None:
@@ -244,13 +246,15 @@ class EffectRecovery:
                                             "not_completable", (str(number),))
                     agents.update({end: lib._etag(end) for end in (relation.subject, relation.object)})
             pins.update({holder: lib._holder_pin(holder) for holder in sorted(entries.keys() - written, key=str)})
-            return EffectChange(
+            change = EffectChange(
                 lib, ref, ((record, None),), tuple(changes), campaign, snap.state, proposal.chat,
                 checks_relations=True, agent_etags=agents, actors=actors,
                 holdings_changes=() if holdings_change is None else (holdings_change,), holder_pins=pins,
                 relation_pins={relation.ref: snap.graph.etags[relation.ref]
                                for relation, _ in sorted(landed.values(), key=lambda pair: str(pair[0].ref))},
-                rests_on=_unchanged_tokens(lib, campaign, orphan, tokens), device=tag)
+                rests_on=_unchanged_tokens(lib, campaign, orphan, tokens), device=tag, scene_sources=sources)
+            change.preview()  # native bounded JSON/envelope preflight
+            return change
 
     def _landed_entries(self, proposal: EffectProposal, recorded: set[str]) -> tuple[dict, dict]:
         """Each touched holder logging this effect's derived op id under an X with no event file:

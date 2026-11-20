@@ -41,6 +41,7 @@ _TRANSCRIPT_REF_RE = re.compile(
     rf"campaign:(?P<campaign_id>{_SEGMENT})#transcript/(?P<chat_id>{_SEGMENT})/(?P<seq>[0-9]{{10}})"
 )
 _TURN_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#turn/(?P<turn_id>{_SEGMENT})")
+_CONTINUITY_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#continuity/(?P<record_id>{_SEGMENT})")
 _BOOKMARK_REF_RE = re.compile(rf"campaign:(?P<campaign_id>{_SEGMENT})#bookmark/(?P<bookmark_id>{_SEGMENT})")
 _HOLDINGS_REF_RE = re.compile(
     rf"campaign:(?P<campaign_id>{_SEGMENT})/(?P<kind>{_SEGMENT})/(?P<instance_id>{_SEGMENT})#holdings"
@@ -503,6 +504,34 @@ class BookmarkRef:
         match = _BOOKMARK_REF_RE.fullmatch(_require_text(text))
         if match is None:
             raise ValueError(f"not a bookmark reference: {text!r}")
+        return cls(**match.groupdict())
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuityRef:
+    """Immutable campaign continuity declaration or retained historical fork; never actor knowledge."""
+
+    campaign_id: str
+    record_id: str
+
+    def __post_init__(self) -> None:
+        validate_segment(self.campaign_id, "campaign_id")
+        validate_segment(self.record_id, "record_id")
+        if len(str(self)) > TEXT_MAX:
+            raise ValueError(f"reference text is longer than {TEXT_MAX} characters")
+
+    def __str__(self) -> str:
+        return f"campaign:{self.campaign_id}#continuity/{self.record_id}"
+
+    @property
+    def scope(self) -> ScopeRef:
+        return ScopeRef(self.campaign_id)
+
+    @classmethod
+    def parse(cls, text: object) -> ContinuityRef:
+        match = _CONTINUITY_REF_RE.fullmatch(_require_text(text))
+        if match is None:
+            raise ValueError(f"not a continuity reference: {text!r}")
         return cls(**match.groupdict())
 
 
