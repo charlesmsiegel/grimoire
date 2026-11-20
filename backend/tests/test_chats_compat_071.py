@@ -8,6 +8,7 @@ supported on-disk compatibility fixture: never regenerate it to get this test gr
 on a copy, so the fixture itself is never written.
 """
 
+import enum
 import json
 import shutil
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from grimoire.chatstore import ChatLibrary
-from grimoire.chats import CAMPAIGN_CONTINUITY, NOT_WITNESSED, Launch, chat_to_payload
+from grimoire.chats import CAMPAIGN_CONTINUITY, NOT_WITNESSED, ChatModelError, Launch, chat_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef
 from grimoire.effective import chat_snapshot
 from grimoire.store import LibraryStore
@@ -89,3 +90,21 @@ def test_stored_chats_take_new_edits_under_the_same_rules(root):
         chats = chat_library(store)
         for chat in (FIRST, SECOND, CAMP, third.chat):
             assert chats.open_chat(chat).broken == ()
+
+
+class Role(str, enum.Enum):
+    ACTOR = "actor"
+
+
+def test_a_role_given_as_text_subclass_still_detaches_only_its_exact_instance(root):
+    """A caller's ``str`` enum equal to ``actor`` is the actor role, as it was before 071: without the exact
+    instance it refuses, rather than detaching whichever same-species goblin comes first."""
+    with LibraryStore.open(root) as store:
+        chats = chat_library(store)
+        before = snapshot(root)
+        with pytest.raises(ChatModelError) as refused:
+            chats.detach_source(CAMP, SPECIES.ref, Role.ACTOR, expected=chats.open_chat(CAMP).etag)
+        assert refused.value.reason == "actor_required"
+        assert snapshot(root) == before
+        chats.detach_source(CAMP, SPECIES.ref, Role.ACTOR, actor=SNIK, expected=chats.open_chat(CAMP).etag).commit()
+        assert chats.open_chat(CAMP).record.active_bindings("actor") == ()

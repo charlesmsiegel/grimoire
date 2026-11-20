@@ -76,8 +76,10 @@ ROLES: Mapping[str, RoleRule] = MappingProxyType({
 
 
 def role_rule(role: object) -> RoleRule | None:
-    """The rule for ``role``, or ``None`` for anything that is not a known role name."""
-    return ROLES.get(role) if type(role) is str else None
+    """The rule for ``role``, or ``None`` for anything that is not a known role name. Lookup is by text
+    equality, so a ``str`` subclass equal to a role name finds its rule; the records that store a role
+    (``SourceBinding``, ``RosterEntry``) still require an exact ``str``."""
+    return ROLES.get(role) if isinstance(role, str) else None
 
 
 #: Compatibility views of ``ROLES`` as exported before 071; internal code asks ``role_rule``.
@@ -189,7 +191,10 @@ class Launch:
             raise _fail("only a premise launch carries premise text", "launch_kind")
         if not isinstance(self.ref, SourceRef):
             raise _fail(f"a {self.kind} launch needs a source reference", "launch_kind")
-        kind = role_rule(self.kind).definition_kind  # type: ignore[union-attr]  # every launch kind is a role
+        rule = role_rule(self.kind)
+        if rule is None:  # a launch kind names a role; a table without it cannot launch one
+            raise _fail(f"unknown launch kind {self.kind!r}", "launch_kind")
+        kind = rule.definition_kind
         if self.ref.kind != kind:
             raise _fail(f"a {self.kind} launch needs a {kind} definition, not {self.ref}", "role_kind")
 
@@ -211,7 +216,7 @@ class SourceBinding:
         if not isinstance(self.ref, SourceRef):
             raise _fail("a binding needs a SourceRef")
         rule = role_rule(self.role)
-        if rule is None:
+        if type(self.role) is not str or rule is None:
             raise _fail(f"unknown role {self.role!r}", "role_kind")
         if not rule.binds(self.ref):
             raise _fail(f"role {self.role} binds {rule.definition_kind} definitions, not {self.ref}", "role_kind")
@@ -264,7 +269,7 @@ class RosterEntry:
         rule = role_rule(self.role)
         if not isinstance(self.actor, InstanceRef):
             raise _fail("a roster actor is an instance of the permitted kind")
-        if rule is None or not rule.has_actor:  # the role first, as a binding checks it (071)
+        if type(self.role) is not str or rule is None or not rule.has_actor:  # the role first, as a binding does
             actor_roles = sorted(role for role, each in ROLES.items() if each.has_actor)
             raise _fail(f"a roster entry's role is one of {actor_roles}", "role_kind")
         if not rule.admits(self.actor):

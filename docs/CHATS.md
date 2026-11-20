@@ -49,7 +49,7 @@ There is **no app yet**. Chats are played headlessly by Sprint 035's runner, whi
 | `lorebook` | `lorebook` | no |
 | `actor` | any, matching the native instance's qualified source | no: explicitly reuses an existing instance of any kind |
 
-This table is `grimoire.chats.ROLES`, one `RoleRule` per role, and it is the only place a role is decided ([role rules, 071](#role-rules-one-owner-071)).
+This table is `grimoire.chats.ROLES`, one `RoleRule` per role, and it is the only place a role's definition kind and actor mode are decided ([role rules, 071](#role-rules-one-owner-071)). Behavior particular to one role (a single persona, a scenario's implied lorebook) stays with that role's code.
 
 ### Launch
 
@@ -218,7 +218,7 @@ The additive role uses the existing chat payload format. Older builds may report
 - `PER_SOURCE`: one actor per bound source, keyed by that source. The chat creates it as an instance of the **definition's own kind**, or reuses an instance of that kind derived from the source (`character`, `persona`).
 - `EXISTING`: an existing instance of any kind, keyed by the instance itself, never created or re-keyed here (`actor`, 033). Only this mode binds a source of any kind.
 
-`role_rule(role)` reads `ROLES` at call time. `SourceBinding`, `RosterEntry`, `Launch`, `ChatRecord.detach`, and `ChatLibrary`'s checks before it plans a write (`_check_role`, `_prepare`, `_check_reuse`) all ask the rule. `ChatLibrary` stays the one writer of a chat and the actors it creates, in one commit. `ROLE_KINDS` and `ACTOR_ROLES` remain exported as views of the table as it was at import; nothing in the package reads them.
+`role_rule(role)` reads `ROLES` at call time and looks a role up by its text, so a `str` subclass equal to a role name finds that role, as the equality checks before 071 did; a stored binding or roster entry still needs an exact `str`. A launch kind with no rule is refused (`launch_kind`). `SourceBinding`, `RosterEntry`, `Launch`, `ChatRecord.detach`, and `ChatLibrary`'s checks before it plans a write (`_check_role`, `_prepare`, `_check_reuse`) all ask the rule. `ChatLibrary` stays the one writer of a chat and the actors it creates, in one commit. `ROLE_KINDS` and `ACTOR_ROLES` remain exported as views of the table as it was at import; nothing in the package reads them.
 
 **What was removed.** Before 071 the same decision was spread over six sites in two modules: the definition-kind map, a separate set of actor roles, two literal `"character"` instance-kind checks in the model (binding and roster), and a literal `"character"` in both the library's reuse check and its allocation of a new actor. The two tables looked authoritative and were not.
 
@@ -232,7 +232,10 @@ The additive role uses the existing chat payload format. Older builds may report
 
 `companion` is **not shipped**. The committed test registers it with `monkeypatch` and also shows that a build without it refuses such a chat (`role_kind`) rather than reinterpreting the binding. The counts measure edited decision sites and tested outcomes, not developer time.
 
-**Equivalence.** A differential dump of 882 outcomes (each role, including unknown and non-text roles, against each definition kind and actor shape, for bindings, roster entries, launches, detaches, `attach_source` and `start_chat` with reuse) was identical before and after, error text included, except for 12 roster entries that are invalid twice over: a role that has no actor, or an unknown role, together with an actor that is not a character. Those now fail on the role (`role_kind`) instead of on the actor kind (`invalid_field`), the order a binding already used. Only a hand-edited chat file can hold such an entry, and it is refused either way.
+**Equivalence.** A differential dump of 1,152 outcomes was identical before and after, error text included, with two exceptions. It covered each role (including unknown roles, non-text roles, `str` enum members equal to a role name and an unhashable list) against each definition kind and actor shape, for bindings, roster entries, launches, detaches, `attach_source` and `start_chat` with reuse. The exceptions, both still refusals:
+
+- 16 roster entries invalid twice over (a role that has no actor, an unknown role or a role that is not an exact `str`, together with an actor that is not a character) now fail on the role (`role_kind`) rather than the actor kind (`invalid_field`), the order a binding already used. Only a hand-edited chat file can hold such an entry.
+- 35 `attach_source` calls with an unhashable role, which raised `TypeError`, now raise `InvalidBinding` (`role_kind`).
 
 **Existing campaigns.** `fixtures/chats_071/library` is a synthetic library written by the pre-071 code: a character launch with a persona, a lorebook, a second character and a detached scenario; a second chat reusing that campaign's Mara; and two goblins under `actor`, one detached by instance. `test_chats_compat_071.py` reads each chat back without a broken binding, re-encodes it to the stored payload exactly, composes it, and makes new edits under the same rules, without rewriting a chat nobody edited. It passes on the code from before and after 071.
 

@@ -66,7 +66,7 @@ def test_a_new_role_creates_its_actor_of_the_definitions_kind_in_the_one_chat_co
         assert actor.kind == "creature" and actor.campaign_id == commit.scope.campaign_id
         # Every record that changed is one the chat library's change planned, in its one commit.
         new_records = {path for path in written(before, snapshot(root)) if path.endswith(".json")}
-        assert set(planned) <= new_records
+        assert new_records == set(planned)
         assert f"campaigns/{actor.campaign_id}/instances/creature/{actor.instance_id}.json" in planned
         record = chats.open_chat(commit.chat).record
         (binding,) = record.active_bindings("companion")
