@@ -44,7 +44,7 @@ These are **functional gates**, not dates. Import and phone play cannot be descr
 
 ## Implementation checkmarks
 
-Historical audit: [`b54b2bd8`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), **2026-11-20**, recorded **62 of 119 scheduled first-useful slices** and **4 of 12 scoped waves**. The bounded reconciliation at landed base [`0f7adcfb`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) recognizes **65 of 119 slices**, including 047, 050 and 112. The 049/054 proofs bring the current rows to **67 of 119 slices**, and 056's shared-bestiary proof with 064's scenario preparation to 69, and 061's local voice proof brings the current rows to **70 of 119 slices**; **4 of 12 scoped waves** remain complete. Historical verification results remain pinned to their original snapshots.
+Historical audit: [`b54b2bd8`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), **2026-11-20**, recorded **62 of 119 scheduled first-useful slices** and **4 of 12 scoped waves**. The bounded reconciliation at landed base [`0f7adcfb`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) recognizes **65 of 119 slices**, including 047, 050 and 112. The 049/054 proofs bring the current rows to **67 of 119 slices**, and 056's shared-bestiary proof with 064's scenario preparation to 69, and 061's local voice proof with 063's rumor proof to **71 of 119 slices**; **4 of 12 scoped waves** remain complete. Historical verification results remain pinned to their original snapshots.
 
 **☑** means the scheduled first-useful implementation and its required first-proof additions were found in code and executable tests. It does **not** mean all subsequent milestones or the moonshot are complete, nor does it certify live providers or physical devices. **☐** means a required implementation or proving scenario is missing or not established; it does not mean no work exists. Existing functionality can satisfy a slice even when delivered by an earlier sprint.
 
@@ -275,7 +275,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 ### Wave 8 — Reliable long-term use and independent enhancements
 
-- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (13/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
+- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (14/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
