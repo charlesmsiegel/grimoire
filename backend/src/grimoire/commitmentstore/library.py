@@ -29,7 +29,7 @@ from grimoire.commitments import (
     DeadlineState, Offer, Transition, Void, fold, fold_one, ledger_from_payload, ledger_to_payload, transition_fingerprint,
     void_fingerprint,
 )
-from grimoire.commitments.model import cites_of
+from grimoire.commitments.model import STATUSES, cites_of, text
 from grimoire.core import DIRECTOR
 from grimoire.core.authority import CONTRIBUTION_DOMAINS, AuthorityError, PlayerContribution, controller_of
 from grimoire.core.identity import ScopeRef
@@ -48,6 +48,12 @@ from .support import Support, read_support
 
 def _clock(moment: ClockMoment | None) -> ClockTime | None:
     return None if moment is None else ClockTime(moment.fixed_day, moment.minute)
+
+
+def _values(value: object, label: str) -> tuple:
+    if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Iterable):
+        raise CommitmentError(f"{label} must be a collection")
+    return tuple(value)
 
 
 def deadlines_of(calendar: CalendarState | None) -> dict[str, DeadlineState]:
@@ -112,7 +118,7 @@ class CommitmentChange:
         library, op = self.library, self.operation
         with library.store.lock:
             # Recheck even a no-write retry: a conflict or a replaced history may have arrived since planning.
-            _, record, ledger, calendar = library._read_scope(self.scope)
+            current, record, ledger, calendar = library._read_scope(self.scope)
             old = None if ledger is None else ledger.operation(op.operation_id)
             if old is not None:
                 if old.request() != op.request():
@@ -120,6 +126,8 @@ class CommitmentChange:
                 return library.read(self.scope, requested_by=DIRECTOR)
             if self.already_applied:
                 raise CommitmentError("operation no longer belongs to the retained history", "history_changed")
+            # A concurrent write is a stale plan, never a retcon: report it as one before rechecking support.
+            library._fresh(self.scope, current, self._expected)
             # The scope's compare-and-swap guards the ledger; the citations live elsewhere, so a retcon that
             # landed after planning must still refuse this step rather than record it on undone fiction.
             planned = CommitmentLedger(self.scope.campaign_id, (ledger.operations if ledger else ()) + (op,))
@@ -172,7 +180,8 @@ class CommitmentLibrary:
 
     def _support(self, ledger: CommitmentLedger | None, extra: Iterable[str] = ()) -> Support:
         cited = {event_id for op in (ledger.operations if ledger else ()) for event_id in getattr(op, "cites", ())}
-        return read_support(self.store, ledger.campaign_id if ledger else "", cited | set(extra)) \
+        return read_support(self.store, ledger.campaign_id if ledger else "", cited | set(extra),
+                            requested_by=DIRECTOR) \
             if ledger is not None else Support({}, {}, ())
 
     def read(self, scope: ScopeRef, *, requested_by: str, as_of: int | None = None) -> CommitmentView:
@@ -196,12 +205,14 @@ class CommitmentLibrary:
             raise CommitmentError("offer takes a Commitment")
         if due is not None and type(due) is not Due:
             raise CommitmentError("due must be a Due or None")
-        cites = tuple(cites)
+        cites = _values(cites, "cites")
         with self.store.lock:
             etag, record, ledger, calendar = self._read_scope(scope)
             probe = Offer(operation_id, commitment, cites, Moment(0), schedules=due is not None)
             retry = self._retry(scope, ledger, operation_id, probe.request())
             if retry is not None:
+                if due is not None and not self._scheduled(calendar, operation_id, commitment, due):
+                    raise CommitmentError("operation id already belongs to a different deadline", "operation_mismatch")
                 return retry
             self._fresh(scope, etag, expected)
             if commitment.campaign_id != scope.campaign_id:
@@ -226,8 +237,12 @@ class CommitmentLibrary:
         A decision (``DECISIONS``) needs ``controls``, the campaign's current 003 control assignments, and,
         for every obligor a player controls, that player's contribution and endorsement.
         """
-        cites = cites_of(tuple(cites))
-        controls, contributions, endorsements = tuple(controls), tuple(contributions), tuple(endorsements)
+        cites = cites_of(_values(cites, "cites"))
+        if type(status) is not str or status not in STATUSES:
+            raise CommitmentError("unknown commitment status")
+        text(note, "step note", empty=True)
+        controls, contributions = _values(controls, "controls"), _values(contributions, "contributions")
+        endorsements = _values(endorsements, "endorsements")
         with self.store.lock:
             etag, record, ledger, calendar = self._read_scope(scope)
             probe = Transition(operation_id, commitment_id, status, cites, Moment(0), note) \
@@ -267,8 +282,10 @@ class CommitmentLibrary:
     def void(self, scope: ScopeRef, operation_id: str, target: str, *, reason: str, expected: str,
              endorsements: Iterable[Endorsement] = ()) -> CommitmentChange:
         """Withdraw an offer or step recorded in error. Every player who backed that step must endorse
-        ``void_fingerprint``. Voiding an offer withdraws the commitment; its deadline is reported orphaned."""
-        endorsements = tuple(endorsements)
+        ``void_fingerprint``. Voiding an offer withdraws the commitment, and with it every player decision
+        on it not already voided, so it needs those players' endorsements; its deadline is reported orphaned."""
+        text(reason, "void reason")
+        endorsements = _values(endorsements, "endorsements")
         with self.store.lock:
             etag, record, ledger, calendar = self._read_scope(scope)
             retry = self._retry(scope, ledger, operation_id, ("void", target, reason))
@@ -278,8 +295,8 @@ class CommitmentLibrary:
             found = None if ledger is None else ledger.operation(target)
             if found is None or isinstance(found, Void) or target in ledger.voids():  # type: ignore[union-attr]
                 raise CommitmentError("nothing voidable has that operation id", "invalid_void")
-            backers = () if isinstance(found, Offer) else found.authorship
-            needed = {a.actor_id: a.submitted_by for a in backers}
+            backers = ledger.backers(target)  # type: ignore[union-attr]
+            needed = {a.contribution_id: a.submitted_by for a in backers}
             fingerprint = void_fingerprint(scope.campaign_id, target, reason)
             given = {e.contribution_id: e for e in endorsements if type(e) is Endorsement}
             if len(given) != len(endorsements) or set(given) != {a.contribution_id for a in backers}:
@@ -288,7 +305,7 @@ class CommitmentLibrary:
             authorship = []
             for item in backers:
                 endorsement = given[item.contribution_id]
-                self._check_handle(endorsement, needed[item.actor_id], fingerprint)
+                self._check_handle(endorsement, needed[item.contribution_id], fingerprint)
                 authorship.append(Authorship(item.contribution_id, item.actor_id, item.submitted_by, item.kind,
                                              item.scene_id, item.turn_id, item.text, fingerprint))
             op = Void(operation_id, target, reason, tuple(authorship))
@@ -331,8 +348,22 @@ class CommitmentLibrary:
             raise CommitmentError("the calendar already has an operation with this id", "operation_mismatch")
         return after
 
+    def _scheduled(self, calendar: CalendarState | None, operation_id: str, commitment: Commitment,
+                   due: Due) -> bool:
+        """Whether this offer's own calendar receipt scheduled exactly ``due`` (a retry must repeat it)."""
+        receipt = None if calendar is None else calendar.receipt(f"commitment-{operation_id}")
+        if receipt is None or commitment.deadline_id is None:
+            return False
+        try:
+            wanted = Deadline(commitment.deadline_id, ClockMoment(calendar.calendar.parse(due.native_date),  # type: ignore[union-attr]
+                                                                  due.minute), due.label)
+        except (CalendarError, TypeError, ValueError):
+            return False
+        return receipt.operation == Schedule(f"commitment-{operation_id}", wanted)
+
     def _cited(self, campaign_id: str, ledger: CommitmentLedger | None, cites: tuple[str, ...]):
-        support = self._support(ledger, cites) if ledger is not None else read_support(self.store, campaign_id, cites)
+        support = self._support(ledger, cites) if ledger is not None else read_support(self.store, campaign_id, cites,
+                                                                                     requested_by=DIRECTOR)
         for event_id in cites:
             value = support.values[event_id]
             if value != "supported":

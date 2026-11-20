@@ -342,7 +342,9 @@ class Facts:
             raise _fail("duplicate_id")
         if any(state.commitment.campaign_id != campaign for state in commitments):
             raise _fail("campaign_mismatch")
-        if any(state.as_of != self.as_of for state in commitments):
+        if any(state.as_of != self.as_of or state.moment.sequence > self.as_of
+               or any(step.operation.at.sequence > self.as_of for step in (state.offer, *state.steps))
+               for state in commitments):
             raise _fail("stale_commitment")
         if any(choice.actor.campaign_id != campaign for choice in intentions):
             raise _fail("campaign_mismatch")

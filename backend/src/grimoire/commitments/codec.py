@@ -53,6 +53,8 @@ def _moment_to(moment: Moment) -> dict:
 
 def _moment_from(value: object) -> Moment:
     raw = _object(value, "sequence", "scene_id turn_id")
+    if any(raw.get(key, "") is None for key in ("scene_id", "turn_id")):  # absent, never null: one spelling
+        raise CommitmentError("a moment's scene or turn is omitted, never null")
     if type(raw["sequence"]) is not int:
         raise CommitmentError("a moment's sequence must be an integer")
     try:

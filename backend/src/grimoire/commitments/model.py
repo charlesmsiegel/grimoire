@@ -256,7 +256,7 @@ class Transition:
             raise CommitmentError(f"{self.status} is an adjudicated outcome: it has no backing", "unexpected_backing")
         if self.status in DECISIONS and not controls:
             raise CommitmentError(f"{self.status} is the obligors' decision: record their control", "no_controls")
-        if {a.actor_id: a.submitted_by for a in authorship} != players or any(
+        if len(authorship) != len(players) or {a.actor_id: a.submitted_by for a in authorship} != players or any(
                 (a.scene_id, a.turn_id) != (self.at.scene_id, self.at.turn_id) for a in authorship):
             raise CommitmentError("a decision needs exactly one backing per player-controlled obligor, "
                                   "for its own scene and turn", "pc_authorship")
@@ -282,7 +282,10 @@ class Void:
         text(self.reason, "void reason")
         if type(self.authorship) not in (tuple, list) or not all(type(a) is Authorship for a in self.authorship):
             raise CommitmentError("authorship must be Authorship values")
-        object.__setattr__(self, "authorship", tuple(sorted(self.authorship, key=lambda a: a.actor_id)))
+        if len({a.contribution_id for a in self.authorship}) != len(self.authorship):
+            raise CommitmentError("a void records each backing contribution once", "pc_authorship")
+        object.__setattr__(self, "authorship", tuple(sorted(self.authorship, key=lambda a: (a.actor_id,
+                                                                                           a.contribution_id))))
 
     def request(self) -> tuple:
         return ("void", self.target, self.reason)
@@ -309,6 +312,13 @@ def void_fingerprint(campaign_id: str, target: str, reason: str) -> str:
     return _digest("grimoire.commitments/void", campaign_id, target, reason)
 
 
+def _backers(operations: tuple, target: Offer | Transition, voided: set[str]) -> tuple[Authorship, ...]:
+    if isinstance(target, Transition):
+        return target.authorship
+    return tuple(a for op in operations if isinstance(op, Transition) and op.commitment_id == target.commitment_id
+                 and op.operation_id not in voided for a in op.authorship)
+
+
 @dataclass(frozen=True)
 class CommitmentLedger:
     """One campaign's ordered commitment operations. Structure only: legality depends on support (``fold``)."""
@@ -323,6 +333,7 @@ class CommitmentLedger:
         seen: dict[str, Operation] = {}
         offers: dict[str, Offer] = {}
         voided: set[str] = set()
+        contributions: set[str] = set()
         for op in self.operations:
             if op.operation_id in seen:
                 raise CommitmentError("an operation id appears twice", "duplicate_operation")
@@ -342,18 +353,31 @@ class CommitmentLedger:
                 pinned = transition_fingerprint(self.campaign_id, op.commitment_id, op.status, op.cites, op.note)
                 if any(a.fingerprint != pinned for a in op.authorship):
                     raise CommitmentError("a backing endorses another step", "pc_authorship")
+                # One contribution backs one step: an endorsement given before a void cannot be replayed.
+                used = {a.contribution_id for a in op.authorship}
+                if used & contributions:
+                    raise CommitmentError("a contribution already backed another step", "reused_contribution")
+                contributions |= used
             else:
                 target = seen.get(op.target)
                 if target is None or isinstance(target, Void) or op.target in voided:
                     raise CommitmentError("a void names no earlier offer or step, or one already voided",
                                           "invalid_void")
-                backers = () if isinstance(target, Offer) else target.authorship
+                backers = _backers(tuple(seen.values()), target, voided)
                 if {(a.contribution_id, a.actor_id, a.submitted_by) for a in op.authorship} != {
                         (a.contribution_id, a.actor_id, a.submitted_by) for a in backers} or any(
                         a.fingerprint != void_fingerprint(self.campaign_id, op.target, op.reason) for a in op.authorship):
                     raise CommitmentError("a void needs every player who backed the step", "pc_authorship")
                 voided.add(op.target)
             seen[op.operation_id] = op
+
+    def backers(self, target: str) -> tuple[Authorship, ...]:
+        """Whose consent voiding ``target`` needs now: its own backers, or for an offer, those of every step
+        of the commitment not already voided (withdrawing a commitment withdraws the players' decisions too)."""
+        found = self.operation(target)
+        if found is None or isinstance(found, Void):
+            return ()
+        return _backers(self.operations, found, set(self.voids()))
 
     def operation(self, operation_id: str) -> Operation | None:
         return next((op for op in self.operations if op.operation_id == operation_id), None)

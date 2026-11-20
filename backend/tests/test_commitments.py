@@ -27,8 +27,8 @@ def at(sequence: int, scene: str = "s1") -> Moment:
     return Moment(sequence, scene, f"t{sequence}")
 
 
-def backing(status: str, cites, *, turn: int = 2, note: str = "") -> Authorship:
-    return Authorship("c-wren", "wren", "human:ana", "commitment", "s1", f"t{turn}", "I will not take it.",
+def backing(status: str, cites, *, turn: int = 2, note: str = "", cid: str = "c-wren") -> Authorship:
+    return Authorship(cid, "wren", "human:ana", "commitment", "s1", f"t{turn}", "I will not take it.",
                       transition_fingerprint(C, "m-tower", status, cites, note))
 
 
@@ -40,7 +40,7 @@ def decide(status: str, op: str = "op-2", cites=("e-no",), sequence: int = 2, *,
     if not pc:
         return Transition(op, "m-tower", status, cites, at(sequence), controls=(("wren", DIRECTOR),))
     return Transition(op, "m-tower", status, cites, at(sequence), controls=(("wren", "human:ana"),),
-                      authorship=(backing(status, cites, turn=sequence),))
+                      authorship=(backing(status, cites, turn=sequence, cid="c-wren" if op == "op-2" else f"c-{op}"),))
 
 
 def outcome(status: str, op: str, cites, sequence: int, clock: ClockTime | None = None) -> Transition:
@@ -184,6 +184,38 @@ def test_a_void_withdraws_an_error_and_the_rest_refolds():
     assert fold_one(withdrawn, "m-tower", {}, {}).status == "voided"
 
 
+def test_a_dead_history_stays_certain_and_a_backing_counts_once():
+    revoked = fold_one(ledger(offer()), "m-tower", {"e-ask": "revoked"}, {})
+    assert (revoked.status, revoked.certain) == ("unsupported", True)  # a confirmed retcon is not doubt
+    refused = ledger(offer(), decide("refused"), outcome("lapsed", "op-3", ("e-late",), 3))
+    state = fold_one(refused, "m-tower", supported("e-ask", "e-no", **{"e-late": "missing"}), {})
+    assert (state.status, state.certain) == ("refused", True)  # a step that cannot follow adds no doubt
+    voided = ledger(offer(), Void("op-2", "op-1", "never offered"), decide("accepted", "op-3", ("e-yes",), 3))
+    assert fold_one(voided, "m-tower", supported("e-ask", **{"e-yes": "unreadable"}), {}).certain
+    twice = Authorship("c-wren", "wren", "human:ana", "commitment", "s1", "t2", "No.",
+                       void_fingerprint(C, "op-2", "wrong"))
+    assert reason(lambda: ledger(offer(), decide("refused"), Void("op-3", "op-2", "wrong", (twice, twice)))) \
+        == "pc_authorship"
+    assert reason(lambda: Transition("op-2", "m-tower", "refused", ("e-no",), at(2), controls=(("wren", "human:ana"),),
+                                     authorship=(backing("refused", ("e-no",)),) * 2)) == "pc_authorship"
+
+
+def test_a_void_cannot_be_used_to_replay_or_skip_a_players_consent():
+    void = Void("op-3", "op-2", "wrong", (Authorship("c-wren", "wren", "human:ana", "commitment", "s1", "t2", "No.",
+                                                      void_fingerprint(C, "op-2", "wrong")),))
+    replay = Transition("op-4", "m-tower", "accepted", ("e-no",), at(4), controls=(("wren", "human:ana"),),
+                        authorship=(backing("accepted", ("e-no",), turn=4),))
+    assert reason(lambda: ledger(offer(), decide("refused"), void, replay)) == "reused_contribution"
+    record = ledger(offer(), decide("refused"))
+    assert record.backers("op-1") == record.backers("op-2") == decide("refused").authorship
+    assert reason(lambda: ledger(offer(), decide("refused"), Void("op-3", "op-1", "never offered"))) \
+        == "pc_authorship"  # withdrawing the offer withdraws Wren's refusal, so it needs Wren's player
+    consented = Void("op-3", "op-1", "never offered",
+                     (Authorship("c-wren", "wren", "human:ana", "commitment", "s1", "t2", "No.",
+                                 void_fingerprint(C, "op-1", "never offered")),))
+    assert fold_one(ledger(offer(), decide("refused"), consented), "m-tower", {}, {}).status == "voided"
+
+
 def test_as_of_reads_the_commitment_as_it_stood_then():
     record = ledger(offer(sequence=3), decide("refused", sequence=5))
     support = supported("e-ask", "e-no")
@@ -214,3 +246,6 @@ def test_the_payload_round_trips_and_fails_closed():
     assert reason(lambda: ledger_from_payload(C, {**payload, "operations": [payload["operations"][0], wrong]})) \
         == "invalid_record"
     assert reason(lambda: ledger_from_payload(C, {**payload, "operations": [{"op": "erase"}]})) == "invalid_record"
+    first = payload["operations"][0]
+    null_scene = dict(first, at={**first["at"], "scene_id": None})
+    assert reason(lambda: ledger_from_payload(C, {**payload, "operations": [null_scene]})) == "invalid_record"

@@ -4,6 +4,8 @@ claims the mission was done is caught by the referee. Synthetic names; nothing c
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from grimoire.commitments import CommitmentError
@@ -83,6 +85,10 @@ def test_figurative_unknown_and_stale_readings_are_never_material(refused):
     stale = library.read(SCOPE, requested_by=DIRECTOR, as_of=4).commitments
     with pytest.raises(RefereeError) as caught:
         Facts(C, 9, commitments=stale)
+    assert caught.value.reason == "stale_commitment"
+    relabelled = [replace(state, as_of=3) for state in library.read(SCOPE, requested_by=DIRECTOR, as_of=9).commitments]
+    with pytest.raises(RefereeError) as caught:
+        Facts(C, 3, commitments=relabelled)  # the refusal at sequence 4 had not happened by 3
     assert caught.value.reason == "stale_commitment"
 
 

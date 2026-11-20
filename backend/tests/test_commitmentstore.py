@@ -9,14 +9,16 @@ import pytest
 
 from grimoire.calendarstore import CalendarLibrary
 from grimoire.commitments import CommitmentError
-from grimoire.commitmentstore import CommitmentLibrary, Due
-from grimoire.core import DIRECTOR, InstanceRef
+from grimoire.commitmentstore import CommitmentLibrary, Due, read_support
+from grimoire.core import DIRECTOR, Event, InstanceRef, Moment
 from grimoire.core.authority import AuthorityError
 from grimoire.core.model import ControlAssignment
-from grimoire.effects import as_knowledge_event
+from grimoire.effects import accepted_token, as_knowledge_event
 from grimoire.effectstore import Endorsement
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.store import LibraryStore, StaleWrite
+from grimoire.store import etag as etag_of
+from grimoire.sync import resolve, sync
 from grimoire.store.layout import address_parts
 from grimoire.testing.fileops import snapshot
 
@@ -26,6 +28,8 @@ from commitment_fixtures import (
 )
 from effects_fixtures import contribution, effects_library, give
 from store_helpers import OWNER
+from sync_helpers import DESKTOP, PHONE, kept, make_pair
+from sync_helpers import handles as sync_handles
 
 TOWER = Due("2024-03-01", "New moon", 360)
 
@@ -308,6 +312,46 @@ def test_a_void_withdraws_an_error_with_its_backers_consent(world):
                                          expected=etag(library))) == "unsupported_commitment"
 
 
+def test_support_is_the_directors_and_damage_taints_only_what_it_could_hide(world):
+    store, handles, library = world
+    with pytest.raises(AuthorityError):
+        read_support(store, C, ["e-ask"], requested_by="human:ana")
+    effects, ref, proposal = _accept_and_bridge(store, handles)
+    ghost = Event(C, "e-ghost", "Wren takes a key nobody gave.", Moment(7, "s1", "t7"), accepted_token("e-ghost"))
+    EvidenceLibrary(store, handles.app, owner=OWNER).append(C, [ghost]).commit()
+    support = read_support(store, C, ["e-ask", ref.event_id, "e-ghost"], requested_by=DIRECTOR).values
+    assert support == {"e-ask": "supported", ref.event_id: "supported", "e-ghost": "unreadable"}  # no record to check
+    accepted = next(p for p in store.root.rglob("*.json") if p.parent.name == "accepted")
+    (accepted.parent / "e-other.json").write_text("{not json")
+    damaged = read_support(store, C, ["e-ask", ref.event_id], requested_by=DIRECTOR)
+    assert damaged.values == {"e-ask": "supported", ref.event_id: "supported"} and damaged.problems
+    accepted.write_text("{not json")
+    assert read_support(store, C, [ref.event_id], requested_by=DIRECTOR).values == {ref.event_id: "unreadable"}
+
+
+def test_inputs_of_the_wrong_shape_are_refusals_and_a_concurrent_write_is_stale(world):
+    store, handles, library = world
+    offered(library)
+    before = scope_bytes(store)
+    assert reason(lambda: library.offer(SCOPE, "op-1", mission(), cites=["e-ask"], expected=etag(library),
+                                        due=Due("2024-03-02", "New moon", 360))) == "operation_mismatch"
+    for bad in (dict(status=["refused"]), dict(status="won"), dict(note=None), dict(cites=None), dict(cites="e-no")):
+        fields = dict(status="refused", cites=["e-no"], note="")
+        fields.update(bad)
+        assert reason(lambda fields=fields: library.record(
+            SCOPE, "op-2", "m-tower", fields["status"], cites=fields["cites"], note=fields["note"],
+            expected=etag(library), controls=CONTROLS)) == "invalid_record"
+    assert reason(lambda: library.void(SCOPE, "op-3", "op-1", reason=None, expected=etag(library))) \
+        == "invalid_record"
+    assert scope_bytes(store) == before
+    tag = etag(library)
+    first = library.record(SCOPE, "op-2", "m-tower", "lapsed", cites=["e-no"], expected=tag)
+    second = library.record(SCOPE, "op-3", "m-tower", "lapsed", cites=["e-ask"], expected=tag)
+    first.commit()
+    with pytest.raises(StaleWrite):
+        second.commit()
+
+
 def test_the_record_survives_reopening_and_a_later_advance(tmp_path):
     handles = Handles()
     root = tmp_path / "lib"
@@ -319,3 +363,33 @@ def test_the_record_survives_reopening_and_a_later_advance(tmp_path):
         advance(store, handles, "weeks", 20 * 1440)
         state = commitments(store, handles).read(SCOPE, requested_by=DIRECTOR).commitment("m-tower")
         assert state.status == "offered" and state.overdue and state.deadline.triggered_by == "weeks"
+
+
+def test_two_devices_that_disagree_wait_for_an_explicit_resolution(tmp_path):
+    handles = Handles()
+    desktop, phone = make_pair(tmp_path)
+    path = f"campaigns/{C}/scope.json"
+    try:
+        left = campaign(desktop, handles)
+        event(desktop, handles, "e-ask", 1, turn="t1")
+        event(desktop, handles, "e-no", 2, turn="t2")
+        sync(desktop, phone, sync_handles())
+        right = commitments(phone, handles)
+        start = etag(left)
+        pending = left.offer(SCOPE, "op-late", mission("m-late", deadline_id=None), cites=["e-ask"], expected=start)
+        offered(left)
+        right.offer(SCOPE, "op-boat", mission("p-boat", deadline_id=None), cites=["e-ask"], expected=start).commit()
+        versions = {DESKTOP: (desktop.root / path).read_bytes(), PHONE: (phone.root / path).read_bytes()}
+        assert sync(desktop, phone, sync_handles()).conflict(path).code == "concurrent"
+        assert versions[PHONE] in kept(desktop)
+        for call in (lambda: left.read(SCOPE, requested_by=DIRECTOR), pending.commit,
+                     lambda: right.void(SCOPE, "op-x", "op-boat", reason="dup", expected=start)):
+            assert reason(call) == "scope_conflict"
+        resolve(desktop, phone, path, etag_of(versions[DESKTOP]),
+                {device: etag_of(data) for device, data in versions.items()}, sync_handles())
+        for library in (left, right):
+            view = library.read(SCOPE, requested_by=DIRECTOR)
+            assert [s.commitment_id for s in view.commitments] == ["m-tower"]
+    finally:
+        desktop.close()
+        phone.close()

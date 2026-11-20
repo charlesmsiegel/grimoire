@@ -30,7 +30,7 @@ from dataclasses import dataclass
 
 from grimoire.core.knowledge import Moment
 
-from .model import NEXT, OPEN, ClockTime, Commitment, CommitmentLedger, Offer, Transition
+from .model import NEXT, OPEN, ClockTime, Commitment, CommitmentError, CommitmentLedger, Offer, Transition
 
 SUPPORT = ("supported", "missing", "unreadable", "revoked")
 _RANK = {name: rank for rank, name in enumerate(SUPPORT)}
@@ -102,8 +102,8 @@ class CommitmentState:
 def _step_support(op: Offer | Transition, support: Mapping[str, str]) -> tuple[str, tuple[tuple[str, str], ...]]:
     cited = tuple((event_id, support.get(event_id, "unreadable")) for event_id in op.cites)
     for _, value in cited:
-        if value not in _RANK:
-            raise ValueError(f"unknown citation support {value!r}")
+        if type(value) is not str or value not in _RANK:
+            raise CommitmentError("unknown citation support")
     return max((value for _, value in cited), key=_RANK.__getitem__), cited
 
 
@@ -111,6 +111,8 @@ def _deadline(commitment: Commitment, deadlines: Mapping[str, DeadlineState]) ->
     if commitment.deadline_id is None:
         return None
     found = deadlines.get(commitment.deadline_id)
+    if found is not None and type(found) is not DeadlineState:
+        raise CommitmentError("deadlines must map ids to DeadlineState values")
     if found is None or not found.found or found.deadline_id != commitment.deadline_id:
         return DeadlineState(commitment.deadline_id, False)
     return found
@@ -127,7 +129,8 @@ def fold_one(ledger: CommitmentLedger, commitment_id: str, support: Mapping[str,
         return None
     voids = ledger.voids()
     offer_support, offer_cited = _step_support(offer, support)
-    certain = offer_support == "supported" or offer.operation_id in voids
+    # Only an event that cannot be checked is uncertainty: a revoked offer is known to be undone.
+    certain = offer_support not in ("missing", "unreadable") or offer.operation_id in voids
     if offer.operation_id in voids:
         status, outcome = "voided", "voided"
     elif offer_support == "revoked":
@@ -142,8 +145,8 @@ def fold_one(ledger: CommitmentLedger, commitment_id: str, support: Mapping[str,
         if as_of is not None and step.at.sequence > as_of:
             continue
         value, cited = _step_support(step, support)
-        if step.operation_id not in voids and value in ("missing", "unreadable"):
-            certain = False  # wherever it stands, an unchecked step could change how the rest folds
+        if alive and NEXT[status] and step.operation_id not in voids and value in ("missing", "unreadable"):
+            certain = False  # an unchecked step that could still apply could change how the rest folds
         if step.operation_id in voids:
             outcome = "voided"
         elif value == "revoked":
