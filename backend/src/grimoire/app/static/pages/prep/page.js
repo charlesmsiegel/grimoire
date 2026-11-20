@@ -14,6 +14,8 @@ import { KIND_NAMES, byKind, estimateLines, fieldText, formValues, latest, newRe
 
 const AUDIENCES = [{ value: "table", label: "Table view" }, { value: "director", label: "Director view" }];
 const FAMILIES = [{ value: "d20", label: "D20" }, { value: "wod", label: "WoD" }, { value: "pbta", label: "PbtA" }, { value: "ars", label: "Ars Magica" }];
+// a secret's standing in the director's truth (one ruled unknown or refuted is never offered as a secret)
+const STANDINGS = { established: "ruled true", reported: "reported, not ruled on", unasserted: "not ruled on" };
 const DRAFT_FIELDS = ["questions", "clues", "tensions", "stakes", "directions"];
 const DRAFT_TITLES = { questions: "Questions", clues: "Clues", tensions: "Tensions", stakes: "Stakes", directions: "Directions" };
 
@@ -343,6 +345,8 @@ async function showPreparation(slot, ctx, chat) {
   });
   const decide = (request, decision, marks) => ctx.act(async () => {
     const answer = await ctx.api("prep.prepare_review", { chat, audience: "director", request_id: request, decision, ...marks });
+    // a decided request is done: the same brief estimated again is a new request (a discarded id is refused)
+    if (attempt && attempt.request === request) attempt = null;
     state = answer.preparation;
     ctx.notify(decision === "accept" ? "Accepted for this session. Nothing is saved." : "Discarded.");
     draw();
@@ -435,7 +439,8 @@ function evidence(ctx, shown) {
   for (const [kind, items] of byKind(shown.evidence)) {
     parts.push(el("p", { class: "prep-label" }, KIND_NAMES[kind]), el("ul", { class: "prep-lines" }, items.map((item) => el("li", { class: "g-stack prep-note" },
       el("span", {}, el("span", { class: "prep-id" }, item.evidence), " ", el("span", { class: "prep-text" }, item.text)),
-      el("span", { class: "g-muted prep-source" }, (item.name ? item.name + " · " : "") + item.source)))));
+      el("span", { class: "g-muted prep-source" }, (item.name ? item.name + " · " : "") + item.source
+        + (STANDINGS[item.standing] ? " · " + STANDINGS[item.standing] : ""))))));
   }
   if (!parts.length) parts.push(ui.empty("The library holds nothing for this chat that a scene could rest on."));
   if (shown.missing.length) parts.push(el("p", { class: "g-muted" }, "Nothing to go on for: " + shown.missing.map((kind) => KIND_NAMES[kind].toLowerCase()).join(", ") + "."));

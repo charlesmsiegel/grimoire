@@ -60,7 +60,8 @@ def segment(args: Mapping[str, object], key: str) -> str:
     try:
         validate_segment(value, key)
     except ValueError:
-        raise ApiRefused("invalid_field", f"{key} is not a valid id: lower case letters, digits, '.', '_' and '-'") from None
+        raise ApiRefused("invalid_field",
+                         f"{key} is not a valid id: lower case letters, digits, '.', '_' and '-'") from None
     return value
 
 

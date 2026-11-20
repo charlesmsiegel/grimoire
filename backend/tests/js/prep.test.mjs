@@ -32,12 +32,12 @@ const D20 = {
 const RULES = { chat: CHAT, audience: "table", pinned: null, not_pinned: "Nothing pins a ruleset.", noncanonical: "A proposal only.",
   profiles: ["d20", "wod", "pbta", "ars"].map((family) => ({ ...D20, family })),
   actors: [{ actor: ANYA, name: "Anya", role: "player", yours: true }, { actor: BEA, name: "Bea", role: "player", yours: true }] };
-const EVIDENCE = { revision: "r", evidence: [{ evidence: "secret-1", kind: "secret", source: "campaign:c1#proposition/oil", text: "The oil was sold." }],
+const EVIDENCE = { revision: "r", evidence: [{ evidence: "secret-1", kind: "secret", source: "campaign:c1#proposition/oil", text: "The oil was sold.", standing: "unasserted" }],
   missing: [], omitted: {}, cast: [{ actor: ANYA, name: "Anya" }], locations: [{ actor: "campaign:c1/location/quay", name: "The Quay" }] };
 const PREPARATION = { chat: CHAT, evidence: EVIDENCE, model: null, proposals: [], spent: [], saved: false, note: "Nothing here is saved." };
 const PLAN = { request: "x", expected: "token", replay: false, blocked: null, snapshot: "r",
   call: { stage: "planning", calls: 1, prompt_tokens: 500, reply_tokens_at_most: 800, attempts_at_most: 1, route: "prep@x/m",
-    cost_at_most: "0.0135", cost_state: "estimated", local: false } };
+    prompt_tokens_at_most: 1500, cost_at_most: "0.0135", cost_state: "estimated", local: false } };
 
 // The page mounted for `audience`; `answer(op, args)` answers every op but campaign.chats (and may return a
 // promise the test settles). `drafts` is the shell's store, kept across mounts.
@@ -86,7 +86,7 @@ test("an estimate is said as a cost at most, or as unpriced, and where the call 
   const lines = logic.estimateLines(PLAN.call);
   assert.equal(lines[0], "One planning call to prep@x/m.");
   assert.match(lines[1], /About 500 prompt tokens .*at most 800 reply tokens, in at most 1 attempt\./);
-  assert.match(lines[2], /costs at most 0\.0135 .*not a bill/);
+  assert.match(lines[2], /costs at most 0\.0135 .*prompt counted as 1500 tokens \(each of its bytes as a token.*not a bill/);
   assert.equal(lines[3], "It leaves this computer for the configured provider.");
   const unpriced = logic.estimateLines({ ...PLAN.call, cost_state: "unpriced", cost_at_most: null, local: true });
   assert.ok(unpriced.includes("No price is set for this model, so its cost cannot be estimated."));
@@ -216,4 +216,57 @@ test("what is typed while a scene is being prepared is kept as the next brief", 
   release();
   await settle();
   assert.equal(control(prep, "What the scene should be about").value, "The next morning");
+});
+
+test("a discarded request is never estimated again: the same brief gets a new request", async () => {
+  const asked = [];
+  let shown = PREPARATION;
+  const scene = (request, outcome) => ({ request, brief: "A night on the quay", snapshot: "r", current: true, outcome, usage: null,
+    draft: { premise: { text: "Mara waits on the quay", evidence: [] }, cast: [], location: { actor: "campaign:c1/location/quay", name: "The Quay" },
+      questions: [], clues: [], tensions: [], stakes: [], directions: [] } });
+  const root = await mounted("director", (op, args) => {
+    if (op === "prep.rulesets") return { ...RULES, audience: "director" };
+    if (op === "prep.catalogs") return { campaign: "c1", catalogs: [], chats: [], more_catalogs: false, more_chats: false, change: "", estimate: "" };
+    if (op === "prep.preparation") return shown;
+    if (op === "prep.prepare_plan") { asked.push(args.request_id); return { plan: { ...PLAN, request: args.request_id }, evidence: EVIDENCE }; }
+    if (op === "prep.prepare") {
+      // the scene was prepared, but its answer was lost: the page reloads and finds it
+      shown = { ...PREPARATION, proposals: [scene(args.request_id, null)] };
+      return Promise.reject(Object.assign(new Error("lost"), { reason: "network" }));
+    }
+    if (op === "prep.prepare_review") {
+      shown = { ...PREPARATION, proposals: [scene(args.request_id, "rejected")] };
+      return { done: { request: args.request_id, decision: args.decision }, preparation: shown };
+    }
+    throw new Error("unexpected " + op);
+  });
+  const prep = section(root, "Scene preparation");
+  set(prep, "What the scene should be about", "A night on the quay");
+  button(prep, "Estimate the call").click();
+  await settle();
+  button(group(prep, "Approve this call"), "Approve and prepare").click();
+  await settle();
+  assert.equal(control(prep, "What the scene should be about").value, "A night on the quay", "a lost answer clears nothing");
+  const article = prep.querySelectorAll("article").find((node) => node.getAttribute("aria-label") === "Prepared scene " + asked[0]);
+  button(article, "Discard").click();
+  await settle();
+  button(prep, "Estimate the call").click();
+  await settle();
+  assert.equal(asked.length, 2);
+  assert.notEqual(asked[1], asked[0], "the discarded request's id is never estimated again");
+});
+
+test("with scene preparation off in Models and costs, the page says so and offers no call", async () => {
+  const off = { ...PREPARATION, model: { reason: "not_enabled", message: "Scene preparation is off in Models and costs." } };
+  const root = await mounted("director", (op) => {
+    if (op === "prep.rulesets") return { ...RULES, audience: "director" };
+    if (op === "prep.catalogs") return { campaign: "c1", catalogs: [], chats: [], more_catalogs: false, more_chats: false, change: "", estimate: "" };
+    if (op === "prep.preparation") return off;
+    throw new Error("unexpected " + op);
+  });
+  const prep = section(root, "Scene preparation");
+  assert.ok(prep.textContent.includes("Scene preparation is off in Models and costs."));
+  assert.ok(prep.textContent.includes("campaign:c1#proposition/oil · not ruled on"), "a secret shows its standing");
+  assert.equal(button(prep, "Estimate the call"), undefined);
+  assert.equal(button(prep, "Approve and prepare"), undefined);
 });

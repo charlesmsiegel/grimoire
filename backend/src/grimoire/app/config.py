@@ -32,7 +32,7 @@ RUNTIME_PRINCIPAL = "app:runtime"
 EXTRACTOR_PRINCIPAL = "app:continuity-extractor"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 KEYS = frozenset({"provider_id", "base_url", "model", "key_env", "max_tokens_field", "max_output_tokens",
-                  "director", "critique", "decision", "planning", "agendas", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
+                  "director", "critique", "decision", "planning", "preparation", "agendas", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
 #: The optional prices, per million tokens, of the configured ``model`` (not of its fallbacks): what one prompt
 #: token, one reply token and one cached prompt token cost. Decimal text, never a JSON number, so no price is
 #: ever a float; no currency is recorded (the number is in whatever currency the provider bills).
@@ -51,6 +51,9 @@ MAX_OUTPUT_TOKENS = 32_768
 #: Optional decision (045) and presentation-planning (068) calls a configuration may allow per turn.
 MAX_DECISION_CALLS = 16
 MAX_PLANNING_CALLS = 16
+#: 064's scene preparation on the Prep page: off (0) or on (1). On, the director may approve one optional planning
+#: call per prepared scene; off, Prep offers none. Off by default: it is billed.
+MAX_PREPARATION_CALLS = 1
 
 
 class ConfigError(ValueError):
@@ -75,6 +78,8 @@ class ModelConfig:
     agendas: tuple[Agenda, ...] = ()
     #: 068: optional presentation suggestions per take, one before each speaking NPC's reply up to the cap.
     planning_calls: int = 0
+    #: 064: whether Prep may send its one optional planning call per approved scene (0 or 1; off by default).
+    preparation_calls: int = 0
 
     @property
     def models(self) -> tuple[str, ...]:
@@ -136,10 +141,12 @@ def parse_model_config(raw: object) -> ModelConfig:
     decision = raw.get("decision", 0)
     critique = raw.get("critique", 0)
     planning = raw.get("planning", 0)
+    preparation = raw.get("preparation", 0)
     for name, value, low, high in (("max_output_tokens", tokens, 1, MAX_OUTPUT_TOKENS), ("director", director, 0, 1_000),
                                    ("attempts", attempts, 1, MAX_ATTEMPTS), ("critique", critique, 0, 1),
                                    ("decision", decision, 0, MAX_DECISION_CALLS),
-                                   ("planning", planning, 0, MAX_PLANNING_CALLS)):
+                                   ("planning", planning, 0, MAX_PLANNING_CALLS),
+                                   ("preparation", preparation, 0, MAX_PREPARATION_CALLS)):
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
             # a director reply is at most one per turn whatever the cap (004); 044 took any count
             raise ConfigError(f"{name} must be a whole number from {low} to {high}")
@@ -164,7 +171,8 @@ def parse_model_config(raw: object) -> ModelConfig:
     except ValueError as error:
         raise ConfigError(str(error)) from None
     return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts, *prices,
-                       critique_calls=critique, decision_calls=decision, agendas=agendas, planning_calls=planning)
+                       critique_calls=critique, decision_calls=decision, agendas=agendas, planning_calls=planning,
+                       preparation_calls=preparation)
 
 
 def config_json(config: ModelConfig) -> dict:
@@ -179,6 +187,8 @@ def config_json(config: ModelConfig) -> dict:
         raw["decision"] = config.decision_calls
     if config.planning_calls:
         raw["planning"] = config.planning_calls
+    if config.preparation_calls:
+        raw["preparation"] = config.preparation_calls
     if config.agendas:
         raw["agendas"] = agendas_json(config.agendas)
     if config.key_env is not None:
@@ -200,6 +210,14 @@ def policy_for(config: ModelConfig) -> InferencePolicy:
     if config.planning_calls:
         caps["planning"] = config.planning_calls
     return InferencePolicy(caps, max_attempts_per_call=config.attempts)
+
+
+def preparation_policy(config: ModelConfig) -> InferencePolicy:
+    """The 004 policy Prep's scene preparation (064) runs under: one optional ``planning`` call when the
+    ``preparation`` setting is on, and none when it is off, so 064 refuses ``not_budgeted`` before anything is
+    sent. Never part of a turn's policy: preparing a scene is not a turn."""
+    caps = {"planning": 1} if config.preparation_calls else {}
+    return InferencePolicy(caps, max_attempts_per_call=config.attempts)  # type: ignore[arg-type]
 
 
 def build_access(config: ModelConfig, owner: str, *, environ=os.environ, transport=None) -> ProviderAccess:  # type: ignore[no-untyped-def]

@@ -4,8 +4,9 @@
 **The evidence** is assembled from what the library already holds for one chat of the campaign, read again on every
 call (never cached), and handed to 064 as its ``Snapshot``:
 
-- *secret*: each proposition of the campaign's 020 ledger, as the director's truth has it (not refuted), that none
-  of the chat's player characters believes, was told or sent; named ``campaign:<id>#proposition/<id>``;
+- *secret*: each proposition of the campaign's 020 ledger, as the director's truth has it (neither refuted nor ruled
+  unknown), that none of the chat's player characters believes, was told or sent; named
+  ``campaign:<id>#proposition/<id>``;
 - *goal*: each goal of the 039 agendas play runs for an NPC in the chat's cast (the startup agendas and the model
   settings' agendas, as 112 composes them); named by the NPC;
 - *calendar*: the campaign clock (055) and its deadlines not yet flagged. 055 keeps the clock in the campaign's scope
@@ -18,13 +19,17 @@ The cast is the chat's cast; the locations are the campaign's instances of kind 
 is inferred and nothing is written; a category with nothing in it is 064's ``missing``. A ledger that cannot be read
 in full refuses (``knowledge_damaged``) rather than call a secret missing.
 
-**The one call.** ``prepare_plan`` builds the exact prompt 064 would send and answers its estimate (the app's
-deterministic token estimate, the reply cap and the configured prices) with a review token over the evidence, the
-brief and the model settings. Nothing is sent. ``prepare`` takes that token, builds everything again, refuses
+**The one call.** It is off unless the model settings' ``preparation`` is 1 (Models and costs shows and switches it
+as *Scene preparation*); off, the plan answers ``not_enabled`` and ``prepare`` refuses it. ``prepare_plan`` builds the
+exact prompt 064 would send and answers its estimate (the app's deterministic token estimate, a cost ceiling that
+counts each prompt byte as a token, the reply cap and the configured prices) with a review token over the evidence,
+the brief and the model settings. Nothing is sent. ``prepare`` takes that token, builds everything again, refuses
 ``changed`` if anything moved, and only then runs 064's ``PreparationGenerator``: one optional ``planning`` call under
-a policy that allows exactly one, through 013's adapter to the endpoint the app's model settings name (112's file,
-with its key variable and transport), on an untrusted handle of its own (``app:scene-preparer``) whose every attempt
-is approved for its exact payload. 064's ``PreparationSession`` keeps the result: the same request id, brief and
+the settings' preparation policy (exactly one call when on, none when off: 064's own ``not_budgeted``), through
+013's adapter to the endpoint the app's model settings name (112's file, with its key variable and transport), on an
+untrusted handle of its own (``app:scene-preparer``) whose every attempt is approved for its exact payload. The call
+is one 048 trace, ``scene_preparation``, with its attempts recorded like a turn's, so Models and costs lists it among
+the recent calls. 064's ``PreparationSession`` keeps the result: the same request id, brief and
 evidence again is answered from it, and nothing is sent again; the same id with another brief or newer evidence is
 064's ``request_conflict``.
 
@@ -39,9 +44,10 @@ import json
 import uuid
 from collections.abc import Mapping
 from decimal import Decimal
+from typing import NamedTuple
 
 from grimoire.app.adapter import AdapterContext
-from grimoire.app.config import ConfigError, ModelConfig
+from grimoire.app.config import ConfigError, ModelConfig, preparation_policy
 from grimoire.app.pricing import cost_text, cost_view, price_table
 from grimoire.calendars import CalendarError
 from grimoire.calendarstore import CalendarLibrary
@@ -49,11 +55,17 @@ from grimoire.chats.codec import ChatCodecError
 from grimoire.context.model import estimate_tokens
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import ChatRef, InstanceRef, KnowledgeRef, ScopeRef
-from grimoire.core.inference import InferencePolicy
 from grimoire.core.perspective import actor_knowledge, director_knowledge
 from grimoire.play.scene import NOW
+from grimoire.play.tracing import record_calls, traced
 from grimoire.preparation import (
-    Evidence, PreparationError, PreparationGenerator, PreparationSession, Review, Snapshot, preparation_messages,
+    Evidence,
+    PreparationError,
+    PreparationGenerator,
+    PreparationSession,
+    Review,
+    Snapshot,
+    preparation_messages,
 )
 from grimoire.providers import EnvironmentCredentials, ProviderRegistry, RouteChoice
 from grimoire.providers.adapter import ProviderAdapter
@@ -67,6 +79,8 @@ from ..campaign import hub_of
 from .common import chat_of, director, segment
 
 PREP_PRINCIPAL = "app:scene-preparer"
+#: The 048 trace operation a scene preparation's call is recorded under.
+OPERATION = "scene_preparation"
 #: The kinds of campaign instance offered as a scene's location.
 LOCATION_KINDS = ("location", "place")
 #: At most this many items of each kind are offered (064 takes at most 64 evidence items in all).
@@ -122,8 +136,8 @@ def assemble(ctx: AdapterContext, chat: ChatRef) -> tuple[Snapshot, dict]:
         try:
             known = actor_knowledge(knowledge, actor, as_of=NOW)
         except ValueError:
-            raise ApiRefused("knowledge_damaged", "a player character's knowledge cannot be read, so the secrets cannot "
-                                                  "be told apart; nothing was sent") from None
+            raise ApiRefused("knowledge_damaged", "a player character's knowledge cannot be read, so the secrets "
+                                                  "cannot be told apart; nothing was sent") from None
         # a proposition a player character believes, was told or sent is no secret from the table
         held.update(belief.proposition_id for belief in (*known.current, *known.history))
         held.update(item.proposition_id for item in known.evidence if item.proposition_id is not None)
@@ -132,7 +146,8 @@ def assemble(ctx: AdapterContext, chat: ChatRef) -> tuple[Snapshot, dict]:
     for standing in sorted(truth.propositions, key=lambda each: (-each.proposition.moment.sequence,
                                                                 each.proposition.proposition_id)):
         proposition = standing.proposition
-        if standing.standing == "refuted" or proposition.proposition_id in held:
+        # the director's truth only: neither refuted nor ruled unknown (an unasserted one is still the truth's)
+        if standing.standing in ("refuted", "unknown") or proposition.proposition_id in held:
             continue
         try:
             secret = KnowledgeRef(campaign, "proposition", proposition.proposition_id)
@@ -251,7 +266,11 @@ class _Prep:
 
 
 def _prep(ctx: AdapterContext, chat: ChatRef) -> _Prep:
+    """The chat's session, made the first time a chat that opens asks: a reference to no chat makes none."""
     table = getattr(ctx.api, _ATTRIBUTE, None)
+    if table is not None and str(chat) in table:
+        return table[str(chat)]
+    hub_of(ctx).runner.open(chat)  # refuses (as reading would) a chat that is not there, before anything is kept
     if table is None:
         table = {}
         setattr(ctx.api, _ATTRIBUTE, table)
@@ -272,6 +291,11 @@ def _model(ctx: AdapterContext) -> tuple[ModelConfig | None, str | None, dict | 
         why = problem.get("message") or ("the app was started with a model nothing here configures: preparation "
                                          "goes only to the model of the app's settings file")
         return None, shown["etag"], {"reason": "no_model", "message": f"No model is set up for preparation: {why}"}
+    if not config.preparation_calls:
+        return config, shown["etag"], {"reason": "not_enabled",
+                                       "message": "Scene preparation is off in Models and costs, so nothing can be "
+                                                  "sent from here. Switch it on there to allow one billed call for "
+                                                  "each scene you approve."}
     if config.key_env is not None and not inference.environ.get(config.key_env):
         return config, shown["etag"], {"reason": "key_missing",
                                        "message": f"The key variable {config.key_env} is not set where the app runs."}
@@ -299,7 +323,7 @@ def _generator(ctx: AdapterContext, config: ModelConfig, prep: _Prep) -> Prepara
                                               payload_digest(payload), ctx.owner))
         return approval_id
 
-    policy = InferencePolicy({"planning": 1}, max_attempts_per_call=config.attempts)  # type: ignore[arg-type]
+    policy = preparation_policy(config)  # one planning call when the setting is on; none when off (not_budgeted)
     routes = tuple(RouteChoice(config.endpoint.provider_id, model) for model in config.models)
     generator = PreparationGenerator(adapter, routes, handle, approvals=approve, policy=policy,
                                      max_output_tokens=config.max_output_tokens)
@@ -308,8 +332,13 @@ def _generator(ctx: AdapterContext, config: ModelConfig, prep: _Prep) -> Prepara
 
 
 def _estimate(config: ModelConfig | None, messages) -> dict:  # type: ignore[no-untyped-def]
+    """The call's estimate. ``prompt_tokens`` is the app's estimate (about a third of the bytes), never a bound;
+    ``prompt_tokens_at_most`` counts every UTF-8 byte of each message (role and text) as a token, plus
+    ``MESSAGE_OVERHEAD``, and that ceiling is what ``cost_at_most`` prices."""
     prompt = sum(estimate_tokens(body) + MESSAGE_OVERHEAD for _role, body in messages)
-    found: dict = {"stage": "planning", "calls": 1, "prompt_tokens": prompt, "measurement": "estimated"}
+    ceiling = sum(len(role.encode("utf-8")) + len(body.encode("utf-8")) + MESSAGE_OVERHEAD for role, body in messages)
+    found: dict = {"stage": "planning", "calls": 1, "prompt_tokens": prompt, "prompt_tokens_at_most": ceiling,
+                   "measurement": "estimated"}
     if config is None:
         return {**found, "reply_tokens_at_most": None, "attempts_at_most": None, "route": None,
                 "cost_at_most": None, "cost_state": "unpriced", "local": None}
@@ -319,7 +348,7 @@ def _estimate(config: ModelConfig | None, messages) -> dict:  # type: ignore[no-
     if not config.priced:
         return {**found, "cost_at_most": None, "cost_state": "unpriced"}
     assert config.price_prompt is not None and config.price_reply is not None
-    one = (Decimal(prompt) * config.price_prompt + Decimal(config.max_output_tokens) * config.price_reply) \
+    one = (Decimal(ceiling) * config.price_prompt + Decimal(config.max_output_tokens) * config.price_reply) \
         / Decimal(1_000_000)
     # a retry goes to a fallback model, which has no price: only the configured model's attempts are priced
     priced_attempts = 1 if config.fallbacks else config.attempts
@@ -343,7 +372,22 @@ def _review(chat: ChatRef, request: str, brief: str, revision: str, etag: str | 
     return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:32]
 
 
-def _planned(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no-untyped-def]
+class _Planned(NamedTuple):
+    """What one plan was worked out from, and its review token."""
+
+    chat: ChatRef
+    request: str
+    brief: str
+    prep: _Prep
+    shown: dict
+    config: ModelConfig | None
+    blocked: dict | None
+    estimate: dict
+    review: str
+    replay: bool
+
+
+def _planned(ctx: AdapterContext, args: Mapping[str, object]) -> _Planned:
     director(args, "scenario preparation")
     chat = chat_of(args)
     request = segment(args, "request_id")
@@ -370,18 +414,31 @@ def _planned(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[n
         blocked = {"reason": "no_location", "message": "This campaign has no location or place instance to set a "
                                                        "scene in."}
     estimate = _estimate(config, messages)
-    return chat, request, brief, prep, snapshot, shown, config, blocked, estimate, \
-        _review(chat, request, brief, snapshot.revision, etag, estimate,
-                sum(1 for item in prep.spent if item["request"] == request and not item["kept"])), replay
+    unkept = sum(1 for item in prep.spent if item["request"] == request and not item["kept"])
+    return _Planned(chat, request, brief, prep, shown, config, blocked, estimate,
+                    _review(chat, request, brief, snapshot.revision, etag, estimate, unkept), replay)
 
 
 def _prepare_plan(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     """What preparing would send and cost, and the review token ``prepare`` takes. Nothing is sent."""
-    chat, request, _brief_, _prep_, _snapshot, shown, _config, blocked, estimate, review, replay = _planned(ctx, args)
-    return {"chat": str(chat), "plan": {"request": request, "expected": review, "replay": replay,
-                                        "blocked": None if replay else blocked, "call": estimate,
-                                        "snapshot": shown["revision"]},
-            "evidence": shown, "saved": False, "note": SAVED}
+    planned = _planned(ctx, args)
+    return {"chat": str(planned.chat),
+            "plan": {"request": planned.request, "expected": planned.review, "replay": planned.replay,
+                     "blocked": None if planned.replay else planned.blocked, "call": planned.estimate,
+                     "snapshot": planned.shown["revision"]},
+            "evidence": planned.shown, "saved": False, "note": SAVED}
+
+
+class _Probe:
+    """What 048's ``traced`` needs of a runner: the app runner's tracer and clock (as a test call has them)."""
+
+    def __init__(self, tracer, clock) -> None:  # type: ignore[no-untyped-def]
+        self.tracer = tracer
+        self.clock = clock
+
+    @traced(OPERATION)
+    def run(self, step):  # type: ignore[no-untyped-def]
+        return step()
 
 
 def _usage(generator: PreparationGenerator, config: ModelConfig) -> dict:
@@ -399,7 +456,9 @@ def _usage(generator: PreparationGenerator, config: ModelConfig) -> dict:
 
 def _prepare(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     """Make the one reviewed call (or answer the request already prepared under this id, sending nothing)."""
-    chat, request, brief, prep, snapshot, _shown, config, blocked, _estimate_, review, replay = _planned(ctx, args)
+    planned = _planned(ctx, args)
+    chat, request, brief, prep = planned.chat, planned.request, planned.brief, planned.prep
+    config, blocked, review, replay = planned.config, planned.blocked, planned.review, planned.replay
     if args.get("expected") != review:
         raise ApiRefused("changed" if type(args.get("expected")) is str else "review_required",
                          "the evidence, the brief or the model settings changed since the estimate; nothing was sent")
@@ -412,8 +471,18 @@ def _prepare(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
         except (ConfigError, ValueError) as error:
             raise ApiRefused("no_model", str(error)) from None
     generator, kept = prep.generator, False
+
+    def step():  # type: ignore[no-untyped-def]
+        try:
+            return prep.session.prepare(request, brief)
+        finally:  # every attempt the call booked, in the trace like a turn's
+            for meter in () if generator is None else generator.meters:
+                record_calls(meter)
+
     try:
-        proposal = prep.session.prepare(request, brief)
+        runner = ctx.api.runner
+        # a replay sends nothing and is no trace; a reviewed call is one, ``scene_preparation``
+        proposal = step() if generator is None else _Probe(runner.tracer, runner.clock).run(step)
         kept = True
     except ApiRefused:
         raise
@@ -507,4 +576,4 @@ def _preparation(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     return _view(ctx, chat, _prep(ctx, chat))
 
 
-__all__ = ["LOCATION_KINDS", "PREP_PRINCIPAL", "SAVED", "assemble"]
+__all__ = ["LOCATION_KINDS", "OPERATION", "PREP_PRINCIPAL", "SAVED", "assemble"]

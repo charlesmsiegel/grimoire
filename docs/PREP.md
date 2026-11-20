@@ -60,8 +60,9 @@ The director's: every op refuses `director_only` in the table's view.
 
 **The evidence** is assembled again on every call from what the library holds for the chat:
 
-- *secret*: each proposition of the campaign's ledger that is not refuted and that no player character of the
-  chat believes, was told or sent; named `campaign:<id>#proposition/<id>`. A ledger that cannot be read in full
+- *secret*: each proposition of the campaign's ledger that is the director's truth (neither refuted nor ruled
+  `unknown`; one nobody ruled on, `unasserted`, counts) and that no player character of the chat believes, was
+  told or sent; each shows its standing; named `campaign:<id>#proposition/<id>`. A ledger that cannot be read in full
   refuses `knowledge_damaged` rather than call a secret missing;
 - *goal*: each goal of the agendas play runs for an NPC of the cast (the startup agendas, then the model
   settings'); named by the NPC;
@@ -73,14 +74,23 @@ The director's: every op refuses `director_only` in the table's view.
 Each item has an id such as `secret-1`; the cast is the chat's cast and the places are the campaign's
 instances of kind `location` or `place`. A kind with nothing in it is 064's `missing`.
 
-**The one call.** `prepare_plan` builds the exact prompt 064 would send and answers its estimate: the prompt's
-token estimate, the reply cap, the attempts and, when the model has prices, the most it can cost. Its `expected`
-token covers the brief, the evidence, the model settings and the estimate. `prepare` builds everything again and
-refuses `changed` unless the token still matches; only then does it run 064's generator, under a policy that
-allows exactly one `planning` call, through 013's adapter to the endpoint of the app's model settings, on an
-untrusted handle (`app:scene-preparer`) whose every attempt is approved for its exact payload. With no model set
-up (`no_model`), a key variable not set (`key_missing`), no evidence (`no_evidence`) or no place
-(`no_location`), the page says so and offers no call.
+**The one call.** It is off until the owner switches it on: the model settings' `preparation` (0 or 1, default 0),
+shown and switched in Models and costs as *Scene preparation* (an optional stage, off by default, cap 1). Off, the
+plan answers `not_enabled`, `prepare` refuses it, and the page shows preparing as unavailable with no button.
+
+`prepare_plan` builds the exact prompt 064 would send and answers its estimate: the app's token estimate for the
+prompt (`prompt_tokens`, about a third of its bytes: not a bound), a ceiling that counts each UTF-8 byte of every
+message as a token plus a few for each message (`prompt_tokens_at_most`), the reply cap, the attempts and, when the
+model has prices, the most it can cost (`cost_at_most`, priced at that ceiling and the whole reply cap; a retry to an
+unpriced fallback model is counted apart). Its `expected` token covers the brief, the evidence, the model settings
+and the estimate. `prepare` builds everything again and refuses `changed` unless the token still matches; only then
+does it run 064's generator, under the settings' preparation policy (exactly one `planning` call when on, none when
+off: 064's own `not_budgeted`), through 013's adapter to the endpoint of the app's model settings, on an untrusted
+handle (`app:scene-preparer`) whose every attempt is approved for its exact payload. The call is one 048 trace,
+`scene_preparation`, with every attempt it booked recorded as a turn's are, so `providers.diagnostics` (the recent
+calls on Models and costs) lists it with its stage, attempts, use and cost; a replay sends nothing and makes no
+trace. With no model set up (`no_model`), preparation off (`not_enabled`), a key variable not set (`key_missing`),
+no evidence (`no_evidence`) or no place (`no_location`), the page says so and offers no call.
 
 - The same request id, brief and evidence again is answered from the session: nothing is sent again
   (`replay`).
@@ -88,6 +98,7 @@ up (`no_model`), a key variable not set (`key_missing`), no evidence (`no_eviden
   `rejected`.
 - A reply 064 refuses (`unparseable`, `incomplete_length`, `unknown_evidence`, ...) keeps nothing, and its
   approval is spent: sending again needs the estimate again. What every call used is shown (`spent`).
+- A discarded request is done on the page too: estimating the same brief again starts a new request.
 
 **The result** shows the premise, cast, place, questions, clues, tensions, stakes and directions, each item
 with the evidence ids it rests on. Accepting needs all three acknowledgements; a scene whose evidence changed
@@ -109,4 +120,6 @@ since refuses `changed`.
 ## Not proved here
 
 The page runs end to end in fakedom against a real app server. It has not been used in a real browser, with a
-screen reader or on a phone, and no real provider was called. The prep call is not traced by 048.
+screen reader or on a phone, and no real provider was called. `providers.usage` reads a chat's stored turns, and a
+prepared scene is no turn and is never stored, so its call shows in the recent calls (048's trace) and in the
+session's `spent`, not in a chat's usage totals.

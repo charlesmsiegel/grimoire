@@ -60,7 +60,8 @@ export function estimateLines(call) {
     + (call.reply_tokens_at_most ? ", and at most " + plural(call.reply_tokens_at_most, "reply token") : "")
     + (call.attempts_at_most ? ", in at most " + plural(call.attempts_at_most, "attempt") : "") + ".");
   if (call.cost_state === "estimated") {
-    lines.push("It costs at most " + call.cost_at_most + " at the prices saved with the model (an estimate, not a bill)"
+    lines.push("It costs at most " + call.cost_at_most + " at the prices saved with the model, with the prompt counted as "
+      + plural(call.prompt_tokens_at_most, "token") + " (each of its bytes as a token, and a few for each message), an estimate, not a bill"
       + (call.unpriced_attempts_at_most ? ", plus " + plural(call.unpriced_attempts_at_most, "retry") + " to a fallback model that has no price" : "") + ".");
   } else {
     lines.push("No price is set for this model, so its cost cannot be estimated.");

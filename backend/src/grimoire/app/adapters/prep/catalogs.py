@@ -33,7 +33,7 @@ from grimoire.core.identity import ChatRef
 from grimoire.core.index import MissingDefinition
 from grimoire.effective import chat_snapshot
 from grimoire.scene import SceneRefused
-from grimoire.store import RecordNotFound, StoreError, StoredDefinition
+from grimoire.store import RecordNotFound, StoredDefinition, StoreError
 
 from ..campaign import hub_of
 from .common import campaign_of, director
@@ -73,7 +73,8 @@ def _catalogs(view) -> tuple[list[dict], list[dict], bool]:  # type: ignore[no-u
             if not isinstance(stored, StoredDefinition):
                 raise CatalogError("invalid_record", stored.ref)
             node = catalog_from_record(stored)
-            item.update(excludes=[str(ref) for ref in node.exclusions], depends_on=[str(ref) for ref in node.dependencies],
+            item.update(excludes=[str(ref) for ref in node.exclusions],
+                        depends_on=[str(ref) for ref in node.dependencies],
                         members=len(node.members))
             composed = compose_catalogs(view, (stored.ref,))
         except CatalogError as error:
@@ -82,7 +83,8 @@ def _catalogs(view) -> tuple[list[dict], list[dict], bool]:  # type: ignore[no-u
             continue
         kinds: dict[str, int] = {}
         for entry in composed.entries:
-            kinds[KINDS.get(entry.ref.kind, entry.ref.kind)] = kinds.get(KINDS.get(entry.ref.kind, entry.ref.kind), 0) + 1
+            kind = KINDS.get(entry.ref.kind, entry.ref.kind)
+            kinds[kind] = kinds.get(kind, 0) + 1
         listed = sorted(composed.entries, key=lambda entry: str(entry.ref))
         item.update(available=len(composed.entries), kinds=dict(sorted(kinds.items())),
                     basis=[{"catalog": str(origin.ref), "etag": origin.etag} for origin in composed.basis],

@@ -74,7 +74,7 @@ def stocked(device, chat) -> dict[str, str]:
 
 def settings(path: Path, mara: str, **extra) -> Path:
     raw = {"provider_id": "prep", "base_url": "https://prep.example/v1", "model": "prep-model",
-           "max_output_tokens": 800, "price_prompt": "3", "price_reply": "15",
+           "max_output_tokens": 800, "price_prompt": "3", "price_reply": "15", "preparation": 1,
            "agendas": [{"actor": mara, "goals": [{"id": "hide-coin", "aim": AIM, "priority": 2,
                                                   "approaches": [{"id": "deflect", "action": "change the subject"}]}]}],
            **extra}
