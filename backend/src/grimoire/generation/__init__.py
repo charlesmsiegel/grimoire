@@ -6,7 +6,7 @@ the planned calls through the provider adapter. See docs/GENERATION.md for the c
 
 from .errors import GenerationError
 from .plan import (
-    DECISION_PHASE, DECISION_PURPOSE, DIRECTOR_PURPOSE, checked_controls, controller, plan_generation_turn,
+    DECISION_PHASE, DECISION_PURPOSE, DIRECTOR_PURPOSE, PLANNING_PHASE, PLANNING_PURPOSE, checked_controls, controller, plan_generation_turn,
     require_director,
 )
 from .imported import (
@@ -21,10 +21,11 @@ from .brief import (
 )
 from .screen import REJECTIONS, screen_reply
 from .decision import MAX_OPTIONS, decision_messages, decision_options, read_pick
+from .presentation import MAX_SUGGESTION_CHARS, PLANNING_MAX_OUTPUT_TOKENS, planning_messages, with_suggestion
 
 __all__ = [
     "GenerationError",
-    "DECISION_PHASE", "DECISION_PURPOSE", "DIRECTOR_PURPOSE", "checked_controls", "controller",
+    "DECISION_PHASE", "DECISION_PURPOSE", "DIRECTOR_PURPOSE", "PLANNING_PHASE", "PLANNING_PURPOSE", "checked_controls", "controller",
     "plan_generation_turn", "require_director",
     "NO_VOICE_TEXT", "DerivedVoice", "VoiceNote", "VoiceReader", "VoiceTexts", "card_voice_texts", "derive_profile",
     "derive_voice", "example_lines", "imported_source", "text_of",
@@ -34,4 +35,5 @@ __all__ = [
     "npc_messages", "unrecognised",
     "REJECTIONS", "screen_reply",
     "MAX_OPTIONS", "decision_messages", "decision_options", "read_pick",
+    "MAX_SUGGESTION_CHARS", "PLANNING_MAX_OUTPUT_TOKENS", "planning_messages", "with_suggestion",
 ]

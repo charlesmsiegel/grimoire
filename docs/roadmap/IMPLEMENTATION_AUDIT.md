@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -22,6 +22,7 @@ This refresh inspected every merged change since the original [92144e17 audit](h
 | [#692](https://github.com/charlesmsiegel/grimoire/pull/692), [`e8e7188d`](https://github.com/charlesmsiegel/grimoire/commit/e8e7188d55cadadf32401043c316b27ec3315c0b) | Check 050: native named capture, one-ball retry/reopen, distinct same-species actor, reserve capacity, failed capture and crash recovery. 033 roster/UI and 115 remain separate. |
 | [#695](https://github.com/charlesmsiegel/grimoire/pull/695), [`1a742e4b`](https://github.com/charlesmsiegel/grimoire/commit/1a742e4b67038d00140d6eab116055b005aa614c) | Retain open Wave 6/7 exits: [offline acceptance](../ACCEPTANCE.md) proves synthetic native voice, keyboard/focus and emulated-phone Chromium journeys, not physical devices, touch or real screen readers. |
 | [#682](https://github.com/charlesmsiegel/grimoire/pull/682), [`0f7adcfb`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) | Check 112: actor-authorized current context and optional metered/replayed decisions in production CLI/Chromium. Wave 7 has 7/7 rows; global accessibility/device gate remains open. |
+| [#704](https://github.com/charlesmsiegel/grimoire/pull/704) | Check 053: attributable dossiers over several scenes; a corrected identity survives a stale and an older-basis recap end to end through the inspector, a generated brief and NPC context packs. UI, write path and sync remain with 115. |
 
 Historical refresh relative to #678: **+8 slices** (033, 051, 055, 057, 059, 060, 062, 113), **+1 wave** (4). At the refresh base, implementation PRs had already checked 033/055/113; this documentation diff adds 051/057/059/060/062 and reconciles stale summaries. Original scheduled scope and inherited first-proof obligations are unchanged.
 
@@ -40,7 +41,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 13/24 | ☐ | 049, 050, 051, 054, 055, 056, 057, 059, 060, 062, 063, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 14/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -51,7 +52,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 ### Follow-up refresh verification (b54b2bd8, 2026-11-20)
 
 - New-claim selection: **206 passed** in 24.81 seconds on Linux/Python 3.12. It covers ensemble, actor inference and reporting, institutions, social hypotheses, memory core/store/recovery, rumors/store/recovery and continuity actor-ID reservation. All providers are synthetic.
-- The 051/057/060 checkmarks reflect complete bounded headless proofs. 053/063/068 retain the missing full-scenario evidence above; neither a partial API nor a passing unit selection closes those slices.
+- The 051/057/060 checkmarks reflect complete bounded headless proofs. 068 retains the missing full-scenario evidence above; neither a partial API nor a passing unit selection closes those slices.
 - The initial 160-test focused selection (159 plus the separately rerun Chromium test below) exercises the previously changed claims and real application composition. Together with source/requirements review, count/link reconciliation and `git diff --check`, this is a targeted documentation-only local gate, not a substitute for required full cross-platform CI. The follow-up PR records fresh combined results for its exact head and the independently reviewed diff.
 
 ### Initial refresh verification (1b4f247a, 2026-11-20)
@@ -497,7 +498,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 050, 051, 054, 055, 056, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -523,9 +524,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-053"></a>
 ### 053 — Memory Consolidation
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/memory-consolidation.md)).
-- Evidence: [`memory/view.py`](../../backend/src/grimoire/memory/view.py), [`memorystore/library.py`](../../backend/src/grimoire/memorystore/library.py), [`test_memory.py`](../../backend/tests/test_memory.py) and [`test_memory_store.py`](../../backend/tests/test_memory_store.py) provide durable actor-scoped selections, corrections, stale-selection suppression, evidence provenance and bounded historical views; [`test_memory_recovery.py`](../../backend/tests/test_memory_recovery.py) covers local recovery.
-- Scope / gap: Partial foundation, not the complete several-scene consolidation proof: exact evidence selection/correction does not yet produce attributable summaries/dossiers or establish the corrected-character-identity versus older recap scenario end to end. The 049/054 correction export supplies pinned causal references only; it neither consolidates several scenes nor implements the older-recap identity correction proof. Context-pack, UI and sync adapters remain absent; see [contract](../MEMORY.md).
+- [x] Scheduled first-useful slice ([requirements](sprints/memory-consolidation.md)).
+- Evidence: [`memory/view.py`](../../backend/src/grimoire/memory/view.py), [`memorystore/library.py`](../../backend/src/grimoire/memorystore/library.py), [`test_memory.py`](../../backend/tests/test_memory.py) and [`test_memory_store.py`](../../backend/tests/test_memory_store.py) provide durable actor-scoped selections, corrections, stale-selection suppression, evidence provenance and bounded historical views; [`test_memory_recovery.py`](../../backend/tests/test_memory_recovery.py) covers local recovery. [`memory/dossier.py`](../../backend/src/grimoire/memory/dossier.py) consolidates authored, evidence-citing accounts into per-topic dossiers ([`test_memory_dossier.py`](../../backend/tests/test_memory_dossier.py)); [`test_memory_consolidation.py`](../../backend/tests/test_memory_consolidation.py) proves the scenario end to end: an NPC's perceptions across three scenes, a recap of the first two, the unmasking's correction and a backlog recap filed afterwards, through the durable ledger, `TextApi`'s runner wiring, the context inspector and a scripted generated brief. The corrected identity is the only account packed; the obsolete percept and both recaps never reach the pack or prompt; each remembered detail resolves to its exact evidence, scene and editor. [`test_context_memory.py`](../../backend/tests/test_context_memory.py) covers contested accounts, controller and moment mismatches.
+- Scope / gap: Bounded first proof. Accounts are authored by the controller (no model or automatic summarization, no TextApi or UI write path; 115 owns the UI); identity is a topic, not a structured field; no sync adapter; thousands-of-scenes scale (milestone 3) is unmeasured. See [contract](../MEMORY.md).
 
 <a id="slice-054"></a>
 ### 054 — Scenes Forks And Retcons
@@ -630,7 +631,8 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/actor-specific-inference.md)).
 - Evidence: [`actor_inference`](../../backend/src/grimoire/actor_inference), [`test_actor_inference.py`](../../backend/tests/test_actor_inference.py) and [`test_actor_inference_report.py`](../../backend/tests/test_actor_inference_report.py) provide opt-in actor-private planner/critic calls, baseline generation, conservative budget/cancellation, usage/latency reports and an injected synthetic comparison.
-- Scope / gap: Partial experiments only: actual billing remains unknown and matched measured V0.2.1 cost/voice evidence is absent (015). Synthetic lexical quality and estimated/priced token usage cannot close the proving scenario. UI/runtime adoption remains separate; see [measurement limits](../ACTOR_INFERENCE.md).
+- Runtime/UI adoption: the app's `planning` setting (0–16, off by default) runs one capped, untrusted presentation suggestion before each speaking NPC's reply through `GenerationRuntime`; with it off a turn is still one call per speaking NPC ([`test_presentation_planning.py`](../../backend/tests/test_presentation_planning.py)). `python -m grimoire.capture.v2` makes the billed V2-vs-V0.2.1 comparison one step on 015's capture ([`test_capture_v2.py`](../../backend/tests/test_capture_v2.py), dry run and loopback only).
+- Scope / gap: No billed comparison has been run: it waits on 015's live capture, and then needs its own spending approval. Actual billing remains unknown and matched measured V0.2.1 cost/voice evidence is absent. Against an `anthropic` capture, V2 reaches Anthropic through its OpenAI-compatible endpoint (no prompt caching, no cached-token counts), so cost will be reported `usage_incomplete`. Synthetic lexical quality and estimated/priced token usage cannot close the proving scenario; see [measurement limits](../ACTOR_INFERENCE.md).
 
 <a id="slice-069"></a>
 ### 069 — Coding Skills Calibration

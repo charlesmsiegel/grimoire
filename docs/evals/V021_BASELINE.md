@@ -138,6 +138,17 @@ python -m grimoire.evals.story_quality SCENARIO.json run.json run.json \
     --evidence-baseline evidence.json --evidence-candidate evidence.json
 ```
 
+### Comparing V2 against the capture (068)
+
+`python -m grimoire.capture.v2 --scenario guild_betrayal --baseline <capture dir> --out <new dir> --dry-run`
+plays the same three turns on V2's own generation runtime and gates V2 against the capture. It takes the
+provider, served model, output budget and attempt limit from the verified capture, so the two runs share
+their recording conditions (a reply from another model is recorded as served and makes the runs
+incomparable). `--live --confirm-billing --api-key-env VAR` makes it billed and is refused
+against a dry-run capture; `--with-planning` adds a second V2 run with 068's optional planning stage.
+See [ACTOR_INFERENCE](../ACTOR_INFERENCE.md#the-v2-against-021-comparison) for what it does and does
+not prove. A live comparison needs its own spending approval, separate from this capture's.
+
 ## What "measured" means, and cannot mean
 
 A `/2` run is reported **measured** only when its rebuilt usage ledger is complete and entirely
