@@ -9,8 +9,7 @@ from grimoire.rumorstore import RumorLibrary
 from ledger_helpers import OWNER, open_authority
 from evidence_fixtures import C, m
 from store_helpers import owner_handle
-from test_evidencestore_scenarios import seed_actors, append_u
-from test_rumor_store import rumor, ALL
+from test_rumor_store import rumor, seeded, ALL
 
 
 def service(store, authority):
@@ -21,8 +20,7 @@ def service(store, authority):
 def test_disk_recovery_around_evidence_append(tmp_path, monkeypatch, phase, after):
     root = tmp_path / 'lib'
     with LibraryStore.create(root) as store:
-        seed_actors(store)
-        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        seeded(store)
         with open_authority(store) as a:
             a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
             SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
@@ -40,7 +38,7 @@ def test_disk_recovery_around_evidence_append(tmp_path, monkeypatch, phase, afte
                     if phase == 'enqueue':
                         lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
                     else:
-                        lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
+                        lib.advance(C, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
     with LibraryStore.open(root) as store:
         with open_authority(store) as a:
             ev = EvidenceLibrary(store, a.handle_for('app:adjudicator', trusted=True))
@@ -49,8 +47,8 @@ def test_disk_recovery_around_evidence_append(tmp_path, monkeypatch, phase, afte
             if phase == 'enqueue':
                 lib.enqueue(rumor(), moment=m(21), requested_by=DIRECTOR)
             else:
-                lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(21), conditions=ALL, requested_by=DIRECTOR)
-            rows, _, _ = lib.trace(C, requested_by=DIRECTOR)
+                lib.advance(C, moment=m(21), conditions=ALL, requested_by=DIRECTOR)
+            rows, _ = lib.trace(C, requested_by=DIRECTOR)
             row = rows['news']
             assert row['enqueued'] and (row['delivered'] if phase == 'delivery' else True)
             assert [x.sequence for x in row['attempts'][phase]] == ([9 if phase == 'enqueue' else 10] if after else [9 if phase == 'enqueue' else 10, 21])
@@ -63,8 +61,7 @@ def test_committed_delivery_reconciles_even_when_route_is_now_blocked(tmp_path, 
     from test_rumor_store import BLOCK
     root = tmp_path / 'lib'
     with LibraryStore.create(root) as store:
-        seed_actors(store)
-        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        seeded(store)
         with open_authority(store) as a:
             a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
             SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
@@ -77,11 +74,11 @@ def test_committed_delivery_reconciles_even_when_route_is_now_blocked(tmp_path, 
             with monkeypatch.context() as patch:
                 patch.setattr(KnowledgeChange, 'commit', interrupted)
                 with pytest.raises(OSError):
-                    lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
+                    lib.advance(C, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
     with LibraryStore.open(root) as store:
         with open_authority(store) as a:
             lib = service(store, a)
-            result = lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(11), conditions=BLOCK, requested_by=DIRECTOR)
+            result = lib.advance(C, moment=m(11), conditions=BLOCK, requested_by=DIRECTOR)
             assert result['pending'] == 0
 
 
@@ -90,8 +87,7 @@ def test_conflicting_existing_output_fails_closed(tmp_path, monkeypatch):
     from grimoire.rumorstore.library import _id
     root = tmp_path / 'lib'
     with LibraryStore.create(root) as store:
-        seed_actors(store)
-        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        seeded(store)
         with open_authority(store) as a:
             a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
             SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
@@ -112,8 +108,7 @@ def test_conflicting_existing_output_fails_closed(tmp_path, monkeypatch):
 def test_staged_request_refuses_deleted_recipient(tmp_path, monkeypatch):
     root = tmp_path / 'lib'
     with LibraryStore.create(root) as store:
-        seed_actors(store)
-        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        seeded(store)
         with open_authority(store) as a:
             a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
             SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
@@ -136,8 +131,7 @@ def test_staged_request_refuses_deleted_recipient(tmp_path, monkeypatch):
 def test_disk_recovery_at_authority_journal_boundaries(tmp_path, monkeypatch, phase, kind, after):
     root = tmp_path / 'lib'
     with LibraryStore.create(root) as store:
-        seed_actors(store)
-        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        seeded(store)
         with open_authority(store) as a:
             a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
             SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
@@ -158,7 +152,7 @@ def test_disk_recovery_at_authority_journal_boundaries(tmp_path, monkeypatch, ph
                     if phase == 'enqueue':
                         lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
                     else:
-                        lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
+                        lib.advance(C, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
     with LibraryStore.open(root) as store:
         with open_authority(store) as a:
             ev = EvidenceLibrary(store, a.handle_for('app:adjudicator', trusted=True))
@@ -167,7 +161,7 @@ def test_disk_recovery_at_authority_journal_boundaries(tmp_path, monkeypatch, ph
             if phase == 'enqueue':
                 lib.enqueue(rumor(), moment=m(21), requested_by=DIRECTOR)
             else:
-                lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(21), conditions=ALL, requested_by=DIRECTOR)
+                lib.advance(C, moment=m(21), conditions=ALL, requested_by=DIRECTOR)
             row = lib.trace(C, requested_by=DIRECTOR)[0]['news']
             assert row['enqueued'] and (row['delivered'] if phase == 'delivery' else True)
             knowledge = ev.read(C, requested_by=DIRECTOR).knowledge
@@ -179,8 +173,7 @@ def test_invalid_initial_attempts_do_not_poison_request_or_delivery(tmp_path):
     from dataclasses import replace
     root = tmp_path / 'lib'
     with LibraryStore.create(root) as store:
-        seed_actors(store)
-        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        seeded(store)
         with open_authority(store) as a:
             a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
             SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
@@ -196,13 +189,13 @@ def test_invalid_initial_attempts_do_not_poison_request_or_delivery(tmp_path):
             assert lib.trace(C, requested_by=DIRECTOR)[0] == {}
             lib.enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
             with pytest.raises(ValueError):
-                lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(2_000_000), conditions=ALL, requested_by=DIRECTOR)
+                lib.advance(C, moment=m(2_000_000), conditions=ALL, requested_by=DIRECTOR)
             assert lib.trace(C, requested_by=DIRECTOR)[0]['news']['attempts']['delivery'] == []
     with LibraryStore.open(root) as store:
         with open_authority(store) as a:
             lib = service(store, a)
             assert lib.trace(C, requested_by=DIRECTOR)[0]['news']['attempts']['delivery'] == []
-            lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
+            lib.advance(C, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
             assert lib.trace(C, requested_by=DIRECTOR)[0]['news']['delivered']
             lib.enqueue(replace(rumor(), communication_id='maximum', text='x' * 20000), moment=m(11), requested_by=DIRECTOR)
             assert lib.trace(C, requested_by=DIRECTOR)[0]['maximum']['enqueued']
@@ -216,8 +209,7 @@ def test_real_file_crash_reopens_and_reconciles(tmp_path, phase, target, nth, wh
     root = tmp_path / 'lib'
     locker = ProcessLocker()
     with LibraryStore.create(root, locker=locker) as store:
-        seed_actors(store)
-        append_u(EvidenceLibrary(store, owner_handle(), owner=OWNER))
+        seeded(store)
         with open_authority(store) as a:
             a.add_grant(Grant('g', 'app:adjudicator', frozenset({Permission.APPLY}), ResourcePath.parse('campaigns'), OWNER))
             SovereigntyLedger(a).record(C, ControlChange(C, 'mara', DIRECTOR), a.handle_for(OWNER, trusted=True))
@@ -232,7 +224,7 @@ def test_real_file_crash_reopens_and_reconciles(tmp_path, phase, target, nth, wh
                 if phase == 'enqueue':
                     service(store, a).enqueue(rumor(), moment=m(9), requested_by=DIRECTOR)
                 else:
-                    service(store, a).advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
+                    service(store, a).advance(C, moment=m(10), conditions=ALL, requested_by=DIRECTOR)
     with LibraryStore.open(root, locker=locker) as store:
         with open_authority(store) as a:
             ev = EvidenceLibrary(store, a.handle_for('app:adjudicator', trusted=True))
@@ -241,7 +233,7 @@ def test_real_file_crash_reopens_and_reconciles(tmp_path, phase, target, nth, wh
             if phase == 'enqueue':
                 lib.enqueue(rumor(), moment=m(21), requested_by=DIRECTOR)
             else:
-                lib.advance(C, clock_id='calendar', clock_unit='day', tick=3, moment=m(21), conditions=ALL, requested_by=DIRECTOR)
+                lib.advance(C, moment=m(21), conditions=ALL, requested_by=DIRECTOR)
             row = lib.trace(C, requested_by=DIRECTOR)[0]['news']
             assert row['enqueued'] and (row['delivered'] if phase == 'delivery' else True)
             knowledge = ev.read(C, requested_by=DIRECTOR)
