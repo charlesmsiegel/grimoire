@@ -20,7 +20,7 @@ import pytest
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
 from grimoire.scene import Post, SceneLine, Take, TurnRecord
 from grimoire.voicecast import (
-    CastEntry, Casting, CastingError, SpeechVoice, casting_from_document, casting_to_document, explain,
+    MAX_SCRIPT, CastEntry, Casting, CastingError, SpeechVoice, casting_from_document, casting_to_document, explain,
     plan_performance, render_performance, script_of, wav_seconds,
 )
 
@@ -31,7 +31,9 @@ PC = InstanceRef("quay", "character", "sam-1")
 WREN_R1 = SourceRef("world:harbor", "character", "wren", "r1")
 WREN_R2 = SourceRef("world:harbor", "character", "wren", "r2")  # Wren's new outfit
 ODO_R1 = SourceRef("world:harbor", "character", "odo", "r1")
-DUCHESS = SourceRef("world:harbor", "character", "masked-duchess", "r1")  # an alternate portrayal
+#: Wren in her noir outfit: a derived portrayal with no voice profile of its own, so its lines are written with
+#: the base's profile (014's inheritance): the line records ``wren-noir@r1`` as its revision, ``wren@r1`` as its voice.
+NOIR = SourceRef("world:harbor", "character", "wren-noir", "r1")
 TABLE = (PC, WREN, ODO)
 
 
@@ -174,15 +176,37 @@ def test_a_line_keeps_the_revision_it_was_spoken_in_whatever_the_source_says_now
     assert (cues["l4"].status, cues["l4"].reason) == ("text_only", "not_cast")
 
 
-def test_an_alternate_portrayal_speaks_in_the_portrayals_voice():
-    turns = (turn(1, line("l1", WREN, "Charmed, I'm sure.", WREN_R1, DUCHESS)),)
-    cast = CAST.with_entry(CastEntry("character", voice("awb"), DUCHESS.unpinned()))
-    cue = plan_performance(turns, cast).cues[0]
-    assert cue.voice_key == "tone/awb"
+def test_an_outfit_with_no_profile_of_its_own_speaks_in_its_base_voice_unless_it_is_cast_itself():
+    turns = (turn(1, line("l1", WREN, "Charmed, I'm sure.", NOIR, WREN_R1)),)
+    cue = plan_performance(turns, CAST).cues[0]
+    assert cue.voice_key == "tone/kal"  # the base's voice, through the profile the line was written with
     assert [item.rule for item in cue.considered] == [
-        "actor", "portrayal", "portrayal_any_revision", "revision", "character_any_revision"]
-    # without a voice for the portrayal, the actor's own character voice is used
-    assert plan_performance(turns, CAST).cues[0].voice_key == "tone/kal"
+        "actor", "revision", "character_any_revision", "voice_profile", "voice_profile_any_revision"]
+    assert explain(cue).endswith("that profile's character at any revision world:harbor/character/wren: tone/kal).")
+    # the outfit cast on its own speaks in its own voice, though the base is cast too
+    for ref in (NOIR, NOIR.unpinned()):
+        cast = CAST.with_entry(CastEntry("character", voice("awb"), ref))
+        assert plan_performance(turns, cast).cues[0].voice_key == "tone/awb"
+    # a base revision cast on its own reaches the outfit's lines written with that revision's profile
+    cast = CAST.with_entry(CastEntry("character", voice("rms"), WREN_R1))
+    assert plan_performance(turns, cast).cues[0].voice_key == "tone/rms"
+
+
+def test_a_post_speaks_in_the_voice_of_the_character_its_actor_plays():
+    turns = (turn(1, post=speech("Who keeps the customs house?")),)
+    sam = SourceRef("world:harbor", "character", "sam")
+    cast = Casting((CastEntry("character", voice("awb"), sam),))
+    assert plan_performance(turns, cast).cues[0].reason == "not_cast"  # nothing says whom Sam plays
+    cue = plan_performance(turns, cast, sources={PC: sam}).cues[0]
+    assert (cue.voice_key, [item.rule for item in cue.considered]) == ("tone/awb", ["actor", "character_any_revision"])
+    pinned = plan_performance(turns, cast, sources={PC: SourceRef("world:harbor", "character", "sam", "r3")}).cues[0]
+    assert [item.rule for item in pinned.considered] == ["actor", "revision", "character_any_revision"]
+    assert pinned.voice_key == "tone/awb"
+    # the actor's own entry still wins, and only a character definition can be what an actor plays
+    own = cast.with_entry(CastEntry("actor", voice("kal"), PC))
+    assert plan_performance(turns, own, sources={PC: sam}).cues[0].voice_key == "tone/kal"
+    lamp = SourceRef("world:harbor", "item", "lamp")
+    assert plan_performance(turns, cast, sources={PC: lamp}).cues[0].considered[1:] == ()
 
 
 def test_a_disputed_choice_names_every_rule_it_looked_at():
@@ -224,6 +248,8 @@ def test_planning_changes_no_text_and_refuses_what_is_not_one_chat():
         plan_performance((*turns, other), CAST)
     assert refused.value.reason == "invalid_turns"
     assert script_of("*nods* *smiles*", narrator=False) == ""
+    # a stage direction never closed runs to the end of the line: it is not spoken
+    assert script_of("Run. *She leans in, voice low. Now.", narrator=False) == "Run."
 
 
 # -- the casting -----------------------------------------------------------------------------------------------
@@ -325,3 +351,53 @@ def test_wav_seconds_refuses_what_is_not_a_whole_recording():
     assert wav_seconds(good[:60]) is None  # the header promises samples the file does not hold
     assert wav_seconds(b"RIFF" + b"\0" * 60) is None and wav_seconds("text") is None
     assert wav_seconds(tone_wav(0, 300)) is None
+
+
+def test_a_fingerprint_moves_when_the_scene_or_its_casting_does():
+    turns = scene()
+    plan = plan_performance(turns, CAST)
+    assert plan_performance(turns, CAST).fingerprint == plan.fingerprint
+    assert plan_performance(turns[:1], CAST).fingerprint != plan.fingerprint
+    recast = CAST.with_entry(CastEntry("character", voice("awb"), ODO_R1.unpinned()))
+    assert plan_performance(turns, recast).fingerprint != plan.fingerprint
+
+
+def test_no_campaign_never_names_every_campaigns_narrator():
+    cast = Casting((CastEntry("narrator", voice("kal")), CastEntry("narrator", voice("slt"), campaign="quay")))
+    for campaign in ("", "bad/name", 7):
+        with pytest.raises(CastingError) as refused:
+            cast.without("narrator", campaign=campaign)
+        assert refused.value.reason == "invalid_target"
+    assert cast.without("narrator", campaign="quay").entries == (CastEntry("narrator", voice("kal")),)
+    assert cast.without("narrator").entries == (CastEntry("narrator", voice("slt"), campaign="quay"),)
+
+
+class Silent(Tones):
+    """An engine installed but with no voices (an ffmpeg built without Flite)."""
+
+    def voices(self):
+        return ()
+
+
+def test_an_engine_with_no_voices_and_a_cue_too_long_to_speak_stay_text_without_a_call():
+    plan = plan_performance(scene(), CAST)
+    silent = Silent()
+    rendering = render_performance(plan, [silent])
+    assert silent.calls == []
+    assert {segment.reason for segment in rendering.segments if segment.voice} == {"engine_unavailable"}
+    long = "Word " * (MAX_SCRIPT // 5 + 1)
+    turns = (turn(1, line("l1", None, long), line("l2", ODO, "Short.", ODO_R1)),)
+    tones = Tones()
+    rendering = render_performance(plan_performance(turns, CAST), [tones])
+    assert [(segment.status, segment.reason) for segment in rendering.segments] == [
+        ("text_only", "too_long"), ("audio", None)]
+    assert tones.calls == [("Short.", "rms")]
+
+
+def test_a_render_that_runs_past_its_time_budget_ends_its_window_there():
+    plan = plan_performance(scene(), CAST)
+    ticks = iter(range(100))
+    rendering = render_performance(plan, [Tones()], clock=lambda: float(next(ticks)), budget=3.0)
+    # the clock reads 0 at the start and one more each time a voiced cue is about to start
+    assert [segment.status for segment in rendering.segments].count("audio") == 2
+    assert rendering.next is not None and plan.cues[rendering.next].status == "voiced"

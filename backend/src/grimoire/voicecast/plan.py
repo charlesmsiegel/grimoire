@@ -14,13 +14,16 @@ action post and a speaker nobody cast are **text only**: shown and captioned, ne
 The voice is chosen by the line's own recorded identity, never by a name or the source's head now:
 
 1. the campaign's own choice for the actor (``actor``),
-2. the line's recorded portrayal at exactly its revision, then at any revision (an alternate portrayal's voice),
-3. the actor's recorded definition revision exactly, then the character at any revision,
+2. the definition revision the line recorded its actor speaking as, exactly, then that character at any revision,
+3. the voice profile the line was written with, when it is another revision's (a derived portrayal, such as an
+   outfit, with no profile of its own inherits its base's: 022/014's ``_inherited_profile``), exactly, then that
+   character at any revision,
 
 and for narration the campaign's narrator, then every campaign's. So a line spoken in revision ``r1`` keeps ``r1``'s
-voice after the source moves to ``r2``, an outfit or version switch keeps the character's voice unless that
-revision was cast on its own, and every cue lists each rule it considered (``considered``), so a disputed choice
-shows where it came from. Pure: no store, engine, clock or I/O.
+voice after the source moves to ``r2``; an outfit (a derived portrayal) speaks with its own voice when one is cast
+for it and with its base's otherwise. A post records no revision: its speaker is voiced by the actor's own entry,
+then the character the actor plays (``sources``). Every cue lists each rule it considered (``considered``), so a
+disputed choice shows where it came from. Pure: no store, engine, clock or I/O.
 """
 
 from __future__ import annotations
@@ -39,7 +42,8 @@ NARRATOR_LABEL = "Narrator"
 #: Cue statuses and the reasons a cue is text only.
 VOICED, TEXT_ONLY = "voiced", "text_only"
 REASONS = ("not_cast", "action", "no_speech")
-_DIRECTION = re.compile(r"\*[^*]*\*")
+#: A stage direction runs from one asterisk to the next, or to the end of the text when it is never closed.
+_DIRECTION = re.compile(r"\*[^*]*(?:\*|$)")
 _SPACE = re.compile(r"\s+")
 
 
@@ -96,6 +100,13 @@ class Performance:
     shared: tuple[SharedVoice, ...]
 
     @property
+    def fingerprint(self) -> str:
+        """What the performance is: each cue's item, text digest, status and voice. A client that renders it in
+        windows names this, so a scene that changed between two windows is refused, not played out of step."""
+        rows = "\n".join(f"{cue.item}\t{cue.digest}\t{cue.status}\t{cue.voice_key or ''}" for cue in self.cues)
+        return digest(rows)
+
+    @property
     def voiced(self) -> tuple[Cue, ...]:
         return tuple(cue for cue in self.cues if cue.status == VOICED)
 
@@ -125,6 +136,9 @@ def _choose(rules: list[tuple[str, str, tuple[str, str]]], lookup: Mapping[tuple
 
 def _character_rules(actor: InstanceRef | None, revision: SourceRef | None, portrayal: SourceRef | None
                      ) -> list[tuple[str, str, tuple[str, str]]]:
+    """The actor's own entry; the recorded revision, then its character; the voice profile the line was written
+    with (an inherited base's, when the revision has none of its own), then its character. The revision always
+    ranks above the profile it inherits, so a derived portrayal cast on its own speaks in its own voice."""
     rules: list[tuple[str, str, tuple[str, str]]] = []
     if actor is not None:
         rules.append(("actor", str(actor), ("actor", str(actor))))
@@ -135,14 +149,13 @@ def _character_rules(actor: InstanceRef | None, revision: SourceRef | None, port
             seen.add(str(ref))
             rules.append((rule, str(ref), ("character", str(ref))))
 
-    alternate = portrayal is not None and (revision is None or portrayal.entity_key != revision.entity_key)
-    if portrayal is not None and portrayal != revision:
-        add("portrayal", portrayal)
-        if alternate:
-            add("portrayal_any_revision", portrayal.unpinned())
-    add("revision", revision)
-    own = revision if revision is not None else (None if alternate else portrayal)
-    add("character_any_revision", own.unpinned() if own is not None else None)
+    if revision is not None:
+        if revision.pinned:  # a post's character may be unpinned: then only its any-revision entry applies
+            add("revision", revision)
+        add("character_any_revision", revision.unpinned())
+    if portrayal is not None:
+        add("voice_profile", portrayal)
+        add("voice_profile_any_revision", portrayal.unpinned())
     return rules
 
 
@@ -181,12 +194,14 @@ def _table_lines(turn: TurnRecord) -> tuple[SceneLine, ...]:
     return tuple(line for line in lines if table.intersection(line.audience))
 
 
-def plan_performance(turns: Iterable[TurnRecord], casting: Casting, names: Mapping[InstanceRef, str] | None = None
-                     ) -> Performance:
-    """The performance of ``turns`` (one chat's line) under ``casting``. ``names`` labels posts' speakers."""
+def plan_performance(turns: Iterable[TurnRecord], casting: Casting, names: Mapping[InstanceRef, str] | None = None,
+                     sources: Mapping[InstanceRef, SourceRef] | None = None) -> Performance:
+    """The performance of ``turns`` (one chat's line) under ``casting``. ``names`` labels posts' speakers, and
+    ``sources`` gives the character each posting actor plays (a post records no revision of its own)."""
     if type(casting) is not Casting:
         raise CastingError("invalid_casting", "plan_performance needs a Casting")
     names = names or {}
+    sources = sources or {}
     lookup = casting.lookup()
     ordered = sorted(turns, key=lambda turn: turn.number)
     if not all(type(turn) is TurnRecord for turn in ordered):
@@ -199,7 +214,10 @@ def plan_performance(turns: Iterable[TurnRecord], casting: Casting, names: Mappi
             if post.private:
                 continue
             speaker = names.get(post.actor) or post.actor.instance_id
-            cues.append(_cue(len(cues), turn, "post", turn.post_id(number), speaker, post.actor, None, None,
+            played = sources.get(post.actor)
+            if played is not None and (type(played) is not SourceRef or played.kind != "character"):
+                played = None  # only a character definition is a character's voice
+            cues.append(_cue(len(cues), turn, "post", turn.post_id(number), speaker, post.actor, played, None,
                              post.text, post.kind == "action" or post.channel is None, lookup))
         for line in _table_lines(turn):
             speaker = NARRATOR_LABEL if line.actor is None else line.speaker
@@ -217,10 +235,10 @@ def plan_performance(turns: Iterable[TurnRecord], casting: Casting, names: Mappi
 
 _RULE_WORDS = {
     "actor": "the campaign's own choice for",
-    "portrayal": "the portrayal",
-    "portrayal_any_revision": "the portrayal at any revision",
     "revision": "the revision",
     "character_any_revision": "the character at any revision",
+    "voice_profile": "the voice profile it was written with",
+    "voice_profile_any_revision": "that profile's character at any revision",
     "narrator": "",
     "narrator_every_campaign": "",
 }

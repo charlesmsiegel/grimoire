@@ -1,9 +1,11 @@
 """Sprint 083's adapter ops: character voice performance. Called as ``voicecast.<op>``; see docs/VOICE_CASTING.md.
 
 The casting (who speaks with which local voice) is ``grimoire.voicecaststore``'s file in the open library's own
-``config`` folder. A chat's performance is planned from the turns opening the chat shows (the runner's own read),
-never from a draft, a proposal or a private message, and no op here writes a turn, a source or a campaign: the
-accepted text stays exactly as it is, and audio is only ever produced from it.
+``config`` folder. A chat's performance is planned from the turns opening the chat shows (the runner's own read,
+which may note 020's pending knowledge as any open does), never from a draft, a proposal or a private message. No
+op here writes a turn or a source: the accepted text stays exactly as it is, and audio is only ever produced from
+it. A forked chat (two devices' turns from one number on) is refused ``turn_fork``: its branches are not one
+scene.
 
 Synthesis is local only: the engines are trusted configuration (by default ``ffmpeg``'s Flite voices when this
 ``ffmpeg`` has them), never chosen by a request, and nothing is sent anywhere, billed or kept. Audio is answered as
@@ -17,10 +19,12 @@ The ops: ``read`` (the casting, each engine and its voices), ``cast`` and ``unca
 from __future__ import annotations
 
 import base64
+import time
 from collections.abc import Callable, Mapping
 from threading import Lock
 
 from grimoire.app.adapter import Adapter, AdapterContext, Handler
+from grimoire.core.entity_codec import CodecError, instance_from_payload
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
 from grimoire.store import RecordNotFound, StoreError
 from grimoire.textapi import ApiRefused, TextApi
@@ -35,6 +39,9 @@ from grimoire.voicecaststore import CastingStore
 #: call stays short and the page asks for the next window while the first plays.
 DEFAULT_WINDOW = 6
 MAX_WINDOW = 12
+#: Synthesis stops starting new cues after this many seconds of one render (at least one cue always renders):
+#: an engine that hangs holds the library for at most this plus one cue's own timeout.
+RENDER_BUDGET = 20.0
 _ATTRIBUTE = "_voicecast_state"
 _MADE = Lock()
 _ABSENT = object()
@@ -177,10 +184,30 @@ def _cue_view(cue: Cue) -> dict:
             "why": explain(cue)}
 
 
+def _played(ctx: AdapterContext, actors: set[InstanceRef]) -> dict[InstanceRef, SourceRef]:
+    """The character each posting actor plays, from its campaign instance; an actor that cannot be read plays none
+    (its posts are then voiced by its own entry only)."""
+    found: dict[InstanceRef, SourceRef] = {}
+    for actor in actors:
+        try:
+            envelope = ctx.store.read(actor).envelope
+            schema = envelope.extra.get("schema")
+            source = instance_from_payload(actor, schema if isinstance(schema, str) else "", envelope.payload).source
+        except (RecordNotFound, StoreError, CodecError, ValueError, OSError, AttributeError):
+            continue
+        if isinstance(source, SourceRef):
+            found[actor] = source
+    return found
+
+
 def _performance(ctx: AdapterContext, chat: ChatRef):  # type: ignore[no-untyped-def]
     view = _store(ctx).view()
     scene = ctx.runner.open(chat)
-    performance = plan_performance(scene.records, view.casting, scene.names)
+    if any(code == "turn_fork" for code, _detail in scene.problems):
+        raise ApiRefused("turn_fork", "this chat's turns fork (two devices played the same turn); its branches are "
+                         "not one scene to read aloud until the fork is resolved", 409)
+    posting = {post.actor for record in scene.records for post in record.posts if not post.private}
+    performance = plan_performance(scene.records, view.casting, scene.names, _played(ctx, posting))
     problems = [{"code": code, "detail": detail} for code, detail in scene.problems]
     if view.problem is not None:
         problems.append({"code": f"casting_{view.problem.reason}", "detail": view.problem.path})
@@ -221,7 +248,8 @@ def _uncast(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
 def _plan(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     chat = _chat(args)
     performance, problems = _performance(ctx, chat)
-    return {"chat": str(chat), "cues": [_cue_view(cue) for cue in performance.cues],
+    return {"chat": str(chat), "fingerprint": performance.fingerprint,
+            "cues": [_cue_view(cue) for cue in performance.cues],
             "shared": [{"voice": shared.voice, "speakers": list(shared.speakers)} for shared in performance.shared],
             "engines": _engines(ctx), "problems": problems}
 
@@ -232,17 +260,24 @@ def _render(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     audio = args.get("audio", True)
     if type(audio) is not bool:
         raise ApiRefused("invalid_field", "audio must be true or false")
+    expected = args.get("fingerprint")
+    if expected is not None and type(expected) is not str:
+        raise ApiRefused("invalid_field", "fingerprint must be the one voicecast.plan or render gave, or null")
     performance, problems = _performance(ctx, chat)
+    if expected is not None and expected != performance.fingerprint:
+        raise ApiRefused("changed", "the scene or its casting changed since that fingerprint; plan it again", 409)
     start = _int(args, "start", 0, 0, len(performance.cues))
-    rendering = render_performance(performance, _state(ctx.api).synthesizers, start=start, count=count, audio=audio)
+    rendering = render_performance(performance, _state(ctx.api).synthesizers, start=start, count=count, audio=audio,
+                                   clock=time.monotonic, budget=RENDER_BUDGET)
     segments = []
     for segment in rendering.segments:
         cue = performance.cues[segment.cue]
-        segments.append({"cue": segment.cue, "speaker": cue.speaker, "text": cue.text, "digest": segment.digest,
+        segments.append({"cue": segment.cue, "turn": cue.turn, "item": cue.item, "speaker": cue.speaker, "text": cue.text, "digest": segment.digest,
                          "voice": segment.voice, "status": segment.status, "reason": segment.reason,
                          "start": round(segment.start, 3), "duration": round(segment.duration, 3),
                          "audio": None if segment.audio is None else base64.b64encode(segment.audio).decode("ascii")})
-    return {"chat": str(chat), "total": len(performance.cues), "start": start, "next": rendering.next,
+    return {"chat": str(chat), "fingerprint": performance.fingerprint, "total": len(performance.cues),
+            "start": start, "next": rendering.next,
             "segments": segments, "problems": problems}
 
 
@@ -272,4 +307,4 @@ ADAPTER = Adapter("voicecast", owner="083", ops={
     "read": _op(_read, writes=False), "plan": _op(_plan, writes=False), "render": _op(_render, writes=False),
     "cast": _op(_cast, writes=True), "uncast": _op(_uncast, writes=True)})
 
-__all__ = ["ADAPTER", "DEFAULT_WINDOW", "MAX_WINDOW", "VoicecastState", "configure"]
+__all__ = ["ADAPTER", "DEFAULT_WINDOW", "MAX_WINDOW", "RENDER_BUDGET", "VoicecastState", "configure"]

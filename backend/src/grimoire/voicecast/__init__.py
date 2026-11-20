@@ -14,7 +14,7 @@ from .plan import (
     plan_performance, script_of,
 )
 from .render import (
-    GAP, MAX_AUDIO, MAX_CHARS, MAX_CUES, RENDER_REASONS, Rendering, Segment, Synthesizer, render_performance,
+    GAP, MAX_AUDIO, MAX_CHARS, MAX_CUES, MAX_SCRIPT, RENDER_REASONS, Rendering, Segment, Synthesizer, render_performance,
     wav_seconds,
 )
 
@@ -23,6 +23,6 @@ __all__ = [
     "casting_from_document", "casting_to_document", "entry_from_document", "entry_to_document",
     "NARRATOR_LABEL", "REASONS", "TEXT_ONLY", "VOICED", "Considered", "Cue", "Performance", "SharedVoice", "digest",
     "explain", "plan_performance", "script_of",
-    "GAP", "MAX_AUDIO", "MAX_CHARS", "MAX_CUES", "RENDER_REASONS", "Rendering", "Segment", "Synthesizer",
+    "GAP", "MAX_AUDIO", "MAX_CHARS", "MAX_CUES", "MAX_SCRIPT", "RENDER_REASONS", "Rendering", "Segment", "Synthesizer",
     "render_performance", "wav_seconds",
 ]

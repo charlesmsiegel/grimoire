@@ -23,7 +23,8 @@ ENGINE = "flite"
 RATE = 16000
 #: The longest script one cue may send, and how long one synthesis may run.
 MAX_SCRIPT = 4000
-TIMEOUT = 60
+TIMEOUT = 30
+LIST_TIMEOUT = 10
 _SCRIPT_FILE = "line.txt"
 
 
@@ -54,17 +55,19 @@ class FliteSynthesizer:
                               timeout=timeout, check=False)
 
     def voices(self) -> tuple[str, ...]:
-        """The Flite voices this ``ffmpeg`` has, asked once (none when it has no ffmpeg or no Flite)."""
+        """The Flite voices this ``ffmpeg`` has (none when it has no ffmpeg or no Flite). A list that was found is
+        kept; an empty one is asked again next time, so one slow or failed listing does not last."""
         with self._lock:
-            if self._voices is None:
-                self._voices = self._list()
+            if self._voices:
+                return self._voices
+            self._voices = self._list()
             return self._voices
 
     def _list(self) -> tuple[str, ...]:
         if self._tool is None:
             return ()
         try:
-            listed = self._run(["-f", "lavfi", "-i", "flite=list_voices=1"])
+            listed = self._run(["-f", "lavfi", "-i", "flite=list_voices=1"], timeout=LIST_TIMEOUT)
         except (OSError, subprocess.SubprocessError):
             return ()
         found = []

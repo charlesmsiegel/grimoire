@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import io
 import wave
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -25,12 +25,15 @@ from .plan import TEXT_ONLY, VOICED, Performance
 #: One render call covers at most this many cues and this much script, so one request stays bounded.
 MAX_CUES = 32
 MAX_CHARS = 8000
-#: One cue's audio: a longer answer is refused, not kept.
-MAX_AUDIO = 4 * 1024 * 1024
+#: The longest script one cue speaks: a longer cue stays text (``too_long``) and is never sent to an engine.
+MAX_SCRIPT = 4000
+#: One cue's audio: a longer answer is refused, not kept. 4000 characters of slow speech fit well inside it.
+MAX_AUDIO = 16 * 1024 * 1024
 #: The pause between two spoken cues, in seconds.
 GAP = 0.3
 #: Why a segment has no audio beyond the cue's own reason.
-RENDER_REASONS = ("audio_off", "engine_unavailable", "voice_unavailable", "synthesis_failed", "invalid_audio")
+RENDER_REASONS = ("audio_off", "too_long", "engine_unavailable", "voice_unavailable", "synthesis_failed",
+                  "invalid_audio")
 
 
 class Synthesizer(Protocol):
@@ -97,9 +100,11 @@ def _engines(synthesizers: Mapping[str, Synthesizer] | Iterable[Synthesizer]) ->
 
 def render_performance(performance: Performance, synthesizers: Mapping[str, Synthesizer] | Iterable[Synthesizer],
                        *, start: int = 0, count: int = MAX_CUES, audio: bool = True, gap: float = GAP,
-                       max_chars: int = MAX_CHARS) -> Rendering:
+                       max_chars: int = MAX_CHARS, clock: Callable[[], float] | None = None,
+                       budget: float | None = None) -> Rendering:
     """Render cues ``start`` to ``start + count`` (at most ``MAX_CUES``, and no more script than ``max_chars``
-    unless one cue alone is longer). ``next`` is where the following call starts."""
+    unless one cue alone is longer). With ``clock`` and ``budget`` (seconds), no synthesis starts once the
+    budget is spent: the window ends there, after at least one cue. ``next`` is where the following call starts."""
     if type(performance) is not Performance:
         raise CastingError("invalid_performance", "render_performance renders a Performance")
     if type(start) is not int or not 0 <= start <= len(performance.cues):
@@ -110,10 +115,13 @@ def render_performance(performance: Performance, synthesizers: Mapping[str, Synt
     known: dict[str, tuple[str, ...] | None] = {}
     segments: list[Segment] = []
     at, spent = 0.0, 0
+    began = clock() if clock is not None and budget is not None else None
     index = start
     while index < len(performance.cues) and index < start + count:
         cue = performance.cues[index]
         if cue.status == VOICED and segments and spent + len(cue.script) > max_chars:
+            break
+        if cue.status == VOICED and segments and began is not None and clock() - began >= budget:  # type: ignore[misc,operator]
             break
         index += 1
         if cue.status != VOICED or cue.chosen is None:
@@ -124,6 +132,8 @@ def render_performance(performance: Performance, synthesizers: Mapping[str, Synt
         data = None
         if not audio:
             reason = "audio_off"
+        elif len(cue.script) > MAX_SCRIPT:
+            reason = "too_long"
         else:
             engine = engines.get(voice.engine)
             if engine is not None and voice.engine not in known:
@@ -131,7 +141,7 @@ def render_performance(performance: Performance, synthesizers: Mapping[str, Synt
                     known[voice.engine] = tuple(engine.voices())
                 except Exception:  # an engine that cannot say what it has has none to use
                     known[voice.engine] = None
-            if engine is None or known.get(voice.engine) is None:
+            if engine is None or not known.get(voice.engine):  # an engine with no voices has none to speak
                 reason = "engine_unavailable"
             elif voice.voice not in known[voice.engine]:  # type: ignore[operator]
                 reason = "voice_unavailable"
@@ -153,5 +163,5 @@ def render_performance(performance: Performance, synthesizers: Mapping[str, Synt
     return Rendering(tuple(segments), index if index < len(performance.cues) else None)
 
 
-__all__ = ["GAP", "MAX_AUDIO", "MAX_CHARS", "MAX_CUES", "RENDER_REASONS", "Rendering", "Segment", "Synthesizer",
+__all__ = ["GAP", "MAX_AUDIO", "MAX_CHARS", "MAX_CUES", "MAX_SCRIPT", "RENDER_REASONS", "Rendering", "Segment", "Synthesizer",
            "render_performance", "wav_seconds"]

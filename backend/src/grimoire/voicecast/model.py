@@ -150,7 +150,15 @@ class Casting:
 
     def get(self, target: str, ref: SourceRef | InstanceRef | None = None, campaign: str | None = None
             ) -> CastEntry | None:
-        key = ("narrator", campaign or "") if target == "narrator" else (target, str(ref))
+        if target == "narrator":
+            if campaign is not None:  # "" is no campaign: it never names every campaign's narrator
+                try:
+                    validate_segment(campaign, "campaign")
+                except (ValueError, TypeError) as error:
+                    raise _fail("invalid_target", str(error)) from None
+            key = ("narrator", campaign or "")
+        else:
+            key = (target, str(ref))
         return self.lookup().get(key)
 
     def with_entry(self, entry: CastEntry) -> Casting:

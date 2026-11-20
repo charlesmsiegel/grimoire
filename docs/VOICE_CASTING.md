@@ -79,25 +79,34 @@ The following are never cued:
 **The text is never changed.** A cue carries the accepted `text` and its `digest` (sha256). It also carries a
 derived `script`, which is what the voice says:
 
-- In a character's line, `*stage directions*` are left unspoken.
+- In a character's line, `*stage directions*` are left unspoken, and one never closed runs to the end of the line.
 - Narration is read with its asterisks dropped.
 - An action post is text only (`action`), and so is a line that is all stage direction (`no_speech`).
 
 Audio is never turned back into text, and pronunciation or prosody edits (sprint milestone 2) are not part of this
 slice.
 
-**A line keeps the voice of the revision it was spoken in.** A scene line pins the definition revision its actor
-spoke as (`actor_revision`) and the portrayal it was written in (`voice_profile`). The voice is chosen from those
-recorded refs, never from the source's head. Changing a character's outfit, or making a new revision, changes no
+**A line keeps the voice of the revision it was spoken in.** A scene line pins two refs:
+
+- `actor_revision`: the definition revision its actor spoke as;
+- `voice_profile`: the voice profile it was written with. This is the revision's own profile or, for a derived
+  portrayal with none of its own (an outfit, a disguise), the nearest base's (`generation/voice.py`).
+
+The voice is chosen from those recorded refs, never from the source's head. Making a new revision changes no
 earlier line's voice. A pinned entry (`...@r2`) applies only to lines spoken at that revision.
 
 For a character's line, the first rule that has a voice wins:
 
 1. `actor`: the campaign's own choice for the actor.
-2. `portrayal`: the portrayal's exact revision, when it is not the recorded revision itself.
-3. `portrayal_any_revision`: an alternate portrayal (another character's profile), at any revision.
-4. `revision`: the line's recorded revision.
-5. `character_any_revision`: the character at any revision.
+2. `revision`: the line's recorded revision, exactly.
+3. `character_any_revision`: that character at any revision.
+4. `voice_profile`: the profile the line was written with, exactly, when it is another revision's.
+5. `voice_profile_any_revision`: that profile's character at any revision.
+
+So an outfit cast on its own speaks in its own voice, and an outfit nobody cast speaks in its base's voice.
+
+A post records no revision of its own. Its speaker is voiced by the actor's own entry, then by the character the
+actor's campaign instance plays now (`revision` when the instance pins one, then `character_any_revision`).
 
 The narrator's rules are `narrator`, for this campaign, and then `narrator_every_campaign`.
 
@@ -116,20 +125,32 @@ the cast voice's engine is called once:
 - The cue's audio comes back as a base64 WAV, with its `start` and `duration`, laid end to end with a 0.3 s gap.
 - `next` is where the following window starts, or `null` at the end.
 
-A page plays one window while it asks for the next. One call covers at most 8000 characters of script.
+A page plays one window while it asks for the next. One call covers at most 8000 characters of script, and starts
+no new synthesis after 20 seconds (one cue's synthesis may take up to 30 more), so a stuck engine holds the
+library only that long.
+
+`plan` and `render` answer the performance's `fingerprint`. This covers each cue's item, text digest, status and
+voice, and each segment names its `turn` and `item`. A render that names a `fingerprint` is refused `changed` when
+the scene or its casting has moved on since. A page then plans again, and never plays one window's cues out of
+step with the next.
+
+A chat whose turns fork is refused `turn_fork`. That happens when two devices each played the same turn number,
+and its branches are not one scene.
 
 A cue stays text, and the rest of the window still renders, in each of these cases:
 
 | reason | what happened |
 |---|---|
 | `audio_off` | `audio: false` was asked: nothing is synthesized and the scene reads as text |
-| `engine_unavailable` | this device has no such engine, or the engine cannot list its voices |
+| `too_long` | the cue's script is over 4000 characters; it is never sent to an engine |
+| `engine_unavailable` | this device has no such engine, or the engine has no voices now (an `ffmpeg` without Flite) |
 | `voice_unavailable` | the engine does not have that voice |
 | `synthesis_failed` | the engine failed; its message is not kept (it could quote the line) and the call is not retried |
 | `invalid_audio` | the engine's answer is not a whole, bounded WAV |
 
-Rendering never falls back to another engine or voice. No op here writes a turn, a source or a campaign, and
-nothing that was rendered is kept.
+Rendering never falls back to another engine or voice, and nothing that was rendered is kept. No op here writes a
+turn or a source. Planning opens the chat as the play page does, so it may note 020's pending knowledge for an
+accepted effect, as any open does.
 
 ### Engines
 
@@ -141,10 +162,11 @@ the engine and are cast with `rights: engine`.
 
 - The line reaches `ffmpeg` as a file in a private temporary folder, named by a fixed relative name, so no part of
   the text is ever parsed as filter syntax. The folder is removed after each cue.
-- An `ffmpeg` without Flite reports no voices, and every cue cast to it stays text.
+- An `ffmpeg` without Flite reports no voices, and every cue cast to it stays text. A voice list that was found is
+  kept; an empty one is asked for again next time.
 
-`grimoire.app.adapters.voicecast.configure(api, synthesizers)` installs other local engines; tests use it to install a tone engine. No
-provider, network or bill is involved anywhere in this slice. CI's `voice` job runs the Flite test, including in a
+`grimoire.app.adapters.voicecast.configure(api, synthesizers)` installs other local engines; tests use it to
+install a tone engine. No provider, network or bill is involved anywhere in this slice. CI's `voice` job runs the Flite test, including in a
 process with no network (`backend/tests/test_app_voicecast.py`).
 
 ## Ops
@@ -154,8 +176,8 @@ process with no network (`backend/tests/test_app_voicecast.py`).
 | `voicecast.read` | none | `casting` (each entry with `describes` and `available`), `etag`, `problem`, `engines` with their voices, `targets`, `rights` |
 | `voicecast.cast` | `target`, `ref` or `campaign`, `engine`, `voice`, `rights` (default `engine`), `note`, `expected` | the new `read` |
 | `voicecast.uncast` | `target`, `ref` or `campaign`, `expected` | the new `read` (`not_cast` when nothing was cast there) |
-| `voicecast.plan` | `chat` | `cues` (text, digest, script, status, reason, voice, `considered`, `why`), `shared`, `engines`, `problems` |
-| `voicecast.render` | `chat`, `start`, `count`, `audio` | `segments` (cue, speaker, text, digest, voice, status, reason, start, duration, audio), `total`, `next`, `problems` |
+| `voicecast.plan` | `chat` | `fingerprint`, `cues` (turn, item, text, digest, script, status, reason, voice, `considered`, `why`), `shared`, `engines`, `problems` |
+| `voicecast.render` | `chat`, `start`, `count`, `audio`, `fingerprint` | `fingerprint`, `segments` (cue, turn, item, speaker, text, digest, voice, status, reason, start, duration, audio), `total`, `next`, `problems` |
 
 `cast` and `uncast` are refused `read_only` on a library opened read-only.
 
@@ -165,7 +187,7 @@ The following are left for later:
 
 - Author-controlled pronunciation, prosody and expression (sprint milestone 2).
 - Mood and inflection cues (milestone 3).
-- Per-portrayal voice profiles beyond the alternate-portrayal rule.
+- Splitting a cue longer than 4000 characters into several syntheses.
 - Syncing a casting between devices.
 - Engines with licensed or consented voices: the casting records their rights, but this slice ships no such engine.
 - The page that plays a scene, which is sprint 116's.

@@ -214,3 +214,46 @@ def test_flite_speaks_each_character_in_its_own_local_voice(tmp_path):
     assert audio[1]["start"] >= audio[0]["duration"]
     first, second = (base64.b64decode(segment["audio"]) for segment in audio)
     assert first != second
+
+
+def test_a_players_post_speaks_in_the_voice_of_the_character_they_play(table):
+    api, _folder, chat, tones = table
+    _cast(api, target="character", ref="card:anya-rook/character/anya-rook", voice="awb")
+    post = api.call("voicecast.plan", {"chat": chat})["cues"][0]
+    assert (post["speaker"], post["status"], post["voice"]["voice"]) == ("Anya Rook", "voiced", "awb")
+    assert [item["rule"] for item in post["considered"]][-1] == "character_any_revision"
+
+
+def test_a_window_names_its_items_and_a_scene_that_moved_on_is_refused(table):
+    api, _folder, chat, _tones = table
+    _cast(api, target="character", ref=MARA, voice="kal")
+    plan = api.call("voicecast.plan", {"chat": chat})
+    first = api.call("voicecast.render", {"chat": chat, "count": 2, "fingerprint": plan["fingerprint"]})
+    assert first["fingerprint"] == plan["fingerprint"]
+    assert [(segment["turn"], segment["item"]) for segment in first["segments"]] == [
+        (cue["turn"], cue["item"]) for cue in plan["cues"][:2]]
+    _cast(api, target="character", ref=MARA, voice="rms")  # the casting changed between two windows
+    _refused(api, "voicecast.render", {"chat": chat, "start": first["next"], "fingerprint": plan["fingerprint"]},
+             "changed", 409)
+    _refused(api, "voicecast.render", {"chat": chat, "fingerprint": 3}, "invalid_field", 400)
+
+
+def test_no_campaign_is_refused_and_never_uncasts_every_campaigns_narrator(table):
+    api, _folder, _chat, _tones = table
+    cast = _cast(api, target="narrator", voice="slt")
+    _refused(api, "voicecast.uncast", {"target": "narrator", "campaign": "", "expected": cast["etag"]},
+             "invalid_target", 400)
+    _refused(api, "voicecast.cast", {"target": "narrator", "campaign": "", "engine": "tone", "voice": "kal",
+                                     "expected": cast["etag"]}, "invalid_target", 400)
+    assert [entry["describes"] for entry in api.call("voicecast.read", {})["casting"]] == [
+        "the narrator of every campaign"]
+
+
+def test_flite_without_an_engine_offers_no_voices_and_asks_again_next_time(tmp_path):
+    missing = FliteSynthesizer(tool=str(tmp_path / "no-ffmpeg"))
+    assert missing.voices() == () and missing.voices() == ()
+    if os.path.exists("/bin/false"):  # an ffmpeg that fails every run
+        failing = FliteSynthesizer(tool="/bin/false")
+        assert failing.voices() == ()
+        with pytest.raises(ValueError):
+            failing.synthesize("Hello.", "kal")
