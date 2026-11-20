@@ -34,6 +34,9 @@ test("each rule finds what it is for", () => {
     [el("button", { type: "button" }, el("a", { href: "#/x" }, "inner")), "nested-interactive"],
     [el("div", { onclick: () => {} }, "Tap me"), "click-events-have-key-events"],
     [el("div", { class: "row", onclick: () => {} }, "A row", el("button", { type: "button" }, "Delete")), "click-events-have-key-events"],
+    [el("button", { type: "button" }, el("img", { src: "x.png", alt: "Close", "aria-hidden": "true" })), "button-name"],
+    [el("button", { type: "button" }, el("span", { hidden: true }, el("img", { src: "x.png", alt: "Close" }))), "button-name"],
+    [el("div", { class: "tile", onclick: () => {} }, "A tile", el("dialog", {}, el("p", {}, "Closed"))), "click-events-have-key-events"],
     [el("button", { type: "button" }, el("span", { "aria-hidden": "true" }, "×")), "button-name"],
     [el("details", {}, el("summary", {}, "More", el("button", { type: "button" }, "Inside"))), "nested-interactive"],
     [el("div", {}, el("label", { for: "masked", "aria-hidden": "true" }, "Name"), el("input", { id: "masked", type: "text" })), "label"],
@@ -54,6 +57,7 @@ test("hidden subtrees are left out, and named things pass", () => {
     el("a", { href: "#/home" }, el("img", { src: "x.png", alt: "Home" })),
     el("div", { role: "button", tabindex: "0", onclick: () => {} }, "Tap me"),
     el("img", { src: "x.png", alt: "" }),
+    el("button", { type: "button", "aria-labelledby": "quiet-name" }), el("span", { id: "quiet-name", hidden: true }, "Close"),
     el("button", { type: "button", "aria-describedby": "later-hint" }, "Save"), el("p", { id: "later-hint", hidden: true }, "Saved in place"),
     el("nav", { "aria-label": "Sections", onclick: () => {} }, el("a", { href: "#/a" }, "A")));
   assert.deepEqual(rules(root), []);

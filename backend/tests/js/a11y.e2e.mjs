@@ -25,13 +25,23 @@ const base = process.env.GRIMOIRE_APP;
 const chat = process.env.GRIMOIRE_CHAT;
 const campaign = process.env.GRIMOIRE_CAMPAIGN;
 
+// requests to the app still outstanding: a screen is not settled while one is (a loaded machine answers late)
+let outstanding = 0;
+function counting() {
+  const fetch = globalThis.fetch;
+  globalThis.fetch = (...args) => {
+    outstanding += 1;
+    return fetch(...args).finally(() => { outstanding -= 1; });
+  };
+}
+
 // the screen has stopped changing: its text the same over a few checks, and no request outstanding
 async function settled(what) {
   let last = null;
   let same = 0;
   await until(() => {
     const now = document.body.textContent + "|" + document.body.querySelectorAll("button").filter((node) => node.disabled).length;
-    same = now === last ? same + 1 : 0;
+    same = now === last && outstanding === 0 ? same + 1 : 0;
     last = now;
     return same >= 5 && !/Loading/.test(document.body.querySelector("main").textContent);
   }, 20000, what + " to settle");
@@ -39,6 +49,7 @@ async function settled(what) {
 
 test("every screen passes the structural accessibility audit", { skip: !base }, async () => {
   const window = install(base);
+  counting();
   window.location.hash = "#token=" + encodeURIComponent(process.env.GRIMOIRE_TOKEN);
   await import("/static/shell/shell.js");
   const body = document.body;
@@ -48,7 +59,6 @@ test("every screen passes the structural accessibility audit", { skip: !base }, 
   const found = [];
   const check = async (where) => {
     await settled(where);
-    if (process.env.A11Y_DEBUG) console.log("## " + where + ": " + body.querySelector("main").textContent.slice(0, 200));
     for (const violation of audit(body)) found.push(where + ": " + describe(violation));
   };
   const visit = async (hash) => {

@@ -76,6 +76,31 @@ function allIds(root) {
 
 function byId(all, id) { return all.find(({ node }) => node.getAttribute("id") === id); }
 
+function anyById(root, id) {
+  for (const child of root.childNodes || []) {
+    if (!child.tagName) continue;
+    if (child.getAttribute("id") === id) return child;
+    const found = anyById(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+// alt text of the images a person hears: hidden and aria-hidden ones are left out
+function heardAlts(node) {
+  const alts = [];
+  const walk = (at) => {
+    for (const child of at.childNodes || []) {
+      if (!child.tagName) continue;
+      if (child.getAttribute("aria-hidden") === "true" || child.hasAttribute("hidden") || child.tagName === "TEMPLATE") continue;
+      if (child.tagName === "IMG") { const alt = (child.getAttribute("alt") || "").trim(); if (alt) alts.push(alt); }
+      walk(child);
+    }
+  };
+  walk(node);
+  return alts;
+}
+
 function focusable(node) {
   const tabindex = node.getAttribute("tabindex");
   if (tabindex !== null) return Number(tabindex) >= 0;
@@ -86,10 +111,13 @@ function focusable(node) {
 }
 
 // the accessible name, by the parts of the name computation the shell relies on
-export function nameOf(node, all) {
+export function nameOf(node, all, root = null) {
   const labelledby = node.getAttribute("aria-labelledby");
   if (labelledby) {
-    const parts = labelledby.split(/\s+/).filter(Boolean).map((id) => byId(all, id)).filter(Boolean).map(({ node: n }) => text(n));
+    // a referenced element names even when hidden (accname: its text is used whatever its hiding)
+    const lookup = (id) => { const seen = byId(all, id); return seen ? seen.node : root && anyById(root, id); };
+    const parts = labelledby.split(/\s+/).filter(Boolean).map(lookup).filter(Boolean)
+      .map((n) => (n.textContent || "").replace(/\s+/g, " ").trim());
     if (parts.join("").trim()) return parts.join(" ").trim();
   }
   const label = node.getAttribute("aria-label");
@@ -113,8 +141,7 @@ export function nameOf(node, all) {
   } else if (node.tagName !== "IMG") {
     const own = text(node);
     if (own) return own;
-    const images = node.querySelectorAll ? node.querySelectorAll("img") : [];
-    const alts = images.map((img) => (img.getAttribute("alt") || "").trim()).filter(Boolean);
+    const alts = heardAlts(node);
     if (alts.length) return alts.join(" ");
   } else {
     const alt = node.getAttribute("alt");
@@ -162,16 +189,16 @@ export function audit(root, { page = true } = {}) {
     const tabindex = node.getAttribute("tabindex");
     if (tabindex !== null && Number(tabindex) > 0) flag("tabindex", node, tabindex);
 
-    if (CONTROLS.has(tag) && node.getAttribute("type") !== "hidden" && !nameOf(node, all)) flag("label", node);
+    if (CONTROLS.has(tag) && node.getAttribute("type") !== "hidden" && !nameOf(node, all, root)) flag("label", node);
     if (tag === "LABEL" && node.getAttribute("for") !== null) {
       const target = byId(all, node.getAttribute("for"));
       if (!target || !CONTROLS.has(target.node.tagName)) flag("label-for", node, node.getAttribute("for"));
     }
-    if (tag === "BUTTON" && !nameOf(node, all)) flag("button-name", node);
-    if (tag === "A" && node.hasAttribute("href") && !nameOf(node, all)) flag("link-name", node);
+    if (tag === "BUTTON" && !nameOf(node, all, root)) flag("button-name", node);
+    if (tag === "A" && node.hasAttribute("href") && !nameOf(node, all, root)) flag("link-name", node);
     if (tag === "IMG" && node.getAttribute("alt") === null && role !== "presentation" && role !== "none") flag("image-alt", node);
-    if (role === "img" && !nameOf(node, all)) flag("role-img-alt", node);
-    if ((tag === "DIALOG" || role === "dialog" || role === "alertdialog") && !nameOf(node, all) && !node.getAttribute("aria-labelledby")) {
+    if (role === "img" && !nameOf(node, all, root)) flag("role-img-alt", node);
+    if ((tag === "DIALOG" || role === "dialog" || role === "alertdialog") && !nameOf(node, all, root)) {
       flag("aria-dialog-name", node);
     }
     if (/^H[1-6]$/.test(tag) && !text(node)) flag("empty-heading", node);
@@ -179,15 +206,15 @@ export function audit(root, { page = true } = {}) {
       const parent = node.parentNode;
       if (!parent || !["UL", "OL", "MENU"].includes(parent.tagName) && parent.getAttribute("role") !== "list") flag("listitem", node);
     }
-    if ((tag === "SECTION" || role === "region") && node.hasAttribute("aria-labelledby") && !nameOf(node, all)) flag("region-name", node);
-    if (role && WIDGET_ROLES.has(role) && !INTERACTIVE.has(tag) && !nameOf(node, all)) flag("aria-command-name", node, role);
+    if ((tag === "SECTION" || role === "region") && node.hasAttribute("aria-labelledby") && !nameOf(node, all, root)) flag("region-name", node);
+    if (role && WIDGET_ROLES.has(role) && !INTERACTIVE.has(tag) && !nameOf(node, all, root)) flag("aria-command-name", node, role);
     // something clickable must be reachable and announced as what it is
     // (a listener on a landmark, a dialog, or the frame around the page's main is delegation or a backdrop's
     // light dismiss, not a control itself; any other clickable container, like a row holding a Delete button, is;
     // an option of a listbox is reached by aria-activedescendant from its focused combobox, not by Tab)
     const clicks = node.listeners && (node.listeners.get("click") || []).length;
     const delegates = () => ["DIALOG", "NAV", "MAIN"].includes(tag) || ["dialog", "alertdialog", "navigation", "main"].includes(role)
-      || node.querySelectorAll("main,nav,dialog").length > 0;
+      || node.querySelectorAll("main,nav").length > 0 || node.querySelectorAll("dialog").some((inner) => inner.open);
     if (clicks && !INTERACTIVE.has(tag) && !(role && WIDGET_ROLES.has(role)) && !delegates()) {
       flag("click-events-have-key-events", node, tag.toLowerCase() + (node.className ? "." + node.className.split(/\s+/).join(".") : ""));
     } else if (clicks && role && WIDGET_ROLES.has(role) && role !== "option" && !INTERACTIVE.has(tag) && !focusable(node)) {
@@ -207,7 +234,7 @@ export function audit(root, { page = true } = {}) {
     const mains = landmarks("main");
     if (mains.length !== 1) flag("landmark-one-main", root, mains.length + " main landmarks");
     const navs = landmarks("navigation");
-    if (navs.length > 1) for (const { node } of navs) if (!nameOf(node, all)) flag("landmark-unique", node, "an unnamed nav among several");
+    if (navs.length > 1) for (const { node } of navs) if (!nameOf(node, all, root)) flag("landmark-unique", node, "an unnamed nav among several");
     const headings = all.filter(({ node, ariaHidden }) => !ariaHidden && /^H[1-6]$/.test(node.tagName));
     if (!headings.some(({ node }) => node.tagName === "H1")) flag("page-has-heading-one", root);
   }
