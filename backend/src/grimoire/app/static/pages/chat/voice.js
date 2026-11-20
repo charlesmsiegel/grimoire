@@ -136,7 +136,7 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
   const back = ui.button("Back to typing", () => backToTyping(), { title: "Esc while listening" });
   const read = ui.button("Read aloud", () => readAloud(state.lastText), { size: "small" });
   const pause = ui.button("Pause reading", () => togglePause(), { size: "small" });
-  const replay = ui.button("Read again", () => { if (state.player) { state.player.restart(); say("Reading again."); } }, { size: "small" });
+  const replay = ui.button("Read again", () => readAgain(), { size: "small" });
   const bar = el("div", { class: "chat-voice-bar" });
   const node = el("section", { class: "chat-voice", "aria-label": "Voice" },
     bar, statusLine, question, captions);
@@ -151,17 +151,24 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
     // "Listening" only once the microphone is taking samples: speech before that would be cut at its start
     statusLine.textContent = state.listening ? (state.listening.live ? "Listening… speak now, or press Alt+V or Esc to stop."
       : "Opening the microphone… wait for \u201cListening\u201d.")
+      : state.hearing ? "Working out what was said… Esc goes back to typing."
       : STATUS_TEXT[stt] || "Voice isn't available here. Typing works as always.";
     listen.textContent = state.listening ? "Stop listening" : (state.pending ? "Answer by voice" : "Listen once");
     // Only what can be used is shown, never a control that cannot work; playback only once something was read.
     const listens = Boolean(state.listening) || (ready("stt") && Boolean(record));
     bar.replaceChildren(...(listens ? [listen, back] : []), ...(ready("tts") && play ? [read] : []),
       ...(state.player ? [pause, replay] : []));
-    pause.textContent = state.player && state.player.paused ? "Resume reading" : "Pause reading";
-    question.replaceChildren(...(state.pending ? [
-      el("p", {}, "Did you mean “" + state.pending.text + "”?"),
-      ui.button("Yes", () => answer("yes"), { kind: "primary", size: "small" }),
-      ui.button("No", () => answer("no"), { size: "small" })] : []));
+    const held = state.listening ? !state.resumeReading : Boolean(state.player && state.player.paused);
+    pause.textContent = held ? "Resume reading" : "Pause reading";
+    // Built once per question, so a redraw keeps focus on Yes or No
+    const asking = state.pending ? state.pending.token : null;
+    if ((asking || "") !== (question.getAttribute("data-asking") || "")) {
+      question.setAttribute("data-asking", asking || "");
+      question.replaceChildren(...(state.pending ? [
+        el("p", {}, "Did you mean “" + state.pending.text + "”?"),
+        ui.button("Yes", () => answer("yes"), { kind: "primary", size: "small" }),
+        ui.button("No", () => answer("no"), { size: "small" })] : []));
+    }
   }
 
   async function refresh() {
@@ -172,7 +179,8 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
 
   // One window: the token is latched when it opens, never after; a pending question's token goes with it.
   async function open(trigger) {
-    if (state.listening || !ready("stt") || !record) return;
+    // one window at a time, through recognition: a second press waits until the first is answered
+    if (state.listening || state.hearing || !ready("stt") || !record) return;
     const capture = state.status.capture_token;
     const proposal = state.pending ? state.pending.token : null;
     let finish;
@@ -207,6 +215,7 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
     if (!audio || state.disposed) return;
     let heard;
     state.hearing = true;
+    draw();
     try {
       heard = await ctx.api("speech.listen", { audio, trigger, capture_token: capture, proposal_token: proposal });
     } catch (error) { say("Voice didn't answer. Typing works as always."); return; }
@@ -288,14 +297,28 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
     try { spoken = await ctx.api("speech.speak", { text }); } catch (error) { say("Read-aloud didn't answer."); return; }
     if (spoken.status !== "ok" || !spoken.audio) { say("Read-aloud isn't available just now; the text stays on screen."); return; }
     if (state.player) state.player.dispose();
-    state.player = play(spoken.audio, () => { draw(); });
-    say("Reading: " + spoken.caption);
+    // never into an open window: synthesis that finishes while listening starts when the window closes
+    const waits = Boolean(state.listening);
+    state.player = play(spoken.audio, () => { draw(); }, { start: !waits });
+    if (waits) state.resumeReading = true;
+    say((waits ? "Reading after listening: " : "Reading: ") + spoken.caption);
     draw();
   }
   function togglePause() {
     if (!state.player) return;
-    if (state.player.paused) state.player.resume(); else state.player.pause(false);
-    say(state.player.paused ? "Paused reading." : "Resumed reading.");
+    if (state.listening) {  // reading waits for the window; this press says whether it goes on afterwards
+      state.resumeReading = !state.resumeReading;
+      say(state.resumeReading ? "Reading goes on after listening." : "Reading stays paused.");
+    } else {
+      if (state.player.paused) state.player.resume(); else state.player.pause(false);
+      say(state.player.paused ? "Paused reading." : "Resumed reading.");
+    }
+    draw();
+  }
+  function readAgain() {
+    if (!state.player) return;
+    if (state.listening) { state.player.pause(true); state.resumeReading = true; say("Reading again after listening."); }
+    else { state.player.restart(); say("Reading again."); }
     draw();
   }
 
@@ -329,12 +352,12 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
 // Plays base64 WAV through an <audio> element on a blob: URL (the page's policy allows media from blob: only).
 export function browserPlayer() {
   if (typeof globalThis.Audio !== "function" || typeof globalThis.URL?.createObjectURL !== "function") return null;
-  return (base64, changed) => {
+  return (base64, changed, { start = true } = {}) => {
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
     const audio = new Audio(url);
     audio.addEventListener("ended", changed);
-    audio.play().catch(() => changed());
+    if (start) audio.play().catch(() => changed());
     return {
       get paused() { return audio.paused; },
       pause(stop) { audio.pause(); if (stop) audio.currentTime = 0; },

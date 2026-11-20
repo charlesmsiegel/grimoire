@@ -158,6 +158,8 @@ that can work, and a status line that says when voice is off or unavailable:
   microphone is taking samples, and pauses any reading aloud while it listens
   (resuming afterwards unless what was said paused or stopped it). A cancelled
   window is never sent, and an answer that arrives after Back to typing is dropped.
+  One window is open at a time, through recognition, and reading never starts
+  inside an open window: synthesis that finishes while listening waits for it.
 - Every result is a caption in a `role=log` list; blocked windows say why.
 - An instant command (pause, stop, resume, cancel) acts; the person's words go
   into the composer as a draft to check; a low-confidence miss can be used as a
@@ -219,7 +221,8 @@ on the corpus:
 | Recognition latency per window (this machine) | p50 ~0.04 s, p95 ~0.16 s, max ~1 s |
 
 The three misses are recognizer errors on clean "stop"/"pause" clips; each
-fails safe (nothing acts). The test gate requires zero unintended, wrong and
+fails safe (nothing acts). Safety counts every window of a case, so a later
+typed recovery cannot erase an earlier wrong action. The test gate requires zero unintended, wrong and
 bystander actions, no bystander recognized, and completion of at least 85%.
 A capture analyzer that passes everything, or a recognizer that always hears
 "open map", fails the gate. Results depend on these synthetic voices and this

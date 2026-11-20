@@ -45,9 +45,9 @@ function strip({ served = true, answers = {}, initial = status(), recordFails = 
     window.open = false;
     return { samples: new Float32Array(4800).fill(0.1), rate: 48000 };
   };
-  const play = (audio, changed) => {
-    const player = { audio, paused: false, restarts: 0, disposed: false, changed,
-      pause(stop) { this.paused = true; this.stopped = stop; }, resume() { this.paused = false; },
+  const play = (audio, changed, { start = true } = {}) => {
+    const player = { audio, paused: !start, started: start, restarts: 0, disposed: false, changed,
+      pause(stop) { this.paused = true; this.stopped = stop; }, resume() { this.paused = false; this.started = true; },
       restart() { this.restarts += 1; this.paused = false; }, dispose() { this.disposed = true; } };
     plays.push(player);
     return player;
@@ -139,7 +139,7 @@ test("an uncertain safe command waits for Yes or No, by button or by a second sp
   s.press("Listen once");
   await settle();
   assert.match(s.voice.node.textContent, /Did you mean “open inventory”\?/);
-  assert.equal(document.activeElement.textContent, "Yes", "focus moves to Yes");
+  assert.equal(document.activeElement, byText(s.voice.node, "button", "Yes")[0], "focus stays on the Yes that is shown");
   assert.equal(byText(s.voice.node, "button", "Answer by voice").length, 1);
   s.press("Yes");
   await settle();
@@ -299,4 +299,42 @@ test("an answer that arrives after Back to typing is dropped unseen", async () =
   await settle();
   assert.equal(s.composer.input.value, "", "no draft lands after the person chose typing");
   assert.equal(s.captions().length, 0);
+});
+
+test("synthesis that finishes while a window listens waits for the window to close", async () => {
+  let spoken;
+  const s = strip({ hold: true, answers: { "speech.speak": () => new Promise((resolve) => { spoken = resolve; }),
+    "speech.listen": () => heard({ caption: "I wave", action: "draft", draft: "I wave" }) } });
+  await settle();
+  s.voice.setLatest("A reply.");
+  s.press("Read aloud");
+  await settle();
+  s.key({ key: "v", altKey: true });
+  s.recordings[0].onOpen();
+  spoken({ status: "ok", caption: "A reply.", audio: "UklGRg==" });
+  await settle();
+  assert.equal(s.plays[0].started, false, "nothing plays into the open window");
+  assert.equal(s.captions().at(-1), "Reading after listening: A reply.");
+  s.key({ key: "v", altKey: true });  // ends the window
+  await settle();
+  assert.equal(s.plays[0].started, true);
+  assert.equal(s.plays[0].paused, false);
+});
+
+test("one window at a time: a press while the last one is being heard opens nothing", async () => {
+  let reply;
+  const s = strip({ answers: { "speech.listen": () => new Promise((resolve) => { reply = resolve; }) } });
+  await settle();
+  s.press("Listen once");
+  await settle();
+  assert.match(s.voice.node.textContent, /Working out what was said/);
+  s.key({ key: "v", altKey: true });
+  s.press("Listen once");
+  await settle();
+  assert.equal(s.recordings.length, 1);
+  reply(heard({ caption: "I wave", action: "draft", draft: "I wave" }));
+  await settle();
+  s.press("Listen once");
+  await settle();
+  assert.equal(s.recordings.length, 2);
 });

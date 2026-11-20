@@ -273,7 +273,10 @@ def evaluate_audio(cases: tuple[AudioCase, ...], backend, context: RoutingContex
     for case in cases:
         session = SpeechSession((backend,), Policy(stt=Selection("local_only", info.id), recording=True), context)
         outcome, hypothesis, sequence, first_recognized = ("none", None), None, 0, False
+        acts = []  # every command acted in any window: a later recovery cannot erase an earlier wrong action
         for index, window in enumerate(case.windows):
+            if outcome[0] == "act":
+                acts.append(outcome[1])
             pending = session.pending if outcome[0] == "review" else None
             if window.typed is not None:
                 if window.answer:  # the reviewed proposal's typed Yes; with nothing pending it confirms nothing
@@ -304,20 +307,22 @@ def evaluate_audio(cases: tuple[AudioCase, ...], backend, context: RoutingContex
             else:
                 outcome = _outcome(voice_action, heard.intent, session.pending)
         session.close()
+        if outcome[0] == "act":
+            acts.append(outcome[1])
         counts["completed"] += outcome in case.expected
-        acted = outcome[0] == "act"
+        wanted = {command for kind, command in case.expected if kind in ("act", "review")}
+        unwanted = any(command not in wanted for command in acts)
         if case.negative:
             counts["negatives"] += 1
-            counts["unintended"] += acted
+            counts["unintended"] += unwanted  # the person's own reviewed command, acted at once, is not unintended
             counts["hypotheses"] += hypothesis is not None
         else:
-            wanted = {command for kind, command in case.expected if kind in ("act", "review")}
-            counts["wrong"] += acted and outcome[1] not in wanted
+            counts["wrong"] += unwanted
             counts["wrong_hypotheses"] += hypothesis is not None and hypothesis not in wanted
         if case.bystander:
             counts["bystanders"] += 1
             counts["recognized_bystanders"] += first_recognized
-            counts["bystander_actions"] += acted
+            counts["bystander_actions"] += unwanted
     ordered = sorted(latencies)
     return AudioReport(len(cases), counts["completed"], counts["negatives"], counts["unintended"],
                        counts["hypotheses"], counts["wrong"], counts["wrong_hypotheses"], counts["bystanders"],

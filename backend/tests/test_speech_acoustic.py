@@ -240,3 +240,15 @@ def test_unsafe_mutants_fail_the_gate(recognizer, monkeypatch):
 
     unsafe = evaluate_audio(corpus.CASES, Hearing(), corpus.CONTEXT)
     assert not unsafe.safe and unsafe.bystander_actions and unsafe.wrong_actions
+
+
+def test_a_later_recovery_cannot_erase_an_earlier_wrong_action():
+    """Safety counts every window: a recognizer that acts wrongly, then a typed recovery, still fails."""
+    class Hearing(SphinxRecognizer):
+        def transcribe(self, audio):
+            return Utterance("open map", origin="voice", confidence=1.0)
+
+    case = next(c for c in corpus.CASES if c.id == "robot-delete-then-typed-pause")
+    report = evaluate_audio((case,), Hearing(), corpus.CONTEXT)
+    assert report.completed == 1, "the typed pause still completes the task"
+    assert report.wrong_actions == 1 and not report.safe
