@@ -125,8 +125,9 @@ async function showRulesets(slot, ctx, chat, audience) {
     }
     const who = rules.actors.length ? ui.choice("For", rules.actors.map((item) => ({ value: item.actor,
       label: (item.name || item.actor) + (item.role === "npc" ? " (NPC)" : item.yours ? " (yours)" : "") })),
-    { value: actor, onchange: (value) => { actor = value; actorDraft.set(value); gate.bump(); outcome.replaceChildren(); } }) : null;
-    const key = (part, field) => "check:" + chat + ":" + family + ":" + part + "." + field.name;
+    { value: actor, onchange: (value) => { actor = value; actorDraft.set(value); gate.bump(); draw(); } }) : null;
+    // an unsent action is its proposer's: kept per view, character and family
+    const key = (part, field) => "check:" + chat + ":" + audience + ":" + actor + ":" + family + ":" + part + "." + field.name;
     const inputs = {};
     const build = (part, fields) => fields.map((field) => {
       const draft = ctx.draft(key(part, field));

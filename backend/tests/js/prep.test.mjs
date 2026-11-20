@@ -108,7 +108,7 @@ test("the guard names only the newest request as current", () => {
   assert.ok(!gate.current(second));
 });
 
-test("a check answered after another character was chosen is never shown as that one's", async () => {
+test("a check answered after another character was chosen, or a value changed, is never shown as theirs", async () => {
   let release;
   const root = await mounted("table", (op, args) => {
     if (op === "prep.rulesets") return RULES;
@@ -127,12 +127,25 @@ test("a check answered after another character was chosen is never shown as that
   await settle();
   assert.equal(group(rules, "Check result"), undefined, "Anya's late answer is not shown as Bea's");
   assert.ok(rules.textContent.includes("check it again") || !rules.textContent.includes("It fits"));
-  // checked again for Bea, the answer is shown
+  // Bea's form is her own (empty until filled); checked for her, the answer is shown
+  assert.equal(control(rules, "DC").value, "");
+  button(rules, "Fill in the example").click();
   button(rules, "Check this action").click();
   await settle(5);
   release();
   await settle();
   assert.ok(group(rules, "Check result").textContent.includes("It fits the 5e-2024 contract."));
+
+  // a value typed over while the check is out: the answer is for the old value, and is dropped
+  set(rules, "DC", "16");
+  button(rules, "Check this action").click();
+  await settle(5);
+  set(rules, "DC", "18");
+  release();
+  await settle();
+  assert.equal(group(rules, "Check result"), undefined, "the answer for DC 16 is not shown beside DC 18");
+  assert.ok(rules.textContent.includes("The form changed while that was being checked"));
+  assert.equal(control(rules, "DC").value, "18");
 });
 
 test("an estimate answered after the brief changed is never offered for approval", async () => {

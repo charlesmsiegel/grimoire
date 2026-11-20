@@ -98,8 +98,8 @@ since refuses `changed`.
 
 ## The page
 
-- The ruleset form and the brief are drafts (`ctx.draft`), kept per chat (and per family for the form) across
-  navigation. Text typed while a request is on its way is kept: only the brief that was sent is cleared.
+- The ruleset form and the brief are drafts (`ctx.draft`), kept across navigation: the brief per chat, the
+  form per chat, view, character and family, so one proposer's unsent action is never another's. Text typed while a request is on its way is kept: only the brief that was sent is cleared.
 - An answer is drawn only for the choice still on screen: a check answered after the person picked another
   character or changed a field, or an estimate answered after the brief changed, is dropped and the page asks
   again (`js/prep.test.mjs`).
