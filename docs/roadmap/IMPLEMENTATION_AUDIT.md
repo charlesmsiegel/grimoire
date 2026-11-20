@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 3/16 | ☐ | 075, 076 and 086 meet their bounded headless first slices; the other domain slices and UI exit 116 are not complete. |
+| [9](#wave-9) | 4/16 | ☐ | 075, 076, 082 and 086 meet their bounded headless first slices; the other domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-075 (recorded rolls), 076 (offscreen plan steps) and 086 (validated module authoring with pinned revisions) meet their headless first slices; the other domain slices and UI exit 116 are not complete.
+075 (recorded rolls), 076 (offscreen plan steps), 082 (read-only world audits) and 086 (validated module authoring with pinned revisions) meet their headless first slices; the other domain slices and UI exit 116 are not complete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -742,9 +742,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-082"></a>
 ### 082 — Agentic Investigations
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/agentic-investigations.md)).
-- Evidence: changesets and runtime tool permissions support reviewed writes and bounded basic calls.
-- Scope / gap: No multi-step read-only world-audit job with attributed evidence, budget and cancellation.
+- [x] Scheduled first-useful slice ([requirements](sprints/agentic-investigations.md)).
+- Evidence: [`investigations/job.py`](../../backend/src/grimoire/investigations/job.py)::run_job runs a worker's list/read/report actions within a step, read, finding and time budget, checks cancellation before every action, and keeps a finding only when every citation is a record the job read, at the same revision and etag, with a field that exists and a verbatim quote ([`evidence.py`](../../backend/src/grimoire/investigations/evidence.py)). [`investigationstore/service.py`](../../backend/src/grimoire/investigationstore/service.py)::InvestigationService grants the job `inspect` only over its source to its own principal, gives the read-only [`WorldToolbox`](../../backend/src/grimoire/investigationstore/toolbox.py) an untrusted handle that authorizes every read, revokes the grant however the job ends, and reviews findings for stale evidence. The deterministic [`ConsistencyAuditor`](../../backend/src/grimoire/investigations/auditor.py) reports dangling references, possible duplicates and missing links. [`test_investigation_store.py`](../../backend/tests/test_investigation_store.py) runs the proving scenario: a missing guild link and a possible duplicate, each cited, no file changed, and a cancelled run that keeps its finding and writes nothing; it also covers the audit trail, scope denials, lying workers and staleness. Docs: [INVESTIGATIONS](../INVESTIGATIONS.md).
+- Scope / gap: No model worker, persistence or resumption, and no process boundary for outside workers; the auditor's checks are lexical, and review does not mark a dangling-reference finding stale when the missing target is created. Proposed repairs (milestone 2), resumable jobs and user permission policy (milestone 3) and the UI (116) remain.
 
 <a id="slice-083"></a>
 ### 083 — Character Voice Performance
