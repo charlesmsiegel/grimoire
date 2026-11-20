@@ -27,7 +27,9 @@ composer's state, the keys, which lines are chosen across takes and their order)
 A backdrop and a picture on a post are the person's own pictures, kept beside the transcript
 ([MEDIA_SYNC_UI](MEDIA_SYNC_UI.md#beyond-character-slots)): no turn is changed for one, no character sees one and
 no model is sent one. An attached image waits in the composer (a thumbnail with **Remove**) until the post is
-made; if it cannot be added then, the post stands and the composer says why, with **Try again**. They are
+made; if it cannot be added then, the post stands and the composer says why, with **Try again**. Only what was
+waiting when Post was pressed goes with that post: an image attached while the post is on its way waits for the
+next one. They are
 `pages/chat/backdrop.js` and `pages/chat/attach.js`.
 
 Not in this slice: a director instruction typed as a post (035 refuses it), conflict resolution beyond keeping one

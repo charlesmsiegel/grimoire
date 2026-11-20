@@ -210,8 +210,8 @@ def test_a_turn_in_conflict_is_previewed_as_the_table_reads_it(synced):
             assert mine["chat"] == chat and mine["turn"]["passed"] is True and mine["turn"]["kept"] is None
             assert theirs["preview"]["turn"]["kept"]["lines"][0]["text"] == "Shared question asked."
             # the table view only: no prompts, intentions or briefs in a preview
-            assert set(theirs["preview"]["turn"]) == {"turn", "number", "origin", "device", "post", "kept", "offered",
-                                                      "open", "passed", "paused", "set_aside"}
+            assert set(theirs["preview"]["turn"]) == {"turn", "number", "origin", "device", "post", "posts", "kept",
+                                                      "offered", "open", "passed", "paused", "set_aside"}
             result = mobile("sync.resolve", peer=DESKTOP, path=conflict["path"], keep="mine",
                             mine=conflict["mine"]["etag"], theirs=[theirs["etag"]])
             assert result["status"] == "resolved", result

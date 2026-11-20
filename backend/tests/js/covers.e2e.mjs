@@ -325,9 +325,10 @@ test("covers, entry pictures, backdrops and post pictures through the pages", { 
   const posted = after.turns.find((turn) => turn.post && turn.post.text === "I light the lamp.");
   assert.deepEqual(art.posts.map((item) => [item.turn, item.state]), [[posted.turn, "shown"]]);
   assert.equal(after.turns.length, before.turns.length + 1);
-  assert.deepEqual(Object.keys(posted).sort(), ["device", "kept", "number", "offered", "open", "origin", "passed", "paused", "post", "set_aside", "turn"],
+  assert.deepEqual(Object.keys(posted).sort(), ["device", "kept", "number", "offered", "open", "origin", "passed", "paused", "post", "posts", "set_aside", "turn"],
     "the turn itself carries nothing of the picture");
-  assert.deepEqual(Object.keys(posted.post).sort(), ["actor", "channel", "kind", "private", "speaker", "text", "to", "withheld"]);
+  assert.deepEqual(Object.keys(posted.post).sort(), ["actor", "by", "channel", "kind", "private", "speaker", "text", "to", "withheld"]);
+  assert.deepEqual(posted.posts, [posted.post], "one post, as a combined turn's list of them (058)");
   // the turn passed elsewhere and the chat opened again: the picture is still under its post
   await idle();
   await call("pass", { chat, turn: (await call("open", { chat })).state.open_turn });

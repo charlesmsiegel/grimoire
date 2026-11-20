@@ -166,7 +166,7 @@ Fields:
 
 <a id="played-turns-035"></a>Added by [Minimal Text Scene Runner](roadmap/sprints/minimal-text-scene-runner.md). Interpreted by [`grimoire.scene`](SCENES.md), never by the store.
 
-- **Another additive 010 envelope amendment:** the scope-record address union adds `TurnRef`, `campaign:<id>#turn/<turn_id>`, at `campaigns/<id>/turns/<turn_id>.json`. `parse_scope_record` dispatches by the exact fragment; `parse_ref` does not return it. The payload schema is `grimoire.scene-turn/1`.
+- **Another additive 010 envelope amendment:** the scope-record address union adds `TurnRef`, `campaign:<id>#turn/<turn_id>`, at `campaigns/<id>/turns/<turn_id>.json`. `parse_scope_record` dispatches by the exact fragment; `parse_ref` does not return it. The payload schema is `grimoire.scene-turn/1`, or `grimoire.scene-turn/2` for a turn holding several player characters' posts ([LOCAL_MULTI_PC](LOCAL_MULTI_PC.md#the-turn-file)).
 - `classify` recognises exactly the new path, so recovery accepts journals that name it, and the replica treats it as an exact kind.
 - **`load()` skips `turns/`**, as it skips `accepted/`: one file is written per played turn. It is read through `campaign_turns(id)` (`CampaignRecords`, contained per file) and `read(TurnRef)`. `campaign_turns(id, *, skip=None, known=None)` (048) leaves out any file whose name `skip` accepts before reading it, and returns a record from `known` (by address) unchanged when the file's bytes hash to that record's etag, so an unchanged file is read and hashed but not parsed again.
 - 107's allocators treat every actor id a turn names as taken (`grimoire.scenestore.turn_instance_ids`, fail closed on an unreadable file).

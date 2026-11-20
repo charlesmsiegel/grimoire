@@ -22,7 +22,6 @@ from dataclasses import replace
 from grimoire.adjudication import Outcome
 from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.chats import ChatCodecError
-from grimoire.comms import TransmissionError, Unread, read_message
 from grimoire.context import Budget
 from grimoire.contextstore import actor_context, chat_lore
 from grimoire.decisionstore import DecisionLibrary
@@ -31,8 +30,7 @@ from grimoire.generation.brief import heard_transcript
 from grimoire.effectstore import EffectRecovery, TurnEffectsLibrary
 from grimoire.core import DIRECTOR, snapshot_actor_view
 from grimoire.core.authority import (
-    AuthorityError, ControlAssignment, NarrationClaim, NarrationContext, PlayerContribution, review_narration,
-    submit_contribution,
+    AuthorityError, ControlAssignment, NarrationClaim, NarrationContext, review_narration,
 )
 from grimoire.core.boundaries import BoundaryChange, BoundaryContext, BoundaryRequest, decide_request
 from grimoire.core.identity import ChatRef, InstanceRef
@@ -44,9 +42,10 @@ from grimoire.generation import GenerationError, director_brief, npc_brief, plan
 from grimoire.goals import Agenda, Choice, GoalError, check_agenda, choose, explain
 from grimoire.import_v1 import imported_voices
 from grimoire.intent import Command, RoutingContext, Utterance, route
-from grimoire.intent.text import wrapped
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
+from grimoire.memory import PLAY_COLLECTION, corrected_knowledge
+from grimoire.memorystore import MemoryLibrary
 from grimoire.obstaclestore import ObstacleLibrary
 from grimoire.partystore import PartyLibrary
 from grimoire.play.accept import (
@@ -64,49 +63,32 @@ from grimoire.play.labels import label_action
 from grimoire.play.mixed import keep_lines
 from grimoire.play.obstacles import pass_attempt
 from grimoire.play.scene import (
-    DEFAULT_BUDGET, NOW, WRITE_RETRIES, Scene, _assigned, _audience, _Context, _declined, _find_line, _first_text,
-    _follows, _has_imported, _human_of, _latest, _macros, _mark, _name_index, _no_clock, _no_id, _payload,
-    _perceived, _readable, _refuse, _room, _scenario_text, _seen, _stage, _stage_ok, _Stale, _table_audience,
+    DEFAULT_BUDGET, NOW, WRITE_RETRIES, Scene, _assigned, _Context, _declined, _find_line, _first_text,
+    _follows, _has_imported, _human_of, _latest, _macros, _mark, _no_clock, _no_id, _payload,
+    _perceived, _readable, _refuse, _room, _scenario_text, _stage, _stage_ok, _Stale, _table_audience,
     _table_known,
 )
 from grimoire.play.stages import StageSource, stage_key, succession
+from grimoire.play.together import UNREAD_HINTS, Contribution, post_together, read_post, seat_player
 from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, LabelRuntime, RunFence
 from grimoire.narration_review import ExtractionRuntime
 from . import continuity
 from .continuity_facts import snapshot as continuity_snapshot
 from grimoire.scene import (
-    MAX_TAKES, NARRATOR, CallRecord, Intention, IntentionOption, Label, Post, SceneLine, SceneRefused, Take, TurnRecord,
-    audible, heard_for, render, segments, table_lines, turn_id,
+    MAX_TAKES, NARRATOR, CallRecord, Intention, IntentionOption, Label, SceneLine, SceneRefused, Take, TurnRecord,
+    heard_for, render, segments, table_lines, turn_id,
 )
 from grimoire.scene.review import MAX_REVIEW_BYTES
 from grimoire.scenestore import MAX_TURN_BYTES, SceneLibrary, StoredTurn
 from grimoire.security import is_human
 from grimoire.staging import Stage, StagingRefused, check_cast
 from grimoire.store import LibraryStore, RecordNotFound
+from grimoire.store.errors import LedgerBroken, LedgerInvalid
 from grimoire.tracing import Trace
 from grimoire.voice import ResolvedVoice, VoiceCatalog
 
 from .tracing import record_calls, span, traced
-
-#: What a player can do about a line 032 cannot read, by its reason: the refusal says how to post it so it reads.
-UNREAD_HINTS = {
-    "unresolved_private": "the line sounds meant for fewer ears than the room's: put the words in quotes to say "
-                          "them aloud, or post an action such as I whisper to (name): \"...\"",
-    "mixed_narration": "the line mixes the words said with narration: post the words alone, or in quotes, and the "
-                       "rest as an action",
-    "unknown_addressee": "use a name from the scene and set the words off after it, such as "
-                         "I whisper to (name): \"...\"",
-    "ambiguous_addressee": "more than one listener fits: name one, and put the words in quotes, such as "
-                           "I whisper to (name): \"...\"",
-    "conflicting_channel": "the line both whispers and speaks mind to mind: choose one, such as "
-                           "I tell (name) telepathically: \"...\"",
-    "indirect_speech": "say how it reaches them, such as I whisper to (name): \"...\" or "
-                       "I tell (name) telepathically: \"...\", or post the words as speech",
-    "unclear_content": "the words said are unclear: put the exact words in quotes after the name, such as "
-                       "I whisper to (name): \"...\"",
-    "no_content": "the line has no words for anyone to hear",
-}
 
 #: Room a finished take needs in its turn file beyond its running take: each planned call's line (a screened line is
 #: at most ``MAX_LINE_CHARS`` characters, with its speaker, ids and audience, escaped), each attempt's usage, and the
@@ -154,7 +136,7 @@ class SceneRunner:
                  adjudication: AdjudicationLibrary | None = None,
                  effects: TurnEffectsLibrary | None = None, obstacles: ObstacleLibrary | None = None,
                  agendas: Iterable[Agenda] = (), decisions: DecisionLibrary | None = None,
-                 stages: StageSource | None = None,
+                 stages: StageSource | None = None, memory: MemoryLibrary | None = None,
                  tracer: Callable[[Trace], None] | None = None,
                  clock: Callable[[], float] = time.perf_counter) -> None:
         if not (authority.issued(handle) and getattr(handle, "trusted", False) is True
@@ -196,6 +178,11 @@ class SceneRunner:
                     getattr(adjudication, "principal", None),
                     getattr(getattr(runtime, "_handle", None), "principal", None)}):
             raise _refuse("bad_decisions", "decisions needs this library's distinct trusted app key")
+        if memory is not None and not (isinstance(memory, MemoryLibrary) and memory.store is store
+                                       and memory.authority is authority and authority.issued(memory.handle)
+                                       and getattr(memory.handle, "trusted", False) is True
+                                       and getattr(memory.handle, "principal", "").startswith("app:")):
+            raise _refuse("bad_memory", "memory needs this library's MemoryLibrary on a trusted app key")
         by_actor = _agendas(agendas)
         self.store = store
         self.authority = authority
@@ -218,6 +205,7 @@ class SceneRunner:
         self.decisions = decisions
         self._agendas = by_actor  # director-authored input: played text cannot author or change one
         self.stages = stages
+        self.memory = memory  # 053: the director's consolidated NPC memory, read for every NPC pack
         self._stages: dict[tuple[str, str], Stage] = {}  # the latest stage this runner played each chat with
         self.tracer = tracer
         self.clock = clock
@@ -571,55 +559,25 @@ class SceneRunner:
         number = 1 if last is None else last.number + 1
         device = self.scenes.tag_for(scene.turns, number)
         tid = turn_id(chat, number, device)
-        if not isinstance(text, str) or not text.strip():
-            raise _refuse("no_content", "a post needs text")
-        try:
-            utterance = Utterance(text, mode)
-            intent = route(utterance, RoutingContext(active_pc=persona.instance_id, can_direct=False))
-        except ValueError as error:
-            raise _refuse("invalid_field", str(error)[:200]) from None
-        if intent.kind == "uncertain":
-            raise _refuse("uncertain", intent.feedback)
-        if intent.kind not in ("pc_speech", "pc_action"):
-            raise _refuse("not_in_this_slice", f"{intent.kind} is not played yet")
-        if intent.kind == "pc_speech" and intent.reason == "explicit_mode" and wrapped(text.strip(), '"', '"') is not None:
-            # 008 takes the quotes off a wholly quoted line in the speech lane as in auto; 032 still reads its words as
-            # quoted ones, said aloud privacy words and all, as it would had auto routed the same line
-            intent = replace(intent, reason="quoted")
-        kind = "speech" if intent.kind == "pc_speech" else "action"
-        try:
-            submit_contribution(PlayerContribution(chat.campaign_id, tid, chat.chat_id, tid, persona.instance_id,
-                                                   principal, kind, intent.text), scene.controls)
-        except AuthorityError:
-            raise _refuse("not_your_character", f"{principal} does not control {persona}") from None
-        except ValueError as error:
-            raise _refuse("invalid_field", str(error)[:200]) from None
-        try:
-            read = read_message(intent, persona, _name_index(scene), message_id=tid)
-        except TransmissionError as error:
-            raise _refuse(error.reason, "the post cannot be read") from None
-        if isinstance(read, Unread):
-            # 032: an Unread transmits nothing. An action that is no message at all is seen by everyone present;
-            # one 032 cannot rule out as a private message (a note, an aside, a signal) is withheld: its sender
-            # alone hears it. A message aimed at someone 032 cannot resolve is refused, never made public.
-            if kind == "speech" or read.reason not in ("not_directed", "unresolved_private"):
-                hint = UNREAD_HINTS.get(read.reason, "the line cannot be read as a message; say who it is for, and what")
-                raise _refuse(read.reason, hint)
-            withheld = read.reason == "unresolved_private"
-            post = Post(principal, persona, "action", intent.text, (persona,) if withheld else _seen(scene, persona),
-                        withheld=withheld)
-        else:
-            post = Post(principal, persona, kind, read.text, _audience(read, scene, chat, tid, number),
-                        read.channel, read.addressees)
-        if not audible(post):  # as clipped and shown
-            raise _refuse("no_content", "a post needs words someone could hear")
+        post = read_post(scene, chat, principal, persona, text, mode, tid=tid, number=number, contribution_id=tid)
         if last is not None and last.open:
-            if last.post == post and not last.takes:
+            if last.posts == (post,) and not last.takes:
                 return last  # the same post retried: it is already saved
             raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it")
         record = TurnRecord(chat, number, "post", post, device=device, follows=_follows(last))
         self._write(record, None, after=scene.turns.last)
         return record
+
+    @traced("post_together")
+    def post_together(self, chat: ChatRef, contributions: Iterable[Contribution]) -> TurnRecord:
+        """Two or more present player characters' posts as one new turn (058), in order, each with its own
+        controller's handle; nothing is written unless every one is played. See ``play/together.py``."""
+        return post_together(self, chat, contributions)
+
+    @traced("seat_player")
+    def seat_player(self, chat: ChatRef, by, actor: InstanceRef, controller: str) -> tuple[ControlAssignment, ...]:
+        """The owner hands a present character to a human player, or back to the director (058)."""
+        return seat_player(self, chat, by, actor, controller)
 
     @traced("generate")
     def generate(self, chat: ChatRef, by, *, speakers: Iterable[InstanceRef] | None = None,
@@ -670,13 +628,18 @@ class SceneRunner:
             self._briefs(context, recorded_speakers, heard_turns, number, existing=existing)
         deciders = [actor.instance_id for actor, _ in chosen
                     if self.decisions is not None and actor in self._agendas and actor not in existing]
+        # 068: an opt-in presentation suggestion for each speaker, capped per take by the policy; none when off.
+        # An actor with an agenda is briefed with its choice, so it is never a planner: a forgone call
+        # would only use up the cap another speaker could have had.
+        planners = ([actor.instance_id for actor, _ in chosen if actor not in self._agendas]
+                    if self.policy.cap_for(InferenceStage.PLANNING) else [])
         try:
             with span("plan"):
                 plan = plan_generation_turn(chat.campaign_id, plan_turn,
                                             present=[a.instance_id for a in scene.on_stage],
                                             speakers=[a.instance_id for a, _ in chosen], controls=scene.controls,
                                             director_reply=director, policy=self._decision_policy(record),
-                                            decisions=deciders)
+                                            decisions=deciders, planners=planners)
         except GenerationError as error:
             raise _refuse(error.reason, "the turn cannot be planned") from None
         if director and not any(call.stage is InferenceStage.DIRECTOR_GENERATION for call in plan.calls):
@@ -820,11 +783,14 @@ class SceneRunner:
         _, bare = outcome_lines(self, turns, scene.names)
         heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
         seen = _perceived(scene, actor)
+        knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
+        memory = self._dossier(actor, as_of, knowledge)
+        if memory is not None:  # the pack, the brief and the agenda's choice all read the corrected projection
+            knowledge = corrected_knowledge(knowledge, memory)
         with span("pack") as packed:
             built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
-                                  present=seen, scene_text=render(heard))
+                                  present=seen, scene_text=render(heard), memory=memory)
             packed.count(items=len(built.pack.items), omitted=len(built.pack.omitted))
-        knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
         view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
         kwargs = dict(heard=heard, secrets=self.secrets, names=scene.names, context=built.pack, snapshot=snap)
         brief = npc_brief(view, voice, **kwargs)
@@ -841,6 +807,20 @@ class SceneRunner:
             brief = npc_brief(view, voice, **kwargs, intention=choice)
         return dict(brief=brief, pack=built.pack, choice=choice, view=view, voice=voice,
                     kwargs=kwargs, knowledge=knowledge, agenda=agenda)
+
+    def _dossier(self, actor, as_of, knowledge):
+        """053: the NPC's consolidated ``PLAY_COLLECTION`` memory, or ``None`` without a memory library."""
+        if self.memory is None:
+            return None
+        try:
+            return self.memory.dossier(actor, PLAY_COLLECTION, as_of=as_of, requested_by=DIRECTOR,
+                                       knowledge=knowledge)
+        except AuthorityError as error:
+            if str(error) == "unknown_actor":
+                return None  # an actor the memory library cannot hold (a paired form) has no consolidated memory
+            raise _refuse("memory_unreadable", "the actor's consolidated memory cannot be read") from None
+        except (LedgerInvalid, LedgerBroken, ValueError):
+            raise _refuse("memory_unreadable", "the actor's consolidated memory cannot be read") from None
 
     def _briefs(self, context: _Context, chosen, turns: Sequence[TurnRecord], take: int,
                 *, existing=None, assemblies=None) -> tuple[list, tuple[Intention, ...]]:
@@ -1430,7 +1410,7 @@ class SceneRunner:
         return stored
 
 
-__all__ = ["DEFAULT_BUDGET", "Boundaries", "Scene", "SceneRunner"]
+__all__ = ["DEFAULT_BUDGET", "UNREAD_HINTS", "Boundaries", "Scene", "SceneRunner"]
 
 
 #: The router's commands ``post`` runs as the table's requests (016): each by the path its click takes.

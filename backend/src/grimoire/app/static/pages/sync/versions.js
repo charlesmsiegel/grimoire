@@ -47,7 +47,9 @@ function preview(ctx, candidate) {
     }
     const take = turn.kept || (turn.offered || [])[0];
     return el("div", {}, head,
-      turn.post ? el("div", { class: "sync-line" }, el("span", { class: "sync-speaker" }, turn.post.speaker + ": "), turn.post.text || "") : null,
+      // every post of the turn: two versions of a combined turn (058) can differ in a later player's post alone
+      (turn.posts || (turn.post ? [turn.post] : [])).map((post) => el("div", { class: "sync-line" },
+        el("span", { class: "sync-speaker" }, post.speaker + ": "), post.text || "")),
       take ? take.lines.map((line) => el("div", { class: "sync-line" },
         el("span", { class: "sync-speaker" }, (line.speaker || "Narrator") + ": "), line.text || ""))
         : el("div", { class: "g-muted" }, turn.passed ? "Passed" : "No take kept"));

@@ -7,6 +7,29 @@ page's **Sync** button. A chat played on one device then resumes on the other.
 This first slice is for one person with one phone and one desktop. Its sync runs over a forwarded loopback
 port, because 028's transport is authenticated but not encrypted ([SYNC](SYNC.md)).
 
+## The quickest phone check: the phone's browser on the desktop's app
+
+This needs no Termux and no second library. It shows the app on a real phone screen, with touch, the on-screen
+keyboard and the phone's camera, playing the desktop's library. It does not test sync: that needs a library on
+each device (**Set up**, below).
+
+On an Android phone, turn on USB debugging (Settings, About phone, tap Build number seven times, then Developer
+options, USB debugging) and connect it to the desktop. On the desktop, with Android's
+[platform tools](https://developer.android.com/tools/releases/platform-tools) (`adb`) installed:
+
+```sh
+python -m grimoire.app serve                         # prints: open http://127.0.0.1:8080/#token=...
+adb reverse tcp:8080 tcp:8080                        # the phone's 127.0.0.1:8080 is now the desktop's
+adb shell am start -a android.intent.action.VIEW -d "'http://127.0.0.1:8080/#token=...'"
+```
+
+The last line opens the printed address, token and all, in the phone's default browser, so nothing long is
+typed on the phone. (The inner single quotes keep the phone's shell from reading the address.) Typing it into
+the phone's browser works too. `adb reverse --remove-all` ends the forward.
+
+An iPhone has no `adb`. An SSH app on it that forwards a local port (`-L 8080:127.0.0.1:8080` to the desktop)
+does the same, if the app keeps running while the browser is in front; this has not been tried.
+
 ## Set up
 
 On the **phone**, install [Termux](https://termux.dev) (from F-Droid) and in it:
@@ -36,6 +59,10 @@ python -m grimoire.app pair --peer phone            # prints: --key 3f9c...
 python -m grimoire.app pair ~/grimoire-library --peer desktop --key 3f9c...
 ```
 
+The key is 64 characters. With the phone on USB, type the start of the phone's command in Termux, then have the
+desktop type the key into it: `adb shell input text 3f9c...` (the whole key), then press Enter on the phone.
+The **Devices and sync** page (`#/sync`) can pair too: **Pair a device**, with the key in its field.
+
 Both devices must use the same owner (`--owner`, default `human:owner`): the table's player is the library
 owner on each device.
 
@@ -60,7 +87,8 @@ An SSH tunnel from Termux (`ssh -N -L 8765:127.0.0.1:8765 you@desktop`) works th
 python -m grimoire.app serve ~/grimoire-library --peer desktop=127.0.0.1:8765
 ```
 
-It prints `open http://127.0.0.1:8080/#token=...`. Open that address in the phone's browser. The page is the app's [shell](APP_SHELL.md): **Chats** is in its menu. The token in the
+It prints `open http://127.0.0.1:8080/#token=...`. (If the desktop's app is also forwarded to the phone's 8080,
+as in the quick check above, give the phone's `serve` another port: `--port 8081`.) Open that address in the phone's browser. The page is the app's [shell](APP_SHELL.md): **Chats** is in its menu. The token in the
 address is this serve's key: a new one each time, kept only in that browser tab.
 
 - **Sync** brings the desktop's chats over the first time, and every later change both ways.
@@ -70,6 +98,9 @@ address is this serve's key: a new one each time, kept only in that browser tab.
 - **Post**, **Ask for a reply**, **Keep this take** and **Pass the turn** play a turn. **Cast and details** in
   the chat's scene bar opens its side panel: **Add picture** there gives a character of the chat a new avatar,
   from the phone's camera or files, and **Sync** is under Details.
+- To play **offline** on purpose, take the forward away: `adb reverse --remove tcp:8765` (or unplug the phone).
+  **Sync** then fails with nothing changed on either device, and play goes on. `adb reverse tcp:8765 tcp:8765` brings it
+  back.
 - A chat that **forked** (both devices played it offline) waits until you keep one branch. A turn or picture
   in **conflict** (both devices changed it) waits until you keep one version. The other device must be
   reachable for that.

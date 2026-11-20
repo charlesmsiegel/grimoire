@@ -349,6 +349,22 @@ def test_a_staged_take_shows_only_the_lines_a_player_character_heard():
     assert len(heard(unstaged)) == 2
 
 
+def test_the_vn_stage_places_only_actors_the_table_knew_were_present():
+    """072: a kept take's ``present`` is historical and never wider than the transcript the table heard."""
+    from grimoire.core.identity import InstanceRef
+    from grimoire.scene.model import SceneLine, Take
+    from grimoire.textapi.views import table_present
+
+    anya, mara, tamsin, gone = (InstanceRef("w", "character", name) for name in ("anya", "mara", "tamsin", "gone"))
+    lines = (SceneLine("l1", tamsin, "Tamsin", "Psst.", (mara,)),  # Tamsin hides: no player heard her
+             SceneLine("l2", mara, "Mara", "Good evening.", (anya, mara, tamsin)))
+    cast = (anya, mara, tamsin, gone)
+    staged = Take(1, "kept", "generated", cast, lines, on_stage=(anya, mara, tamsin), players=(anya,))
+    assert table_present(staged) == (anya, mara)  # not hidden Tamsin, not Gone, who had left the stage
+    assert table_present(Take(1, "kept", "generated", cast, lines, on_stage=(anya, mara, tamsin))) == ()
+    assert set(table_present(Take(1, "kept", "generated", cast, lines))) == set(cast)  # no stage: all were present
+
+
 def test_a_late_keep_never_keeps_another_turns_take(synced):
     _desk, phone, chat = synced
     with Device(phone, [say("Turn two."), say("Turn three, unread.")]) as mobile:

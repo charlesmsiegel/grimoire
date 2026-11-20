@@ -59,15 +59,16 @@ def _library(ctx: AdapterContext) -> BookmarkLibrary:
 
 
 def said(turns: list[dict], persona: str | None) -> list[dict]:
-    """What the table's player read, in order, from the player-facing view of each turn: a post that was said
-    or done in the open (a private or withheld one is left out), then the kept take's lines. Passed turns give
-    their post only; a take on offer gives nothing."""
+    """What the table's player read, in order, from the player-facing view of each turn: each post that was said
+    or done in the open (a private or withheld one is left out; a combined turn has one per player character,
+    058), then the kept take's lines. Passed turns give their posts only; a take on offer gives nothing."""
     out: list[dict] = []
     for turn in turns:
         where = {"turn": turn["turn"], "number": turn["number"]}
-        post = turn["post"]
-        if post is not None and not post["private"] and not post["withheld"]:
-            out.append({**where, "speaker": post["speaker"], "text": post["text"], "you": post["actor"] == persona})
+        for post in turn.get("posts", [turn["post"]] if turn["post"] is not None else []):
+            if not post["private"] and not post["withheld"]:
+                out.append({**where, "speaker": post["speaker"], "text": post["text"],
+                            "you": post["actor"] == persona})
         if turn["kept"] is not None:
             for line in turn["kept"]["lines"]:
                 out.append({**where, "speaker": line["speaker"] or "Narrator", "text": line["text"], "you": False})
