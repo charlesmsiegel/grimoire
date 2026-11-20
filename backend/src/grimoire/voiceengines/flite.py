@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import wave
 from threading import Lock
 
@@ -25,6 +26,8 @@ RATE = 16000
 MAX_SCRIPT = 4000
 TIMEOUT = 30
 LIST_TIMEOUT = 10
+#: An empty voice list (no ffmpeg, no Flite, a listing that failed) is asked for again only after this long.
+RETRY_AFTER = 300.0
 _SCRIPT_FILE = "line.txt"
 
 
@@ -47,6 +50,7 @@ class FliteSynthesizer:
     def __init__(self, tool: str | None = None) -> None:
         self._tool = tool if tool is not None else shutil.which("ffmpeg")
         self._voices: tuple[str, ...] | None = None
+        self._asked_at = 0.0
         self._lock = Lock()
 
     def _run(self, args: list[str], cwd: str | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
@@ -56,11 +60,13 @@ class FliteSynthesizer:
 
     def voices(self) -> tuple[str, ...]:
         """The Flite voices this ``ffmpeg`` has (none when it has no ffmpeg or no Flite). A list that was found is
-        kept; an empty one is asked again next time, so one slow or failed listing does not last."""
+        kept; an empty one is asked again after ``RETRY_AFTER`` seconds, so one failed listing does not last and
+        an ``ffmpeg`` without Flite is not run on every call."""
         with self._lock:
-            if self._voices:
+            if self._voices or (self._voices is not None and time.monotonic() - self._asked_at < RETRY_AFTER):
                 return self._voices
             self._voices = self._list()
+            self._asked_at = time.monotonic()
             return self._voices
 
     def _list(self) -> tuple[str, ...]:
@@ -98,4 +104,4 @@ class FliteSynthesizer:
         return to_wav(done.stdout, RATE)
 
 
-__all__ = ["ENGINE", "MAX_SCRIPT", "RATE", "FliteSynthesizer"]
+__all__ = ["ENGINE", "MAX_SCRIPT", "RATE", "RETRY_AFTER", "FliteSynthesizer"]

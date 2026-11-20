@@ -64,7 +64,7 @@ The writes are explored under the fault harness (`backend/tests/test_voicecastst
 `voicecast.plan` reads a chat's turns the way opening the chat shows them, and makes one **cue** per item the
 table heard, in order:
 
-- each non-private post of a turn;
+- each non-private post of a turn, then a decided action's outcome line;
 - then the kept take's shown lines, filtered as the table's transcript filters them (`table_lines`): on a staged
   take, only lines a player character heard.
 
@@ -93,7 +93,9 @@ slice.
   portrayal with none of its own (an outfit, a disguise), the nearest base's (`generation/voice.py`).
 
 The voice is chosen from those recorded refs, never from the source's head. Making a new revision changes no
-earlier line's voice. A pinned entry (`...@r2`) applies only to lines spoken at that revision.
+earlier line's voice. A pinned entry (`...@r2`) applies only to lines that recorded that exact revision, either as
+the revision spoken or as the voice profile written with (so `wren@r1` also voices an outfit of Wren's written
+with `wren@r1`'s profile).
 
 For a character's line, the first rule that has a voice wins:
 
@@ -105,8 +107,13 @@ For a character's line, the first rule that has a voice wins:
 
 So an outfit cast on its own speaks in its own voice, and an outfit nobody cast speaks in its base's voice.
 
-A post records no revision of its own. Its speaker is voiced by the actor's own entry, then by the character the
-actor's campaign instance plays now (`revision` when the instance pins one, then `character_any_revision`).
+A post records no revision of its own, and neither does a card chat's opening greeting. Their speaker is voiced
+by the actor's own entry, then by the character the actor's campaign instance plays **now** (`revision` when the
+instance pins one, then `character_any_revision`). So a post keeps its voice through an outfit switch only when the
+character, or the actor, is cast at any revision; a post has no voice-profile fallback.
+
+A decided action's outcome line, which the table reads after the action's posts, is a cue of kind `outcome`, read
+by the narrator.
 
 The narrator's rules are `narrator`, for this campaign, and then `narrator_every_campaign`.
 
@@ -126,8 +133,8 @@ the cast voice's engine is called once:
 - `next` is where the following window starts, or `null` at the end.
 
 A page plays one window while it asks for the next. One call covers at most 8000 characters of script, and starts
-no new synthesis after 20 seconds (one cue's synthesis may take up to 30 more), so a stuck engine holds the
-library only that long.
+no new synthesis after 20 seconds. One cue's synthesis may take up to 30 seconds more, and asking an engine for its
+voices up to 10, so a stuck engine holds the library about a minute at most.
 
 `plan` and `render` answer the performance's `fingerprint`. This covers each cue's item, text digest, status and
 voice, and each segment names its `turn` and `item`. A render that names a `fingerprint` is refused `changed` when
@@ -163,7 +170,8 @@ the engine and are cast with `rights: engine`.
 - The line reaches `ffmpeg` as a file in a private temporary folder, named by a fixed relative name, so no part of
   the text is ever parsed as filter syntax. The folder is removed after each cue.
 - An `ffmpeg` without Flite reports no voices, and every cue cast to it stays text. A voice list that was found is
-  kept; an empty one is asked for again next time.
+  kept; an empty one is asked for again after five minutes, so a failed listing does not last and an `ffmpeg`
+  without Flite is not run on every call.
 
 `grimoire.app.adapters.voicecast.configure(api, synthesizers)` installs other local engines; tests use it to
 install a tone engine. No provider, network or bill is involved anywhere in this slice. CI's `voice` job runs the Flite test, including in a

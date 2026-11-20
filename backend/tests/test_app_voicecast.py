@@ -249,11 +249,67 @@ def test_no_campaign_is_refused_and_never_uncasts_every_campaigns_narrator(table
         "the narrator of every campaign"]
 
 
-def test_flite_without_an_engine_offers_no_voices_and_asks_again_next_time(tmp_path):
+def test_flite_without_an_engine_offers_no_voices(tmp_path):
     missing = FliteSynthesizer(tool=str(tmp_path / "no-ffmpeg"))
-    assert missing.voices() == () and missing.voices() == ()
+    assert missing.voices() == ()
     if os.path.exists("/bin/false"):  # an ffmpeg that fails every run
         failing = FliteSynthesizer(tool="/bin/false")
         assert failing.voices() == ()
         with pytest.raises(ValueError):
             failing.synthesize("Hello.", "kal")
+
+
+def test_a_card_chats_opening_greeting_speaks_in_the_characters_voice(tmp_path):
+    folder, chat = desktop_library(tmp_path / "desk")
+    with Device(folder, [say("Twelve coins short.")]) as device:
+        configure(device.api, (Tones(),))
+        api = AppApi(device.api)
+        device.api.runner.seat(chat, OWNER)
+        device.api.runner.begin(chat, device.api.player_handle)  # the card's greeting opens the chat
+        keep(device, str(chat))
+        device("post", chat=str(chat), text="Where is the rest?")
+        device("generate", chat=str(chat))
+        keep(device, str(chat))
+        api.call("voicecast.cast", {"target": "character", "ref": MARA, "engine": "tone", "voice": "kal",
+                                    "expected": None})
+        lines = [cue for cue in api.call("voicecast.plan", {"chat": str(chat)})["cues"] if cue["kind"] == "line"]
+    greeting, reply = lines
+    assert greeting["revision"] is None or greeting["revision"].startswith(MARA)
+    assert [(cue["status"], cue["voice"]["voice"]) for cue in lines] == [("voiced", "kal"), ("voiced", "kal")]
+    assert greeting["why"].startswith("Mara Vell speaks with tone/kal")
+
+
+def test_a_forked_chat_is_refused_and_the_time_budget_ends_a_window(table, monkeypatch):
+    api, _folder, chat, tones = table
+    _cast(api, target="character", ref=MARA, voice="kal")
+    _cast(api, target="narrator", voice="slt")
+    _cast(api, target="actor", ref=_actors(api, chat)["Anya Rook"], voice="slt")
+    from grimoire.app.adapters import voicecast as adapter
+    monkeypatch.setattr(adapter, "RENDER_BUDGET", 0.0)  # every synthesis after the first is over budget
+    window = api.call("voicecast.render", {"chat": chat})
+    assert [segment["status"] for segment in window["segments"]] == ["audio"] and window["next"] == 1
+    runner = api.api.runner
+    opened = runner.open
+
+    def forked(ref):  # type: ignore[no-untyped-def]
+        scene = opened(ref)
+        return type("Forked", (), {"records": scene.records, "names": scene.names,
+                                   "problems": (*scene.problems, ("turn_fork", "two devices played turn 2"))})()
+
+    monkeypatch.setattr(runner, "open", forked)
+    for op in ("voicecast.plan", "voicecast.render"):
+        _refused(api, op, {"chat": chat}, "turn_fork", 409)
+    _refused(api, "voicecast.render", {"chat": chat, "fingerprint": ""}, "invalid_field", 400)
+
+
+def test_an_empty_flite_list_is_asked_again_only_after_a_while(monkeypatch):
+    from grimoire.voiceengines import flite as module
+    asked: list[int] = []
+    engine = FliteSynthesizer(tool="ffmpeg-without-flite")
+    monkeypatch.setattr(engine, "_list", lambda: asked.append(1) or ())
+    now = [1000.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    assert engine.voices() == () and engine.voices() == () and len(asked) == 1
+    now[0] += module.RETRY_AFTER
+    monkeypatch.setattr(engine, "_list", lambda: asked.append(1) or ("kal",))
+    assert engine.voices() == ("kal",) and engine.voices() == ("kal",) and len(asked) == 2

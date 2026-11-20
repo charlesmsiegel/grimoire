@@ -42,8 +42,9 @@ NARRATOR_LABEL = "Narrator"
 #: Cue statuses and the reasons a cue is text only.
 VOICED, TEXT_ONLY = "voiced", "text_only"
 REASONS = ("not_cast", "action", "no_speech")
-#: A stage direction runs from one asterisk to the next, or to the end of the text when it is never closed.
-_DIRECTION = re.compile(r"\*[^*]*(?:\*|$)")
+#: A stage direction runs from one asterisk to the next; one never closed runs to the end of its line.
+_DIRECTION = re.compile(r"\*[^*]*\*")
+_UNCLOSED = re.compile(r"\*[^\n]*")
 _SPACE = re.compile(r"\s+")
 
 
@@ -62,7 +63,7 @@ class Cue:
 
     index: int
     turn: str
-    kind: str  # "line" or "post"
+    kind: str  # "line", "post" or "outcome" (a decided action's outcome, read by the narrator)
     item: str  # the line id, or the post's contribution id
     speaker: str
     actor: InstanceRef | None
@@ -118,7 +119,7 @@ def digest(text: str) -> str:
 def script_of(text: str, *, narrator: bool) -> str:
     """What a voice says for ``text``: a character's ``*stage directions*`` left unsaid, a narrator's asterisks
     dropped, and whitespace made single. The text itself is never changed."""
-    spoken = text.replace("*", " ") if narrator else _DIRECTION.sub(" ", text).replace("*", " ")
+    spoken = text.replace("*", " ") if narrator else _UNCLOSED.sub(" ", _DIRECTION.sub(" ", text))
     return _SPACE.sub(" ", spoken).strip()
 
 
@@ -167,7 +168,7 @@ def _narrator_rules(campaign: str) -> list[tuple[str, str, tuple[str, str]]]:
 def _cue(index: int, turn: TurnRecord, kind: str, item: str, speaker: str, actor: InstanceRef | None,
          revision: SourceRef | None, portrayal: SourceRef | None, text: str, action: bool,
          lookup: Mapping[tuple[str, str], CastEntry]) -> Cue:
-    narrator = kind == "line" and actor is None
+    narrator = kind == "outcome" or (kind == "line" and actor is None)
     rules = _narrator_rules(turn.chat.campaign_id) if narrator else _character_rules(actor, revision, portrayal)
     chosen, considered = _choose(rules, lookup)
     script = "" if action else script_of(text, narrator=narrator)
@@ -195,13 +196,19 @@ def _table_lines(turn: TurnRecord) -> tuple[SceneLine, ...]:
 
 
 def plan_performance(turns: Iterable[TurnRecord], casting: Casting, names: Mapping[InstanceRef, str] | None = None,
-                     sources: Mapping[InstanceRef, SourceRef] | None = None) -> Performance:
-    """The performance of ``turns`` (one chat's line) under ``casting``. ``names`` labels posts' speakers, and
-    ``sources`` gives the character each posting actor plays (a post records no revision of its own)."""
+                     sources: Mapping[InstanceRef, SourceRef] | None = None,
+                     outcomes: Mapping[str, tuple[str, str]] | None = None) -> Performance:
+    """The performance of ``turns`` (one chat's line) under ``casting``. ``names`` labels posts' speakers.
+    ``sources`` gives the character an actor's campaign instance plays now: what voices a post, and a line that
+    recorded no revision (a card chat's opening greeting), since neither records one of its own. ``outcomes`` is
+    each decided action's outcome line the table read, by turn id (``(speaker, text)``), cued after the turn's
+    posts and read by the narrator."""
     if type(casting) is not Casting:
         raise CastingError("invalid_casting", "plan_performance needs a Casting")
     names = names or {}
-    sources = sources or {}
+    sources = {actor: ref for actor, ref in (sources or {}).items()
+               if type(ref) is SourceRef and ref.kind == "character"}  # only a character definition voices one
+    outcomes = outcomes or {}
     lookup = casting.lookup()
     ordered = sorted(turns, key=lambda turn: turn.number)
     if not all(type(turn) is TurnRecord for turn in ordered):
@@ -214,15 +221,21 @@ def plan_performance(turns: Iterable[TurnRecord], casting: Casting, names: Mappi
             if post.private:
                 continue
             speaker = names.get(post.actor) or post.actor.instance_id
-            played = sources.get(post.actor)
-            if played is not None and (type(played) is not SourceRef or played.kind != "character"):
-                played = None  # only a character definition is a character's voice
-            cues.append(_cue(len(cues), turn, "post", turn.post_id(number), speaker, post.actor, played, None,
-                             post.text, post.kind == "action" or post.channel is None, lookup))
+            cues.append(_cue(len(cues), turn, "post", turn.post_id(number), speaker, post.actor,
+                             sources.get(post.actor), None, post.text,
+                             post.kind == "action" or post.channel is None, lookup))
+        outcome = outcomes.get(turn.turn_id) if turn.post is not None and not turn.post.private else None
+        if outcome is not None:
+            label, said = outcome
+            cues.append(_cue(len(cues), turn, "outcome", f"{turn.turn_id}.outcome", label or NARRATOR_LABEL, None,
+                             None, None, said, False, lookup))
         for line in _table_lines(turn):
             speaker = NARRATOR_LABEL if line.actor is None else line.speaker
-            cues.append(_cue(len(cues), turn, "line", line.line_id, speaker, line.actor, line.actor_revision,
-                             line.voice_profile, line.text, False, lookup))
+            revision, profile = line.actor_revision, line.voice_profile
+            if line.actor is not None and revision is None and profile is None:
+                revision = sources.get(line.actor)  # an opening greeting records none: the character played now
+            cues.append(_cue(len(cues), turn, "line", line.line_id, speaker, line.actor, revision, profile,
+                             line.text, False, lookup))
     by_voice: dict[str, list[str]] = {}
     for cue in cues:
         key = cue.voice_key

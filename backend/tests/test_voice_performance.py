@@ -250,6 +250,8 @@ def test_planning_changes_no_text_and_refuses_what_is_not_one_chat():
     assert script_of("*nods* *smiles*", narrator=False) == ""
     # a stage direction never closed runs to the end of the line: it is not spoken
     assert script_of("Run. *She leans in, voice low. Now.", narrator=False) == "Run."
+    assert script_of("*sighs\nFine, I will go.", narrator=False) == "Fine, I will go."
+    assert script_of("*a* Go. *b\nNow listen.", narrator=False) == "Go. Now listen."
 
 
 # -- the casting -----------------------------------------------------------------------------------------------
@@ -401,3 +403,17 @@ def test_a_render_that_runs_past_its_time_budget_ends_its_window_there():
     # the clock reads 0 at the start and one more each time a voiced cue is about to start
     assert [segment.status for segment in rendering.segments].count("audio") == 2
     assert rendering.next is not None and plan.cues[rendering.next].status == "voiced"
+
+
+def test_a_decided_outcome_is_read_by_the_narrator_and_an_opening_by_the_character_played():
+    turns = scene()
+    first = turns[0].turn_id
+    plan = plan_performance(turns, CAST, outcomes={first: ("Narrator", "The ledger is short twelve coins.")})
+    cues = by_item(plan)
+    outcome = cues[f"{first}.outcome"]
+    assert [SHORT.get(cue.item, cue.item) for cue in plan.cues][:3] == [first, f"{first}.outcome", "l1"]
+    assert (outcome.kind, outcome.voice_key, outcome.text) == ("outcome", "tone/slt", "The ledger is short twelve coins.")
+    # a line that recorded no revision (a card's opening greeting) speaks as the character its actor plays
+    opening = (turn(1, SceneLine("l1", WREN, "Wren", "You came back.", TABLE)),)
+    assert plan_performance(opening, CAST).cues[0].reason == "not_cast"
+    assert plan_performance(opening, CAST, sources={WREN: WREN_R2}).cues[0].voice_key == "tone/kal"

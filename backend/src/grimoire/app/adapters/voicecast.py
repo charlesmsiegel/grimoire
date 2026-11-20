@@ -26,6 +26,8 @@ from threading import Lock
 from grimoire.app.adapter import Adapter, AdapterContext, Handler
 from grimoire.core.entity_codec import CodecError, instance_from_payload
 from grimoire.core.identity import ChatRef, InstanceRef, SourceRef
+from grimoire.play.adjudicate import outcome_lines
+from grimoire.scene import SceneRefused
 from grimoire.store import RecordNotFound, StoreError
 from grimoire.textapi import ApiRefused, TextApi
 from grimoire.voicecast import (
@@ -206,9 +208,17 @@ def _performance(ctx: AdapterContext, chat: ChatRef):  # type: ignore[no-untyped
     if any(code == "turn_fork" for code, _detail in scene.problems):
         raise ApiRefused("turn_fork", "this chat's turns fork (two devices played the same turn); its branches are "
                          "not one scene to read aloud until the fork is resolved", 409)
-    posting = {post.actor for record in scene.records for post in record.posts if not post.private}
-    performance = plan_performance(scene.records, view.casting, scene.names, _played(ctx, posting))
     problems = [{"code": code, "detail": detail} for code, detail in scene.problems]
+    speaking = {post.actor for record in scene.records for post in record.posts if not post.private}
+    speaking |= {line.actor for record in scene.records for take in record.takes for line in take.lines
+                 if line.actor is not None and line.actor_revision is None}
+    try:
+        heard = outcome_lines(ctx.runner, scene.records, scene.names)[0]
+    except SceneRefused as error:  # the outcomes cannot be read now: the rest of the scene still performs
+        heard = {}
+        problems.append({"code": "outcomes_unreadable", "detail": error.reason})
+    outcomes = {turn: (line.speaker, line.text) for turn, line in heard.items()}
+    performance = plan_performance(scene.records, view.casting, scene.names, _played(ctx, speaking), outcomes)
     if view.problem is not None:
         problems.append({"code": f"casting_{view.problem.reason}", "detail": view.problem.path})
     return performance, problems
@@ -261,7 +271,7 @@ def _render(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     if type(audio) is not bool:
         raise ApiRefused("invalid_field", "audio must be true or false")
     expected = args.get("fingerprint")
-    if expected is not None and type(expected) is not str:
+    if expected is not None and (type(expected) is not str or not expected.startswith("sha256:")):
         raise ApiRefused("invalid_field", "fingerprint must be the one voicecast.plan or render gave, or null")
     performance, problems = _performance(ctx, chat)
     if expected is not None and expected != performance.fingerprint:

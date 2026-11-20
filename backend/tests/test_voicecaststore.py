@@ -96,7 +96,7 @@ def test_a_file_that_is_not_a_casting_is_reported_and_never_written_over(tmp_pat
     target.parent.mkdir(parents=True)
     for data, reason in ((b"{not json", "malformed"),
                          (json.dumps({"format": "grimoire.voice-casting/9", "cast": []}).encode(), "unsupported_format"),
-                         (b" " * (512 * 1024 + 1), "too_large")):
+                         (b" " * (1024 * 1024 + 1), "too_large")):
         target.write_bytes(data)
         view = CastingStore(tmp_path).view()
         assert (view.casting, view.etag) == (Casting(), None)
