@@ -24,11 +24,19 @@ const base = process.env.GRIMOIRE_APP;
 const missing = process.env.GRIMOIRE_VOICE_MISSING === "1";
 
 // A microphone that plays a 300 Hz tone at 48 kHz, and counts what was opened and closed.
-const microphone = { opened: 0, stopped: 0, contexts: 0, closed: 0 };
+// With `microphone.hold` set, the next getUserMedia waits (a permission prompt) until `microphone.release()`.
+const microphone = { opened: 0, stopped: 0, contexts: 0, closed: 0, hold: false, release: null };
 function installMicrophone() {
   const track = { stop() { microphone.stopped += 1; } };
+  // older Node has no navigator global, and fakedom does not make one
+  if (!globalThis.navigator) Object.defineProperty(globalThis, "navigator", { configurable: true, writable: true, value: {} });
   Object.defineProperty(globalThis.navigator, "mediaDevices", { configurable: true, value: {
-    async getUserMedia(constraints) { assert.ok(constraints.audio); microphone.opened += 1; return { getTracks: () => [track] }; },
+    async getUserMedia(constraints) {
+      assert.ok(constraints.audio);
+      if (microphone.hold) { microphone.hold = false; await new Promise((resolve) => { microphone.release = resolve; }); }
+      microphone.opened += 1;
+      return { getTracks: () => [track] };
+    },
   } });
   globalThis.AudioContext = class {
     constructor() { microphone.contexts += 1; this.sampleRate = 48000; this.destination = {}; this.at = 0; }
@@ -99,10 +107,26 @@ test("voice is chosen on this device only, records into a transcript, and keeps 
   byText(main, "button", "Delete voice data now")[0].click();
   await until(() => main.textContent.includes("Kept now: nothing."), 15000, "deleted");
 
+  // Record pressed, then the microphone switched off while the browser is still asking: it never records
+  microphone.hold = true;
+  byText(main, "button", "Record")[0].click();
+  await until(() => microphone.release, 15000, "the permission prompt");
+  const micOff = main.querySelectorAll("input").find((node) => node.getAttribute("data-focus-key") === "voice:recording");
+  micOff.checked = false;
+  micOff.dispatchEvent({ type: "change" });
+  await until(() => !byText(main, "button", "Record").length && main.textContent.includes("The microphone is off"), 15000, "microphone off during the prompt");
+  microphone.release();
+  await until(() => microphone.stopped === 2 && microphone.closed === microphone.contexts, 15000, "the late microphone closed at once");
+  assert.equal(byText(main, "button", "Stop").length, 0, "no recording started");
+  const micOn = main.querySelectorAll("input").find((node) => node.getAttribute("data-focus-key") === "voice:recording");
+  micOn.checked = true;
+  micOn.dispatchEvent({ type: "change" });
+  await until(() => byText(main, "button", "Record").length, 15000, "ready again after the prompt");
+
   // the microphone off: Record goes away
   const micAgain = main.querySelectorAll("input").find((node) => node.getAttribute("data-focus-key") === "voice:recording");
   micAgain.checked = false;
   micAgain.dispatchEvent({ type: "change" });
   await until(() => !byText(main, "button", "Record").length && main.textContent.includes("The microphone is off"), 15000, "microphone off");
-  assert.equal(microphone.opened, 1, "nothing opened the microphone again");
+  assert.equal(microphone.opened, 2, "nothing else opened the microphone");
 });

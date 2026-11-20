@@ -60,7 +60,7 @@ export async function mount(root, ctx) {
   let heard = null;  // the last answer to a recording: { status, text }
   const page = el("div", { class: "g-stack g-loose voice-page" });
   root.replaceChildren(page);
-  ctx.signal.addEventListener("abort", () => { if (recorder) { recorder.cancel(); recorder = null; } });
+  ctx.signal.addEventListener("abort", () => { attempt += 1; if (recorder) { recorder.cancel(); recorder = null; } });
 
   const load = async () => { status = await ctx.api("voice.status", {}); draw(); };
   const choose = (change) => ctx.act(async () => {
@@ -179,20 +179,24 @@ export async function mount(root, ctx) {
   // makes the recording stale, and it is dropped rather than recognized under the new settings.
   let latched = null;
   let starting = false;  // a second press while the microphone is being opened is not a second recorder
+  let attempt = 0;  // bumped by every drop: a microphone that opens for an older attempt is closed at once
   const start = async (backend) => {
     if (starting || recorder) return;
     starting = true;
+    const mine = ++attempt;
     try {
       latched = { token: status.capture_token, sequence: status.next_sequence };
-      recorder = await record({ maxSeconds: backend.max_seconds, onlimit: () => finish() });
+      const opened = await record({ maxSeconds: backend.max_seconds, onlimit: () => finish() });
+      // the settings changed, data was deleted or the page was left while the browser was asking: never record
+      if (mine !== attempt || ctx.signal.aborted) { await opened.cancel(); return; }
+      recorder = opened;
       heard = null;
       draw();
     } catch (error) {
-      recorder = null;
-      ctx.notify("The microphone could not be opened: " + (error && error.message ? error.message : "permission refused") + ". Typing works as always.", { bad: true });
+      if (mine === attempt && !ctx.signal.aborted) {
+        ctx.notify("The microphone could not be opened: " + (error && error.message ? error.message : "permission refused") + ". Typing works as always.", { bad: true });
+      }
     } finally { starting = false; }
-    // the page was left while the microphone was opening: close it at once
-    if (recorder && ctx.signal.aborted) { recorder.cancel(); recorder = null; }
   };
   // Stop: send what was recorded, or nothing when nothing was captured. The page is drawn again whatever
   // happens, so Stop never stays on screen for a microphone that is closed.
@@ -207,7 +211,10 @@ export async function mount(root, ctx) {
       status = await ctx.api("voice.status", {});
     } finally { draw(); }
   });
-  const drop = async () => { if (recorder) { const active = recorder; recorder = null; await active.cancel(); } };
+  const drop = async () => {
+    attempt += 1;  // also invalidates a microphone still being opened
+    if (recorder) { const active = recorder; recorder = null; await active.cancel(); }
+  };
 
   const notYet = () => el("section", { class: "g-stack", "aria-label": "Not in this app yet" },
     el("h2", { class: "g-heading" }, "Not in this app yet"),
