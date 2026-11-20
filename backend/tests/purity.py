@@ -81,6 +81,8 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.ar
                       "grimoire.play", "grimoire.preparation", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
                       "grimoire.runtime", "grimoire.scenestore", "grimoire.shelfstore", "grimoire.sourceapi", "grimoire.speech",
                       "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi",
+                      # Source upgrade previews (079) read a whole library through the store.
+                      "grimoire.sourceupgrades",
                       "grimoire.topologystore"})
 
 
