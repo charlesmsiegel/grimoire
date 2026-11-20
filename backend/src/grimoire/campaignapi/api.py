@@ -78,7 +78,6 @@ UNAVAILABLE = (
      "reason": "the scene runner frames no ability use and refuses one on an effect in this slice"},
     {"feature": "proposed_by_narration", "blocker": "035/047",
      "reason": "no model proposes an effect from narration yet; effects are proposed here, in structured form"},
-    {"feature": "story_graph", "blocker": "081", "reason": "story graph and navigation is Wave 9"},
     {"feature": "npc_autonomy", "blocker": "039",
      "reason": "NPC agendas are the app's configuration; no screen edits them in this slice"},
     {"feature": "goal_progress", "blocker": "039",

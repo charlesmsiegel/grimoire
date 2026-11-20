@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "story",
+  "route": "story",
+  "title": "Story threads",
+  "slot": "hidden",
+  "order": 10,
+  "owner": "081",
+  "entry": "page.js",
+  "requires": ["story.threads", "story.thread"],
+  "unavailable": null
+}

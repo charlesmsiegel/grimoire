@@ -80,7 +80,7 @@ An obstacle's `due` lists what its decided attempts brought, as 040 says (each w
 
 ## Not available yet
 
-The hub's `unavailable` list names each feature it does not offer and the work that would: revoking an accepted effect and ability use (035 offers neither), effects proposed from narration (035/047), the story graph (081), NPC agenda editing (039) and stored goal progress (039's next slice), rebasing a pinned scenario or lorebook (042), stored change-set proposals (043 milestone 3: a change set is reviewed from its document in the review screen), and the stage when a chat has none (041). A campaign's clock (055) and its characters' sourced memory (053) are on its [Chronicle](CHRONICLE.md) page (115), which the hub links. Item powers (034) and beliefs of actors outside the chat's cast are not shown yet.
+The hub's `unavailable` list names each feature it does not offer and the work that would: revoking an accepted effect and ability use (035 offers neither), effects proposed from narration (035/047), NPC agenda editing (039) and stored goal progress (039's next slice), rebasing a pinned scenario or lorebook (042), stored change-set proposals (043 milestone 3: a change set is reviewed from its document in the review screen), and the stage when a chat has none (041). A campaign's clock (055) and its characters' sourced memory (053) are on its [Chronicle](CHRONICLE.md) page (115), which the hub links. Item powers (034) and beliefs of actors outside the chat's cast are not shown yet.
 
 
 ## Startup services (113)
