@@ -15,12 +15,12 @@ No model call is made anywhere.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
 from grimoire.core.identity import AcceptedRef, ChatRef, InstanceRef, KnowledgeRef, ScopeRef, paired_instances
-from grimoire.core.knowledge import Belief, Event, Knowledge, Proposition, Subject
+from grimoire.core.knowledge import Belief, Event, Knowledge, KnowledgeError, Proposition, Report, Subject
 from grimoire.core.model import ControlAssignment
 from grimoire.core.perspective import (
     ActorKnowledge, PlayerKnowledge, actor_knowledge, admit_belief, knowledge_about, player_knowledge, standing,
@@ -36,6 +36,7 @@ from grimoire.store import (
     TakenIdsUnlisted, UnstorableIdentifier, WriteConflict, etag,
 )
 from grimoire.library import LibraryPathError
+from grimoire.rumorledger import campaign_dispatches, is_rumor_output, ledger_name
 from grimoire.store.layout import address_parts, logical
 from grimoire.sync.documents import DEVICE_FILE, parse_device
 
@@ -218,6 +219,27 @@ class KnowledgeChange:
         return []
 
 
+def _with_dispatches(store: LibraryStore, campaign_id: str, assembly: Assembly) -> Assembly:
+    """The assembly with 063's queued sends beside its ledger, so no projection read through this library ever
+    shows a delayed report only once it is delivered. A rumor ledger that cannot be trusted, or that disagrees
+    with a delivered report, is a problem: every actor is then shown no sends at all (fail closed). So is a
+    delivered rumor report the ledger does not name, as on a device that has the evidence but not the (unsynced)
+    rumor ledger."""
+    try:
+        dispatches = campaign_dispatches(store, campaign_id)
+        named = {dispatch.evidence_id for dispatch in dispatches}
+        if any(is_rumor_output(item.evidence_id) and item.evidence_id not in named
+               for item in assembly.knowledge.evidence if isinstance(item, Report)):
+            raise ValueError("undispatched_rumor")
+        if not dispatches:  # no queue: the ledger as assembled, without validating it twice
+            return assembly
+        knowledge = assembly.knowledge.with_dispatches(dispatches)
+    except (StoreError, KnowledgeError, ValueError):
+        return replace(assembly, knowledge=assembly.knowledge.with_dispatches(None),
+                       problems=tuple(sorted({*assembly.problems, f"{ledger_name(campaign_id)}:unreadable"})))
+    return replace(assembly, knowledge=knowledge)
+
+
 class EvidenceLibrary:
     """Durable events and evidence over one ``LibraryStore`` (read-only stores can read)."""
 
@@ -233,7 +255,7 @@ class EvidenceLibrary:
     def _assembly(self, campaign_id: str) -> tuple[Assembly, KnowledgeScan, dict[KnowledgeRef, ScannedFile]]:
         scan = self.store.campaign_knowledge(campaign_id)
         files = _files(scan)
-        return assemble(campaign_id, files), scan, files
+        return _with_dispatches(self.store, campaign_id, assemble(campaign_id, files)), scan, files
 
     def read(self, campaign_id: str, *, requested_by: str) -> CampaignKnowledge:
         """The raw ledger: director-only, so call sites stay explicit and auditable."""
