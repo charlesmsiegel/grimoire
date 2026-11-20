@@ -55,11 +55,18 @@ def recorded_turn(turn: int, meter: TurnMeter, outcome: TurnOutcome, *,
         raise GenerationError("outcome_mismatch", "the outcome's calls are not this meter's planned calls")
     if meter.poisoned_call_ids:
         raise GenerationError("poisoned_meter", "a call's booking failed, so its ledger may miss an attempt")
+    stages = {call.call_id: call.stage for call in plan.calls}
     for call in outcome.calls:
-        if meter.status(call.call_id) not in _METER_STATUS[call.status]:
+        allowed = _METER_STATUS[call.status]
+        if stages[call.call_id] is InferenceStage.PLANNING and call.status == "not_issued":
+            # 068: forgone when skipped for an NPC with a decided choice; unbooked when never reached
+            allowed = frozenset({"forgone", None})
+        if meter.status(call.call_id) not in allowed:
             raise GenerationError("outcome_mismatch",
                                   f"{call.call_id} is {call.status} in the outcome but not on the meter")
-    accepted = [call.call_id for call in outcome.calls if call.status == "accepted"]
+    # 068: an accepted planning call is a suggestion, never a line; only speaking calls produce one.
+    accepted = [call.call_id for call in outcome.calls
+                if call.status == "accepted" and stages[call.call_id] is not InferenceStage.PLANNING]
     expected = [] if outcome.status == "stale" else accepted
     if [line.call_id for line in outcome.lines] != expected:
         raise GenerationError("outcome_mismatch", "the outcome's lines are not its accepted calls'")

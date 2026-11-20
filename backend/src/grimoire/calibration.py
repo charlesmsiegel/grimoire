@@ -26,7 +26,7 @@ def verify_checkout(checkout: Path) -> None:
                               capture_output=True, text=True, timeout=10)
     if revision.returncode or revision.stdout.strip() != REVISION:
         raise ValueError('external tool revision does not match the calibration pin')
-    status = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain',
+    status = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain', '--ignored',
                              '--untracked-files=all'], capture_output=True, text=True, timeout=10)
     if status.returncode or status.stdout:
         raise ValueError('external tool checkout is not clean')

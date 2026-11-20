@@ -1,0 +1,11 @@
+{
+  "address": "catalog:cards/lorebook/harbor-notes@r1",
+  "format": "grimoire.record/1",
+  "name": "Harbor notes",
+  "payload": {
+    "entries": [
+      "the lighthouse is dark"
+    ]
+  },
+  "previous": null
+}

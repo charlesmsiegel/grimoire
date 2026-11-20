@@ -1,0 +1,11 @@
+{
+  "format": "grimoire.source/1",
+  "heads": {
+    "scenario/storm": "r2"
+  },
+  "links": [],
+  "owner": "human:owner",
+  "previous": null,
+  "source": "catalog:cards",
+  "title": "Cards"
+}
