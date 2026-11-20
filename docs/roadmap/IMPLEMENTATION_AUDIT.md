@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof brings them to **68/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -40,7 +40,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 11/24 | ☐ | 049, 050, 051, 054, 055, 056, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 12/24 | ☐ | 049, 050, 051, 054, 055, 056, 057, 059, 060, 062, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -600,9 +600,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-064"></a>
 ### 064 — Scenario Preparation
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/scenario-preparation.md)).
-- Evidence: obstacles provide player-agency contracts and authored scene obstacles.
-- Scope / gap: No grounded noncanonical situation-preparation generator producing reviewed stakes/directions.
+- [x] Scheduled first-useful slice ([requirements](sprints/scenario-preparation.md)).
+- Evidence: [`preparation/generate.py`](../../backend/src/grimoire/preparation/generate.py) and [`test_preparation_generation.py`](../../backend/tests/test_preparation_generation.py) generate one scene through the real provider adapter (scripted transport): a metered, approved `planning` call grounded in secret, goal, calendar and choice evidence returns premise, cast, location, questions, clues, tensions, stakes and two directions. The reviewed meeting goes stale when the player decides to leave town; a new request after that choice prepares a different, roadside draft from the updated evidence, and the unplayed meeting never enters evidence (no writer exists). [`preparation/session.py`](../../backend/src/grimoire/preparation/session.py) and [`test_preparation.py`](../../backend/tests/test_preparation.py) own review, replay, rejection and staleness. Invented evidence, uncast or foreign instances, display-name matching, one direction, extra canon fields, truncated, refused, unbudgeted and unparseable replies fail closed.
+- Scope / gap: Headless first slice. Callers assemble the evidence snapshot; no store reader, app service or UI (115) wires it. In-memory session only; no linked scenario sets, multi-session kits or durable notes. Credible stakes, open agency and respect for the latest choice are director review, not automatic checks (grounding is checked by evidence ID); one call per explicit request with no aggregate budget cap; no live-model quality or cost was measured. See [contract](../PREPARATION.md).
 
 <a id="slice-065"></a>
 ### 065 — Scene Workspace
