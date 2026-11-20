@@ -366,7 +366,7 @@ dictated passage** only, never on typed text:
 
 | Said | Does | The other reading (one press) |
 |---|---|---|
-| "no, I meant the west gate", "I meant …", "correction …" | replaces the part of the passage it lines up with ("the east gate"): a shared word that is not a stop word, or a whole that sounds alike (a misheard name) | keep the words as said, in case they were a character's line |
+| "no, I meant the west gate", "I meant …", "correction …" | replaces the part of the passage it lines up with: a word swapped ("the east gate"), put in ("the gate") or taken out, around a shared word that is not a stop word, or a whole that sounds alike (a misheard name); neighbouring words are never taken, and a trailing "please" is not put in | keep the words as said, in case they were a character's line |
 | the same, when nothing lines up | keeps the words as said | replace the whole last passage instead |
 | "scratch that", "delete that", "strike that" | removes the last passage | keep the words as said |
 | "post it", "send it", "submit" … | nothing: voice never posts | keep the words as said |
@@ -377,7 +377,11 @@ offered ("Use Mara Vell for “mara bell”"); an invented name the recognizer
 cannot know is the player's to type over. A recognizer confidence under 0.5
 (untuned) adds "check it". The player's own typing always wins: a draft typed in
 while a recording was heard is revised as it is now (`dictation.revise`), and an
-offer whose text has since changed does nothing and says so.
+offer whose text has since changed does nothing and says so. Once the reply is
+typed in, posted or changed by anything but dictation, there is no "last
+passage" any more: a correction or "scratch that" is then kept as words. A
+correction is lined up within the passage's last 200 words, and names are looked
+for in its first 300, so a long draft costs about what a sentence does.
 
 | Op | Arguments | Answer |
 |---|---|---|

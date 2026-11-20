@@ -59,7 +59,7 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
   if (!ctx.has("dictation.status")) return { node: null };
   ctx.styles("dictate.css");
   const state = { status: null, recorder: null, starting: false, attempt: 0, hearing: false, latched: null,
-    passage: null, applied: null, disposed: false };
+    passage: null, applied: null, putting: false, disposed: false };
   const statusLine = el("p", { class: "chat-dictate-status", role: "status" }, "Checking dictation…");
   const note = el("div", { class: "chat-dictate-note", role: "log", "aria-live": "polite", "aria-label": "Dictation" });
   const dictate = ui.button("Dictate", () => (state.recorder ? stop() : start()), { title: "Speak a draft; Esc cancels" });
@@ -108,7 +108,10 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
     const mine = ++state.attempt;
     draw();
     try {
+      // the sequence and token as they are now (another tab, or the Voice page, may have used the last ones),
       // latched now, never after: a change of settings while recording makes this recording stale
+      await refresh({ draw: false });
+      if (mine !== state.attempt || state.disposed || !ready()) return;
       state.latched = { token: state.status.capture_token, sequence: state.status.next_sequence };
       const opened = await record({ maxSeconds: state.status.max_seconds, onlimit: () => stop() });
       // cancelled, or the page left, while the browser was asking for the microphone: never record
@@ -140,7 +143,7 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
       const audio = await active.stop();
       if (audio === null) { tell("Nothing was recorded. Press Dictate, speak, then Stop dictating."); return; }
       const sent = composer.value;
-      const asked = { draft: sent, last: state.passage, names: sceneNames() };
+      const asked = { draft: sent, last: lastPassage(), names: sceneNames() };
       const heard = await ctx.api("dictation.hear", { ...asked, audio: base64(audio),
         sequence: state.latched.sequence, capture_token: state.latched.token });
       if (state.disposed || mine !== state.attempt) return;
@@ -148,7 +151,7 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
       let revision = heard.revision;
       // typed in while it was being heard: the same words, against the reply as it is now
       if (composer.value !== sent) {
-        revision = (await ctx.api("dictation.revise", { draft: composer.value, last: state.passage, names: sceneNames(),
+        revision = (await ctx.api("dictation.revise", { draft: composer.value, last: lastPassage(), names: sceneNames(),
           heard: heard.heard, confidence: heard.confidence })).revision;
         if (state.disposed || mine !== state.attempt) return;
       }
@@ -172,13 +175,23 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
   }
 
   // Put `text` in the composer; its own input event saves it as the chat's draft.
-  function put(text, passage, previous) {
+  function write(text) {
     composer.value = text;
-    composer.input.dispatchEvent(new Event("input"));
+    state.putting = true;
+    try { composer.input.dispatchEvent(new Event("input")); } finally { state.putting = false; }
+  }
+  function put(text, passage, previous) {
+    write(text);
     state.passage = passage;
     state.applied = { text, previous };
   }
+  // The reply as dictation last left it: anything else (typing, Post, another assist) means the last dictated
+  // passage and the offers about it no longer apply, so a correction or "scratch that" can never reach typed text.
   const current = () => Boolean(state.applied) && composer.value === state.applied.text;
+  const lastPassage = () => (current() ? state.passage : null);
+  composer.input.addEventListener("input", () => {
+    if (!state.putting) { state.applied = null; state.passage = null; }
+  }, { signal: ctx.signal });
   function changed() { tell("Your reply has changed since, so nothing was done: edit it there."); }
 
   function show(revision) {
@@ -189,7 +202,7 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
     const controls = [];
     if (changes) controls.push(ui.button("Undo", () => undo(), { size: "small" }));
     const other = revision.alternative;
-    if (other) {
+    if (other && ["added", "corrected"].includes(other.kind)) {
       const label = other.kind === "added" ? "Keep as words" : "Replace " + quoted(other.before) + " instead";
       controls.push(ui.button(label, () => {
         // the other reading starts from the same draft this one did
@@ -200,17 +213,16 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
     for (const suggestion of revision.suggestions || []) {
       controls.push(ui.button("Use " + suggestion.name + " for " + quoted(suggestion.heard), () => named(suggestion), { size: "small" }));
     }
-    if (revision.base) state.applied.previous = revision.base;  // Undo after choosing the other reading goes all the way back
+    if (revision.base && state.applied) state.applied.previous = revision.base;  // Undo after choosing the other reading goes all the way back
     tell((revision.kind === "nothing" ? "" : heardText) + describe(revision), ...controls);
   }
 
   function undo() {
-    if (!current()) { changed(); return; }
+    if (!current() || !state.applied.previous) { changed(); return; }
     const { previous } = state.applied;
-    composer.value = previous.text;
-    composer.input.dispatchEvent(new Event("input"));
+    write(previous.text);
     state.passage = previous.passage;
-    state.applied = null;
+    state.applied = { text: previous.text, previous: null };  // what was dictated before is still the last passage
     tell("Undone: your reply is as it was.");
   }
 

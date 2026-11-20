@@ -34,6 +34,13 @@ LOW_CONFIDENCE = 0.5
 MAX_NAMES = 64
 MAX_NAME = 80
 MAX_SUGGESTIONS = 3
+#: How much is searched, so a long draft or a long recording costs about what a spoken sentence does: a correction
+#: is lined up within the last words of the passage, names are looked for in its first words, and a name of more
+#: words than this is matched by its parts.
+MAX_CORRECTION_WORDS = 24
+MAX_ALIGN_WORDS = 200
+MAX_SUGGEST_WORDS = 300
+MAX_NAME_WORDS = 4
 
 _WORD = re.compile(r"[\w']+")
 _FILLERS = frozenset({"no", "sorry", "wait", "oh", "um", "uh", "er", "actually"})
@@ -132,17 +139,18 @@ def _correction(heard: str) -> str | None:
     while at < len(words) and words[at] in _FILLERS:
         at += 1
     said_no = "no" in words[:at]
-    if words[at:at + 2] == ["i", "meant"]:
-        begin = at + 2
-    elif said_no and words[at:at + 2] == ["i", "mean"]:
+    if words[at:at + 2] == ["i", "meant"] or (said_no and words[at:at + 2] == ["i", "mean"]):
         begin = at + 2
     elif words[at:at + 1] == ["correction"]:
         begin = at + 1
     else:
         return None
-    if begin >= len(tokens):
+    end = len(tokens)
+    while end > begin and words[end - 1] in _POLITE:
+        end -= 1  # "... the west gate please": the courtesy is not part of what is put in
+    if begin >= end:
         return None
-    return heard[tokens[begin][1]:].strip(" ,.;:!?-")
+    return heard[tokens[begin][1]:tokens[end - 1][2]].strip(" ,.;:!?-")
 
 
 def _scratch(heard: str) -> bool:
@@ -154,35 +162,54 @@ def _submit(heard: str) -> bool:
     return bool(words) and words[0] in _SUBMIT_VERBS and tuple(words[1:]) in _SUBMIT_OBJECTS
 
 
+def _fits(window: list[str], wanted: list[str]) -> int | None:
+    """How many words ``window`` and ``wanted`` share when ``wanted`` reads as a correction of ``window``, else
+    ``None``: they share a word that is not a stop word, in order, and every word of the window they do not share
+    is either swapped for new words in the same place ("east" for "west" in "the east gate") or dropped from
+    between shared words ("the gate" for "the west gate"). A window may not begin or end with a word nothing
+    replaces ("ride to the gate" for "the west gate"), nor swap stop words for new content ("to" for "west")."""
+    matcher = SequenceMatcher(None, window, wanted, autojunk=False)
+    shared = [word for block in matcher.get_matching_blocks() for word in window[block.a:block.a + block.size]]
+    if all(word in _STOP for word in shared):
+        return None
+    for tag, start, end, begin, stop in matcher.get_opcodes():
+        if tag == "delete" and (start == 0 or end == len(window)):
+            return None
+        if tag == "replace" and (end - start > stop - begin or all(word in _STOP for word in window[start:end])):
+            return None
+    return len(shared)
+
+
 def _align(passage: str, replacement: str) -> tuple[int, int] | None:
     """The character span of ``passage`` that ``replacement`` corrects, or ``None`` when nothing lines up.
 
-    A window of about the replacement's length lines up when it shares a word that is not a stop word, or sounds
-    like the replacement as a whole (a misheard name). The best window wins; a tie goes to one of the
-    replacement's own length, then to the latest, since a correction usually follows what it corrects."""
-    words = _tokens(passage)
+    A span lines up when the replacement reads as a correction of it (``_fits``), or, sharing no word, sounds like
+    the replacement as a whole (a misheard name). The most shared words win, then the span that the replacement
+    accounts for most of, then the latest, since a correction usually follows what it corrects. Only the passage's
+    last words are searched, and a long replacement is not a correction to line up."""
+    words = _tokens(passage)[-MAX_ALIGN_WORDS:]
     wanted = [word for word, _s, _e in _tokens(replacement)]
-    if not words or not wanted:
+    if not words or not wanted or len(wanted) > MAX_CORRECTION_WORDS:
         return None
     spoken = [word for word, _s, _e in words]
     if any(spoken[at:at + len(wanted)] == wanted for at in range(len(spoken))):
         return None  # already said just so: there is nothing to correct
     wanted_key = key("".join(word for word in wanted if word not in _STOP))
     best: tuple[float, int, int, int, int] | None = None
-    for size in sorted({len(wanted), len(wanted) - 1, len(wanted) + 1}):
-        if not 1 <= size <= len(words):
-            continue
+    for size in range(1, min(len(wanted) + 1, len(words)) + 1):
         for at in range(len(words) - size + 1):
-            window = [word for word, _s, _e in words[at:at + size]]
-            if all(word in window for word in wanted):
-                continue  # nothing of the replacement is new here: dropping words is not a correction
-            shared = [word for word in wanted if word in window]
-            content = [word for word in shared if word not in _STOP]
-            heard_key = key("".join(word for word in window if word not in _STOP))
-            sound = _ratio(heard_key, wanted_key) if min(len(heard_key), len(wanted_key)) >= 3 else 0.0
-            if not content and sound < 0.85:
+            window = spoken[at:at + size]
+            shared = _fits(window, wanted)
+            if shared is not None:
+                score: tuple[float, int, int] = (float(shared), size, at)
+            elif any(word in wanted for word in window) or abs(size - len(wanted)) > 1:
                 continue
-            score = (len(shared) + sound, 1 if size == len(wanted) else 0, at)
+            else:
+                heard_key = key("".join(word for word in window if word not in _STOP))
+                sound = _ratio(heard_key, wanted_key) if min(len(heard_key), len(wanted_key)) >= 3 else 0.0
+                if sound < 0.85:
+                    continue
+                score = (sound, size, at)
             if best is None or score > best[:3]:
                 best = (*score, words[at][1], words[at + size - 1][2])
     return (best[3], best[4]) if best is not None else None
@@ -219,7 +246,8 @@ def _names(names: tuple[str, ...]) -> list[str]:
     """Each name, then each word of a longer name ("Mara Vell", then "Mara", "Vell"), once, longest first."""
     found: list[str] = []
     for name in names:
-        for part in (" ".join(name.split()), *name.split()):
+        whole = (" ".join(name.split()),) if len(name.split()) <= MAX_NAME_WORDS else ()
+        for part in (*whole, *name.split()):
             if len(key(part)) >= 3 and part.lower() not in _STOP and part not in found:
                 found.append(part)
     return sorted(found, key=lambda part: -len(part.split()))  # stable: scene order within a length
@@ -227,7 +255,7 @@ def _names(names: tuple[str, ...]) -> list[str]:
 
 def suggest(passage: str, names: tuple[str, ...]) -> tuple[Suggestion, ...]:
     """Spans of ``passage`` that sound like a scene name without being it: one suggestion per span and name."""
-    words = _tokens(passage)
+    words = _tokens(passage)[:MAX_SUGGEST_WORDS]
     present = {word for word, _s, _e in words}
     taken: list[tuple[int, int]] = []
     found: list[Suggestion] = []
@@ -281,15 +309,16 @@ def revise(draft: str, last: str | None, heard: str, *, confidence: float | None
         return Revision("nothing", draft, last, heard)
     verbatim = _added(draft, heard, confidence, names)
     at = _last(draft, last)
+    other = verbatim if verbatim.kind != "too_long" else None  # a reading that cannot be had is not offered
     if _submit(heard):
-        return Revision("not_posted", draft, last, heard, alternative=verbatim)
+        return Revision("not_posted", draft, last, heard, alternative=other)
     if _scratch(heard):
         if at < 0:
             return verbatim
         head = draft[:at]
         tail = draft[at + len(last):]
         text = (head.rstrip(" ") if not tail.strip() else head) + tail
-        return Revision("scratched", text, None, heard, before=last, alternative=verbatim)
+        return Revision("scratched", text, None, heard, before=last, alternative=other)
     replacement = _correction(heard)
     if replacement is None or at < 0:
         return verbatim
@@ -314,8 +343,8 @@ def revise(draft: str, last: str | None, heard: str, *, confidence: float | None
     if len(text) > MAX_DRAFT:
         return Revision("too_long", draft, last, heard)
     return Revision("corrected", text, passage, heard, before=replaced, after=put, uncertain=_uncertain(confidence),
-                    suggestions=suggest(put, names), alternative=verbatim)
+                    suggestions=suggest(put, names), alternative=other)
 
 
-__all__ = ["LOW_CONFIDENCE", "MAX_DRAFT", "MAX_NAME", "MAX_NAMES", "Revision", "Suggestion", "key", "revise",
+__all__ = ["LOW_CONFIDENCE", "MAX_ALIGN_WORDS", "MAX_CORRECTION_WORDS", "MAX_DRAFT", "MAX_NAME", "MAX_NAMES", "Revision", "Suggestion", "key", "revise",
            "suggest"]

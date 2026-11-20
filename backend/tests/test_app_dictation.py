@@ -18,8 +18,6 @@ import threading
 from pathlib import Path
 
 import pytest
-from textapi_fixtures import Device, desktop_library
-
 from grimoire.app import AppServer
 from grimoire.app.adapters import dictation, voice
 from grimoire.app.appapi import AppApi
@@ -28,6 +26,7 @@ from grimoire.speech import BackendInfo
 from grimoire.speech.measure import flite_available, synthesize
 from grimoire.speech.sphinx import RATE, PocketSphinxBackend, installed, to_wav
 from grimoire.textapi import ApiRefused
+from textapi_fixtures import Device, desktop_library
 
 TESTS = Path(__file__).with_name("js")
 NODE = shutil.which("node")
@@ -203,7 +202,7 @@ def test_the_proving_scenario_on_the_chat_page(tmp_path):
 
 @pytest.mark.skipif(not (installed() and flite_available()), reason="pocketsphinx and ffmpeg with Flite are not both installed")
 def test_the_installed_engine_dictates_synthetic_speech_into_a_draft_and_posts_nothing(library):
-    desk, chat = library
+    desk, _chat = library
     with Device(desk, runtime=False) as device:
         engine = PocketSphinxBackend()
         voice.configure(device.api, (engine,))

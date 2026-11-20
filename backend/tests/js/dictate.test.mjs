@@ -258,3 +258,38 @@ test("helpers: the last occurrence is replaced, and every kind is described", ()
     assert.ok(describe(revision({ kind, before: "x", after: "y" })).length > 5, kind);
   }
 });
+
+test("once the reply is typed in or posted, the last dictated passage is no longer offered as a target", async () => {
+  const s = strip({ answers: { "dictation.hear": (args) => ({ status: "ok", heard: "i draw my sword",
+    revision: revision({ text: args.draft + "I draw my sword", passage: "I draw my sword", heard: "i draw my sword" }) }) } });
+  await settle();
+  s.press("Dictate");
+  await settle();
+  s.press("Stop dictating");
+  await settle();
+  // typed by the player (the composer's own input event), as after a Post cleared it and they wrote again
+  s.composer.value = "I draw my sword and charge";
+  s.composer.input.dispatchEvent({ type: "input" });
+  s.press("Undo");
+  assert.equal(s.composer.value, "I draw my sword and charge", "an old Undo does nothing to typed text");
+  s.press("Dictate");
+  await settle();
+  s.press("Stop dictating");
+  await settle();
+  assert.equal(s.ops("dictation.hear")[1].args.last, null, "\"scratch that\" could not reach the typed words");
+});
+
+test("Dictate takes the sequence as it is when pressed, not as it was when the page opened", async () => {
+  let sequence = 1;
+  const s = strip({ answers: {
+    "dictation.status": () => ({ ...READY, next_sequence: sequence }),
+    "dictation.hear": () => ({ status: "ok", heard: "we run", revision: revision({ text: "We run", passage: "We run", heard: "we run" }) }),
+  } });
+  await settle();
+  sequence = 5;  // another tab, or the Voice page, recognized something meanwhile
+  s.press("Dictate");
+  await settle();
+  s.press("Stop dictating");
+  await settle();
+  assert.equal(s.ops("dictation.hear")[0].args.sequence, 5);
+});

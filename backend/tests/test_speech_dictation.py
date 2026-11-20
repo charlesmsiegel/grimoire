@@ -6,8 +6,9 @@ gate"); test_app_dictation.py runs it through the app and the real chat page."""
 
 from __future__ import annotations
 
-import pytest
+import time
 
+import pytest
 from grimoire.speech.dictation import MAX_DRAFT, revise, suggest
 
 NAMES = ("Mara Vell", "Anya Rook")
@@ -50,6 +51,19 @@ def test_a_correction_only_reaches_the_last_dictated_passage():
     assert revise("We go up", "we take the stairs", "i meant the west gate").kind == "added"
 
 
+@pytest.mark.parametrize(("passage", "said", "expected"), [
+    ("We ride to the gate", "no, I meant the west gate", "We ride to the west gate"),  # a word put in
+    ("I give the key to the guard at the gate", "no I meant the west gate", "I give the key to the guard at the west gate"),
+    ("We go to the west gate", "I meant the gate", "We go to the gate"),  # a word taken out
+    ("We hire three guards", "no I meant four guards", "We hire four guards"),  # a word swapped
+    ("We draw swords and charge the line", "no I meant we draw bows", "We draw bows and charge the line"),
+    ("We head to the east gate", "no, I meant the west gate please", "We head to the west gate"),  # not the courtesy
+])
+def test_a_correction_that_puts_in_takes_out_or_swaps_words_keeps_its_neighbours(passage, said, expected):
+    fixed = revise(passage, passage, said)
+    assert (fixed.kind, fixed.text) == ("corrected", expected)
+
+
 def test_a_capital_is_kept_where_the_correction_starts_a_sentence():
     said = revise("", None, "east gate now")
     assert revise(said.text, said.passage, "correction west gate").text == "West gate now"
@@ -87,6 +101,23 @@ def test_silence_and_an_overlong_draft_change_nothing():
     assert revise("Typed", "x", "  ").kind == "nothing"
     full = "x" * (MAX_DRAFT - 3)
     assert revise(full, None, "we run").kind == "too_long" and revise(full, None, "we run").text == full
+
+
+def test_a_reading_that_would_not_fit_the_message_box_is_not_offered():
+    said = revise("x" * (MAX_DRAFT - 10), None, "we run")
+    assert said.kind == "added"
+    for words in ("post it", "scratch that"):  # keeping these words as said would pass the limit
+        assert revise(said.text, said.passage, words).alternative is None
+
+
+def test_a_long_draft_or_recording_costs_about_what_a_sentence_does():
+    words = ["the", "west", "gate", "east", "north", "stairs", "ride", "run", "mara", "bell"]
+    long = " ".join(words[(i * 7) % len(words)] for i in range(3000))[:MAX_DRAFT - 100]
+    names = tuple(" ".join(words[(i + j) % len(words)] for j in range(6)) for i in range(64))
+    began = time.monotonic()
+    revise(long, long, "correction " + " ".join(words[(i * 3) % len(words)] for i in range(1200)), names=names)
+    revise("", None, long[:16000], names=names)
+    assert time.monotonic() - began < 5
 
 
 def test_low_confidence_flags_the_passage_and_unknown_confidence_does_not():
