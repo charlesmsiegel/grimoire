@@ -34,10 +34,13 @@ const quoted = (text) => "“" + text + "”";
 const MAX_DRAFT = 20000;  // the composer's own limit (grimoire.speech.dictation.MAX_DRAFT)
 
 // `text` with the `find` that starts at `at` replaced by `put`, or null when `find` is not there: a suggestion
-// replaces exactly the words it matched, never the same letters elsewhere ("mara bellows").
+// replaces exactly the words it matched, never the same letters elsewhere ("mara bellows"). `at` counts
+// characters as the server does (code points), so an emoji earlier in the reply is one, not two.
 export function replaceAt(text, at, find, put) {
-  if (typeof text !== "string" || !Number.isInteger(at) || at < 0 || !find || text.slice(at, at + find.length) !== find) return null;
-  return text.slice(0, at) + put + text.slice(at + find.length);
+  if (typeof text !== "string" || !Number.isInteger(at) || at < 0 || !find) return null;
+  const head = Array.from(text).slice(0, at).join("");
+  if (Array.from(head).length !== at || text.slice(head.length, head.length + find.length) !== find) return null;
+  return head + put + text.slice(head.length + find.length);
 }
 
 // What a revision did, in a sentence after "Heard “…”."

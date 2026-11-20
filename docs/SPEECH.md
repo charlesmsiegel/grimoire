@@ -377,7 +377,7 @@ dictated passage** only, never on typed text:
 cast that sound like part of what was heard ("mara bell" for Mara Vell) are only
 offered ("Use Mara Vell for “mara bell”"), and a press replaces exactly the
 words that were matched (each suggestion carries its place in the draft and the
-passage, `at` and `offset`), never the same letters elsewhere; an invented name the recognizer
+passage, `at` and `offset`, counted in code points), never the same letters elsewhere; an invented name the recognizer
 cannot know is the player's to type over. A recognizer confidence under 0.5
 (untuned) adds "check it". The player's own typing always wins: a draft typed in
 while a recording was heard is revised as it is now (`dictation.revise`), and an

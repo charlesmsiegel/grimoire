@@ -274,6 +274,9 @@ test("helpers: only the span at its place is replaced, and every kind is describ
   assert.equal(replaceAt("a b", 2, "a", "c"), null, "moved: not there any more");
   assert.equal(replaceAt("a b", undefined, "a", "c"), null);
   assert.equal(replaceAt(null, 0, "a", "c"), null);
+  // the server counts code points: the emoji is one character before "mara bell"
+  assert.equal(replaceAt("We wave 👋. Tell mara bell", 16, "mara bell", "Mara Vell"), "We wave 👋. Tell Mara Vell");
+  assert.equal(replaceAt("ab", 5, "a", "c"), null, "past the end");
   for (const kind of ["added", "corrected", "scratched", "not_posted", "too_long", "nothing"]) {
     assert.ok(describe(revision({ kind, before: "x", after: "y" })).length > 5, kind);
   }

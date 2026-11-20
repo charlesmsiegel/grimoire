@@ -184,6 +184,7 @@ def test_a_scene_name_that_sounds_like_what_was_heard_is_only_suggested():
 @pytest.mark.parametrize(("draft", "last", "heard"), [
     ("", None, "tell mara bell while mara bellows"),  # the same letters later on are not the span
     ("We hide. ", None, "tell mara bell"),
+    ("We wave 👋. ", None, "tell mara bell"),  # offsets count code points; the page converts them
     ("We meet at the east gate. ", "We meet at the east gate.", "no i meant mara bell at the west gate"),
     ("Go to the east gate", "Go to the east gate", "no i meant mara bells gate"),
 ])
