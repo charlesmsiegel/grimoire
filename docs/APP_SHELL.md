@@ -20,7 +20,8 @@ backend/src/grimoire/app/
   adapter.py                   the adapter contract: Adapter, AdapterContext
   adapters/<name>.py           one sprint's ops: sources 109, imports 110, play 111, providers 112,
                                campaign 113, media 114, shell 108; inbox, what waits on the person
-                               ([INBOX](INBOX.md)); and shelf, tags, pins and saved filters ([SHELF](SHELF.md))
+                               ([INBOX](INBOX.md)); shelf, tags, pins and saved filters ([SHELF](SHELF.md));
+                               and speech 067, one listening window, captions, read-aloud ([SPEECH](SPEECH.md))
   pages.py                     the page manifest format and its checks
 ```
 
