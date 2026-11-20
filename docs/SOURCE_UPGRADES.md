@@ -35,8 +35,10 @@ reference is a string that is exactly:
 The scan is raw, so a record shape this version does not know still counts. Prose that merely
 contains a reference does not, and neither does a source whose id only starts with, ends with or
 is nested under the changed one's (`catalog:cast:extra` is not `catalog:cast`). Two unpinned
-positions name an entity without reaching its content, so they are not listed: an art pin's layer
-`entity` (beside the record's pinned base) and a catalog's `exclusions`. Every other unpinned ref is
+positions name an entity without reaching its content: an art pin's layer `entity` (beside the
+record's pinned base) and a catalog's `exclusions`. They are listed by existence only (`unchanged`
+while the entity has a head on both sides, otherwise `missing`, `still_missing` or `restored`) and
+never as `follows_head`. Every other unpinned ref is
 listed, so an actor whose `source` follows its head, or a binding detached and reattached with
 `follow=True`, shows as `follows_head` even when the same file also holds an older pin.
 

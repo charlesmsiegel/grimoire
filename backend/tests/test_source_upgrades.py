@@ -92,6 +92,8 @@ def test_removal_reports_missing_references_and_never_a_namesake(tmp_path):
             assert any(path.startswith('sources/' + world.replace(':', '/') + '/') for path in held)
         assert {row.status for row in preview.references} == {'missing'}
         assert {str(ALPHA), str(BETA), str(NOTES), str(BASE.unpinned())} <= set(rows)
+        # An exclusion names the entity only, and is still listed as missing on removal.
+        assert any(row.path.startswith('sources/world/elderfen-vampire/') for row in rows[str(BASE.unpinned())])
         assert all(row.after is None and row.newer_head is None for row in preview.references)
         # Names never establish identity: two other sources hold a Mara, neither is offered.
         assert store.load().index.find_by_name('Mara', 'character')
@@ -147,7 +149,7 @@ def test_update_reports_by_id_when_catalog_names_and_head_order_swap(tmp_path):
         assert changes[ALPHA.unpinned()].renamed and changes[ALPHA.unpinned()].status == 'moved'
         # Pinned actors and chats stay on r1 and are offered r2; the following chat and its actor move.
         assert {(row.status, row.newer_head) for row in rows[str(BASE)]} == {('unchanged', 'r2')}
-        moving = rows[str(BASE.unpinned())]
+        moving = [row for row in rows[str(BASE.unpinned())] if row.path.startswith('campaigns/')]
         assert {row.record for row in moving} == {'chat', 'instance'}
         assert all(row.path.startswith(f'campaigns/{following.scope.campaign_id}/') for row in moving)
         assert {(row.status, row.before, row.after) for row in moving} == {('follows_head', 'r1', 'r2')}
@@ -155,6 +157,9 @@ def test_update_reports_by_id_when_catalog_names_and_head_order_swap(tmp_path):
         # The vampire catalog's exclusion of Mara reaches no content, so it never reads as a follow.
         assert not any(row.path.startswith('sources/world/elderfen-vampire/_source/records/catalog/')
                        for row in moving)
+        [exclusion] = [row for row in preview.references if row.text == str(BASE.unpinned())
+                       and row.path.startswith('sources/world/elderfen-vampire/')]
+        assert exclusion.status == 'unchanged' and not exclusion.attention
 
 
 def test_update_reports_a_binding_reattached_to_follow(tmp_path):
@@ -327,6 +332,11 @@ def test_raw_scan_matches_exact_source_ids_only():
     assert _references(payload, CAST)[0] == {
         ('definition', f'{CAST}/character/mara@r1'), ('definition', f'{CAST}/character/mara'),
         ('image', f'{CAST}#image/portrait'), ('source', CAST), ('definition', f'{CAST}/lorebook/key@r1')}
+    art = {'art_pin': {'layers': [{'entity': f'{CAST}/character/mara'}]}}
+    assert _references(art, CAST)[0] == {('identity', f'{CAST}/character/mara')}
+    exclusion = {'schema': 'grimoire.catalog/1', 'payload': {'exclusions': [f'{CAST}/character/mara']}}
+    assert _references(exclusion, CAST)[0] == {('identity', f'{CAST}/character/mara')}
+    assert _references({**exclusion, 'schema': 'other/1'}, CAST)[0] == {('definition', f'{CAST}/character/mara')}
     assert _owner('sources/catalog/elderfen-cast/extra/_source/manifest.json') == LOOKALIKE
     assert _owner('sources/catalog/elderfen-cast/_source/records/x/y/r1.json') == CAST
     assert _owner('campaigns/q-1/scope.json') is None
@@ -354,4 +364,5 @@ def test_stray_strings_deep_nesting_and_a_damaged_candidate_do_not_break_a_previ
             preview = preview_source_update(store, CAST, candidate)
         assert preview.after is None and preview.complete
         assert any(problem.side == 'after' for problem in preview.problems)
+        assert len(set(preview.problems)) == len(preview.problems)
         assert {row.status for row in preview.references} == {'missing', 'still_missing'}

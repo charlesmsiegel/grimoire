@@ -9,7 +9,7 @@ change. Nothing is matched by name, slug, list position or a lookalike source id
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from grimoire.core.identity import ImageRef, SourceRef, validate_source_id
 from grimoire.core.index import MissingDefinition
@@ -83,10 +83,10 @@ CATALOG_SCHEMA = 'grimoire.catalog/1'
 
 
 def _references(payload: object, source: str) -> tuple[set[tuple[str, str]], bool]:
-    """``(kind, text)`` for every string naming ``source`` (``definition``, ``image`` or ``source``),
-    and whether a container past ``MAX_DEPTH`` went unsearched. An unpinned definition ref at an
+    """``(kind, text)`` for every string naming ``source`` (``definition``, ``image``, ``source`` or
+    ``identity``), and whether a container past ``MAX_DEPTH`` went unsearched. An unpinned ref at an
     identity-only key path (an art pin's layer entity beside its pinned base, a catalog's
-    exclusions) is left out: it reaches no content and follows nothing."""
+    exclusions) is kind ``identity``: it names the entity, reaches no content and follows nothing."""
     found: set[tuple[str, str]] = set()
     deep = False
     identity = {ART_LAYER}
@@ -108,8 +108,8 @@ def _references(payload: object, source: str) -> tuple[set[tuple[str, str]], boo
                 ref = SourceRef.parse(value)
             except ValueError:
                 continue
-            if ref.source == source and (ref.pinned or keys not in identity):
-                found.add(('definition', value))
+            if ref.source == source:
+                found.add(('identity' if not ref.pinned and keys in identity else 'definition', value))
         elif isinstance(value, (Mapping, list, tuple)) and depth >= MAX_DEPTH:
             deep = True
         elif isinstance(value, Mapping):
@@ -190,6 +190,11 @@ def _preview(store: LibraryStore, source: str, new: _Side, action: str) -> Sourc
         for kind, text in sorted(found):
             if kind == 'definition':
                 row = _definition_row(path, record, text, old, new)
+            elif kind == 'identity':  # existence only: never a follow
+                ref = SourceRef.parse(text)
+                was, now = old.definition(ref), new.definition(ref)
+                row = _etag_row(path, record, text, was and was.ref.revision, now and now.ref.revision, 'unchanged')
+                row = replace(row, status='unchanged') if was is not None and now is not None else row
             elif kind == 'image':
                 try:
                     where: str | None = '/'.join(image_parts(ImageRef.parse(text)))
@@ -212,8 +217,9 @@ def _preview(store: LibraryStore, source: str, new: _Side, action: str) -> Sourc
         found = classify(tuple(path.split('/')))
         if found is not None and found[0] == 'definition' and path in new.files and new.files[path] != data:
             edited.append(found[1])
+    unique = tuple(dict.fromkeys(problems))  # a load problem and a scan block can name one file
     return SourceChangePreview(source, action, old.manifest_etag, new.manifest_etag, tuple(entities),
-                               tuple(edited), tuple(rows[key] for key in sorted(rows)), tuple(problems))
+                               tuple(edited), tuple(rows[key] for key in sorted(rows)), unique)
 
 
 def preview_source_removal(store: LibraryStore, source: str) -> SourceChangePreview:
@@ -233,7 +239,8 @@ def preview_source_update(store: LibraryStore, source: str, candidate: LibrarySt
     except (ValueError, TypeError) as error:
         raise SourceUpgradeError('invalid_source', str(error)) from None
     side, scan = _scan_side(candidate, source)
-    if not side.files and not any(_owner(path) == source for path in scan.blocked):
+    home = '/'.join((SOURCES, *source.split(':'), SOURCE_DIR))
+    if not side.files and not any(_owner(path) == source or home.startswith(path + '/') for path in scan.blocked):
         raise SourceUpgradeError('candidate_missing_source', source)
     # A candidate that holds the source but cannot load it (a malformed manifest) is previewed with
     # nothing resolving after, and its load problems are reported on the ``after`` side.
