@@ -1,0 +1,6 @@
+"""Collect the tags one request carries; each call starts from no tags."""
+
+
+def request_tags(tag, tags=[]):
+    tags.append(tag)
+    return tags
