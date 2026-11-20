@@ -395,6 +395,17 @@ def test_a_director_only_effect_reaches_no_characters_knowledge(cards):
         assert hub.api.evidence.read(chat.campaign_id, requested_by=DIRECTOR).knowledge.events[0].summary == summary
         assert not any(p["code"] == "unbridged" for p in director["problems"])
 
+        # knowledge left unwritten is reported to the director alone: even its count could hint at this effect
+        import grimoire.play.accept as accept
+        original = accept.unbridged_problems
+        accept.unbridged_problems = lambda runner, scene: [("unbridged", "1:ledger_damaged")]
+        try:
+            assert not any(p["code"] == "unbridged" for p in hub.call("hub", chat=str(chat))["problems"])
+            assert {"code": "unbridged", "detail": "1:ledger_damaged"} in \
+                hub.call("hub", chat=str(chat), audience="director")["problems"]
+        finally:
+            accept.unbridged_problems = original
+
 
 def test_the_table_sees_only_its_own_characters_party_standing(cards):
     folder, chat = cards

@@ -198,8 +198,11 @@ class CampaignApi:
         campaign = chat.campaign_id
         names = scene.names.get
         director = audience == "director"
-        # 021's problems name accepted events of the whole campaign: the director's, shown once, in ``truth``
-        problems = [{"code": code, "detail": detail} for code, detail in scene.problems if code != "effects"]
+        # 021's problems name accepted events of the whole campaign: the director's, shown once, in ``truth``;
+        # unwritten knowledge (``unbridged``) is the director's too, since even its count can hint at an effect
+        # the table is not shown
+        problems = [{"code": code, "detail": detail} for code, detail in scene.problems
+                    if code != "effects" and (director or code != "unbridged")]
         on_stage = set(scene.on_stage)
         # control is recorded, not read from the present cast: a character set in reserve leaves the cast (033)
         # and stays its player's
