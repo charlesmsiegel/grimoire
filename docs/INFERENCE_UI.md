@@ -38,6 +38,7 @@ The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model))
 - `attempts`: attempts per planned call, 1 to 3 (004's `max_attempts_per_call`, default 1). Every attempt may
   be billed, and retries happen only before any text reached the table (013).
 
+- `critique`: independent prose extraction calls per take, 0 or 1 (default 0, off). Existing file configuration is preserved by model and tactics saves; this page does not edit it.
 - `decision`: optional decision calls per turn, 0–16 (default 0, off). A call is requested only for a speaking NPC with an authored agenda and no recorded decision for this scene turn.
 - `agendas`: at most 64 actor-qualified, director-authored policies on this device. Each has `actor`, `goals` (`id`, `aim`, `priority`, `approaches` with `id`, `action`, `needs`, `tags`) and `limits` (`id`, `rule`, `forbids`, `when`). Conditions are `{"present": "<InstanceRef>"}` or `{"holds": "<proposition id>", "stances": [...]}`; existing 039 validation applies. The UI edits one simple goal with ordered actions and preserves unrelated policies. Policies with typed conditions/limits or custom priorities remain read-only in this simple editor, so no authored constraint is silently dropped.
 - `price_prompt`, `price_reply` and `price_cached`: optional prices per million prompt tokens, reply tokens and
@@ -83,7 +84,7 @@ is never echoed. Without `--model` the settings are read-only (`file.configured:
 
 One entry per 004 stage: `stage`, `kind` (`baseline` or `optional`), `enabled`, `cap`, `available` and a `note`.
 `npc_generation` is the baseline: one call per speaking NPC, never switched off. `director_generation` is the one
-optional narrator stage. `decision` is independently opt-in and capped; its recorded choice is replayed on rerolls and after restart. Every remaining optional stage is listed `available: false`, with the reason, because
+optional narrator stage. `decision` is independently opt-in and capped; its recorded choice is replayed on rerolls and after restart. `critique` is separately opt-in, bounded independent prose extraction; its findings do not commit canon. Every remaining optional stage is listed `available: false`, with the reason, because
 the app wires no service that would make the call: a switch that changes nothing is never offered.
 
 ### Usage
@@ -256,7 +257,9 @@ For generation, the runner plans a select phase only for undecided actors with a
 ledger, and briefs each NPC with its own choice. Disabling the cap uses the deterministic policy on the next
 new turn; a reroll retains its recorded choice. Removing or changing that choice's agenda refuses replay,
 so finish/pass the pending turn or restore its policy. Invalid picks fall back to the deterministic choice;
-no choice writes world facts or beliefs. Paid attempts remain in usage after a recoverable ledger failure when the store and authority remain writable.
+no choice writes world facts or beliefs. When continuity extraction is enabled, it reviews the exact selected
+or replayed choices used in narration while retaining the authoritative facts and freshness fingerprint captured
+before any provider call. Decisions, narration and extraction all remain in usage and diagnostics. Paid attempts remain in usage after a recoverable ledger failure when the store and authority remain writable.
 A stale/paused/passed/replaced take cannot record a new decision. The store's existing exclusive process
 lease and shared authority/store lock protect the current-turn check and append.
 

@@ -197,3 +197,39 @@ def test_owner_configures_inspects_and_plays_optional_decisions_in_chromium(tmp_
             assert errors == []
         finally:
             browser.close()
+
+
+def test_model_ui_edits_preserve_configured_critique_on_restart(tmp_path):
+    """112's form must preserve the independent047 option it does not edit."""
+    folder, _, _ = card_library(tmp_path)
+    settings = tmp_path / 'model.json'
+    with sse_server(model_reply) as model, playwright.sync_playwright() as pw:
+        settings.write_text(json.dumps({'provider_id': 'synthetic', 'base_url': base_url(model),
+                                        'model': 'before-edit', 'critique': 1}))
+        browser = pw.chromium.launch(executable_path=CHROMIUM, headless=True, args=['--no-sandbox'],
+                                    env={**os.environ, 'XDG_CONFIG_HOME': str(tmp_path / 'browser-config'),
+                                         'XDG_CACHE_HOME': str(tmp_path / 'browser-cache')})
+        try:
+            page = browser.new_page()
+            page.set_default_timeout(15_000)
+            with running_app(folder, settings) as url:
+                page.goto(url)
+                navigate(page, 'providers')
+                page.get_by_role('textbox', name='Model', exact=True).fill('after-edit')
+                page.get_by_label('Optional decision calls per turn', exact=True).fill('1')
+                save_models(page)
+                saved = json.loads(settings.read_text())
+                assert saved['critique'] == 1
+                assert saved['decision'] == 1
+                assert saved['model'] == 'after-edit'
+            with running_app(folder, settings) as url:
+                page.goto(url)
+                navigate(page, 'providers')
+                playwright.expect(page.get_by_role('textbox', name='Model', exact=True)).to_have_value('after-edit')
+                playwright.expect(page.get_by_label('Optional decision calls per turn', exact=True)).to_have_value('1')
+                page.get_by_label('Optional decision calls per turn', exact=True).fill('0')
+                save_models(page)
+                assert json.loads(settings.read_text())['critique'] == 1
+            assert not model.requests
+        finally:
+            browser.close()

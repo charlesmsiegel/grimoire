@@ -236,6 +236,7 @@ export async function mount(root, ctx) {
     for (const [field, name] of PRICE_FIELDS) { const price = text(form[field]); if (price) settings[name] = price; }
     const kept = state.models && state.models.settings;
     if (kept && kept.max_tokens_field) settings.max_tokens_field = kept.max_tokens_field;
+    if (kept && kept.critique !== undefined) settings.critique = kept.critique;
     return settings;
   }
 

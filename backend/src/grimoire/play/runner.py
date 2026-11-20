@@ -714,6 +714,11 @@ class SceneRunner:
                     if self.decisions is not None:
                         briefs, intentions = self._decide(context, record, stored, running, plan, meter,
                                                           token, assemblies, existing, decision_outcomes)
+                    if captured is not None:
+                        # Review the exact model-selected or replayed choices briefed below. Keep the
+                        # pre-provider facts and freshness fence: a decision call must not refresh canon.
+                        captured = replace(captured, facts=replace(captured.facts, intentions=tuple(
+                            brief.intention for brief in briefs if brief.intention is not None)))
                     outcome = self.runtime.run_turn(meter, briefs, controls=scene.controls,
                                                     director=director_view[0] if director_view else None,
                                                     token=token, scene_voices=silent, hears=_hearing(scene, rooms))
