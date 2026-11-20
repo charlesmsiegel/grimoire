@@ -78,11 +78,21 @@ def test_a_correction_that_puts_in_takes_out_or_swaps_words_keeps_its_neighbours
     ("We draw swords and charge", "no I meant we draw our bows", "We draw our bows"),
     ("We leave at dawn", "no I meant we leave now", "We leave now"),  # "now" is meant, not a courtesy
     ("We run then I hide", "I meant we go", "We go"),  # nothing lines up: no clause is dropped by itself
+    ("the guard is asleep", "no I meant the guards", "The guards"),  # never "the the guards asleep"
+    ("I draw my sword", "no I meant my swords", "My swords"),
+    ("the captain and the guard leave", "no I meant the captain and guard", "The captain and guard"),
+    ("we wait for the dawn", "no I meant for dawn", "For dawn"),  # never "for for dawn"
 ])
 def test_a_correction_that_is_not_plainly_one_edit_is_kept_as_words_with_the_whole_passage_offered(passage, said, whole):
     kept = revise(passage, passage, said)
     assert kept.kind == "added" and kept.text.startswith(passage + " ")
     assert (kept.alternative.kind, kept.alternative.text) == ("corrected", whole)
+
+
+def test_a_misheard_name_is_corrected_by_its_sound_and_only_past_its_last_words_nothing_is():
+    assert revise("ask Marabel for help", "ask Marabel for help", "no I meant Mara Vell").text == "ask Mara Vell for help"
+    long = "we pass the west gate " + "walk " * 199
+    assert revise(long, long, "no I meant the east gate").kind == "added"  # the gate is out of reach, not "found"
 
 
 def test_a_capital_is_kept_where_the_correction_starts_a_sentence():

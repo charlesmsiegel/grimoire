@@ -380,7 +380,7 @@ while a recording was heard is revised as it is now (`dictation.revise`), and an
 offer whose text has since changed does nothing and says so. Once the reply is
 typed in, posted or changed by anything but dictation, there is no "last
 passage" any more: a correction or "scratch that" is then kept as words. A
-correction is lined up within the passage's last 200 words, and names are looked
+correction is lined up within the passage's last 120 words, and names are looked
 for in its first 300, so a long draft costs about what a sentence does.
 
 | Op | Arguments | Answer |

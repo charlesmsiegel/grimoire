@@ -38,7 +38,7 @@ MAX_SUGGESTIONS = 3
 #: is lined up within the last words of the passage, names are looked for in its first words, and a name of more
 #: words than this is matched by its parts.
 MAX_CORRECTION_WORDS = 24
-MAX_ALIGN_WORDS = 200
+MAX_ALIGN_WORDS = 120
 MAX_SUGGEST_WORDS = 300
 MAX_NAME_WORDS = 4
 #: The most words a correction takes out ("the big west gate" for "the gate").
@@ -211,39 +211,55 @@ def _fits(window: list[str], wanted: list[str], before: str | None) -> int | Non
     return len(shared)
 
 
+def _repeats(words: list[str]) -> int:
+    """How many times a run of one to three words comes twice in a row ("the the", "and the and the")."""
+    return sum(words[at:at + size] == words[at + size:at + 2 * size]
+               for size in (1, 2, 3) for at in range(len(words) - 2 * size + 1))
+
+
 def _align(passage: str, replacement: str) -> tuple[int, int] | None:
     """The character span of ``passage`` that ``replacement`` corrects, or ``None`` when nothing lines up.
 
-    A span lines up when the replacement is plainly a correction of it (``_fits``), or, sharing no word, sounds
-    like the replacement as a whole (a misheard name). The most shared words win, then the tightest span, then the
-    latest, since a correction usually follows what it corrects. Only the passage's last words are searched, a
+    A span lines up when the replacement is plainly a correction of it (``_fits``), or, both made only of content
+    words and sharing none, sounds like it as a whole (a misheard name: "Marabel" for "Mara Vell"). The most shared
+    words win, then the tightest span, then the latest, since a correction usually follows what it corrects; a
+    span whose correction would leave words said twice in a row that neither the passage nor the replacement says
+    twice ("the the guards", "for for dawn") is passed over. Only the passage's last words are searched, a
     correction drops at most a few words, and a long replacement is not a correction to line up."""
-    words = _tokens(passage)[-MAX_ALIGN_WORDS:]
+    tokens = _tokens(passage)
+    offset = max(0, len(tokens) - MAX_ALIGN_WORDS)
+    words = tokens[offset:]
     wanted = [word for word, _s, _e in _tokens(replacement)]
     if not words or not wanted or len(wanted) > MAX_CORRECTION_WORDS:
         return None
-    spoken = [word for word, _s, _e in words]
+    spoken = [word for word, _s, _e in tokens]
     if any(spoken[at:at + len(wanted)] == wanted for at in range(len(spoken))):
         return None  # already said just so: there is nothing to correct
-    wanted_key = key("".join(word for word in wanted if word not in _STOP))
-    best: tuple[float, int, int, int, int] | None = None
+    anchors = {word for word in wanted if word not in _STOP}
+    wanted_key = key("".join(wanted))
+    found: list[tuple[float, int, int, int, int]] = []
     for size in range(1, min(len(wanted) + MAX_DROPPED, len(words)) + 1):
-        for at in range(len(words) - size + 1):
+        for at in range(offset, len(spoken) - size + 1):
             window = spoken[at:at + size]
-            shared = _fits(window, wanted, spoken[at - 1] if at > 0 else None)
-            if shared is not None:
+            if anchors.intersection(window):
+                shared = _fits(window, wanted, spoken[at - 1] if at > 0 else None)
+                if shared is None:
+                    continue
                 score: tuple[float, int, int] = (float(shared), -size, at)
-            elif any(word in wanted for word in window) or abs(size - len(wanted)) > 1:
+            elif abs(size - len(wanted)) > 1 or not (_content(window) and _content(wanted)):
                 continue
             else:
-                heard_key = key("".join(word for word in window if word not in _STOP))
+                heard_key = key("".join(window))
                 sound = _ratio(heard_key, wanted_key) if min(len(heard_key), len(wanted_key)) >= 3 else 0.0
                 if sound < 0.85:
                     continue
                 score = (sound, -abs(size - len(wanted)), at)
-            if best is None or score > best[:3]:
-                best = (*score, words[at][1], words[at + size - 1][2])
-    return (best[3], best[4]) if best is not None else None
+            found.append((*score, at, at + size))
+    for *_score, first, past in sorted(found, reverse=True):
+        left, right = spoken[max(0, first - 6):first], spoken[past:past + 6]  # all a three-word repeat can reach
+        if _repeats(left + wanted + right) <= _repeats(left + spoken[first:past] + right) + _repeats(wanted):
+            return tokens[first][1], tokens[past - 1][2]
+    return None
 
 
 def _sentence_start(prefix: str) -> bool:
