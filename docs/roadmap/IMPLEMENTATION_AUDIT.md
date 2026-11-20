@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -40,7 +40,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 11/24 | ☐ | 049, 050, 051, 054, 055, 057, 059, 060, 062, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 12/24 | ☐ | 049, 050, 051, 054, 055, 056, 057, 059, 060, 062, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -497,7 +497,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 050, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 054, 055, 056, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -544,9 +544,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-056"></a>
 ### 056 — Catalog Composition
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/catalog-composition.md)).
-- Evidence: [`catalogs`](../../backend/src/grimoire/catalogs), [`test_catalog_scenarios.py`](../../backend/tests/test_catalog_scenarios.py) and [contract](../CATALOGS.md) prove shared pinned character/lore/gear in three worlds, gear exclusion, a setting-local creature, independent quick chats and stable context with 2,000 unselected records.
-- Missing proof: the shared pack has no pinned bestiary creature reused across two settings; the tested creature is local to one setting. The inherited bestiary proving scenario is not established, so the implementation remains partial despite the passing catalog scenarios. UI 115 remains separate.
+- [x] Scheduled first-useful slice ([requirements](sprints/catalog-composition.md)).
+- Evidence: [`catalogs`](../../backend/src/grimoire/catalogs), [`test_catalog_scenarios.py`](../../backend/tests/test_catalog_scenarios.py) and [contract](../CATALOGS.md) prove shared pinned character/lore/gear in three worlds, gear exclusion, a setting-local creature, independent quick chats and stable context with 2,000 unselected records. `test_one_shared_bestiary_supports_two_settings_without_importing_a_card_set` proves the inherited bestiary scenario: one pinned shared creature, read from its single canonical file, is bound as a campaign creature actor in two world-attached settings, one through a setting-specific specialization that inherits the rest of the shared card; one setting excludes another shared creature from discovery, only the other campaign opts into a 2,002-record creator card set and binds one character and one lorebook selected from it; that lorebook's lore reaches its actual context pack, while none of the 2,000 unselected lorebooks, which the same scene text would trigger if bound, reaches either campaign's pack.
+- Scope / gap: Headless only. No catalog UI (115), package distribution (103), follow-head source upgrades (079) or automatic world catalog attachment; a campaign's catalog opt-in is expressed only as its explicit chat bindings, and exclusions are availability, not access control; context costs are the existing deterministic estimates.
 
 <a id="slice-057"></a>
 ### 057 — Faction Decision Making
