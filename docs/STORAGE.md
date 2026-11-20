@@ -562,3 +562,31 @@ Ledgers grow without compaction, about one file per 500 decisions. Opening repla
 
 - **A Markdown payload codec** (its own later pull request, by requester decision), so prose-heavy records can be authored as Markdown while the envelope stays JSON.
 - **Later milestones** of the sprint: versioned snapshots and change journals, external-edit watching, ledger compaction, and device-level tests of real disk-full and permission errors.
+
+## Opaque record schema policy (071 bounded slice)
+
+Scope, asset and knowledge envelopes own schema metadata, while their consumers own payload
+meaning. Each record family still validates its own address first. A single internal schema
+validator then requires an exact `str`, at least one non-whitespace character, and at most 128
+characters. It preserves the original text, including surrounding whitespace; it does not interpret
+schema versions. The common predicate removes three separate decision sites without merging the
+record families, serializers, write authorities or their distinct revision rules. Error text and
+validation order are unchanged. No stored-data migration is needed; rollback is a code revert.
+
+This target had ten first-parent V2 commits touching `store/envelope.py` between the clean-core
+baseline `7ff2b9837` and `e551c709f`, verified with `git log --first-parent` on that path. It is outside
+the supplied active domain/UI allocations; remote open-PR ownership could not be inspected because
+the listing request was denied.
+
+The synthetic behavior matrix in `test_store_schema_policy.py` passed 51 cases both before and
+after extraction: schema boundaries and types, Unicode whitespace, error precedence and lossless
+round trips with unknown fields. A separate, executed change rehearsal added hypothetical ASCII
+NUL rejection to temporary copies of the original and simplified modules. It required three
+predicate edits before extraction and one afterward. Both modified copies passed the same 45
+schema acceptance/rejection cases across all three families, including actual NUL rejection and
+literal backslash-zero acceptance. **NUL rejection is not shipped**: current schema behavior is
+unchanged. These counts measure edited decision sites and tested outcomes, not elapsed developer
+time or a general reduction in defect rate.
+
+This is a bounded schema-policy rehearsal, not the full sprint's actor/world feature rehearsal or
+Android-runtime proof. It leaves those wider simplification and platform obligations open.

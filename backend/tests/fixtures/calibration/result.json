@@ -1,0 +1,212 @@
+{
+  "blocking": false,
+  "by_specialist": {
+    "coroutines": {
+      "confusion": {
+        "fn": 0,
+        "fp": 0,
+        "tn": 1,
+        "tp": 1
+      },
+      "inconsistent": 0,
+      "repeatable": 3,
+      "structural_accuracy": 1.0,
+      "unknown": 1
+    },
+    "overengineering": {
+      "confusion": {
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "tp": 1
+      },
+      "inconsistent": 0,
+      "repeatable": 1,
+      "structural_accuracy": 1.0,
+      "unknown": 0
+    }
+  },
+  "cases": [
+    {
+      "actionable_defect_label": false,
+      "diagnostics": [
+        {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "[\n  {\n    \"file\": \"facade.py.txt\",\n    \"line\": 3,\n    \"issue_type\": \"thin_wrapper\",\n    \"name\": \"LegacyStore\",\n    \"description\": \"Class LegacyStore is a thin wrapper around backend\",\n    \"suggestion\": \"Use the wrapped class directly unless abstraction is needed\",\n    \"severity\": \"low\",\n    \"kind\": \"finding\",\n    \"also_caused_by\": []\n  }\n]\n"
+        },
+        {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "[\n  {\n    \"file\": \"facade.py.txt\",\n    \"line\": 3,\n    \"issue_type\": \"thin_wrapper\",\n    \"name\": \"LegacyStore\",\n    \"description\": \"Class LegacyStore is a thin wrapper around backend\",\n    \"suggestion\": \"Use the wrapped class directly unless abstraction is needed\",\n    \"severity\": \"low\",\n    \"kind\": \"finding\",\n    \"also_caused_by\": []\n  }\n]\n"
+        },
+        {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "[\n  {\n    \"file\": \"facade.py.txt\",\n    \"line\": 3,\n    \"issue_type\": \"thin_wrapper\",\n    \"name\": \"LegacyStore\",\n    \"description\": \"Class LegacyStore is a thin wrapper around backend\",\n    \"suggestion\": \"Use the wrapped class directly unless abstraction is needed\",\n    \"severity\": \"low\",\n    \"kind\": \"finding\",\n    \"also_caused_by\": []\n  }\n]\n"
+        }
+      ],
+      "expected": true,
+      "id": "facade",
+      "source_sha256": "683e36ebd31c488d92a56a2af55f8aaab4d7aa0873506a83a0d6baa04e3fc43a",
+      "specialist": "overengineering",
+      "syntax_parsed": true,
+      "trials": [
+        {
+          "lines": [
+            3
+          ],
+          "state": "candidate"
+        },
+        {
+          "lines": [
+            3
+          ],
+          "state": "candidate"
+        },
+        {
+          "lines": [
+            3
+          ],
+          "state": "candidate"
+        }
+      ]
+    },
+    {
+      "actionable_defect_label": false,
+      "diagnostics": [
+        {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "[]\n"
+        },
+        {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "[]\n"
+        },
+        {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "[]\n"
+        }
+      ],
+      "expected": false,
+      "id": "awaited",
+      "source_sha256": "0fbacf6c134863b40571b778003e0c8016612654fba12022a154723f39d27b5b",
+      "specialist": "coroutines",
+      "syntax_parsed": true,
+      "trials": [
+        {
+          "lines": [],
+          "state": "clear"
+        },
+        {
+          "lines": [],
+          "state": "clear"
+        },
+        {
+          "lines": [],
+          "state": "clear"
+        }
+      ]
+    },
+    {
+      "actionable_defect_label": true,
+      "diagnostics": [
+        {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "[\n  {\n    \"file\": \"discarded.py.txt\",\n    \"line\": 5,\n    \"smell_type\": \"unawaited_coroutine\",\n    \"description\": \"Coroutine 'persist(...)' is called but never awaited; the coroutine object is silently discarded and the function body never runs\",\n    \"suggestion\": \"Add 'await' before the call, or wrap it in asyncio.create_task()/asyncio.gather() to schedule it.\",\n    \"severity\": \"high\",\n    \"code_snippet\": \"persist(events, value)\"\n  }\n]\n"
+        },
+        {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "[\n  {\n    \"file\": \"discarded.py.txt\",\n    \"line\": 5,\n    \"smell_type\": \"unawaited_coroutine\",\n    \"description\": \"Coroutine 'persist(...)' is called but never awaited; the coroutine object is silently discarded and the function body never runs\",\n    \"suggestion\": \"Add 'await' before the call, or wrap it in asyncio.create_task()/asyncio.gather() to schedule it.\",\n    \"severity\": \"high\",\n    \"code_snippet\": \"persist(events, value)\"\n  }\n]\n"
+        },
+        {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "[\n  {\n    \"file\": \"discarded.py.txt\",\n    \"line\": 5,\n    \"smell_type\": \"unawaited_coroutine\",\n    \"description\": \"Coroutine 'persist(...)' is called but never awaited; the coroutine object is silently discarded and the function body never runs\",\n    \"suggestion\": \"Add 'await' before the call, or wrap it in asyncio.create_task()/asyncio.gather() to schedule it.\",\n    \"severity\": \"high\",\n    \"code_snippet\": \"persist(events, value)\"\n  }\n]\n"
+        }
+      ],
+      "expected": true,
+      "id": "discarded",
+      "source_sha256": "aae5dcf7df882baa2dda06ee9c97a86831e27bdf9792a2b11f2d8ae088ce3ee9",
+      "specialist": "coroutines",
+      "syntax_parsed": true,
+      "trials": [
+        {
+          "lines": [
+            5
+          ],
+          "state": "candidate"
+        },
+        {
+          "lines": [
+            5
+          ],
+          "state": "candidate"
+        },
+        {
+          "lines": [
+            5
+          ],
+          "state": "candidate"
+        }
+      ]
+    },
+    {
+      "actionable_defect_label": null,
+      "diagnostics": [
+        {
+          "exit": 0,
+          "stderr": "\u26a0\ufe0f  missing.py.txt: skipped, does not parse ('(' was never closed (missing.py, line 1))\n",
+          "stdout": "[]\n"
+        },
+        {
+          "exit": 0,
+          "stderr": "\u26a0\ufe0f  missing.py.txt: skipped, does not parse ('(' was never closed (missing.py, line 1))\n",
+          "stdout": "[]\n"
+        },
+        {
+          "exit": 0,
+          "stderr": "\u26a0\ufe0f  missing.py.txt: skipped, does not parse ('(' was never closed (missing.py, line 1))\n",
+          "stdout": "[]\n"
+        }
+      ],
+      "expected": null,
+      "id": "missing",
+      "source_sha256": "cbddc4796afce09647c0ae24ac02797080d88a1e8f9ff56bd7cb012b91fb4282",
+      "specialist": "coroutines",
+      "syntax_parsed": false,
+      "trials": [
+        {
+          "lines": [],
+          "state": "unknown"
+        },
+        {
+          "lines": [],
+          "state": "unknown"
+        },
+        {
+          "lines": [],
+          "state": "unknown"
+        }
+      ]
+    }
+  ],
+  "confirmed_defects": [],
+  "corpus_sha256": "29cad0ff1467e18040f8af7d3000ac01650416e8da9fe53f6bb274f2efcfe841",
+  "format": "grimoire.calibration/1",
+  "independent_defect_judge": {
+    "reason": "no pinned independent judge execution",
+    "state": "unknown"
+  },
+  "python": "3.12.14",
+  "theory_judge": {
+    "reason": "no pinned independent model and three-judge trials",
+    "state": "unknown"
+  },
+  "tool_revision": "74f40dbd4bc301e276702b2854478f0e2eb2ac6a"
+}
