@@ -42,6 +42,7 @@ from grimoire.core.perspective import ActorKnowledge, actor_knowledge, controlle
 from grimoire.core.portrayal import PortrayalError
 from grimoire.core.snapshot import EffectiveSnapshot, Resolution
 from grimoire.graph import PREDICATES, ClaimSet
+from grimoire.memory import MemoryDossier
 
 from .basis import knowledge_digest, selection_basis
 from .lore import LORE_ROLES, Unpack, check_readers, lore, lore_problems
@@ -216,6 +217,41 @@ def _memory(held: ActorKnowledge, focus: set[str], readings: dict[str, list[Clai
     return found
 
 
+def _consolidated(memory: MemoryDossier | None, held: ActorKnowledge, actor: InstanceRef, as_of: int,
+                  editor: str) -> tuple[ActorKnowledge, list[Candidate], list[str]]:
+    """053's consolidated memory: ``held`` without the evidence the editor's corrections made obsolete (and
+    the reports sent as it and the current beliefs citing it), the standing summaries as memory candidates, and their texts (which trigger lore like any held memory).
+
+    The dossier must be this actor's, as of this moment, and the present controller's (``editor``): the
+    director's for an NPC, the one human's for a player character. Every summary it shows must cite only
+    evidence this projection holds, or the dossier was built over another read (``memory_mismatch``).
+    A stale, superseded, older-basis or unsupported account is history, never memory.
+    """
+    if memory is None:
+        return held, [], []
+    if type(memory) is not MemoryDossier:
+        raise _fail("memory must be a MemoryDossier", "invalid_memory")
+    if memory.actor != actor or memory.as_of != as_of or memory.editor != editor:
+        raise _fail("the consolidated memory is another actor's, moment's or controller's", "memory_mismatch")
+    known = {item.evidence_id for item in held.evidence}
+    standing = memory.standing()
+    if any(e.evidence_id not in known for summary in standing for e in summary.evidence):
+        raise _fail("the consolidated memory cites evidence this projection does not hold", "memory_mismatch")
+    obsolete = set(memory.suppressed)
+    # what rests on obsolete evidence goes with it: the percept, a report sent as it, and a belief citing it
+    kept = replace(held, evidence=tuple(item for item in held.evidence if item.evidence_id not in obsolete),
+                   sent=tuple(sent for sent in held.sent if sent.evidence_id not in obsolete),
+                   current=tuple(belief for belief in held.current if obsolete.isdisjoint(belief.evidence_ids)))
+    found = []
+    for summary in standing:
+        lead = "You remember" if summary.status == "current" else "You remember conflicting accounts; one is"
+        found.append(Candidate("memory", (False, -summary.basis, -1, summary.operation_id), f"{lead}: {summary.text}",
+                               Origin("summary", name=summary.topic, record=summary.operation_id,
+                                      evidence=tuple(e.evidence_id for e in summary.evidence)),
+                               sequence=summary.basis))
+    return kept, found, [summary.text for summary in standing]
+
+
 def _perceived(held: ActorKnowledge) -> list[str]:
     """The texts of everything the actor holds: what it perceived, heard, said and concluded."""
     return ([item.content for item in held.evidence] + [sent.text for sent in held.sent]
@@ -260,14 +296,22 @@ def _prepare(snapshot: object, knowledge: object, actor: object, as_of: object, 
 def _build(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor: InstanceRef, held: ActorKnowledge,
            cast: tuple[InstanceRef, ...], excluded: frozenset[str], *, as_of: int, budget: Budget, scene_text: str,
            claims: ClaimSet | None, readers: Mapping[str, EntryReader], unpack: Unpack | None, count: TokenCounter,
-           measurement: str, controller: str | None = None, notes: tuple[str, ...] = ()) -> ContextPack:
-    """The pack over ``held``: the one projection its memory shows, ranks and triggers lore from."""
+           measurement: str, controller: str | None = None, notes: tuple[str, ...] = (),
+           memory: MemoryDossier | None = None) -> ContextPack:
+    """The pack over ``held``: the one projection its memory shows, ranks and triggers lore from.
+
+    With 053's ``memory``, obsolete evidence is left out of what is shown, ranked and triggered, and the
+    standing summaries join the memory lane; the ``knowledge`` digest stays that of ``held`` itself, the
+    projection 027's brief checks the pack against.
+    """
     candidates = _portrayal(snapshot, actor, excluded)
     nodes = tuple(dict.fromkeys((actor, *sorted(cast, key=str))))
-    focus, readings = _focus(knowledge, held, claims, nodes)
-    candidates += _memory(held, focus, readings)
-    found, untriggered, problems = lore(snapshot, SceneWords([scene_text, *_perceived(held)]), readers, unpack,
-                                        ACTOR_AUDIENCES)
+    shown, summaries, remembered = _consolidated(memory, held, actor, as_of,
+                                                 DIRECTOR if controller is None else controller)
+    focus, readings = _focus(knowledge, shown, claims, nodes)
+    candidates += summaries + _memory(shown, focus, readings)
+    found, untriggered, problems = lore(snapshot, SceneWords([scene_text, *_perceived(shown), *remembered]), readers,
+                                        unpack, ACTOR_AUDIENCES)
     candidates += found
     items, omitted = pack(candidates, budget, count)
     if not items or items[0].origin.kind != "identity":
@@ -285,7 +329,8 @@ def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor:
                        claims: ClaimSet | None = None, readers: Mapping[str, EntryReader] | None = None,
                        unpack: Unpack | None = None, count: TokenCounter = estimate_tokens,
                        measurement: str = "estimated",
-                       exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS) -> ContextPack:
+                       exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS,
+                       memory: MemoryDossier | None = None) -> ContextPack:
     """The audience-safe, budgeted context for ``actor`` at ``as_of``.
 
     **Trusted inputs; only the result goes toward the actor.** ``snapshot`` is one frozen view (022:
@@ -309,12 +354,17 @@ def pack_actor_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor:
     **An NPC's pack.** Memory is 012's ``actor_knowledge``, so every current belief reads as the
     actor's own. A player character's pack is ``pack_player_context``'s, which leaves out every belief
     its present controller did not author.
+
+    ``memory`` is 053's ``MemoryDossier`` of this actor as of ``as_of``, the director's own (an NPC's
+    controller): its standing summaries are packed as memory (``You remember: ...``, contested accounts
+    side by side), each with an ``Origin("summary")`` naming the topic, the summary and the evidence it
+    cites, and evidence its corrections made obsolete is not packed at all.
     """
     readers, cast, excluded = _prepare(snapshot, knowledge, actor, as_of, budget, present, scene_text, readers,
                                        unpack, count, measurement, claims, exclude_sections)
     held = actor_knowledge(knowledge, actor, as_of=as_of)
     return _build(snapshot, knowledge, actor, held, cast, excluded, as_of=as_of, budget=budget, scene_text=scene_text,
-                  claims=claims, readers=readers, unpack=unpack, count=count, measurement=measurement)
+                  claims=claims, readers=readers, unpack=unpack, count=count, measurement=measurement, memory=memory)
 
 
 def _controls(controls: object) -> tuple[ControlAssignment, ...]:
@@ -350,7 +400,8 @@ def pack_player_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor
                         present: Iterable[InstanceRef] = (), scene_text: str = "", claims: ClaimSet | None = None,
                         readers: Mapping[str, EntryReader] | None = None, unpack: Unpack | None = None,
                         count: TokenCounter = estimate_tokens, measurement: str = "estimated",
-                        exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS) -> ContextPack:
+                        exclude_sections: Iterable[str] = DEFAULT_EXCLUDED_SECTIONS,
+                        memory: MemoryDossier | None = None) -> ContextPack:
     """``pack_actor_context`` for a player character, packed for its present ``controller``: only what that
     controller may see (docs/CONTEXT.md, *Packing for a player character's controller*).
 
@@ -369,7 +420,8 @@ def pack_player_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor
     ``present`` and ``scene_text`` carry ``pack_actor_context``'s caller obligations for the character: whom
     it perceives, and its own window of what it heard and saw (never narration, a whisper it was not in the
     audience of, a withdrawn line or another player's interiority). The pack records its ``controller``, and
-    027's ``npc_brief`` refuses it.
+    027's ``npc_brief`` refuses it. ``memory`` is as for ``pack_actor_context``, but must be this
+    controller's own dossier (053: a previous controller's summaries are not this player's memory).
     """
     readers, cast, excluded = _prepare(snapshot, knowledge, actor, as_of, budget, present, scene_text, readers,
                                        unpack, count, measurement, claims, exclude_sections)
@@ -386,9 +438,12 @@ def pack_player_context(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor
     notes: tuple[str, ...] = ()
     if held is None:
         held, notes = ActorKnowledge(actor, as_of, (), (), (), ()), ("knowledge_unprojected",)
+        if memory is not None and type(memory) is not MemoryDossier:
+            raise _fail("memory must be a MemoryDossier", "invalid_memory")
+        memory = None  # nothing projects, so nothing it cites can be shown
     return _build(snapshot, knowledge, actor, held, cast, excluded, as_of=as_of, budget=budget, scene_text=scene_text,
                   claims=claims, readers=readers, unpack=unpack, count=count, measurement=measurement,
-                  controller=controller, notes=notes)
+                  controller=controller, notes=notes, memory=memory)
 
 
 __all__ = [

@@ -40,7 +40,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 10/24 | ☐ | 049, 050, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 11/24 | ☐ | 049, 050, 051, 053, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -497,7 +497,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 050, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 053, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -523,9 +523,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-053"></a>
 ### 053 — Memory Consolidation
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/memory-consolidation.md)).
-- Evidence: [`memory/view.py`](../../backend/src/grimoire/memory/view.py), [`memorystore/library.py`](../../backend/src/grimoire/memorystore/library.py), [`test_memory.py`](../../backend/tests/test_memory.py) and [`test_memory_store.py`](../../backend/tests/test_memory_store.py) provide durable actor-scoped selections, corrections, stale-selection suppression, evidence provenance and bounded historical views; [`test_memory_recovery.py`](../../backend/tests/test_memory_recovery.py) covers local recovery.
-- Scope / gap: Partial foundation, not the complete several-scene consolidation proof: exact evidence selection/correction does not yet produce attributable summaries/dossiers or establish the corrected-character-identity versus older recap scenario end to end. The 049/054 correction export supplies pinned causal references only; it neither consolidates several scenes nor implements the older-recap identity correction proof. Context-pack, UI and sync adapters remain absent; see [contract](../MEMORY.md).
+- [x] Scheduled first-useful slice ([requirements](sprints/memory-consolidation.md)).
+- Evidence: [`memory/view.py`](../../backend/src/grimoire/memory/view.py), [`memorystore/library.py`](../../backend/src/grimoire/memorystore/library.py), [`test_memory.py`](../../backend/tests/test_memory.py) and [`test_memory_store.py`](../../backend/tests/test_memory_store.py) provide durable actor-scoped selections, corrections, stale-selection suppression, evidence provenance and bounded historical views; [`test_memory_recovery.py`](../../backend/tests/test_memory_recovery.py) covers local recovery. [`memory/dossier.py`](../../backend/src/grimoire/memory/dossier.py) consolidates authored, evidence-citing accounts into per-topic dossiers ([`test_memory_dossier.py`](../../backend/tests/test_memory_dossier.py)); [`test_memory_consolidation.py`](../../backend/tests/test_memory_consolidation.py) proves the scenario end to end: an NPC's perceptions across three scenes, a recap of the first two, the unmasking's correction and a backlog recap filed afterwards, through the durable ledger, `TextApi`'s runner wiring, the context inspector and a scripted generated brief. The corrected identity is the only account packed; the obsolete percept and both recaps never reach the pack or prompt; each remembered detail resolves to its exact evidence, scene and editor. [`test_context_memory.py`](../../backend/tests/test_context_memory.py) covers contested accounts, controller and moment mismatches.
+- Scope / gap: Bounded first proof. Accounts are authored by the controller (no model or automatic summarization, no TextApi or UI write path; 115 owns the UI); identity is a topic, not a structured field; no sync adapter; thousands-of-scenes scale (milestone 3) is unmeasured. See [contract](../MEMORY.md).
 
 <a id="slice-054"></a>
 ### 054 — Scenes Forks And Retcons

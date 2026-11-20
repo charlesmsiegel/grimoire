@@ -17,7 +17,7 @@ A pack has three **lanes**, packed in this order:
 | Lane | What | From |
 |---|---|---|
 | `portrayal` | the actor's name line (`You are Name.`), its description, and its composed card sections | 022's `entity(actor)` and `effective(...)` of the actor's **own** binding |
-| `memory` | what the actor perceived, was told, said and currently believes | 012's `actor_knowledge` as of `as_of` |
+| `memory` | what the actor perceived, was told, said and currently believes, and, given 053's dossier, the standing accounts its present controller consolidated | 012's `actor_knowledge` as of `as_of`; [MEMORY](MEMORY.md#context-packs) |
 | `lore` | `common` entries of bound `lorebook` and `scenario` sources | a reader for the stored record's schema |
 
 `actor_context(view, chat, ledger, actor, *, as_of, budget, ...)` in `grimoire.contextstore` is the same over one `LibraryView` and one `EvidenceLibrary.read(campaign, requested_by=DIRECTOR)`. It returns a `ChatContext` with the pack, the chat's and scope's etags (so a caller can tell a pack built before a binding changed from one built after), and the chat snapshot's own `problems`. When the ledger read quarantined records, the pack carries the note `knowledge_quarantined`: the actor's knowledge can only have shrunk ([EVIDENCE](EVIDENCE.md)).

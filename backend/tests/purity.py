@@ -173,7 +173,7 @@ PURE_PACKAGES = (
                 never_import=("grimoire.core.inference",)),
     # Context packing (031): audience rules, triggering and the packer; the store join is an adapter.
     # It reads 017's claim shapes through ``claims_about``, never the director's graph.
-    PurePackage("grimoire.context", ("grimoire.context", "grimoire.graph", "grimoire.core"),
+    PurePackage("grimoire.context", ("grimoire.context", "grimoire.graph", "grimoire.memory", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     # Diegetic communication (032): who an in-scene message reaches; reads 008's routed intents
     # and 020's storage limits.
