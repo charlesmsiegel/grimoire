@@ -315,7 +315,9 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
       // whether the composer still needs the text, read again after any wait: the player may have typed or
       // posted meanwhile, and only the composer as it is now may be appended to. Text-only, an intent used once is
       // not pressed on a player who edited it away; a marked sketch never goes without its text, so it is re-added.
-      const needs = () => !inDraft(text) && (carrying || state.used !== text);
+      // A short text-only action ("Attack") counts as present only as its own paragraph, not inside other words.
+      const paragraph = () => ('\n\n'+composer.input.value+'\n\n').includes('\n\n'+text+'\n\n');
+      const needs = () => carrying ? !inDraft(text) : !(state.used === text || paragraph());
       const current = () => {
         try { const now = region(); return [draftAction(inputs.action.value.trim(), inputs['region-label'].value.trim()), state.shape, now.x, now.y, now.w, now.h].join('|'); }
         catch { return null; }

@@ -351,3 +351,11 @@ test('the sketch goes only with its own words, and only the outline the player s
   r.attach.staged[0].carry.sent('turn:2');
   assert.match(r.status(), /went with your post/);
 });
+
+test('a short text-only action inside other words is still offered', async () => {
+  const p = page({draft: 'Attack the guard? No, wait.'});
+  p.type('action', 'Attack');
+  await p.use();
+  assert.equal(p.composer.input.value, 'Attack the guard? No, wait.\n\nAttack');
+  byText(p.root, 'button', 'Clear')[0].click();
+});
