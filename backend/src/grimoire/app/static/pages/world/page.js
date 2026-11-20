@@ -590,6 +590,13 @@ async function minds(ctx, body, chat, cast) {
       const whom = [about.value, ...(alsoAbout.value && alsoAbout.value !== about.value ? [alsoAbout.value] : [])];
       const problem = replacementProblem(hypotheses, replaces.value, whom);
       if (problem) { formError.hidden = false; formError.textContent = problem; return; }
+      // 060's preview takes at most MAX_RECORDS hypotheses: one more is refused here, and what is typed is kept
+      const room = mind.max || 64;
+      if (hypotheses.length >= room) {
+        formError.hidden = false;
+        formError.textContent = "At most " + room + " hypotheses can be shown at once: remove one before adding another.";
+        return;
+      }
       hypotheses = [...hypotheses, { id: nextHypothesisId(hypotheses), about: whom, claim: claim.value.trim(), confidence: sure,
         evidence: cited, at: heldAt(cited, mind.evidence, hypotheses.find((item) => item.id === replaces.value)),
         supersedes: replaces.value || null }];

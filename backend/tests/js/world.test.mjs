@@ -393,6 +393,28 @@ test("text longer than 400 characters is refused on the page, kept to be shorten
   assert.ok(!asked.some((item) => item.op === "world.mind_preview"), "an overlong tactic is not sent");
 });
 
+test("one hypothesis more than 060's preview takes is refused on the page, with what is typed kept", async () => {
+  const { root, done, asked } = await mounted({ answers: { "world.mind": (args) => ({ ...mind(args.owner, "Mara's own sight"), max: 2 }) } });
+  await done;
+  await settle();
+  const write = (claim) => {
+    typeInto(minds(root), "What Mara thinks they think", claim);
+    const box = minds(root).querySelectorAll("input").find((node) => node.getAttribute("value") === "e-Mara");
+    box.checked = true;
+    box.dispatchEvent({ type: "change" });
+    typeInto(minds(root), "How sure", "70%");
+    field(minds(root), "Whose belief").value = ANYA;
+    button(minds(root), "Add this hypothesis").click();
+  };
+  write("Anya knows the letter");
+  write("Anya suspects it");
+  write("Anya told Bea");
+  assert.ok(minds(root).textContent.includes("At most 2 hypotheses can be shown at once: remove one before adding another."));
+  assert.ok(!minds(root).querySelectorAll("li").some((node) => node.textContent.startsWith("h3:")), "the third is not kept");
+  assert.equal(field(minds(root), "What Mara thinks they think").value, "Anya told Bea", "what is typed is kept");
+  assert.ok(!asked.some((item) => item.op === "world.mind_preview"), "nothing is sent");
+});
+
 test("a route answered before a road was blocked is not left on screen as current", async () => {
   const { root, done } = await mounted({ answers: {
     "world.route": () => ({ found: true, conditions: [], route: { places: [{ place: TOWN }, { place: PORT }], paths: ["road"] } }),

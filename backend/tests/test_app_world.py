@@ -397,6 +397,33 @@ def test_a_road_change_retried_after_its_road_was_changed_again_is_already_appli
         assert scope_bytes(device, campaign) == settled
 
 
+def test_a_place_defined_after_a_road_review_refuses_a_new_change_but_not_a_retry(desk):
+    """The review showed the topology's places as they were (the ruin with no definition): a place defined, lost or
+    replaced since is a change it did not show, while the same operation again still answers the change it made."""
+    folder, chat = desk
+    with Device(folder, [say("Mara reads it.")]) as device:
+        campaign = seed_world(device, chat)["campaign"]
+        app = AppApi(device.api)
+        ask = {"campaign": campaign, **D, "topology": str(GRAPH)}
+        first = app.call("world.places", ask)["topology"]["etag"]
+        bridge = {**ask, "path": "bridge", "blocked": True, "operation_id": "block-bridge", "expected": first}
+        assert app.call("world.path_commit", bridge)["done"]["already_applied"] is False
+        second = app.call("world.places", ask)["topology"]["etag"]
+        trail = {**ask, "path": "trail", "blocked": True, "operation_id": "block-trail", "expected": second}
+        app.call("world.path_plan", trail)
+        txn = device.table.store.transaction()
+        txn.put(RecordEnvelope(RUIN, {}, name="The Drowned Ruin"), None)
+        txn.commit(device.table.owner)
+        before = scope_bytes(device, campaign)
+        assert refused(app, "world.path_plan", **trail).reason == "changed"
+        assert refused(app, "world.path_commit", **trail).reason == "changed"
+        assert app.call("world.path_commit", bridge)["done"]["already_applied"] is True
+        assert scope_bytes(device, campaign) == before
+        # reviewed again, it is made
+        trail = {**trail, "expected": app.call("world.places", ask)["topology"]["etag"]}
+        assert app.call("world.path_commit", trail)["done"]["already_applied"] is False
+
+
 def test_an_unreadable_campaign_override_is_refused_with_its_reason_never_a_server_error(desk):
     folder, chat = desk
     with Device(folder, [say("Mara reads it.")]) as device:
