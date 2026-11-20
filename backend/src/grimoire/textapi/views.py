@@ -153,21 +153,22 @@ def _take(take: Take, names: Mapping[InstanceRef, str]) -> dict:
 
 
 def turn_view(stored: StoredTurn, names: Mapping[InstanceRef, str]) -> dict:
-    """One turn as the table's player reads it: the post, then the kept take's shown lines, or, while the
+    """One turn as the table's player reads it: the posts, then the kept take's shown lines, or, while the
     turn is open, every take still on offer (proposed, running, halted)."""
     record: TurnRecord = stored.record
-    post = None
-    if record.post is not None:
-        post = {"speaker": _speaker(record.post.actor, names, "Player"), "actor": str(record.post.actor),
-                "kind": record.post.kind, "channel": record.post.channel, "text": record.post.text,
-                "private": record.post.private, "withheld": record.post.withheld,
-                "to": [names.get(actor, actor.instance_id) for actor in record.post.addressees]}
+    posts = [{"speaker": _speaker(post.actor, names, "Player"), "actor": str(post.actor), "by": post.submitted_by,
+              "kind": post.kind, "channel": post.channel, "text": post.text, "private": post.private,
+              "withheld": post.withheld, "to": [names.get(actor, actor.instance_id) for actor in post.addressees]}
+             for post in record.posts]
     kept = record.kept
     offered = [] if not record.open else [_take(take, names) for take in record.takes
                                           if take.state in ("proposed", "running")]
     return {
         "turn": record.turn_id, "number": record.number, "origin": record.origin, "device": record.device,
-        "post": post, "kept": None if kept is None else _take(kept, names), "offered": offered,
+        # ``post`` is the first post (a client that reads one post a turn); ``posts`` every post of a combined
+        # turn (058), in order, each with its character (``actor``) and who wrote it (``by``, its controller)
+        "post": posts[0] if posts else None, "posts": posts, "kept": None if kept is None else _take(kept, names),
+        "offered": offered,
         "open": record.open, "passed": record.passed_by is not None, "paused": record.paused,
         "set_aside": record.set_aside is not None,
     }

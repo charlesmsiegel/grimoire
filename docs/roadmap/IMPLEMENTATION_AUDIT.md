@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072 and 061 proofs to **75/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -41,7 +41,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 18/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -404,6 +404,7 @@ Scheduled first slices are implemented; physical-phone validation remains unveri
 - [x] Scheduled first-useful slice ([requirements](sprints/v2-mobile-client.md)).
 - Evidence: [`backend/src/grimoire/app`](../../backend/src/grimoire/app); [`backend/tests/test_textapi_proof.py`](../../backend/tests/test_textapi_proof.py); [`docs/MOBILE.md`](../../docs/MOBILE.md); [`backend/tests/test_app_release_proof.py`](../../backend/tests/test_app_release_proof.py).
 - Scope / gap: Runnable responsive web/Termux client and paired loopback sync; physical-phone acceptance not verified, distinct from code completeness.
+- Emulated-phone follow-up: a touch (Pixel 7 profile) Chromium journey taps through setup, import, play, review, a cast-panel picture, touch scrolling, an emulated on-screen keyboard, back navigation and a 24px target sweep; the paired sync and offline-fork journey runs its second client as the same touch phone ([acceptance](../ACCEPTANCE.md)). It found and fixed 13–23px touch targets. The numbered physical-phone script in [ACCEPTANCE](../ACCEPTANCE.md#manual-release-evidence-still-required) and the no-Termux USB path in [MOBILE](../MOBILE.md) are ready; the Wave 6 exit stays open until a physical-phone run is recorded.
 
 <a id="slice-052"></a>
 ### 052 — Instant Campaign Creation
@@ -498,7 +499,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -559,9 +560,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-058"></a>
 ### 058 — Local Multi PC
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/local-multi-pc.md)).
-- Evidence: [`textapi/api.py`](../../backend/src/grimoire/textapi/api.py) enforces a trusted library-owner player; [`test_textapi.py`](../../backend/tests/test_textapi.py)::test_only_the_owner_plays_in_this_slice verifies rejection of others.
-- Scope / gap: No independent local PC controllers/drafts and combined accepted contribution.
+- [x] Scheduled first-useful slice ([requirements](sprints/local-multi-pc.md)).
+- Evidence: [`play/together.py`](../../backend/src/grimoire/play/together.py), [`play/drafts.py`](../../backend/src/grimoire/play/drafts.py), [`textapi/table.py`](../../backend/src/grimoire/textapi/table.py) and the combined turn in [`scene/model.py`](../../backend/src/grimoire/scene/model.py) (`grimoire.scene-turn/2`); [`test_local_multi_pc.py`](../../backend/tests/test_local_multi_pc.py). Two PCs under separate human controllers post one turn, the cast (or the narrator) answers once in one generation, each post keeps its submitter after reopening, and the NPC stays the director's. An NPC, an unseated or another player's character, a duplicate or empty contribution and an unauthenticated handle are refused with nothing written; a retry returns the same turn; per-post whisper audiences, the owner-only handover with control history, the no-revived-delegation rule, one player holding two PCs, editable/reorderable drafts and the text API's local table are covered.
+- Scope / gap: Drafts are held in memory (persistence and interrupted-submission recovery are milestone 2); local players share the owner's screen; a combined turn takes no label, framing or effect; troupe play is milestone 3; the drafting UI is 115. See [contract](../LOCAL_MULTI_PC.md).
 
 <a id="slice-059"></a>
 ### 059 — Location Topology

@@ -110,7 +110,7 @@ def test_a_malformed_payload_is_refused_never_dropped(change, reason):
 def test_an_unknown_schema_is_never_read():
     record = full_turn()
     with pytest.raises(SceneRefused) as refused:
-        turn_from_payload(record.ref, "grimoire.scene-turn/2", turn_to_payload(record))
+        turn_from_payload(record.ref, "grimoire.scene-turn/9", turn_to_payload(record))
     assert refused.value.reason == "unsupported_schema"
 
 

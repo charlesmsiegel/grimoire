@@ -117,7 +117,7 @@ export function makeStaging(ctx, chat, { log }) {
         el("ul", {}, ...(entry.directions.length ? entry.directions : ["No change on stage."]).map((d) => el("li", {}, d))),
         ...entry.unavailable.map((u) => el("p", {}, "Cue not honoured: " + u + "."))),
     );
-    for (const item of [turn.post, ...turn.kept.lines].filter(Boolean)) {
+    for (const item of [...(turn.posts || [turn.post]), ...turn.kept.lines].filter(Boolean)) {
       const to = item.to?.length ? " to " + item.to.join(", ") : "";
       body.append(el("article", { class: "vn-line" },
         el("strong", {}, (item.speaker || item.actor || "Narrator") + to),

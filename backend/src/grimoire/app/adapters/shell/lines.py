@@ -121,9 +121,9 @@ def chat_lines(scenes: SceneLibrary, chat: ChatRef) -> tuple[Line, ...]:
     for stored in scenes.turns(chat).turns:
         view = turn_view(stored, {})
         record = stored.record
-        if view["post"] is not None:
-            text = view["post"]["text"]
-            lines.append(Line(record.turn_id, record.number, stored.etag, "post", None, record.post.actor, text, fold(text)))
+        for post, shown in zip(record.posts, view["posts"]):  # every post of a combined turn (058), in order
+            text = shown["text"]
+            lines.append(Line(record.turn_id, record.number, stored.etag, "post", None, post.actor, text, fold(text)))
         if view["kept"] is not None:
             for said in view["kept"]["lines"]:
                 lines.append(Line(record.turn_id, record.number, stored.etag, "line", said["speaker"], None,
