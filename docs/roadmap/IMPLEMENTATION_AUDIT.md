@@ -403,6 +403,7 @@ Scheduled first slices are implemented; physical-phone validation remains unveri
 - [x] Scheduled first-useful slice ([requirements](sprints/v2-mobile-client.md)).
 - Evidence: [`backend/src/grimoire/app`](../../backend/src/grimoire/app); [`backend/tests/test_textapi_proof.py`](../../backend/tests/test_textapi_proof.py); [`docs/MOBILE.md`](../../docs/MOBILE.md); [`backend/tests/test_app_release_proof.py`](../../backend/tests/test_app_release_proof.py).
 - Scope / gap: Runnable responsive web/Termux client and paired loopback sync; physical-phone acceptance not verified, distinct from code completeness.
+- Emulated-phone follow-up: a touch (Pixel 7 profile) Chromium journey taps through setup, import, play, review, a cast-panel picture, touch scrolling, an emulated on-screen keyboard, back navigation and a 24px target sweep; the paired sync and offline-fork journey runs its second client as the same touch phone ([acceptance](../ACCEPTANCE.md)). It found and fixed 13–23px touch targets. The numbered physical-phone script in [ACCEPTANCE](../ACCEPTANCE.md#manual-release-evidence-still-required) and the no-Termux USB path in [MOBILE](../MOBILE.md) are ready; the Wave 6 exit stays open until a physical-phone run is recorded.
 
 <a id="slice-052"></a>
 ### 052 — Instant Campaign Creation
