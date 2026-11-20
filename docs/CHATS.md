@@ -248,7 +248,7 @@ paging, searching and choosing a source in a large library no longer reparse it.
 or any write from outside it (another app, a sync folder, a hand edit), changes the stamp and the next request
 rebuilds. A hit still runs the store's readability check, so a closed store, a swapped root or a pending
 recovery refuses exactly as a load would. The stamp is taken before the load, so a racing write can only make
-the held basis newer than its stamp, never let a stale one look current. Limits: a rewrite that keeps size,
+the held basis newer than its stamp, never let a stale one look current. A load that met any problem (an unreadable or undecodable file, a folder it could not list) may have met a transient read failure that leaves file metadata unchanged, so its basis is reused only for a two-second burst; after that the next request reloads, so a library with a lasting problem browses at the uncached cost. Limits: a rewrite that keeps size,
 both timestamps and inode is not detected. On POSIX a rewrite moves `ctime` even when a tool restores
 `mtime`; on Windows `st_ctime` is the creation time, so an in-place, same-size rewrite whose tool restores
 `mtime` (`rsync --inplace -t`, a time-preserving copy) is missed there, as are same-size rewrites inside one

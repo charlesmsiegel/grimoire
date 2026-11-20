@@ -361,14 +361,17 @@ function written(ctx, read) {
 
 // Ways into the Chats workspace (065) for the same threads: a character's or scenario's chats by its exact qualified
 // reference, or with the portrayals validly derived from it; a world's chats by the world its campaigns stand in.
-// Each is a link, so the composer drafts of every chat stay where the shell keeps them.
+// Each is a link, so the composer drafts of every chat stay where the shell keeps them. A page opened at a pinned
+// revision browses by that pin (chats bound to it, portrayals whose validated ancestry holds it); an entity's page
+// browses every revision.
 function browseChats(ctx, read) {
   if (!ctx.registered("chats")) return [];
   const { ui } = ctx;
   const links = [];
   if (["character", "scenario"].includes(read.kind)) {
-    links.push(ui.link("Browse these chats", "chats", [], { filter: read.kind, source: read.entity }));
-    if (read.family === "entity") links.push(ui.link("Include derived portrayals", "chats", [], { filter: read.kind, source: read.entity, match: "derived" }));
+    const source = /@r\d+$/.test(ctx.path[0] || "") ? read.ref : read.entity;
+    links.push(ui.link("Browse these chats", "chats", [], { filter: read.kind, source }));
+    if (read.family === "entity") links.push(ui.link("Include derived portrayals", "chats", [], { filter: read.kind, source, match: "derived" }));
   }
   if (typeof read.source === "string" && read.source.startsWith("world:")) links.push(ui.link("Chats in this world", "chats", [], { filter: "world", world: read.source }));
   return links.length ? [ui.el("div", { class: "g-row" }, ...links)] : [];

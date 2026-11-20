@@ -26,6 +26,12 @@ Windows ``st_ctime`` is the creation time, so an in-place, same-size rewrite who
 timestamp tick on coarse filesystems (FAT/exFAT keep 2-second ``mtime``). Ordinary saves, the store's own
 atomic replacements and sync clients move ``mtime``. The walk is linear in file count; the cache is per
 process and never persisted, so the first request after a start pays one full load.
+
+**A degraded load is not trusted for long.** A load that met any problem (an unreadable or undecodable file, a
+folder it could not list) may have met a transient read failure that leaves no trace in file metadata, so the
+stamp alone would keep that degraded basis forever. Such a basis is reused only for ``retry`` seconds (a burst
+of keystrokes or pages); after that the next request reloads, whether the problem was transient or permanent. A
+clean load is reused for as long as its stamp holds.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ import os
 import stat
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -90,6 +97,7 @@ class Basis:
     rows: dict[str, dict]           # chat ref -> its listing row, as the ``chats`` op lists it
     text: dict[str, str]            # chat ref -> its row as case-folded JSON, the full-library search text
     fingerprint: str
+    degraded: bool = False          # the load met a problem, which may have been a transient read failure
 
 
 def build_basis(api: Any, view: Any) -> Basis:
@@ -121,18 +129,24 @@ def build_basis(api: Any, view: Any) -> Basis:
     listed = api._entries(view, index, order, names)
     rows = {str(ref): row for ref, row in zip(order, listed)}
     text = {key: json.dumps(row, ensure_ascii=False).casefold() for key, row in rows.items()}
-    return Basis(index, order, names, tuple(sources), tuple(diagnostics), rows, text, fingerprint)
+    return Basis(index, order, names, tuple(sources), tuple(diagnostics), rows, text, fingerprint,
+                 degraded=bool(view.problems))
 
 
 class NavigationCache:
     """One validated :class:`Basis` per process. Thread-safe; a miss rebuilds while holding the lock, so
     concurrent first pages share one load instead of each paying for it."""
 
-    def __init__(self, store: Any, *, stamp: Callable[[Any, int | None], Stamp] = library_stamp) -> None:
+    RETRY = 2.0  # seconds a degraded basis is reused before the next request reloads
+
+    def __init__(self, store: Any, *, stamp: Callable[[Any, int | None], Stamp] = library_stamp,
+                 clock: Callable[[], float] = time.monotonic, retry: float = RETRY) -> None:
         self._store = store
         self._stamp = stamp
+        self.clock = clock
+        self.retry = retry
         self._lock = threading.Lock()
-        self._held: tuple[Stamp, Basis] | None = None
+        self._held: tuple[Stamp, Basis, float] | None = None
         self.builds = 0  # how many times a basis was rebuilt from a full load (diagnostics and tests)
 
     def basis(self, api: Any) -> Basis:
@@ -142,11 +156,13 @@ class NavigationCache:
             self._store.require_readable()
             now = self._stamp(self._store.root, getattr(self._store, "generation", None))
             if self._held is not None and self._held[0] == now:
-                return self._held[1]
+                held, at = self._held[1], self._held[2]
+                if not held.degraded or self.clock() - at < self.retry:
+                    return held
             self._held = None
             built = build_basis(api, self._store.load())  # a refusal (pending recovery, closed store) propagates
             self.builds += 1
-            self._held = (now, built)
+            self._held = (now, built, self.clock())
             return built
 
     def clear(self) -> None:

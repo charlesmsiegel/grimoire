@@ -5,6 +5,7 @@ import sys
 import pytest
 from textapi_fixtures import MARA_VELL, desktop_library, Device
 from grimoire.chats import Launch
+from grimoire.store.diskops import DiskOps
 from grimoire.store import StoreError
 from grimoire.textapi import ApiRefused
 from grimoire.textapi.navcache import build_basis
@@ -255,3 +256,37 @@ def test_a_closed_store_refuses_even_with_a_held_basis(tmp_path):
                 api(op)
         with pytest.raises(StoreError):
             api.api.listed_chats()
+
+
+def test_a_load_degraded_by_a_transient_read_failure_is_retried_without_a_library_change(tmp_path, monkeypatch):
+    """A read that fails once leaves no trace in file metadata: the degraded basis serves a burst of requests,
+    then the next request after the retry window reloads and the readable chat is back with its sources."""
+    table, card_chat = desktop_library(tmp_path / 'desk')
+    with Device(table) as api:
+        healthy = api('chats.workspace', filter='character', source=str(MARA_VELL))
+        assert healthy['total'] >= 1
+        cache = api.api.navigation_cache
+        now = [100.0]
+        cache.clock = lambda: now[0]
+        cache.clear()
+        real, failed = DiskOps.read_bytes, []
+
+        def flaky(self, path):  # type: ignore[no-untyped-def]
+            if not failed and str(path).endswith('.json') and 'campaigns' in str(path):
+                failed.append(path)
+                raise OSError('transient read failure')
+            return real(self, path)
+        monkeypatch.setattr(DiskOps, 'read_bytes', flaky)
+        degraded = api('chats.workspace', filter='character', source=str(MARA_VELL))
+        assert failed and degraded['snapshot'] != healthy['snapshot']
+        builds = cache.builds
+        now[0] += 0.5
+        api('chats.workspace', q='mara')
+        assert cache.builds == builds, 'within the retry window a degraded basis still serves the burst'
+        now[0] += cache.retry
+        again = api('chats.workspace', filter='character', source=str(MARA_VELL))
+        assert cache.builds == builds + 1
+        assert again['snapshot'] == healthy['snapshot'] and again['chats'] == healthy['chats']
+        now[0] += 3600
+        api('chats.workspace')
+        assert cache.builds == builds + 1, 'a clean basis is reused for as long as its stamp holds'

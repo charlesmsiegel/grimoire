@@ -282,7 +282,12 @@ test("the library from the menu to an exact attach", { skip: !base }, async () =
   assert.ok(block(page, "Opens with").querySelectorAll("p.g-quote").some((quote) => quote.textContent === "The tide is late tonight."));
   assert.equal(block(page, "Lorebooks bound").querySelector("a").getAttribute("href"), at(LORE + "@r1"));
   assert.equal(block(page, "In these chats").querySelectorAll("a.source-chat").length, 1);  // one chat row, then the ways into Chats
-  assert.ok(byText(block(page, "In these chats"), "a", "Browse these chats").length);
+  const browse = (at) => new URLSearchParams(byText(block(at, "In these chats"), "a", "Browse these chats")[0].getAttribute("href").split("?")[1]).get("source");
+  assert.equal(browse(page), MARA, "the entity's page browses every revision");
+  page = await go(at(MARA + "@r1"), entry, "Mara Vell at r1");
+  assert.equal(browse(page), MARA + "@r1", "a pinned page browses by its pin");
+  assert.ok(new URLSearchParams(byText(block(page, "In these chats"), "a", "Include derived portrayals")[0].getAttribute("href").split("?")[1]).get("source") === MARA + "@r1");
+  page = await go(at(MARA), entry, "Mara Vell");
   assert.equal(byText(page, "a", "Start a chat")[0].getAttribute("href"), "#/start?source=" + encodeURIComponent(MARA));
 
   // its pictures, and the way to the Art page for exactly this character
