@@ -186,7 +186,7 @@ By default every present actor hears every spoken line (no whispering), so a sec
 | Detecting player-character authorship in generated text (035's first slice reviews each NPC line as that NPC's voluntary speech) | 035 M2 (`review_narration`) |
 | Richer retrieval behind the same pack seam (recent history, unbound world records, embeddings) | 031 |
 | Building each speaker's pack and the director's lore every turn, with the transcript window as scene text | 035 (done in its first slice, [SCENES](SCENES.md)) |
-| Other optional stages in a generation turn (`planning`, `summary`, ...) | later sprints; 045's `select`/`decision` phase is [DECISIONS](DECISIONS.md) |
+| Other optional stages in a generation turn (`summary`, ...) | later sprints; 045's `select`/`decision` phase is [DECISIONS](DECISIONS.md), 068's `plan` phase is [ACTOR_INFERENCE](ACTOR_INFERENCE.md#runtime-adoption) |
 | Choosing an NPC's intention every turn and giving the turn to an NPC that acts on its goals | 035 M2 |
 
 ## Ensemble coordination (051)
