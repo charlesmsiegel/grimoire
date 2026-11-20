@@ -84,6 +84,8 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.ar
                       # Scene transfer (084) reads and writes through the store.
                       "grimoire.scenetransfer", "grimoire.shelfstore", "grimoire.sourceapi", "grimoire.speech",
                       "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi",
+                      # Source upgrade previews (079) read a whole library through the store.
+                      "grimoire.sourceupgrades",
                       "grimoire.topologystore"})
 
 
