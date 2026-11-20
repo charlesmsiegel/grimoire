@@ -44,7 +44,7 @@ These are **functional gates**, not dates. Import and phone play cannot be descr
 
 ## Implementation checkmarks
 
-Audited against [`v2` at `b54b2bd8`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326) on **2026-11-20**. **62 of 119 scheduled first-useful slices** and **4 of 12 scoped waves** were checked at that snapshot. The subsequent 049/054 proofs bring the current entries to **64 of 119 slices**; the scoped-wave count remains **4 of 12**.
+Historical audit: [`b54b2bd8`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), **2026-11-20**, recorded **62 of 119 scheduled first-useful slices** and **4 of 12 scoped waves**. The bounded reconciliation at landed base [`0f7adcfb`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) recognizes **65 of 119 slices**, including 047, 050 and 112. This PR’s 049/054 proofs bring the current rows to **67 of 119 slices**; **4 of 12 scoped waves** remain complete. Historical verification results remain pinned to their original snapshots.
 
 **☑** means the scheduled first-useful implementation and its required first-proof additions were found in code and executable tests. It does **not** mean all subsequent milestones or the moonshot are complete, nor does it certify live providers or physical devices. **☐** means a required implementation or proving scenario is missing or not established; it does not mean no work exists. Existing functionality can satisfy a slice even when delivered by an earlier sprint.
 
@@ -275,12 +275,12 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 ### Wave 8 — Reliable long-term use and independent enhancements
 
-- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (9/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
+- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (10/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
 | 049 | [☑](IMPLEMENTATION_AUDIT.md#slice-049) | [Offline Multi Device Sync](sprints/offline-multi-device-sync.md) | **P0** | [V2 Mobile Client](sprints/v2-mobile-client.md), [App Managed Device Sync](sprints/app-managed-device-sync.md), [Sync Revisions And Conflict Core](sprints/sync-revisions-and-conflict-core.md) | sync / offline branch reconciliation | Preserve two conflicting offline edits without silent loss |
-| 050 | [☐](IMPLEMENTATION_AUDIT.md#slice-050) | [Capture And Trainer Links](sprints/capture-and-trainer-links.md) | **P0** | [Counted Inventory](sprints/counted-inventory.md), [Creature Individualization](sprints/creature-individualization.md), [Party And Presence](sprints/party-and-presence.md), [Durable Action Recovery](sprints/durable-action-recovery.md) | gameplay / capture | Catch a named monster with one ball and no duplicate actor |
+| 050 | [☑](IMPLEMENTATION_AUDIT.md#slice-050) | [Capture And Trainer Links](sprints/capture-and-trainer-links.md) | **P0** | [Counted Inventory](sprints/counted-inventory.md), [Creature Individualization](sprints/creature-individualization.md), [Party And Presence](sprints/party-and-presence.md), [Durable Action Recovery](sprints/durable-action-recovery.md) | gameplay / capture | Catch a named monster with one ball and no duplicate actor |
 | 051 | [☑](IMPLEMENTATION_AUDIT.md#slice-051) | [Ensemble Conversation](sprints/ensemble-conversation.md) | **P0** | [Diegetic Communication](sprints/diegetic-communication.md), [NPC Goals And Autonomy](sprints/npc-goals-and-autonomy.md), [Decision Policies](sprints/decision-policies.md) | generation / conversation floor | Handle three voices, interruption and meaningful silence |
 | 053 | [☐](IMPLEMENTATION_AUDIT.md#slice-053) | [Memory Consolidation](sprints/memory-consolidation.md) | **P0** | [Turn Effects And Wrap Up](sprints/turn-effects-and-wrap-up.md), [Knowledge And Perspective](sprints/knowledge-and-perspective.md) | memory / long-horizon ledger | Maintain sourced facts across corrected scenes |
 | 054 | [☑](IMPLEMENTATION_AUDIT.md#slice-054) | [Scenes Forks And Retcons](sprints/scenes-forks-and-retcons.md) | **P0** | [Turn Effects And Wrap Up](sprints/turn-effects-and-wrap-up.md), [Durable Action Recovery](sprints/durable-action-recovery.md) | scene / fork and revision | Preview a fork without duplicating effects |

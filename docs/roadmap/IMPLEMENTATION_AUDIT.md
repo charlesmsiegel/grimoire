@@ -1,8 +1,8 @@
 # Roadmap implementation audit
 
-**Snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
+**Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-The subsequent 049/054 proofs recorded below bring the current entries to **64/119 scheduled slices**, with **4/12 scoped waves** unchanged. This does not rewrite the historical snapshot or its verification results.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -17,12 +17,17 @@ This refresh inspected every merged change since the original [92144e17 audit](h
 | [#691](https://github.com/charlesmsiegel/grimoire/pull/691) | Check 051: three-voice coordination, interruption, silence and privacy. Keep 068 open: synthetic comparison is not billed live V0.2.1 evidence. |
 | [#681](https://github.com/charlesmsiegel/grimoire/pull/681) | Check 057/060: institutional dissent and mistaken second-order hypotheses with tactic revision. Persistence and UI remain deferred. |
 | [#693](https://github.com/charlesmsiegel/grimoire/pull/693) | Keep 053/063 open: durable correction and delayed rumor foundations exist, but complete proving scenarios remain unestablished. |
+| [#684](https://github.com/charlesmsiegel/grimoire/pull/684), [`ff3d0875`](https://github.com/charlesmsiegel/grimoire/commit/ff3d0875f5f24dee1778b195a1afc30456c73c16) | Keep 056 partial: pinned shared character/lore/gear across three worlds, exclusions, local creature, quick chats and 2,000 unselected records are proven; shared pinned bestiary creature across two settings is missing. |
+| [#685](https://github.com/charlesmsiegel/grimoire/pull/685), [`b252c671`](https://github.com/charlesmsiegel/grimoire/commit/b252c671ee497ce787c7657fef6de855119d5e04) | Check 047: independent prose extraction and exact-text continuity/PC-authorship review with authority-preserving keep gate. Wave 6 has 6/6 rows; physical-phone exit remains open. |
+| [#692](https://github.com/charlesmsiegel/grimoire/pull/692), [`e8e7188d`](https://github.com/charlesmsiegel/grimoire/commit/e8e7188d55cadadf32401043c316b27ec3315c0b) | Check 050: native named capture, one-ball retry/reopen, distinct same-species actor, reserve capacity, failed capture and crash recovery. 033 roster/UI and 115 remain separate. |
+| [#695](https://github.com/charlesmsiegel/grimoire/pull/695), [`1a742e4b`](https://github.com/charlesmsiegel/grimoire/commit/1a742e4b67038d00140d6eab116055b005aa614c) | Retain open Wave 6/7 exits: [offline acceptance](../ACCEPTANCE.md) proves synthetic native voice, keyboard/focus and emulated-phone Chromium journeys, not physical devices, touch or real screen readers. |
+| [#682](https://github.com/charlesmsiegel/grimoire/pull/682), [`0f7adcfb`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) | Check 112: actor-authorized current context and optional metered/replayed decisions in production CLI/Chromium. Wave 7 has 7/7 rows; global accessibility/device gate remains open. |
 
-Relative to #678: **+8 slices** (033, 051, 055, 057, 059, 060, 062, 113), **+1 wave** (4). At the refresh base, implementation PRs had already checked 033/055/113; this documentation diff adds 051/057/059/060/062 and reconciles stale summaries. Original scheduled scope and inherited first-proof obligations are unchanged.
+Historical refresh relative to #678: **+8 slices** (033, 051, 055, 057, 059, 060, 062, 113), **+1 wave** (4). At the refresh base, implementation PRs had already checked 033/055/113; this documentation diff adds 051/057/059/060/062 and reconciles stale summaries. Original scheduled scope and inherited first-proof obligations are unchanged.
 
 This is a code-and-test audit of the 119 scheduled **first-useful slices**, including inherited first-proof additions. Requirements were not narrowed to match the code. A check does not close later milestones, certify a live model, or prove physical-phone/browser accessibility. Unchecked entries distinguish missing implementation from a proof not yet established. The [ordered roadmap](README.md#implementation-checkmarks) carries the same checkmarks.
 
-**047 follow-up:** the independent extraction and production integration described below were added after the pinned audit snapshot; other entries retain their audit scope.
+The current reconciliation preserves the original proving obligations. Browser evidence is synthetic Chromium/loopback with keyboard, focus and emulated narrow viewport; it does not certify physical-phone touch, real screen-reader use or the global Wave 6/7 acceptance gates. 015 remains unchecked without the live provider-reported baseline.
 
 ## Wave results
 
@@ -35,7 +40,7 @@ This is a code-and-test audit of the 119 scheduled **first-useful slices**, incl
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 9/24 | ☐ | 049, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 10/24 | ☐ | 049, 050, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -492,21 +497,21 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
 
 - [x] Scheduled first-useful slice ([requirements](sprints/offline-multi-device-sync.md)).
 - Evidence: [`sync/semantic.py`](../../backend/src/grimoire/sync/semantic.py); [`test_sync_semantic.py`](../../backend/tests/test_sync_semantic.py); [`test_peersync_semantic.py`](../../backend/tests/test_peersync_semantic.py); [`test_continuity_forks.py`](../../backend/tests/test_continuity_forks.py). Actual compatible synthetic libraries detect relationship/event changes after a scene versus its offline edit, retain variants, block generic-resolution bypasses and stale/deletion races, and explicitly archive/restore compatible fiction before ordinary exactly-once ledger reconciliation. Interrupted resolution reopens and resumes under pinned premises.
-- Scope / gap: Headless semantic reconciliation beyond earlier turn forks, documented in [CONTINUITY.md](../CONTINUITY.md). Uncertain ancestry and incompatible continuations refuse; remote fork controls and broad UI are 115. Long-period disconnected media/tombstone/retcon convergence remains later work.
+- Scope / gap: Headless semantic reconciliation beyond earlier turn forks, documented in [CONTINUITY.md](../CONTINUITY.md). Uncertain ancestry and incompatible continuations refuse; remote fork controls and broad UI are 115. The scheduled conflicting-history proof is complete; arbitrary world-override/private-evidence semantic merging and long-period disconnected media/tombstone/retcon convergence are not claimed.
 
 <a id="slice-050"></a>
 ### 050 — Capture And Trainer Links
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/capture-and-trainer-links.md)).
-- Evidence: [`test_effect_completion.py`](../../backend/tests/test_effect_completion.py) / [`test_effect_completion_recovery.py`](../../backend/tests/test_effect_completion_recovery.py) with capture_fixtures.py prove generic accepted-effect recovery, one ball spend and allied_with(existing TAM,WISP).
-- Implementation update (050): `grimoire.companions` supplies accepted capture, trainer links, optional one-device spending, active/reserve placement and capture-aware recovery. `test_companions.py` and `test_companions_recovery.py` exercise qualified identities, refusal/failed capture, authority, stale capacity, retry and native crash recovery. [Contract and limits](../COMPANIONS.md). Checkbox retained for the coordinated post-merge completion audit; 033 roster integration and 115 UI are separate. `grimoire.capture` remains external model usage capture.
+- [x] Scheduled first-useful slice ([requirements](sprints/capture-and-trainer-links.md)).
+- Evidence: [`companions`](../../backend/src/grimoire/companions), [`test_companions.py`](../../backend/tests/test_companions.py), [`test_companions_recovery.py`](../../backend/tests/test_companions_recovery.py) and [contract](../COMPANIONS.md). Native acceptance preserves the named actor and one-ball spend through retry/reopen, distinguishes a same-species individual, respects active/reserve capacity, creates no companion on failed capture and recovers native interrupted writes.
+- Limits: accepted capture/trainer links are headless; 033 roster exposure and 115 broad UI are separate. No automatic NPC speech, control transfer or actor knowledge follows from the link. `grimoire.capture` remains external model usage capture.
 
 <a id="slice-051"></a>
 ### 051 — Ensemble Conversation
@@ -520,14 +525,14 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/memory-consolidation.md)).
 - Evidence: [`memory/view.py`](../../backend/src/grimoire/memory/view.py), [`memorystore/library.py`](../../backend/src/grimoire/memorystore/library.py), [`test_memory.py`](../../backend/tests/test_memory.py) and [`test_memory_store.py`](../../backend/tests/test_memory_store.py) provide durable actor-scoped selections, corrections, stale-selection suppression, evidence provenance and bounded historical views; [`test_memory_recovery.py`](../../backend/tests/test_memory_recovery.py) covers local recovery.
-- Scope / gap: Partial foundation, not the complete several-scene consolidation proof: exact evidence selection/correction does not yet produce attributable summaries/dossiers or establish the corrected-character-identity versus older recap scenario end to end. Context-pack, UI and sync adapters remain absent; see [contract](../MEMORY.md).
+- Scope / gap: Partial foundation, not the complete several-scene consolidation proof: exact evidence selection/correction does not yet produce attributable summaries/dossiers or establish the corrected-character-identity versus older recap scenario end to end. The 049/054 correction export supplies pinned causal references only; it neither consolidates several scenes nor implements the older-recap identity correction proof. Context-pack, UI and sync adapters remain absent; see [contract](../MEMORY.md).
 
 <a id="slice-054"></a>
 ### 054 — Scenes Forks And Retcons
 
 - [x] Scheduled first-useful slice ([requirements](sprints/scenes-forks-and-retcons.md)).
 - Evidence: [`continuitystore`](../../backend/src/grimoire/continuitystore); [`test_continuitystore.py`](../../backend/tests/test_continuitystore.py); [`test_effect_continuity.py`](../../backend/tests/test_effect_continuity.py); [`test_continuity_forks.py`](../../backend/tests/test_continuity_forks.py). The transferred-key scenario previews downstream possession, actions, declared dialogue, summary and evidence impacts without changing originals. Native source pins and potential scene/event ordering distinguish recorded causality from uncertainty. Bounded authored rehearsals are speculative and model-free; retained forks preserve exact scene envelopes without replaying accepted effects.
-- Scope / gap: Director-only headless previews, explicit compatible-source restoration and pinned correction exports for 053; no automatic downstream repair, prose inference, generated continuations, alternative promotion or 115 UI. Missing/stale/legacy inputs remain incomplete or refused rather than inferred. See [CONTINUITY.md](../CONTINUITY.md).
+- Scope / gap: Director-only headless previews, explicit compatible-source restoration and pinned correction exports for 053; no automatic downstream repair, prose inference, generated continuations, alternative promotion or 115 UI. The scheduled fork/impact proof and original transferred-key proving scenario are met; authored rehearsal strings reuse the impact graph and do not simulate alternative causal futures or close the later promotion milestone. Missing/stale/legacy inputs remain incomplete or refused rather than inferred. See [CONTINUITY.md](../CONTINUITY.md).
 
 <a id="slice-055"></a>
 ### 055 — Calendar And Clocks
@@ -540,8 +545,8 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 ### 056 — Catalog Composition
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/catalog-composition.md)).
-- Evidence: chats and cardstore support direct qualified reusable character/lorebook bindings (107/037); rebase supports instance field updates.
-- Scope / gap: No 056 optional catalog inclusion/exclusion, dependency composition or three-world shared-catalog proof. Direct bindings alone are earlier-slice functionality.
+- Evidence: [`catalogs`](../../backend/src/grimoire/catalogs), [`test_catalog_scenarios.py`](../../backend/tests/test_catalog_scenarios.py) and [contract](../CATALOGS.md) prove shared pinned character/lore/gear in three worlds, gear exclusion, a setting-local creature, independent quick chats and stable context with 2,000 unselected records.
+- Missing proof: the shared pack has no pinned bestiary creature reused across two settings; the tested creature is local to one setting. The inherited bestiary proving scenario is not established, so the implementation remains partial despite the passing catalog scenarios. UI 115 remains separate.
 
 <a id="slice-057"></a>
 ### 057 — Faction Decision Making
