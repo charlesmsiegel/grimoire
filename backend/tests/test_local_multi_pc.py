@@ -24,8 +24,9 @@ from grimoire.play.drafts import Draft, TurnDraft
 from grimoire.play.together import MAX_TOGETHER, Contribution
 from grimoire.scene import (
     COMBINED_TURN_SCHEMA, TURN_SCHEMA, SceneRefused, TurnRecord, heard_for, table_lines, turn_from_payload,
-    turn_to_payload,
+    turn_schema, turn_to_payload,
 )
+from grimoire.store import ScopeRecord
 from grimoire.textapi import TextApi
 from grimoire.textapi.errors import ApiRefused
 
@@ -203,6 +204,27 @@ def test_a_post_waiting_in_another_chat_of_the_campaign_keeps_its_player_too(car
         # control is the campaign's: handing Tamsin back through the other chat would leave Bob's post to the model
         refused("turn_open", table.runner.seat_player, dawn.chat, table.owner, tamsin, DIRECTOR)
         assert table.runner.open(chat).controller(tamsin) == BOB
+
+
+def test_a_post_on_a_branch_a_fork_choice_set_aside_holds_nothing(cards):
+    folder, chat, _ = cards
+    with Table(folder, [say("Dark.")]) as table:
+        anya, _, tamsin = two_players(table, chat)
+        table.runner.post_together(chat, both(table, anya, tamsin))
+        table.runner.generate(chat, table.player(ANA))
+        table.runner.keep(chat, table.player(ANA), 1)
+        table.runner.post_together(chat, both(table, anya, tamsin, '"Then we light it."', '"With what?"'))
+        # another device's turn 1 arrives, as a sync would bring it, and the owner goes on from it: this device's
+        # turn 1 is set aside, and the open turn 2 after it, unmarked itself, is on no chat's line
+        first = table.runner.open(chat).turns.turns[0].record
+        theirs = TurnRecord(chat, 1, "post", first.post, device="0badcafe", also=first.also, passed_by=BOB)
+        txn = table.store.transaction()
+        txn.put(ScopeRecord(theirs.ref, turn_schema(theirs), turn_to_payload(theirs), owner=OWNER), None)
+        txn.commit(table.owner)
+        refused("turn_fork", table.runner.seat_player, chat, table.owner, tamsin, DIRECTOR)  # nothing until chosen
+        table.runner.choose(chat, table.owner, theirs.turn_id)
+        table.runner.seat_player(chat, table.owner, tamsin, DIRECTOR)
+        assert table.runner.open(chat).controller(tamsin) == DIRECTOR
 
 
 def test_a_retried_submission_returns_its_turn_and_nothing_else_is_posted_while_it_is_open(cards):

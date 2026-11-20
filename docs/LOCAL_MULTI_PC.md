@@ -25,8 +25,9 @@ player character in only one way: the library owner hands it over with
   handing the character back to that player would revive it. This is the Wave 1 obligation 058 inherited.
 - A character whose post waits in an open turn, in any chat of the campaign (control is the campaign's, and one
   actor can play in several chats of a scope), keeps its controller until that turn is kept or passed
-  (`turn_open`): handed to the director, the model would answer the post as the character it was written for. A
-  campaign turn file that cannot be read refuses the change (`turns_unreadable`).
+  (`turn_open`): handed to the director, the model would answer the post as the character it was written for.
+  Only a chat's line counts: a turn on a branch a fork choice set aside holds nothing. A campaign turn file that
+  cannot be read refuses the change (`turns_unreadable`).
 - Every change is a `ControlChange` recorded with the owner's handle, so 003's control history says who handed
   which character to whom. Handing a character to the controller it already has writes nothing.
 

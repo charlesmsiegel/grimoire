@@ -174,21 +174,34 @@ def post_together(runner, chat: ChatRef, contributions: Iterable[Contribution]) 
     return record
 
 
+def _waits(turn: TurnRecord, actor: InstanceRef) -> bool:
+    return turn.open and any(post.actor == actor for post in turn.posts)
+
+
 def _post_waits(runner, actor: InstanceRef) -> bool:  # type: ignore[no-untyped-def]
-    """Whether a post for ``actor`` waits on an answer in an open turn of any chat of its campaign: 003's control is
-    campaign-wide, and 107 lets one actor play in several chats of a scope. A turn file that cannot be read, or
-    decoded, counts as one that might (fail closed); a branch head a fork choice set aside goes on in no chat."""
+    """Whether a post for ``actor`` waits on an answer in an open turn on the line of any chat of its campaign:
+    003's control is campaign-wide, and 107 lets one actor play in several chats of a scope. A turn file that
+    cannot be read or decoded fails closed. A chat holding such a turn is read as play reads it (028's line), so a
+    turn on a branch a fork choice set aside, its head or after it, goes on nowhere and holds nothing."""
     found = runner.store.campaign_turns(actor.campaign_id)
     if found.problems:
         raise _refuse("turns_unreadable", "a turn of this campaign cannot be read, so whether a post for this "
                                           "character still waits cannot be told")
+    chats = set()
     for ref, stored in found.records.items():
         try:
             turn = turn_from_payload(ref, stored.record.schema, stored.record.payload)
         except SceneRefused:
             raise _refuse("turns_unreadable", f"turn {ref} cannot be read, so whether a post for this character "
                                               "still waits cannot be told") from None
-        if turn.open and turn.set_aside is None and any(post.actor == actor for post in turn.posts):
+        if _waits(turn, actor):
+            chats.add(turn.chat)
+    for chat in sorted(chats, key=str):
+        line = runner.scenes.turns(chat)
+        if not line.complete:
+            raise _refuse("turns_unreadable", f"the turns of {chat} cannot all be read, so whether a post for this "
+                                              "character still waits cannot be told")
+        if any(_waits(stored.record, actor) for stored in line.turns):
             return True
     return False
 
