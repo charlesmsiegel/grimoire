@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation proof brings them to **70/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -41,7 +41,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 13/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 14/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -52,7 +52,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 ### Follow-up refresh verification (b54b2bd8, 2026-11-20)
 
 - New-claim selection: **206 passed** in 24.81 seconds on Linux/Python 3.12. It covers ensemble, actor inference and reporting, institutions, social hypotheses, memory core/store/recovery, rumors/store/recovery and continuity actor-ID reservation. All providers are synthetic.
-- The 051/057/060 checkmarks reflect complete bounded headless proofs. 053/063/068 retain the missing full-scenario evidence above; neither a partial API nor a passing unit selection closes those slices.
+- The 051/057/060 checkmarks reflect complete bounded headless proofs. 068 retains the missing full-scenario evidence above; neither a partial API nor a passing unit selection closes those slices.
 - The initial 160-test focused selection (159 plus the separately rerun Chromium test below) exercises the previously changed claims and real application composition. Together with source/requirements review, count/link reconciliation and `git diff --check`, this is a targeted documentation-only local gate, not a substitute for required full cross-platform CI. The follow-up PR records fresh combined results for its exact head and the independently reviewed diff.
 
 ### Initial refresh verification (1b4f247a, 2026-11-20)
@@ -498,7 +498,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -594,9 +594,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-063"></a>
 ### 063 — Rumors And Information Flow
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/rumors-and-information-flow.md)).
-- Evidence: [`rumorstore/library.py`](../../backend/src/grimoire/rumorstore/library.py), [`test_rumor_store.py`](../../backend/tests/test_rumor_store.py) and [`test_rumor_recovery.py`](../../backend/tests/test_rumor_recovery.py) prove delayed authored edges, false retelling, explicitly admitted belief, stable sender projection and local crash reconciliation without altering events/rulings.
-- Scope / gap: Partial: the required distant rival acting on the delayed misleading belief is not established by the delivery/belief tests. Runtime/context/campaign readers must adopt the safe rumor projection before app exposure; sync, UI and the calendar adapter remain pending. Explicit supplied ticks are not integrated campaign time. See [contract](../RUMORS.md).
+- [x] Scheduled first-useful slice ([requirements](sprints/rumors-and-information-flow.md)).
+- Evidence: [`test_rumor_scenarios.py`](../../backend/tests/test_rumor_scenarios.py) runs the proving scenario through the scene runner: a witness's faithful retelling, then a distorted letter to a distant director NPC timed 21 days on the campaign's 055 calendar and carried only by a courier route; once it arrives and her belief is admitted, her recorded intention changes from trading to the challenge her agenda gates on that proposition, her brief carries the letter's account and never the true insult, and the insult event, its witness's perception, rulings and the proposition's reported standing are unchanged. [`evidencestore/library.py`](../../backend/src/grimoire/evidencestore/library.py) and [`core/knowledge.py`](../../backend/src/grimoire/core/knowledge.py) give every library reader (scene runner, context packs, campaign API, memory) the queued sends as `Knowledge.dispatches`, so a sender's view never changes on delivery; [`test_rumor_store.py`](../../backend/tests/test_rumor_store.py), [`test_rumors.py`](../../backend/tests/test_rumors.py) and [`test_rumor_recovery.py`](../../backend/tests/test_rumor_recovery.py) prove calendar timing, the overlay's fail-closed cases (damaged or missing rumor ledger) and crash reconciliation.
+- Scope / gap: Complete bounded first-useful slice. Belief admission on receipt is the director's explicit act, and delivery conditions are supplied explicitly rather than inferred. The rumor ledger is not synced (a peer without it shows no sends), faction/public-media spread at scale (milestone 3) and UI (115) remain pending. See [contract](../RUMORS.md).
 
 <a id="slice-064"></a>
 ### 064 — Scenario Preparation

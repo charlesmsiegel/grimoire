@@ -185,14 +185,27 @@ def _received_and_sent(knowledge: Knowledge, actor: InstanceRef, as_of: int,
         (item for item in knowledge.evidence_held_by(actor)
          if item.confirmed and item.moment.sequence <= as_of and keep_item(item)),
         key=lambda item: _order(item.moment, item.evidence_id))
-    sent = sorted(
-        (report for report in knowledge.reports_sent_by(actor)
-         if report.sent_at.sequence <= as_of and keep_proposition(report.proposition_id)),
-        key=lambda report: _order(report.sent_at, report.evidence_id))
-    return (tuple(_known_evidence(knowledge, item) for item in evidence),
-            tuple(SentReport(r.evidence_id, r.holder, r.proposition_id,
-                             knowledge.proposition(r.proposition_id).text, r.channel, r.sent_at)
-                  for r in sent))
+    return tuple(_known_evidence(knowledge, item) for item in evidence), _sent(knowledge, actor, as_of, keep_proposition)
+
+
+def _sent(knowledge: Knowledge, actor: InstanceRef, as_of: int, keep_proposition) -> tuple[SentReport, ...]:
+    """What the actor knowingly sent, by send time: its dispatches (063's queue), delivered or not, and the
+    other addressed reports it sent. A delayed report is shown from its dispatch, never from its arrival, so
+    the sender's past does not change when it is delivered. No send at all when the store could not tell
+    which were dispatched (``dispatches`` is ``None``), since any addressed report might be a delayed one."""
+    if knowledge.dispatches is None:
+        return ()
+    named = {dispatch.evidence_id for dispatch in knowledge.dispatches}
+    sends = [SentReport(r.evidence_id, r.holder, r.proposition_id, knowledge.proposition(r.proposition_id).text,
+                        r.channel, r.sent_at)
+             for r in knowledge.reports_sent_by(actor)
+             if r.evidence_id not in named and r.sent_at.sequence <= as_of and keep_proposition(r.proposition_id)]
+    sends += [SentReport(d.evidence_id, d.recipient, d.proposition_id, knowledge.proposition(d.proposition_id).text,
+                         d.channel, d.sent_at)
+              for d in knowledge.dispatches_by(actor)  # a quarantined proposition takes its send with it
+              if d.sent_at.sequence <= as_of and knowledge.has_proposition(d.proposition_id)
+              and keep_proposition(d.proposition_id)]
+    return tuple(sorted(sends, key=lambda report: _order(report.sent_at, report.evidence_id)))
 
 
 def _projection(knowledge: Knowledge, actor: InstanceRef, as_of: int,
@@ -206,8 +219,8 @@ def _projection(knowledge: Knowledge, actor: InstanceRef, as_of: int,
 def actor_knowledge(knowledge: Knowledge, actor: InstanceRef, *, as_of: int) -> ActorKnowledge:
     """What ``actor`` perceived, was told, sent and concluded, as of ``as_of``.
 
-    A function of the actor's own evidence, own beliefs and the addressed
-    reports it sent; no other record can change it. Empty when the actor has
+    A function of the actor's own evidence, own beliefs, its dispatches and the
+    addressed reports it sent; no other record can change it. Empty when the actor has
     none: absence is the normal, fail-closed answer.
     """
     return _projection(knowledge, _check_actor(knowledge, actor), _check_as_of(as_of))
