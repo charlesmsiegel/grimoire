@@ -707,9 +707,9 @@ Scheduled domain slices and UI exit 116 are not complete.
 <a id="slice-077"></a>
 ### 077 — Quests And Commitments
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/quests-and-commitments.md)).
-- Evidence: Existing scene/turn records and graph relations record accepted fiction.
-- Scope / gap: No explicit promise/commitment deadline and fulfillment-provenance ledger; clocks unavailable.
+- [x] Scheduled first-useful slice ([requirements](sprints/quests-and-commitments.md)).
+- Evidence: [`commitments/`](../../backend/src/grimoire/commitments) (pure ledger, fold and codec), [`commitmentstore/library.py`](../../backend/src/grimoire/commitmentstore/library.py) and [`COMMITMENTS.md`](../COMMITMENTS.md); [`test_commitment_scenarios.py`](../../backend/tests/test_commitment_scenarios.py)::test_the_refusal_and_its_deadline_stay_on_the_record and ::test_later_narration_that_claims_the_mission_done_is_a_contradiction prove the proving scenario across three scenes and a reopened store: a player character's backed refusal and the 055 deadline stay recorded past the deadline, recording it fulfilled is refused, and the referee's new `fulfills` check reports a material contradiction. An accepted promise running overdue, a 021 retcon unwinding a step, a cited event still syncing (uncertain, never material), voids and every authority refusal are in `test_commitmentstore.py` and `test_commitments.py`.
+- Scope / gap: Milestone 1 plus milestone 2's recorded fulfilment, partial completion and abandonment, each citing 020 objective events. No commitment UI (116), no labeller or runner capture of `fulfills` claims (the extractor offers no commitment ids yet), no branching goals, quest stages, dependencies or planning aids (milestone 3), no delegation or transfer of a commitment, and no ledger compaction: the ledger shares `scope.json`'s native size cap with the calendar.
 
 <a id="slice-078"></a>
 ### 078 — Relationships And Reputation
