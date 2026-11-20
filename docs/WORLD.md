@@ -96,7 +96,8 @@ holds; the page holds them from the newest evidence they cite, and a replacement
 replaces if that is later (060 refuses a revision no later than what it supersedes). A hypothesis another one replaces
 can't be removed before its replacement, and a replacement must name a hypothesis written before it, replaced by
 nothing yet and about the same characters, so the chain sent stays one 060 admits. The preview admits them in order into a ledger that
-lives for that one answer, recalls what the NPC holds current, and proposes the credited tactic or the fallback.
+lives for that one answer, recalls what the NPC holds current, and proposes the credited tactic or the fallback; a
+tactic rests only on a hypothesis nothing replaces, since 060 refuses one that is replaced.
 Each ruled proposition stands as 012's `standing` says (its latest ruling); the rulings before it are listed apart
 as `earlier`, so a proposition refuted and later established reads as established. The preview answers the
 director's truth and every cast member's actual beliefs, read again after it, and the page draws that truth in

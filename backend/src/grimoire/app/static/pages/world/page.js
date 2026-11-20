@@ -566,7 +566,8 @@ async function minds(ctx, body, chat, cast) {
       const open = ids.filter((item) => !replacedBy(hypotheses, item.value).length);
       replaces = ui.choice("It replaces", [{ value: "", label: "Nothing: a new hypothesis" }, ...open], { value: "" });
       supersedes.replaceChildren(replaces.node);
-      tacticChoice = ids.length ? ui.choice("Tactic rests on", ids, { value: ids[ids.length - 1].value }) : null;
+      // a tactic rests only on a hypothesis still current: 060's choose_tactic refuses a replaced one
+      tacticChoice = open.length ? ui.choice("Tactic rests on", open, { value: open[open.length - 1].value }) : null;
       tacticFor.replaceChildren(tacticChoice ? tacticChoice.node : ui.empty("Write a hypothesis to choose a tactic from it."));
     };
     const add = () => {
@@ -592,7 +593,7 @@ async function minds(ctx, body, chat, cast) {
       const least = parseConfidence(minimum.value);
       minimum.setError(least === null ? "Give a number from 0 to 1." : "");
       if (!hypotheses.length || least === null) return;
-      const tactic = tacticChoice && credited.value.trim() && fallback.value.trim()
+      const tactic = tacticChoice && !replacedBy(hypotheses, tacticChoice.value).length && credited.value.trim() && fallback.value.trim()
         ? { hypothesis: tacticChoice.value, minimum: least, credited: credited.value.trim(), fallback: fallback.value.trim() } : undefined;
       ctx.act(async () => {
         const asked = previewing.start();

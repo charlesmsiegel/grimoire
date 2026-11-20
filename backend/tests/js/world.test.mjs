@@ -624,6 +624,8 @@ test("a hypothesis another one replaces can't be removed before it, so the chain
   assert.ok(!first.querySelectorAll("button").some((node) => node.textContent === "Remove"), "h1 offers no Remove while h2 replaces it");
   const offered = field(minds(root), "It replaces").querySelectorAll("option").map((node) => node.getAttribute("value"));
   assert.deepEqual(offered, ["", "h2"], "h1 is replaced already, so only h2 can be replaced next");
+  const tactics = field(minds(root), "Tactic rests on").querySelectorAll("option").map((node) => node.getAttribute("value"));
+  assert.deepEqual(tactics, ["h2"], "a tactic rests only on a hypothesis still current: 060 refuses a replaced one");
   // a replacement about other characters is refused on the page, not saved for 060 to refuse as different_chain
   typeInto(minds(root), "What Mara thinks they think", "Bea knows it");
   const tick2 = minds(root).querySelectorAll("input").find((node) => node.getAttribute("value") === "e-Mara");
