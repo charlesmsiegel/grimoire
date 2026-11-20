@@ -17,6 +17,9 @@ DIRECTOR_PURPOSE = "director reply"
 #: The planned purpose of an optional bounded NPC decision (045), and the phase that holds it.
 DECISION_PURPOSE = "npc decision"
 DECISION_PHASE = "select"
+#: The planned purpose of an optional presentation suggestion (068), and the phase that holds it.
+PLANNING_PURPOSE = "presentation suggestion"
+PLANNING_PHASE = "plan"
 
 
 def _texts(values: object, label: str) -> tuple[str, ...]:
@@ -64,7 +67,7 @@ def require_director(campaign_id: str, actor_id: str, controls: tuple[ControlAss
 def plan_generation_turn(campaign_id: str, turn_id: str, *, present: Iterable[str], speakers: Iterable[str],
                          controls: Iterable[ControlAssignment], director_reply: bool = False,
                          policy: InferencePolicy | None = None, phase: str = "main",
-                         decisions: Iterable[str] = ()) -> TurnInferencePlan:
+                         decisions: Iterable[str] = (), planners: Iterable[str] = ()) -> TurnInferencePlan:
     """One planned ``npc_generation`` call per speaking NPC, and at most one optional director reply.
 
     Who is player-controlled is derived from ``controls``: every present actor whose controller is
@@ -76,17 +79,25 @@ def plan_generation_turn(campaign_id: str, turn_id: str, *, present: Iterable[st
     requested, in a ``select`` phase planned before ``phase``. Each must be present and
     director-controlled. A policy without a ``decision`` cap declines them as data, like a director
     reply: the deterministic policy then decides, and the turn costs what it would have without them.
+
+    ``planners`` (068, docs/ACTOR_INFERENCE.md) are speakers for which an optional ``planning`` call
+    (a presentation suggestion) is requested, in a ``plan`` phase after ``select`` and before ``phase``.
+    Each must be a speaker. A policy without a ``planning`` cap declines them as data. An optional
+    phase the policy declines entirely is not planned: its declines are kept with ``phase``'s.
     """
     controls = checked_controls(controls)
     present = _texts(present, "present")
     speakers = _texts(speakers, "speakers")
     deciders = _texts(decisions, "decisions")
+    planning = _texts(planners, "planners")
     if deciders and phase == DECISION_PHASE:
         raise GenerationError("bad_input", f"the generation phase cannot be {DECISION_PHASE!r} when decisions are asked")
+    if planning and phase == PLANNING_PHASE:
+        raise GenerationError("bad_input", f"the generation phase cannot be {PLANNING_PHASE!r} when planning is asked")
     if not isinstance(director_reply, bool):
         raise GenerationError("bad_input", "director_reply must be true or false")
     for ids, reason in ((present, "duplicate_present"), (speakers, "duplicate_speaker"),
-                        (deciders, "duplicate_decision")):
+                        (deciders, "duplicate_decision"), (planning, "duplicate_planner")):
         if len(set(ids)) != len(ids):
             raise GenerationError(reason, f"an actor is listed twice in {ids}")
     owners = {actor_id: controller(campaign_id, actor_id, controls) for actor_id in present}
@@ -102,18 +113,32 @@ def plan_generation_turn(campaign_id: str, turn_id: str, *, present: Iterable[st
             raise GenerationError("absent_decider", f"{decider} is not present this turn")
         # Player sovereignty: a player character's choices are its player's, never a model's.
         require_director(campaign_id, decider, controls)
+    for planner in planning:
+        if planner not in speakers:
+            # A suggestion only ever shapes the planner's own reply this turn.
+            raise GenerationError("planner_not_speaking", f"{planner} does not speak this turn")
     players = [actor_id for actor_id, owner in owners.items() if owner not in (None, DIRECTOR)]
     requests = ((OptionalRequest(InferenceStage.DIRECTOR_GENERATION, None, DIRECTOR_PURPOSE),)
                 if director_reply else ())
-    if not deciders:
+    optional = [(DECISION_PHASE, tuple(OptionalRequest(InferenceStage.DECISION, decider, DECISION_PURPOSE)
+                                       for decider in deciders)),
+                (PLANNING_PHASE, tuple(OptionalRequest(InferenceStage.PLANNING, planner, PLANNING_PURPOSE)
+                                       for planner in planning))]
+    plan: TurnInferencePlan | None = None
+    carried: tuple[OptionalRequest, ...] = ()
+    for name, asked in optional:
+        if not asked:
+            continue
+        trial = (plan_turn(campaign_id, turn_id, present_actor_ids=present, player_controlled_ids=players,
+                           optional_requests=asked, phase=name, policy=policy) if plan is None
+                 else plan.add_phase(name, optional_requests=asked))
+        if not any(call.call_id.phase == name for call in trial.calls):
+            # The policy declined every request: the phase is not planned, its declines kept as data.
+            carried += asked
+            continue
+        plan = trial
+    if plan is None:
         return plan_turn(campaign_id, turn_id, present_actor_ids=present, speaking_npc_ids=speakers,
-                         player_controlled_ids=players, optional_requests=requests, phase=phase, policy=policy)
-    asked = tuple(OptionalRequest(InferenceStage.DECISION, decider, DECISION_PURPOSE) for decider in deciders)
-    select = plan_turn(campaign_id, turn_id, present_actor_ids=present, player_controlled_ids=players,
-                       optional_requests=asked, phase=DECISION_PHASE, policy=policy)
-    if not select.calls:
-        # The mode declined every decision: the plan is the one without decisions, its declines kept as data.
-        return plan_turn(campaign_id, turn_id, present_actor_ids=present, speaking_npc_ids=speakers,
-                         player_controlled_ids=players, optional_requests=asked + requests, phase=phase,
+                         player_controlled_ids=players, optional_requests=carried + requests, phase=phase,
                          policy=policy)
-    return select.add_phase(phase, speaking_npc_ids=speakers, optional_requests=requests)
+    return plan.add_phase(phase, speaking_npc_ids=speakers, optional_requests=carried + requests)
