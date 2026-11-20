@@ -26,7 +26,7 @@ from grimoire.textapi import ApiRefused
 
 #: The hub's ops, served as ``campaign.<op>`` and passed on unchanged.
 HUB_OPS = ("hub", "knowledge", "label", "confirm", "decide", "propose_effect", "endorse_effect", "approve_effect",
-           "recover_effects")
+           "withdraw_effect", "decline_effect", "recover_effects")
 #: The most chats one ``chats`` answer lists (the core ``chats`` op's own largest page).
 MAX_CHATS = 1000
 #: The bindings of a chat that the list names as its cast.

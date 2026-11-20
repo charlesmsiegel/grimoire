@@ -6,7 +6,8 @@ own and writes only through the services that own each record:
 
 - 035's ``SceneRunner``, configured with 029's ``AdjudicationLibrary`` and 040's ``ObstacleLibrary`` on the
   app's own adjudication key, and 021's ``TurnEffectsLibrary`` on the owner's handle: labelling, confirming and
-  deciding an action, proposing an effect, each key on it, and recovering an acceptance cut short;
+  deciding an action, proposing an effect, each key on it, withdrawing or declining it, and recovering an
+  acceptance cut short;
 - nothing else: holdings, items, party, stage, knowledge, relations, accepted events, powers, bindings and
   agendas are only read.
 
@@ -149,7 +150,8 @@ class CampaignApi:
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "hub": self._hub_op, "knowledge": self._knowledge, "label": self._label, "confirm": self._confirm,
             "decide": self._decide, "propose_effect": self._propose, "endorse_effect": self._endorse,
-            "approve_effect": self._approve, "recover_effects": self._recover,
+            "approve_effect": self._approve, "withdraw_effect": self._withdraw, "decline_effect": self._decline,
+            "recover_effects": self._recover,
         }
 
     @property
@@ -460,7 +462,8 @@ class CampaignApi:
         """What can be done from the hub now, each implemented; a disabled one says why. A pause holds every
         step of play (035); recovery of an acceptance cut short is never held by one."""
         found = []
-        for op in ("label", "confirm", "decide", "propose_effect", "endorse_effect", "approve_effect"):
+        for op in ("label", "confirm", "decide", "propose_effect", "endorse_effect", "approve_effect", "withdraw_effect",
+                   "decline_effect"):
             if op == "label" and not self.labelling:
                 found.append({"op": op, "available": False, "reason": "no labelling model is configured for this app"})
             elif paused:
@@ -583,6 +586,23 @@ class CampaignApi:
         audience = self._audience(args)  # read before any write: a malformed request writes nothing
         turn, number = self._turn_number(args)
         effect = self.runner.approve_effect(chat, self.handle, turn, number)
+        return self._after(chat, audience, lambda names: {"effect": effect_view(effect, names)})
+
+    def _withdraw(self, args: Mapping[str, object]) -> dict:
+        """The director withdraws a live effect: it is ended, unaccepted, and its turn may be proposed for again."""
+        chat = parse.chat_of(args)
+        audience = self._audience(args)  # read before any write: a malformed request writes nothing
+        turn, number = self._turn_number(args)
+        effect = self.runner.withdraw_effect(chat, self.handle, turn, number)
+        return self._after(chat, audience, lambda names: {"effect": effect_view(effect, names)})
+
+    def _decline(self, args: Mapping[str, object]) -> dict:
+        """The player refuses the exact effect shown (``fingerprint`` as the hub showed it): it is ended, unaccepted."""
+        chat = parse.chat_of(args)
+        audience = self._audience(args)  # read before any write: a malformed request writes nothing
+        turn, number = self._turn_number(args)
+        fingerprint = parse.field(args, "fingerprint", str)
+        effect = self.runner.decline_effect(chat, self.handle, turn, number, fingerprint)
         return self._after(chat, audience, lambda names: {"effect": effect_view(effect, names)})
 
     def _recover(self, args: Mapping[str, object]) -> dict:

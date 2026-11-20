@@ -14,6 +14,8 @@ It keeps no record of its own. Every write goes through the service that owns th
 | `propose_effect` | The director proposes a turn's effect whole, as structured 021 operations and 023 holdings lines; what an obstacle attempt made due comes first | 035 runner, 021 |
 | `endorse_effect` | The player's own key on the effect exactly as shown (its `fingerprint`) | 035 runner, 021 |
 | `approve_effect` | The director's key; the last key accepts the effect, once | 035 runner, 021 |
+| `withdraw_effect` | The director ends a live effect without accepting it (`refused`, reason `withdrawn`); the turn takes a new proposal | 035 runner |
+| `decline_effect` | The player refuses the effect exactly as shown (its `fingerprint`), key given or not (`refused`, reason `declined`) | 035 runner |
 | `recover_effects` | Settle (or `abort`) acceptances of this chat that were cut short; where 035 needs the player present (an abort of an effect they endorsed, or a completion whose endorsement the authority no longer records), `player_key: true` is the player's own key, given knowingly | 035 runner, 030 |
 | `chats` (app only) | The library's recent chats, grouped by campaign (each with its `title` and `world`, its chats newest first, each chat with its `label`, `last_activity`, `problem` and `cast`: its bound characters and persona), all as the core `chats` op answers them; with `campaign`, that campaign's alone (read only) | none |
 
@@ -36,7 +38,8 @@ Every op takes `chat` (a `ChatRef` string) and an optional `audience`, checked b
 
 Who acts:
 
-- **The table** confirms a labelling and consents to a setback, naming the frame's fingerprint, after a confirmation that says what it decides. It also endorses an effect exactly as shown.
+- **The table** confirms a labelling and consents to a setback, naming the frame's fingerprint, after a confirmation that says what it decides. It also endorses an effect exactly as shown, or **Decline**s it, naming the same fingerprint (on the hub, also where the inbox takes the endorsing: the inbox offers no refusal yet).
+- **Ending a waiting change.** The director's view offers **Withdraw** on each change still waiting on a key; the table's view offers it only on a change the player proposed themselves (`proposed_by: player`; the app's own proposals are the director's). Each button is named for its change ("Withdraw effect 1 of turn 3"), asks first, and then says what it did and moves focus to the change's record under "Turns and effects", which says `withdrawn` or `declined`. An ended change takes no further key, and the turn takes a new proposal.
 - **Either view** asks for a labelling where the app has a labeller. The app enables it only through an explicit `--campaign-config` labeling route (below); without one it is named as unavailable.
 - **The director** decides, and proposes an effect. A proposal names a kept turn (read from the core `open` op) or the open action's turn once it is decided and is written in structured form: 021 operations, plus 023 `add` and `consume` lines. The director then approves it. When the director's key is the last one, the confirmation says the effect becomes world truth.
 - A cut-short acceptance of this chat (035's `effect_unsettled`, `effect_untagged` or `effect_elsewhere`) is shown to both views. Only the director's view settles or undoes it. The player's own key is a separate box they tick, and so is the owner's word that an untagged one was accepted in this library (`own`). One that another device accepted is left to that device. The page then says how many effects were settled.

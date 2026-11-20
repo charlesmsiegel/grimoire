@@ -70,7 +70,7 @@ def test_the_app_serves_every_hub_op_and_lists_chats_by_campaign(desk):
         app = AppApi(device.api)
         assert {"campaign.chats", "campaign.hub", "campaign.knowledge", "campaign.label", "campaign.confirm",
                 "campaign.decide", "campaign.propose_effect", "campaign.endorse_effect", "campaign.approve_effect",
-                "campaign.recover_effects"} <= set(app.ops)
+                "campaign.withdraw_effect", "campaign.decline_effect", "campaign.recover_effects"} <= set(app.ops)
         listed = app.call("campaign.chats", {})
         assert listed["complete"] is True
         by_campaign = {item["campaign"]: [chat["chat"] for chat in item["chats"]] for item in listed["campaigns"]}
@@ -133,6 +133,34 @@ def test_an_effect_is_accepted_through_the_app_with_two_keys_in_two_calls(desk):
         (event,) = director["truth"]["events"]
         assert (event["event"], event["summary"]) == (approved["event"], "Anya pays Mara a coin.")
         assert "truth" not in app.call("campaign.hub", {"chat": str(chat)})
+
+
+def test_a_waiting_change_is_withdrawn_and_declined_through_the_app(desk):
+    folder, chat = desk
+    with Device(folder, [say("Mara pockets it.")]) as device:
+        app = AppApi(device.api)
+        turn = kept_turn(device, chat)
+        names = cast_of(app.call("campaign.hub", {"chat": str(chat)}))
+        anya, mara = names["Anya Rook"], names["Mara Vell"]
+        op = {"kind": "begin", "predicate": "knows", "subject": mara, "object": anya, "agent": anya, "backed_by": turn}
+
+        def propose() -> dict:
+            return app.call("campaign.propose_effect", {"chat": str(chat), "audience": "director", "turn": turn,
+                                                        "summary": "Anya pays Mara a coin.",
+                                                        "operations": [op]})["done"]["effect"]
+        propose()
+        withdrawn = app.call("campaign.withdraw_effect", {"chat": str(chat), "audience": "director", "turn": turn,
+                                                          "number": 1})
+        assert (withdrawn["done"]["effect"]["state"], withdrawn["done"]["effect"]["reason"]) == ("refused", "withdrawn")
+        second = propose()
+        assert refused(app, "campaign.decline_effect", chat=str(chat), turn=turn, number=2,
+                       fingerprint="0" * 64).reason == "fingerprint_mismatch"
+        declined = app.call("campaign.decline_effect", {"chat": str(chat), "turn": turn, "number": 2,
+                                                        "fingerprint": second["fingerprint"]})
+        assert [(item["state"], item["reason"]) for record in declined["hub"]["turns"] for item in record["effects"]] \
+            == [("refused", "withdrawn"), ("refused", "declined")]
+        assert refused(app, "campaign.withdraw_effect", chat=str(chat), turn=turn, number=2).reason == "not_proposed"
+        assert app.call("campaign.hub", {"chat": str(chat), "audience": "director"})["truth"]["events"] == []
 
 
 def test_the_app_names_what_it_cannot_do_and_a_refusal_writes_nothing(desk):

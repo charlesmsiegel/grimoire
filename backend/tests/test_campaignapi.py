@@ -239,6 +239,59 @@ def test_a_stale_or_wrong_key_changes_no_canon(cards):
         assert after == before and after["truth"]["events"] == []  # nothing was written
 
 
+def test_a_waiting_change_is_withdrawn_or_declined_and_the_turn_takes_another(cards):
+    folder, chat = cards
+    with Hub(folder, BRIBE) as hub:
+        turn, _, _ = acting(hub, chat)
+        hub.call("label", chat=str(chat), obstacle="hold")
+        hub.call("confirm", chat=str(chat))
+        first = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        hub.call("approve_effect", chat=str(chat), turn=turn, number=1)
+        hub.refused("invalid_field", "withdraw_effect", chat=str(chat), turn=turn, number="1")
+        hub.refused("invalid_field", "withdraw_effect", chat=str(chat), turn=turn, number=1, audience="everyone")
+        withdrawn = hub.call("withdraw_effect", chat=str(chat), turn=turn, number=1, audience="director")
+        assert (withdrawn["done"]["effect"]["state"], withdrawn["done"]["effect"]["reason"]) == ("refused", "withdrawn")
+        (shown,) = [effect for record in withdrawn["hub"]["turns"] for effect in record["effects"]]
+        assert (shown["state"], shown["reason"]) == ("refused", "withdrawn")
+        hub.refused("not_proposed", "approve_effect", chat=str(chat), turn=turn, number=1)
+        # the player's refusal names the effect as shown, as the endorsement does
+        second = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        assert second["number"] == 2 and second["fingerprint"] != first["fingerprint"]
+        hub.refused("invalid_field", "decline_effect", chat=str(chat), turn=turn, number=2)
+        hub.refused("fingerprint_mismatch", "decline_effect", chat=str(chat), turn=turn, number=2,
+                    fingerprint=first["fingerprint"])
+        declined = hub.call("decline_effect", chat=str(chat), turn=turn, number=2, fingerprint=second["fingerprint"])
+        table = declined["hub"]  # the table's view, which the call asked for
+        assert [(effect["number"], effect["state"], effect["reason"]) for record in table["turns"]
+                for effect in record["effects"]] == [(1, "refused", "withdrawn"), (2, "refused", "declined")]
+        third = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        hub.call("endorse_effect", chat=str(chat), turn=turn, number=3, fingerprint=third["fingerprint"])
+        assert hub.call("approve_effect", chat=str(chat), turn=turn, number=3)["done"]["effect"]["state"] == "accepted"
+    with Hub(folder, labelling=False) as again:  # reopened: the ended effects read back as ended
+        director = again.call("hub", chat=str(chat), audience="director")
+        assert [(effect["state"], effect["reason"]) for record in director["turns"] for effect in record["effects"]] \
+            == [("refused", "withdrawn"), ("refused", "declined"), ("accepted", None)]
+        assert len(director["truth"]["events"]) == 1
+        again.refused("already_accepted", "withdraw_effect", chat=str(chat), turn=turn, number=3)
+
+
+def test_a_paused_chat_ends_no_change_and_says_so(cards):
+    folder, chat = cards
+    with Hub(folder, BRIBE) as hub:
+        turn, _, _ = acting(hub, chat)
+        hub.call("label", chat=str(chat), obstacle="hold")
+        hub.call("confirm", chat=str(chat))
+        effect = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        hub.api.runner.request(chat, hub.api.handle, "pause")
+        actions = {item["op"]: item for item in hub.call("hub", chat=str(chat))["actions"]}
+        for op in ("withdraw_effect", "decline_effect"):
+            assert actions[op] == {"op": op, "available": False, "reason": "play is paused"}
+        hub.refused("paused", "withdraw_effect", chat=str(chat), turn=turn, number=1)
+        hub.refused("paused", "decline_effect", chat=str(chat), turn=turn, number=1, fingerprint=effect["fingerprint"])
+        (shown,) = [item for record in hub.call("hub", chat=str(chat))["turns"] for item in record["effects"]]
+        assert shown["state"] == "proposed"
+
+
 def test_only_the_librarys_owner_has_a_hub(cards):
     folder, chat = cards
     with Hub(folder, labelling=False) as hub:
