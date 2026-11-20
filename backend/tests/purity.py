@@ -201,6 +201,10 @@ PURE_PACKAGES = (
     # Social hypotheses (060) consume actor evidence, never providers or another actor's actual mind.
     PurePackage("grimoire.social_hypotheses", ("grimoire.social_hypotheses", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
+    # Relationships (078): per-holder attitudes grounded in the holder's own 012 evidence; never providers,
+    # graph membership or another actor's mind.
+    PurePackage("grimoire.relationships", ("grimoire.relationships", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Recorded NPC decisions (045): the record of a 039 choice, its evidence and codec, and replay; the
     # ledger is an adapter. It calls no model, so it never touches the inference contracts.
     PurePackage("grimoire.decisions", ("grimoire.decisions", "grimoire.goals", "grimoire.core"),
