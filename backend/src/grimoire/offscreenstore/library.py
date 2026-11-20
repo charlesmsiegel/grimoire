@@ -17,8 +17,16 @@ from grimoire.chats import scope_from_payload
 from grimoire.core.identity import ScopeRef
 from grimoire.institutions import InstitutionState
 from grimoire.offscreen import (
-    OFFSCREEN_KEY, Adopt, FactionPlan, OffscreenError, OffscreenState, Skip, apply, pending_skips,
-    state_from_payload, state_to_payload,
+    OFFSCREEN_KEY,
+    Adopt,
+    FactionPlan,
+    OffscreenError,
+    OffscreenState,
+    Skip,
+    apply,
+    pending_skips,
+    state_from_payload,
+    state_to_payload,
 )
 from grimoire.peersync.pairing import pairing_ended
 from grimoire.store import LibraryStore, ScopeRecord, StaleWrite
@@ -66,7 +74,7 @@ class OffscreenChange:
         library = self.library
         with library.store.lock:
             view = library.read(self.scope)
-            old = None if view.state is None else view.state.receipt(self.receipt.operation.operation_id)
+            old = None if view.state is None else view.state.receipt(self.receipt.operation)
             if old is not None:
                 if old != self.receipt:
                     raise OffscreenError("operation_mismatch", "operation receipt changed since planning")

@@ -27,10 +27,13 @@ view = offscreen.adopt(scope, "adopt-docks", plan, institution=guild_state,
                        expected=offscreen.read(scope).etag).commit()
 ```
 
-Adoption is the authorization boundary. The caller passes the institution's current
-`InstitutionState` (057 has no store yet); adoption refuses unless that institution is the plan's
-group, it recorded a decision with `decision_id`, and that decision's choice is the plan's
-`choice`. An adoption retry rechecks the decision. The plan starts at the calendar's **current**
+Adoption is where a plan's authority is checked, against a caller-owned snapshot. The caller passes
+the institution's current `InstitutionState` (057 has no store yet); adoption refuses unless that
+institution is the plan's group, it recorded a decision with `decision_id`, and that decision's
+choice is the plan's `choice` (`decision_missing`, `decision_mismatch`). One decision authorizes one
+plan (`decision_used`). Like 057's own snapshots, the state is trusted domain input: this library
+cannot prove it came from `decide`, so trusted application code must supply it. An adoption retry
+rechecks the decision. The plan starts at the calendar's **current**
 moment, so each step's due moment is fixed at adoption: start plus the cumulative step minutes.
 Adoption refuses when the calendar is not initialized (`uninitialized`), when an earlier calendar
 advance has not been applied to the plans yet (`pending_skips`), for a duplicate plan id, a missing or
@@ -60,9 +63,10 @@ A skip flags every pending step due at or before the advance's end, each with it
 due order. A plan's step is never flagged twice and is never re-timed to the end of the trip. The
 receipt is `Advanced(operation, before, after, developments, deferred, deadlines)`.
 
-**Relevance is event driven.** A skip reads only adopted plans. A character with no plan, such as a
-distant shopkeeper, is never read, simulated or sent to a model; the scheduler's modules import no
-roster, knowledge, goal, provider or runtime package. Among the plans with a due step, a plan whose
+**Relevance is event driven.** A skip takes only the adopted plans and the calendar, never the
+roster. A character with no plan, such as a distant shopkeeper, is never read, simulated or sent to a
+model; importing `grimoire.offscreen` loads no provider, runtime, generation, inference, goal or
+decision package (`test_offscreen.py` checks this transitively). Among the plans with a due step, a plan whose
 calendar deadline this advance crossed comes first, then higher priority, then plan id. `budget`
 (1–32, part of the skip's identity) is how many plans this skip may advance. The rest are listed in
 `deferred`: their steps stay pending and are flagged by a later skip with their original due moments.
@@ -87,16 +91,19 @@ The `offscreen` extension of `campaigns/<id>/scope.json` (schema `grimoire.offsc
 campaign id, the plans' current moment and the ordered receipt log. Progress is not stored separately:
 reading replays every receipt against the campaign's **current** calendar and refuses any receipt that
 replay does not reproduce (`invalid_history`), including a skip whose calendar advance is no longer in
-the calendar's history. Unknown fields and schemas fail closed; other scope fields and the calendar
+the calendar's history, or a hand edit that contradicts a later receipt. Replay cannot check what no
+receipt has observed yet, such as the duration of a step no skip has reached: that is the user's
+canonical JSON, as authored. Unknown fields and schemas fail closed; other scope fields and the calendar
 extension survive writes, and calendar writes preserve this extension. Replay cannot recheck an
 adoption's institutional decision, because institutions are not persisted; the receipt keeps the
 decision id and choice as provenance.
 
 Planning writes nothing. New operations need the reviewed etag (`StaleWrite` otherwise). An exact
 retry returns the original receipt with `already_applied` and an empty preview; a changed request
-under the same id is refused (`operation_mismatch`). Adoption ids and skip ids share one campaign-local
-namespace and are never evicted, so a full scope record refuses new operations instead of forgetting
-old ids. Native recovery leaves each write wholly before or after; reopen and retry the same id.
+under the same id is refused (`operation_mismatch`). Adoption ids are this package's own and skip ids are
+calendar advance ids, so the two are looked up separately and never shadow each other: an advance
+named like an earlier adoption is still pending and still applies. Neither is ever evicted, so a full
+scope record refuses new operations instead of forgetting old ids. Native recovery leaves each write wholly before or after; reopen and retry the same id.
 
 ## Not in this slice
 

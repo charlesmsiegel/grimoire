@@ -1,10 +1,11 @@
 """Adopt a faction plan, or progress every adopted plan across one explicit calendar advance (076).
 
-The scheduler is event driven: a skip reads only the adopted plans, never the campaign roster, so a
-distant shopkeeper with no plan costs nothing and receives no model call. No model is ever called
+The scheduler is event driven: a skip takes only the adopted plans and the calendar, never the
+campaign roster, so a distant shopkeeper with no plan costs nothing and receives no model call. No model is ever called
 here; relevance is a deterministic rule (a crossed plan deadline first, then priority, then plan id)
 under a caller-chosen budget. A skip is one calendar advance, identified by that advance's own
-operation id, so a retried skip returns its original receipt and time is never counted twice.
+operation id, so a retried skip returns its original receipt and time is never counted twice. Skip
+ids are calendar ids and adoption ids are this package's own; the two never shadow each other.
 """
 from __future__ import annotations
 
@@ -12,11 +13,19 @@ from dataclasses import replace
 
 from grimoire.calendars import Advance as CalendarAdvance
 from grimoire.calendars import CalendarError, CalendarState, Moment
-from grimoire.institutions import InstitutionState
+from grimoire.institutions.model import InstitutionState
 
 from .model import (
-    MAX_PLANS, Adopt, Adopted, Advanced, DeadlineOutcome, Development, OffscreenError, OffscreenState,
-    PlanProgress, Skip,
+    MAX_PLANS,
+    Adopt,
+    Adopted,
+    Advanced,
+    DeadlineOutcome,
+    Development,
+    OffscreenError,
+    OffscreenState,
+    PlanProgress,
+    Skip,
 )
 
 
@@ -41,7 +50,7 @@ def pending_skips(state: OffscreenState | None, calendar: CalendarState) -> tupl
         return ()
     return tuple(r.operation.operation_id for r in calendar.receipts
                  if type(r.operation) is CalendarAdvance and r.after > state.as_of
-                 and state.receipt(r.operation.operation_id) is None)
+                 and state.skip(r.operation.operation_id) is None)
 
 
 def _apply(campaign_id, state, operation, *, calendar, institution, at, replay=False):
@@ -55,7 +64,7 @@ def _apply(campaign_id, state, operation, *, calendar, institution, at, replay=F
         raise OffscreenError("campaign_mismatch", "offscreen state belongs to another campaign")
     if type(operation) not in (Adopt, Skip):
         raise OffscreenError("invalid_field", "unknown offscreen operation")
-    old = None if state is None else state.receipt(operation.operation_id)
+    old = None if state is None else state.receipt(operation)
     if old is not None and old.operation != operation:
         raise OffscreenError("operation_mismatch", "operation id already belongs to a different request")
     if type(operation) is Adopt:
@@ -95,6 +104,9 @@ def _adopt(campaign_id, state, operation, calendar, at, replay):
             raise OffscreenError("pending_skips", "apply the calendar's pending advances first")
         if state.progress(plan.plan_id) is not None:
             raise OffscreenError("duplicate_plan", f"plan {plan.plan_id} is already adopted")
+        if any(p.plan.group == plan.group and p.plan.decision_id == plan.decision_id for p in state.plans):
+            # One leader choice authorizes one course, not parallel copies of it.
+            raise OffscreenError("decision_used", f"decision {plan.decision_id} already authorized a plan")
         if len(state.plans) >= MAX_PLANS:
             raise OffscreenError("limit", f"at most {MAX_PLANS} adopted plans")
     if plan.deadline_id is not None:

@@ -1,18 +1,38 @@
 """A rival's plan progresses while the party travels; nobody else is simulated or told (076)."""
 import ast
+import inspect
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-
-from grimoire.calendars import Duration, Schedule, Deadline
-from grimoire.calendars import Advance as CalendarAdvance
-from grimoire.institutions import Institution, InstitutionState
-from grimoire.offscreen import (
-    Adopt, DeadlineOutcome, Development, OffscreenError, PlanStep, Skip, apply, pending_skips,
-    state_from_payload, state_to_payload,
+from offscreen_fixtures import (
+    DAY,
+    GUILD,
+    LEADER,
+    START,
+    C,
+    calendar,
+    decided_guild,
+    rival_plan,
+    travel,
 )
 
-from offscreen_fixtures import C, DAY, GUILD, LEADER, START, calendar, decided_guild, rival_plan, travel
+from grimoire.calendars import Advance as CalendarAdvance
+from grimoire.calendars import Deadline, Duration, Schedule
+from grimoire.institutions import Institution, InstitutionState
+from grimoire.offscreen import (
+    Adopt,
+    DeadlineOutcome,
+    Development,
+    OffscreenError,
+    PlanStep,
+    Skip,
+    apply,
+    pending_skips,
+    state_from_payload,
+    state_to_payload,
+)
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "grimoire"
 
@@ -67,14 +87,32 @@ def test_retry_returns_the_original_receipt_and_never_counts_time_twice():
     assert already and same is receipt and again is state
     with pytest.raises(OffscreenError, match="operation_mismatch"):
         apply(C, state, Skip("travel", 2), calendar=cal)
-    with pytest.raises(OffscreenError, match="operation_mismatch"):
-        apply(C, state, Adopt("travel", rival_plan(plan_id="other")), calendar=cal, institution=decided_guild())
     # An adoption retry rechecks the decision; a receipt lookup is not an authority bypass.
     first = adopted()
     assert apply(C, first, Adopt("adopt-docks", rival_plan()), calendar=calendar(),
                  institution=decided_guild())[2]
     with pytest.raises(OffscreenError, match="decision_missing"):
         apply(C, first, Adopt("adopt-docks", rival_plan()), calendar=calendar(), institution=None)
+
+
+def test_an_adoption_id_never_shadows_a_later_calendar_advance_of_the_same_name():
+    state = adopted(operation_id="day-2")
+    cal = calendar(travel("day-2", 20))
+    assert pending_skips(state, cal) == ("day-2",)
+    state, receipt, again = apply(C, state, Skip("day-2", 4), calendar=cal)
+    assert not again and len(receipt.developments) == 2 and pending_skips(state, cal) == ()
+    assert state.adoption("day-2").operation.plan.plan_id == "docks" and state.skip("day-2") is receipt
+    assert state_from_payload(C, state_to_payload(state), cal) == state
+    # Each kind still retries, and still refuses a changed request, within its own namespace.
+    assert apply(C, state, Skip("day-2", 4), calendar=cal)[2]
+    with pytest.raises(OffscreenError, match="operation_mismatch"):
+        apply(C, state, Adopt("day-2", rival_plan(plan_id="other")), calendar=cal, institution=decided_guild())
+
+
+def test_one_decision_authorizes_one_plan():
+    with pytest.raises(OffscreenError, match="decision_used"):
+        apply(C, adopted(), Adopt("again", rival_plan(plan_id="docks-again", decision_id="seize-docks")), calendar=calendar(),
+              institution=decided_guild())
 
 
 def test_skips_apply_in_calendar_order_and_only_for_real_advances():
@@ -220,16 +258,24 @@ def test_replay_accepts_later_unapplied_advances_and_later_adoptions():
     assert pending_skips(state, longer) == ("b",)
 
 
-def test_scheduler_reads_no_roster_and_calls_no_model():
-    """The shopkeeper costs nothing: the scheduler cannot even see the roster or a provider."""
-    forbidden = ("grimoire.providers", "grimoire.runtime", "grimoire.generation", "grimoire.core.roster",
-                 "grimoire.core.perspective", "grimoire.core.knowledge", "grimoire.decisions", "grimoire.goals")
+def test_scheduler_takes_no_roster_and_calls_no_model():
+    """The shopkeeper costs nothing: a skip takes no roster, and the package loads no model code."""
+    direct = ("grimoire.providers", "grimoire.runtime", "grimoire.generation", "grimoire.core.roster",
+              "grimoire.core.perspective", "grimoire.decisions", "grimoire.goals")
     for path in (SRC / "offscreen").glob("*.py"):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             names = ([a.name for a in node.names] if isinstance(node, ast.Import)
                      else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
             for name in names:
-                assert not name.startswith(forbidden), f"{path.name} imports {name}"
+                assert not name.startswith(direct), f"{path.name} imports {name}"
+    # Transitively too: importing the scheduler pulls in no provider, runtime or inference module.
+    probe = ("import sys, grimoire.offscreen; print('\\n'.join(sorted(m for m in sys.modules "
+             "if m.startswith(('grimoire.providers', 'grimoire.runtime', 'grimoire.generation', "
+             "'grimoire.actor_inference', 'grimoire.ensemble', 'grimoire.decisions', 'grimoire.goals', "
+             "'grimoire.core.inference')))))")
+    loaded = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True).stdout
+    assert loaded.strip() == ""
+    assert "roster" not in inspect.signature(apply).parameters
     # Adding a deadline that only an unrelated character cares about changes nothing for the guild.
     cal = calendar(Schedule("shop", Deadline("shop-restock", START.advance(3 * DAY), "Shop restock")), travel())
     _, receipt, _ = apply(C, adopted(cal=calendar(Schedule("shop", Deadline("shop-restock", START.advance(3 * DAY),

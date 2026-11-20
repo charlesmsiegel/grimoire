@@ -1,8 +1,10 @@
 """Strict readable offscreen authority: the receipt log is stored, and replay proves it (076).
 
 The stored extension holds only operations and their receipts. Reading replays each one against the
-campaign's current calendar and refuses any receipt that replay does not reproduce, so a hand edit or
-a replaced calendar history fails closed instead of silently moving a faction's plan.
+campaign's current calendar and refuses any receipt that replay does not reproduce, so a replaced
+calendar history, or a hand edit that contradicts a later receipt, fails closed. Replay cannot check
+what no later receipt observed: an adoption's decision provenance (institutions are not stored yet),
+or a step that no skip has reached. Those are the user's canonical JSON, as authored.
 """
 from __future__ import annotations
 
@@ -12,8 +14,16 @@ from grimoire.calendars import CalendarError, CalendarState, Moment
 from grimoire.core.identity import InstanceRef
 
 from .model import (
-    Adopt, Adopted, Advanced, DeadlineOutcome, Development, FactionPlan, OffscreenError, OffscreenState,
-    PlanStep, Skip,
+    Adopt,
+    Adopted,
+    Advanced,
+    DeadlineOutcome,
+    Development,
+    FactionPlan,
+    OffscreenError,
+    OffscreenState,
+    PlanStep,
+    Skip,
 )
 from .schedule import _apply
 

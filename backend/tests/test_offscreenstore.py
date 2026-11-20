@@ -2,6 +2,9 @@
 import json
 
 import pytest
+from calendar_fixtures import OLD, OTHER, SCOPE, initialized, seed_calendar_scope
+from offscreen_fixtures import DAY, decided_guild, rival_plan
+from store_helpers import drop_empty_dirs, owner_handle
 
 from grimoire.calendars import CalendarError, Duration
 from grimoire.calendarstore import CalendarLibrary
@@ -9,11 +12,14 @@ from grimoire.offscreen import Development, OffscreenError
 from grimoire.offscreenstore import OffscreenLibrary
 from grimoire.store import LibraryStore, ProcessLocker, StaleWrite
 from grimoire.store.layout import address_parts
-from grimoire.testing import CrashScenario, Invariant, explore_crashes, idempotent_recovery, no_residue, untouched
-
-from calendar_fixtures import OLD, OTHER, SCOPE, initialized, seed_calendar_scope
-from offscreen_fixtures import DAY, decided_guild, rival_plan
-from store_helpers import drop_empty_dirs, owner_handle
+from grimoire.testing import (
+    CrashScenario,
+    Invariant,
+    explore_crashes,
+    idempotent_recovery,
+    no_residue,
+    untouched,
+)
 
 PATH = "lib/campaigns/saltmarch/scope.json"
 
@@ -141,3 +147,15 @@ def test_offscreen_skip_survives_native_crashes_and_io_errors(tmp_path):
     report = explore_crashes(scenario, tmp_path, torn=False, errors=True)
     report.assert_ok()
     assert report.points_explored > 0
+
+
+def test_a_calendar_advance_named_like_an_adoption_is_still_pending_and_applies(table):
+    clock = initialized(table)
+    offscreen = OffscreenLibrary(table, owner_handle())
+    offscreen.adopt(SCOPE, "day-2", rival_plan(deadline_id=None), institution=decided_guild(),
+                    expected=offscreen.read(SCOPE).etag).commit()
+    clock.advance(SCOPE, "day-2", Duration(20 * DAY), expected=clock.read(SCOPE).etag).commit()
+    view = offscreen.read(SCOPE)
+    assert view.pending == ("day-2",)
+    view = offscreen.advance(SCOPE, "day-2", budget=1, expected=view.etag).commit()
+    assert view.pending == () and view.state.progress("docks").completed == 2

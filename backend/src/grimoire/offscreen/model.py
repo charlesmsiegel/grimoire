@@ -224,8 +224,21 @@ class OffscreenState:
     plans: tuple[PlanProgress, ...]
     receipts: tuple[Receipt, ...]
 
-    def receipt(self, operation_id: str) -> Receipt | None:
-        return next((r for r in self.receipts if r.operation.operation_id == operation_id), None)
+    def adoption(self, operation_id: str) -> Adopted | None:
+        return next((r for r in self.receipts if type(r) is Adopted and r.operation.operation_id == operation_id), None)
+
+    def skip(self, operation_id: str) -> Advanced | None:
+        """The receipt of a calendar advance's skip. Skip ids are calendar ids, a namespace of their own."""
+        return next((r for r in self.receipts if type(r) is Advanced and r.operation.operation_id == operation_id),
+                    None)
+
+    def receipt(self, operation: Adopt | Skip) -> Receipt | None:
+        """The retained receipt for an operation's id, looked up among receipts of its own kind."""
+        if type(operation) is Adopt:
+            return self.adoption(operation.operation_id)
+        if type(operation) is Skip:
+            return self.skip(operation.operation_id)
+        return None
 
     def progress(self, plan_id: str) -> PlanProgress | None:
         return next((p for p in self.plans if p.plan.plan_id == plan_id), None)
