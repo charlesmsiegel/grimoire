@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the rows to **80/119**, and the Wave 9 073, 074, 077, 079, 082, 083, 084, 085, 086 and 087 proofs to **90/119**. With Wave 2, **5/12 scoped waves** (1, 2, 3, 4, 5) are complete. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the rows to **80/119**, and the Wave 9 073, 074, 077, 078, 079, 082, 083, 084, 085, 086 and 087 proofs to **91/119**. With Wave 2, **5/12 scoped waves** (1, 2, 3, 4, 5) are complete. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 12/16 | ☐ | 073, 074, 075, 076, 077, 079, 082, 083, 084, 085, 086 and 087 meet their bounded first slices; the other domain slices and UI exit 116 are not complete. |
+| [9](#wave-9) | 13/16 | ☐ | 073, 074, 075, 076, 077, 078, 079, 082, 083, 084, 085, 086 and 087 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-073 (a hypothetical NPC reply), 074 (downtime), 075 (recorded rolls), 076 (offscreen plan steps), 077 (a cited commitment ledger), 079 (source upgrade previews), 082 (read-only world audits), 083 (cast voices reading accepted text), 084 (reviewed transcript transfer), 085 (draft context preview), 086 (validated module authoring with pinned revisions) and 087 (world authoring proposals accepted in part) meet their first slices; the other domain slices and UI exit 116 are not complete.
+073 (a hypothetical NPC reply), 074 (downtime), 075 (recorded rolls), 076 (offscreen plan steps), 077 (a cited commitment ledger), 078 (private attitudes from each holder's own evidence), 079 (source upgrade previews), 082 (read-only world audits), 083 (cast voices reading accepted text), 084 (reviewed transcript transfer), 085 (draft context preview), 086 (validated module authoring with pinned revisions) and 087 (world authoring proposals accepted in part) meet their first slices; the other domain slices and UI exit 116 are not complete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -714,9 +714,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-078"></a>
 ### 078 — Relationships And Reputation
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/relationships-and-reputation.md)).
-- Evidence: graph relations and actor-specific evidence implement relationships and knowledge scoping foundations.
-- Scope / gap: No asymmetric trust/reputation updates with episode provenance and absent-NPC social knowledge proof.
+- [x] Scheduled first-useful slice ([requirements](sprints/relationships-and-reputation.md)).
+- Evidence: [`relationships/policy.py`](../../backend/src/grimoire/relationships/policy.py) admits a director-authored NPC attitude (trust, affection, fear, rivalry, resentment or debt toward one actor or group, a narrative account and an optional degree) only from the holder's own confirmed evidence or beliefs at that moment, at least one of which overtly concerns the target; perceptions, participation, membership and other actors' evidence never count. [`test_relationships.py`](../../backend/tests/test_relationships.py) runs the proving scenario: an insulted envoy resents and distrusts the newcomer, a dockhand who overheard likes them, two absent guild members hold nothing, and one comes to resent them only after the envoy's letter arrives; admission writes no knowledge. Groups hold no attitudes, a player taking an NPC over does not inherit its attitudes as their own, and supersession history, idempotent retries, future-dated changes, authority refusals and bounds are covered. See [contract](../RELATIONSHIPS.md).
+- Scope / gap: Authored, in-memory per-holder attitudes only: no community reputation with uncertainty (milestone 3), change of allegiance, persistence, brief/goal consumption, narrator proposals or UI. No provider calls.
 
 <a id="slice-079"></a>
 ### 079 — Source Upgrades And Dependencies
