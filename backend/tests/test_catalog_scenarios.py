@@ -1,26 +1,29 @@
 """056 acceptance: three synthetic worlds and quick chats reuse authored references only."""
 from dataclasses import replace
 
+import pytest
+
 from chat_fixtures import Clock, Ids
 import context_fixtures as lore
 from portrayal_fixtures import (
     BASE, CAST, MODERN, MODERN_MARA, VAMPIRE, VAMPIRE_MARA, MECHA, MECHA_MARA,
-    NAMESAKE, base, envelope, manifest, seed_four_portrayals,
+    NAMESAKE, base, derived, derives, envelope, manifest, seed_four_portrayals,
 )
 from store_helpers import OWNER, owner_handle
 
-from grimoire.catalogs import Catalog, compose_catalogs, publish_catalog
+from grimoire.catalogs import Catalog, CatalogError, compose_catalogs, publish_catalog
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
 from grimoire.context import Budget, pack_actor_context
 from grimoire.contextstore import stored_record
-from grimoire.core.entity import EntityDefinition
-from grimoire.core.facets import FacetSet, Physical
-from grimoire.core.identity import SourceRef, TranscriptRef
+from grimoire.core.entity import EntityDefinition, EntityInstance
+from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_to_payload
+from grimoire.core.facets import Biological, FacetSet, Physical
+from grimoire.core.identity import InstanceRef, ScopeRef, SourceRef, TranscriptRef
 from grimoire.core.knowledge import Knowledge
 from grimoire.core.snapshot import SelectedSource
 from grimoire.effective import chat_snapshot, selection_snapshot
-from grimoire.store import LibraryStore, RecordEnvelope, ScopeRecord
+from grimoire.store import LibraryStore, LinkSpec, RecordEnvelope, ScopeRecord
 from grimoire.transcripts import TRANSCRIPT_SCHEMA, Post, Speaker, TranscriptPage, Variant, page_from_payload, page_to_payload
 from grimoire.testing.fileops import snapshot as files_of
 
@@ -153,3 +156,144 @@ def test_thousands_of_available_records_do_not_expand_real_context(tmp_path):
         after = pack()
         assert after == before
         assert 'UNRELATED-CATALOG-TOKEN' not in after.render()
+
+
+# -- the inherited proving scenario: one shared bestiary, two settings ----------------------------------
+
+HERD = 'catalog:shared-bestiary'
+BEASTS = SourceRef(HERD, 'catalog', 'beasts', 'r1')
+WYRM = SourceRef(HERD, 'creature', 'river-wyrm', 'r1')
+HOUND = SourceRef(HERD, 'creature', 'frost-hound', 'r1')
+CRYPT_WYRM = SourceRef(VAMPIRE, 'creature', 'river-wyrm', 'r1')
+CREATORS = 'catalog:creator-cards'
+CARD_SET = SourceRef(CREATORS, 'catalog', 'set', 'r1')
+GUIDE = SourceRef(CREATORS, 'character', 'ferry-guide', 'r1')
+CREATOR_LORE = SourceRef(CREATORS, 'lorebook', 'crossings', 'r1')
+UNRELATED_CARDS = tuple(SourceRef(CREATORS, 'lorebook', f'card-{i}', 'r1') for i in range(2000))
+SETTINGS = {MODERN: 'c-modern', VAMPIRE: 'c-vampire'}
+WYRM_SECTIONS = {'habitat': 'Slow rivers and ferry crossings.', 'threat': 'Capsizes small boats at dusk.',
+                 'lore': 'Bells drive it under.'}
+
+
+def river_lore(entry_id, text):
+    """A lorebook whose one entry the shared scene text triggers, so binding it would visibly reach a pack."""
+    return {'entries': [lore.entry(entry_id, text, 'river', 'fog')]}
+
+
+def bestiary_catalog(world):
+    return SourceRef(world, 'catalog', 'bestiary', 'r1')
+
+
+def setup_bestiary(store):
+    """A shared bestiary pack used by two settings; Vampire specializes the wyrm and Modern drops the hound."""
+    seed_four_portrayals(store, owner_handle())
+    tx = store.transaction()
+    tx.put(manifest(HERD), None)
+    tx.put(manifest(CREATORS), None)
+    tx.put(envelope(EntityDefinition(WYRM, 'River wyrm', 'template', FacetSet([Physical(), Biological()]),
+                                     'A long grey beast under slow water.', {'sections': WYRM_SECTIONS})), None)
+    tx.put(envelope(EntityDefinition(HOUND, 'Frost hound', 'template', FacetSet([Physical(), Biological()]))), None)
+    tx.put(envelope(EntityDefinition(GUIDE, 'Ferry guide', 'individual', FacetSet([Physical()]),
+                                     'Knows every crossing.')), None)
+    tx.put(RecordEnvelope(CREATOR_LORE, river_lore('crossings', 'CREATOR-LORE-TOKEN the north crossing floods.'),
+                          name='Crossings', extra={'schema': lore.LORE_SCHEMA}), None)
+    for ref in UNRELATED_CARDS:  # lore this very scene text would trigger if any of it were bound
+        tx.put(RecordEnvelope(ref, river_lore(ref.entity_id, 'UNRELATED-CARD-TOKEN a stranger crossing.'),
+                              name='Unrelated card', extra={'schema': lore.LORE_SCHEMA}), None)
+    tx.put(envelope(derived(CRYPT_WYRM, WYRM, name='River wyrm', nature='template',
+                            sections={'habitat': 'The flooded crypts under the old ferry.'})), None)
+    vampire = store.read_source(VAMPIRE)
+    link = derives(CRYPT_WYRM, WYRM)
+    tx.put(replace(vampire.manifest, links=(*vampire.manifest.links,
+                                            LinkSpec(link.subject, link.relation, link.object))), vampire.etag)
+    for world, campaign in SETTINGS.items():
+        played = CRYPT_WYRM if world == VAMPIRE else WYRM
+        actor = InstanceRef(campaign, 'creature', 'wyrm-1')
+        tx.put(RecordEnvelope(actor, instance_to_payload(EntityInstance(actor, source=played)), owner=OWNER,
+                              extra={'schema': ENTITY_SCHEMA}), None)
+    tx.commit(owner_handle())
+    publish(store, Catalog(BEASTS, (WYRM, HOUND)))
+    publish(store, Catalog(CARD_SET, (GUIDE, CREATOR_LORE, *UNRELATED_CARDS)))
+    publish(store, Catalog(bestiary_catalog(MODERN), (), (BEASTS,), (HOUND.unpinned(),)))
+    publish(store, Catalog(bestiary_catalog(VAMPIRE), (CRYPT_WYRM,), (BEASTS,)))
+
+
+def test_one_shared_bestiary_supports_two_settings_without_importing_a_card_set(tmp_path):
+    """Sprint 056's proving scenario: one pinned shared creature in two settings (one specialized), and a
+    campaign that opts into a 2,002-record creator card set packs none of its unselected cards into a turn."""
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        setup_bestiary(store)
+        chats = ChatLibrary(store, owner_handle(), clock=Clock(), new_id=Ids(), owner=OWNER)
+        shared_etag = store.load().index.resolve(WYRM).etag
+        started = {}
+        for world, campaign in SETTINGS.items():
+            roots = (bestiary_catalog(world), CARD_SET) if world == MODERN else (bestiary_catalog(world),)
+            available = compose_catalogs(store.load(), roots)
+            entries = {entry.ref: entry for entry in available.entries}
+            # The very same pinned creature, read from the one shared file, is available in both settings.
+            assert [origin.ref for origin in entries[WYRM].origins] == [BEASTS]
+            assert (HOUND in entries) == (world == VAMPIRE)
+            assert (CRYPT_WYRM in entries) == (world == VAMPIRE)
+            assert (GUIDE in entries) == (CREATOR_LORE in entries) == (world == MODERN)
+            # Modern opts into the whole populated creator set; discovery over it stays bounded.
+            assert len(entries) == (2003 if world == MODERN else 3)
+            assert len(available.search('card', limit=10)) == (10 if world == MODERN else 0)
+            played = CRYPT_WYRM if world == VAMPIRE else WYRM
+            wanted = (SelectedSource(played, 'actor'),)
+            if world == MODERN:
+                wanted += (SelectedSource(GUIDE, 'character'), SelectedSource(CREATOR_LORE, 'lorebook'))
+            selected = available.select(wanted, world=world)
+            # Discovery honours each setting's availability: no hound in Modern, no creator card in Vampire.
+            # (Availability is not access control; the chat binds only what was explicitly selected.)
+            refused = HOUND if world == MODERN else GUIDE
+            with pytest.raises(CatalogError) as error:
+                available.select((SelectedSource(refused, 'actor' if refused == HOUND else 'character'),))
+            assert error.value.reason == 'not_available'
+            actor = InstanceRef(campaign, 'creature', 'wyrm-1')
+            change = chats.start_chat(Launch('premise', premise='Fog on the river.'), scope=ScopeRef(campaign),
+                                      actors=[(played, actor)],
+                                      attach=[(s.ref, s.role) for s in selected.sources if s.role != 'actor'])
+            commit = change.commit()
+            scope = commit.scope
+            chats.attach_world(scope, world, expected=chats.read_scope(scope)[1]).commit()
+            started[world] = (commit.chat, actor)
+        knowledge = {world: Knowledge(campaign) for world, campaign in SETTINGS.items()}
+
+        def packs():
+            found = {}
+            for world, (chat, actor) in started.items():
+                captured = chat_snapshot(store.load(), chat)
+                assert captured.scope.world.source == world and not captured.problems
+                found[world] = (captured, pack_actor_context(
+                    captured.snapshot, knowledge[world], actor, as_of=1, budget=Budget(400),
+                    scene_text='Fog on the river.', readers=lore.READERS, unpack=stored_record))
+            return found
+
+        bound = {VAMPIRE: {CRYPT_WYRM}, MODERN: {WYRM, GUIDE, CREATOR_LORE}}
+        before = packs()
+        for world, (captured, pack) in before.items():
+            assert {r.resolved for r in captured.snapshot.sources()} == bound[world]
+            # Positive control: the one selected creator lorebook reaches the opted-in campaign's turn, while
+            # none of the 2,000 unselected lorebooks in the same set does, though this scene would trigger them.
+            assert ('CREATOR-LORE-TOKEN' in pack.render()) == (world == MODERN)
+            assert {item.origin.source for item in pack.lane('lore')} == ({CREATOR_LORE} if world == MODERN else set())
+            assert 'UNRELATED-CARD-TOKEN' not in pack.render()
+            sections = {item.origin.name: item for item in pack.lane('portrayal') if item.origin.kind == 'section'}
+            assert sections['threat'].origin.source == WYRM and sections['lore'].origin.source == WYRM
+            habitat = sections['habitat']
+            if world == VAMPIRE:  # a setting-specific specialization that inherits the rest of the shared card
+                assert habitat.origin.source == CRYPT_WYRM and 'flooded crypts' in habitat.line
+                chain = captured.snapshot.effective(CRYPT_WYRM, 'actor').chain
+                assert chain[-1].ref == WYRM and chain[-1].etag == shared_etag
+            else:
+                assert habitat.origin.source == WYRM and 'Slow rivers' in habitat.line
+            assert 'A long grey beast under slow water.' in pack.render()
+        # Neither setting copied the shared creature; its one canonical file is the shared pack's.
+        holders = [path for path, data in files_of(store.root).items() if data and b'Capsizes small boats' in data]
+        assert len(holders) == 1 and 'shared-bestiary' in str(holders[0])
+
+        # A later turn rereads the same bindings and packs the same context.
+        for world, (captured, pack) in packs().items():
+            assert {r.resolved for r in captured.snapshot.sources()} == bound[world]
+            assert pack == before[world][1]
+        assert store.load().index.resolve(WYRM).etag == shared_etag

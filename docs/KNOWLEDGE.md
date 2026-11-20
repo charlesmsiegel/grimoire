@@ -94,7 +94,7 @@ Every projection names its perspective and takes a keyword `as_of` (a non-negati
 
 - **`actor_knowledge(knowledge, actor, *, as_of)`** returns an `ActorKnowledge` with these buckets:
   - `evidence`: the actor's own **confirmed** evidence, giving content (the percept, or the reported proposition's text), channel, moment, and the reported proposition and apparent author for reports;
-  - `sent`: addressed reports the actor sent, from `sent_at`, with no receipt time or confirmation, so delivery and loss look alike;
+  - `sent`: addressed reports the actor sent, from `sent_at`, with no receipt time or confirmation, so delivery and loss look alike. A report appended only on delivery would still change the sender's view the moment it arrives, so `Knowledge.dispatches` (`Dispatch(campaign_id, evidence_id, sender, recipient, proposition_id, channel, sent_at)`, never persisted here) lists sends from a queue beside the ledger: each shows from its `sent_at` whether or not its report exists, and a delivered report it names shows only through it (`dispatch_mismatch` unless the report agrees on sender, recipient, proposition, channel and `sent_at`). `dispatches=None` means the queue cannot be vouched for, and then no sends are shown at all. 063 supplies them ([RUMORS](RUMORS.md));
   - `current` and `history`: the actor's own beliefs, without authorship. Superseded beliefs stay as history the actor can recall;
   - `inherited` and `inherited_history`: `None` here (not computed).
 
