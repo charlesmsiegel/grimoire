@@ -1,8 +1,11 @@
 # Private speech boundary and synthetic safety tests
 
 `grimoire.speech` implements the headless first-useful boundaries for 061 and
-067. It does **not** implement microphone capture, acoustic recognition,
-playback, or live voice roleplay. `grimoire.voice` continues to own written
+067, and 061's optional local recognizer with its measurements. The app's Voice
+page (settings) records from the microphone and recognizes on the device; see
+[Local recognizer and the Voice page](#local-recognizer-and-the-voice-page-061).
+It does **not** implement speech synthesis, playback, streaming recognition or
+live voice roleplay. `grimoire.voice` continues to own written
 characterization. Existing `intent` values remain unexecuted hypotheses.
 
 ## Explicit routing and truthful fallback
@@ -11,8 +14,9 @@ characterization. Existing `intent` values remain unexecuted hypotheses.
 `local_only`, or `provider`, each naming a backend explicitly. Recording is
 off by default. `describe("stt")` / `describe("tts")` disclose status, audio
 versus text input, network use, locality, backend retention, billing and text
-fallback. The only shipped backend, `unsupported`, reports unavailable for
-both features and never runs recognition or synthesis. Missing engines,
+fallback. The always-present backend, `unsupported`, reports unavailable for
+both features and never runs recognition or synthesis. The optional
+`pocketsphinx` backend (below) is STT only. Missing engines,
 missing features and device-resource unavailability are unavailable states,
 not a reason to switch to a remote service.
 
@@ -42,8 +46,8 @@ and then purges session-owned artifacts. This is not cancellation of a hung
 adapter. Exceptions become payload-free `backend_failed`, without logging the
 provider message, retrying, or changing routing. Malformed/oversized output is
 `invalid_output`. Audio is bounded to 4 MiB, text to 16,384 characters and
-recognition alternatives to eight bounded strings. Real device budgets and
-acoustic latency remain unmeasured.
+recognition alternatives to eight bounded strings. Measured acoustic cost is
+reported by the local recognizer (below); a phone's budget is still unmeasured.
 
 ## Retention, deletion and retries
 
@@ -236,3 +240,98 @@ real microphone and speakers in a real room, hands-free campaign play with the
 voice strip and alternative inputs (switch, keyboard only), and accessibility-user
 testing. 061's product backend must also pass `evaluate_audio`. No persisted
 schema or migration changes are introduced.
+
+## Local recognizer and the Voice page (061)
+
+`grimoire.speech.sphinx.PocketSphinxBackend` is a trusted local STT adapter over
+[CMU PocketSphinx](https://github.com/cmusphinx/pocketsphinx), free and offline,
+with its bundled US English model. It is **optional**: `pip install -e
+"./backend[voice]"` (or `pip install pocketsphinx`). Without it the backend
+declares itself unavailable and nothing else is tried. It declares local
+execution, no network and no input retention; recognition runs in the app's own
+process, writes no file and opens no socket, and the engine's log is set to
+`FATAL` so what it heard never reaches a log or crash trace. It takes a WAV
+recording, 16-bit mono at 16 000 Hz, up to a recording limit the person sets
+(1 to 60 seconds, default 15); anything else is refused before recognition. A
+recording below about -50 dBFS is silence and yields an empty transcript without
+running the engine (it otherwise "hears" a word in pure silence). The model loads
+on first use, its load time and the resident memory it added (where the system
+reports resident memory: Linux, Android) are measured, as is each recognition's
+time and real-time factor; `unload` frees it. `phrases=` restricts recognition to
+a command vocabulary (a JSGF grammar); without it, recognition is open dictation.
+
+### The Voice page and `voice.*` ops
+
+The `voice` adapter (owner 061) keeps one `SpeechSession` per open library, in
+memory only: every launch starts with voice off, the microphone off and nothing
+kept. Settings (Voice) offers speech input **Off** or **On this device only**;
+there is no online option, and `voice.configure` refuses any other mode. The
+page shows the route's disclosure (runs on this device, no network, keeps no
+audio, free), a separate microphone switch (off by default), what may be kept for
+this launch (only the last transcript: recordings are never kept), what is kept now and a
+**Delete voice data now** button, and this device's measured cost with a
+recording-limit choice and **Free the recognizer's memory**. Turning voice off
+also frees it.
+
+Record opens the microphone only while recording (every track stopped and the
+audio context closed on Stop, at the limit by the recorder itself, on a change of
+settings, on delete or unload, or when the page is left). A Stop before any sound
+sends nothing. The page resamples to 16 kHz, encodes WAV and sends it to `voice.transcribe` on the
+app's loopback server, which never leaves the device. The capture token and
+sequence are latched when recording starts, so a recording made before a change
+of settings is dropped as `stale_capture`. The transcript is shown as text with a
+Copy button; **nothing is posted**: speaking into a chat, speech output and hands-free
+play are shown as not available yet. With the microphone or voice off, typed play
+is exactly as before. 067's chat voice strip and read-aloud (`speech.*`, above)
+still start on the `unsupported` backend: installing this backend there, and
+running it through `evaluate_audio`, is the next step.
+
+| Op | Arguments | Answer |
+|---|---|---|
+| `voice.status` | none | `stt`/`tts` disclosures, `mode`, `recording`, `retain`, `kept`, `backends` (with `max_seconds` and `measurements`), `selected`, `capture_token` and `next_sequence` (only while ready), `limits`, `keepable` |
+| `voice.configure` | any of `mode` (`off`, `local_only`), `backend`, `recording`, `retain` (`provisional_transcript` only), `max_seconds` (1-60) | the new status; every change forgets what was kept and rotates the capture token |
+| `voice.transcribe` | `sequence`, `capture_token`, `audio` (base64 WAV) | `status` (`ok` with `text` and `confidence`, or why not), `next_sequence`, `measurements`, `kept`; `invalid_audio`/`too_long` are 400 refusals; when not ready the recognizer is not touched |
+| `voice.delete` | none | the new status, `kept` empty |
+| `voice.unload` | none | the new status, the recognizer unloaded |
+
+The voice ops touch no library state, so they run **without** the library's
+writer lock (`Adapter.unlocked`, `TextApi.unlocked`; refusals are mapped exactly
+as for any op): a recognition, however long, never holds up typed play. The
+adapter's own lock serializes the voice ops among themselves. A malformed WAV of
+any kind is an `invalid_audio` refusal, and after each recognition the engine's
+own last hypothesis is cleared, so delete leaves no transcript in the recognizer.
+
+### Measuring a device
+
+```sh
+python -m grimoire.speech.measure            # synthetic Flite speech, open dictation
+python -m grimoire.speech.measure --grammar  # the same phrases as a command vocabulary
+python -m grimoire.speech.measure --wav me.wav="open the door" --rows
+```
+
+It reports model load time, the memory the first load in the process added (a
+reload after unloading reuses memory the process kept, so the page keeps showing
+the first figure), the process's peak
+memory, latency p50/p95/max, real-time factor, word error rate, exact matches and
+the Python-level network connections attempted while it ran (refused and
+counted; the tool fails if any is attempted). That guard sees Python sockets only,
+not native code, so CI also runs the acoustic tests and the measurement in a
+process with no network at all (`unshare -n`): there the engine still works,
+which shows it needs none, against a desktop budget of 10 s load, real-time
+factor 1 and 512 MiB peak. The default corpus is eight phrases spoken by four
+`ffmpeg` Flite voices, synthesized at run time: computer speech, not a person or
+a microphone. One run in a Linux x86-64 cloud development container (Python 3.13,
+pocketsphinx 5.1.1), 32 recordings:
+
+| Mode | Load | Memory added | Peak | Latency p50 / p95 | Real-time factor (max) | Word error rate | Exact | Network |
+|---|---|---|---|---|---|---|---|---|
+| dictation | 0.33 s | 91 MiB | 118 MiB | 0.25 s / 0.70 s | 0.47 | 42% | 16/32 | 0 |
+| grammar | 0.35 s | 91 MiB | 112 MiB | 0.015 s / 0.027 s | 0.015 | 2.3% | 30/32 | 0 |
+
+So on that machine the engine is well within budget, open dictation of synthetic
+speech is poor and a command vocabulary is reliable. These are not phone numbers
+and say nothing of real voices, accents or rooms. The acoustic tests
+(`test_speech_local.py`, the last test of `test_app_voice.py`) run where
+pocketsphinx and an `ffmpeg` with Flite are installed, as in CI's `local voice`
+job, and are skipped elsewhere.
+

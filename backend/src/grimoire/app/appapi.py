@@ -71,7 +71,10 @@ class AppApi:
                     raise
                 raise ApiRefused(reason, str(error)) from None
 
-        result = self.api.serialized(run, args)
+        if op.partition(".")[2] in adapter.unlocked:
+            result = self.api.unlocked(run, args)  # an op that touches no library state (Adapter.unlocked)
+        else:
+            result = self.api.serialized(run, args)
         _check_answer(op, result)
         return result
 

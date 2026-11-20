@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "voice",
+  "route": "voice",
+  "title": "Voice",
+  "slot": "settings",
+  "order": 30,
+  "owner": "061",
+  "entry": "page.js",
+  "requires": ["voice.status", "voice.configure", "voice.transcribe", "voice.delete", "voice.unload"],
+  "unavailable": null
+}
