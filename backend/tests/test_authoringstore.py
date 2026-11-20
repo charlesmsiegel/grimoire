@@ -314,7 +314,7 @@ def put_map(store, graph: Topology, *, records=()) -> None:
     heads = dict(stored.manifest.heads, **{f"topology/{graph.ref.entity_id}": graph.ref.revision})
     txn = store.transaction()
     for envelope in records:
-        heads[f"{envelope.ref.kind}/{envelope.ref.entity_id}"] = envelope.ref.revision
+        heads[f"{envelope.address.kind}/{envelope.address.entity_id}"] = envelope.address.revision
         txn.put(envelope, None)
     txn.put(RecordEnvelope(graph.ref, encode_topology(graph), name="Coast map", owner=OWNER), None)
     txn.put(SourceManifest(REALM, OWNER, "Realm", heads), stored.etag)
@@ -389,3 +389,72 @@ def test_a_candidate_whose_id_an_existing_record_of_its_kind_holds_is_flagged(st
         (d.candidate, d.existing) for d in review.duplicates}
     with pytest.raises(AuthoringError, match="duplicate_unacknowledged"):
         lib(store).draft(review, accept("brinewick"))
+
+
+def put_records(store, *envelopes: RecordEnvelope) -> None:
+    stored = store.read_source(REALM)
+    heads = dict(stored.manifest.heads)
+    txn = store.transaction()
+    for envelope in envelopes:
+        heads[f"{envelope.address.kind}/{envelope.address.entity_id}"] = envelope.address.revision
+        txn.put(envelope, None)
+    txn.put(SourceManifest(REALM, OWNER, "Realm", heads), stored.etag)
+    txn.commit(owner_handle())
+
+
+def test_an_existing_template_place_is_no_link_endpoint(store):
+    village = SourceRef(REALM, "location", "fishing-village", "r1")  # a generic kind, accepted earlier
+    put_records(store, entity(village, "A fishing village", spatial=True, nature="template"))
+    authoring = lib(store)
+    proposal = towns(coast=village)
+    review = authoring.review(proposal)
+    assert {(p.link_id, p.reason) for p in review.problems} == {
+        ("brinewick-in", "template_endpoint"), ("gullhaven-in", "template_endpoint"),
+        ("tidemoor-in", "template_endpoint")}
+    draft = authoring.draft(review, accept("brinewick", "gullhaven"))
+    assert {link.link_id for link in draft.selection.links} == {"shore-road"}
+    assert village not in draft.changes.changeset.preconditions and draft.applicable
+
+
+def test_context_cuts_long_names_and_applies_its_limit_first(store):
+    lore = SourceRef(REALM, "lore", "long-chronicle", "r1")
+    put_records(store, RecordEnvelope(lore, {"text": "a long tale"}, name="Chronicle " + "x" * 300, owner=OWNER))
+    authoring = lib(store)
+    assert authoring.context(REALM, limit=0).records == () and authoring.context(REALM, limit=0).truncated
+    assert [r.ref for r in authoring.context(REALM, limit=1).records] == [LIGHT]
+    chronicle = authoring.context(REALM).record(str(lore))
+    assert len(chronicle.name) == 256 and chronicle.name.startswith("Chronicle x")
+
+
+def test_a_typed_record_named_only_in_its_payload_is_still_a_namesake(store):
+    keepers = SourceRef(REALM, "organization", "guild-17", "r1")
+    payload = {"name": "Tidekeepers Guild", "nature": "individual", "traits": []}
+    put_records(store, RecordEnvelope(keepers, payload, owner=OWNER, extra={"schema": ENTITY_SCHEMA}))
+    authoring = lib(store)
+    proposal = towns(extra=(Candidate("keepers", "organization", "The Tidekeepers' Guild", "individual"),))
+    review = authoring.review(proposal)
+    assert [(d.existing, d.existing_name) for d in review.duplicates if d.candidate == "keepers"] == [
+        (keepers, "Tidekeepers Guild")]
+    assert any(r.ref == keepers and r.name == "Tidekeepers Guild" for r in authoring.context(REALM).records)
+
+
+def test_a_map_edited_in_place_while_drafting_refuses(store, monkeypatch):
+    put_map(store, Topology(MAP, (Place(COAST), Place(LIGHT, parent=COAST)), (), "drawn by hand"))
+    authoring = lib(store)
+    review = authoring.review(towns())
+    revise, edited = ChangeSetLibrary.revise, []
+
+    def editing(self, *args, **kwargs):  # an outside editor rewrites the map file without a new revision
+        if not edited:
+            edited.append(True)
+            path = store.root / record(MAP)
+            data = json.loads(path.read_bytes())
+            graph = Topology(MAP, (Place(COAST), Place(LIGHT, parent=COAST)),
+                             (Path("cliff-road", COAST, LIGHT, True),), "drawn by hand")
+            data["payload"] = encode_topology(graph)
+            path.write_text(json.dumps(data, indent=2))
+        return revise(self, *args, **kwargs)
+
+    monkeypatch.setattr(ChangeSetLibrary, "revise", editing)
+    with pytest.raises(AuthoringError, match="stale_review"):
+        authoring.draft(review, accept("brinewick", "gullhaven"))

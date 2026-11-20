@@ -45,9 +45,9 @@ There is no app or UI (that is [116](roadmap/sprints/wave-9-ui-exit.md)). Tests 
 
 | Call | Notes |
 |---|---|
-| `context(source, *, limit=200)` | The world's current heads as an `AuthoringContext`, with a basis digest. Topology records are not offered. Refusals: `missing_source`, `excluded_source`. |
-| `review(proposal)` | A `ProposalReview` of `duplicates` (against existing heads of the same kind, by name key or by holding the id the candidate's name would take, and between candidates) and link `problems` (`missing_endpoint`, `endpoint_moved`, `not_a_place`). Writes nothing. |
-| `draft(review, decision, *, topology=None)` | Under the store lock, judges the world again (`stale_review` if anything the review reported changed, or if the map moves while the draft is built), selects, and builds one change set from that one read. Returns an `AcceptanceDraft` holding the change-set review (`.changes`) and `.applicable`. |
+| `context(source, *, limit=200)` | The world's current heads as an `AuthoringContext`, with a basis digest. Topology records are not offered. A record's name is its envelope name, else a typed payload's `name`; the limit applies before names are cut to 256 characters, so one long name never refuses the context. Refusals: `missing_source`, `excluded_source`. |
+| `review(proposal)` | A `ProposalReview` of `duplicates` (against existing heads of the same kind, by name key or by holding the id the candidate's name would take, and between candidates) and link `problems` (`missing_endpoint`, `endpoint_moved`, `not_a_place`, and `template_endpoint` for an existing typed place whose nature is `template`). Writes nothing. |
+| `draft(review, decision, *, topology=None)` | Under the store lock, judges the world again (`stale_review` if anything the review reported changed, or if the map moves or is edited in place while the draft is built), selects, and builds one change set from that one read. Returns an `AcceptanceDraft` holding the change-set review (`.changes`) and `.applicable`. |
 | `approve(draft, authority, *, approved_by, new_id)` | 043's digest-bound approvals; only from a human's direct action on the shown draft. |
 | `apply(draft, approvals=None)` | Writes exactly the drafted files, or raises 043's refusal and writes nothing. Returns `AcceptedRecords(proposal_id, records, topology, changeset)`. |
 | `reject(draft, authority=None)` | Ends the draft, writing nothing. |

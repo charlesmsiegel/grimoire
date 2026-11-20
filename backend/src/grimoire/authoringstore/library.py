@@ -21,6 +21,7 @@ from grimoire.authoring import (
     AuthoringContext, AuthoringError, Candidate, Decision, Duplicate, LinkProblem, Proposal, Selection,
     WorldRecord, name_key, select,
 )
+from grimoire.authoring.model import NAME_MAX
 from grimoire.changesets import ChangeSet, ChangeSetError, RecordChange
 from grimoire.changesetstore import AppliedChangeSet, ChangeSetLibrary, ChangeSetReview
 from grimoire.core.entity import EntityDefinition
@@ -102,17 +103,37 @@ def _fresh(base: str, taken: set[str]) -> str:
     return entity_id
 
 
-def _is_place(stored: object, ref: SourceRef) -> bool:
-    """An existing record a road or containment may join: a ``location``, or an entity with ``spatial``."""
-    if ref.kind == "location":
-        return True
+def _place_problem(stored: object, ref: SourceRef) -> str | None:
+    """Why an existing record cannot be a road's or containment's endpoint, or ``None`` if it can.
+
+    It must be one particular place: a ``location``, or an entity with ``spatial``. A typed entity
+    whose nature is ``template`` is a generic kind of place, on no map (``template_endpoint``)."""
     envelope = getattr(stored, "envelope", None)
-    if envelope is None or envelope.extra.get("schema") != ENTITY_SCHEMA:
-        return False
-    try:
-        return definition_from_payload(ref, ENTITY_SCHEMA, envelope.payload).traits.has(Spatial)
-    except (CodecError, ValueError):
-        return False
+    if envelope is not None and envelope.extra.get("schema") == ENTITY_SCHEMA:
+        try:
+            definition = definition_from_payload(ref, ENTITY_SCHEMA, envelope.payload)
+        except (CodecError, ValueError):
+            return "not_a_place"
+        if not (ref.kind == "location" or definition.traits.has(Spatial)):
+            return "not_a_place"
+        return "template_endpoint" if definition.nature == "template" else None
+    return None if ref.kind == "location" else "not_a_place"
+
+
+def _name_of(stored: object) -> str:
+    """A record's display name: the envelope's, else a typed payload's own ``name``."""
+    name = getattr(stored, "name", "")
+    if name:
+        return name
+    payload = getattr(getattr(stored, "envelope", None), "payload", None)
+    named = payload.get("name") if isinstance(payload, Mapping) else None
+    return named if type(named) is str else ""
+
+
+def _bounded(name: str) -> str:
+    """A stored name in the proposer's bounded form: at most ``NAME_MAX`` characters, never blank."""
+    cut = name[:NAME_MAX]
+    return cut if cut.strip() else "(unnamed)"
 
 
 class AuthoringLibrary:
@@ -151,12 +172,13 @@ class AuthoringLibrary:
             raise AuthoringError("invalid_bound")
         view, basis, heads = self._world(source)
         order = {"location": 0, "organization": 1}
-        records = sorted(
-            (WorldRecord(definition.ref, kind, definition.name)  # type: ignore[attr-defined]
-             for (kind, _), definition in heads.items() if kind != TOPOLOGY and getattr(definition, "name", "")),
-            key=lambda record: (order.get(record.kind, 2), record.kind, record.name.casefold(), str(record.ref)))
-        return AuthoringContext(source, view.sources[source].manifest.title, tuple(records[:limit]),
-                                len(records) > limit, basis)
+        named = sorted(
+            ((order.get(kind, 2), kind, name.casefold(), str(definition.ref), definition.ref, name)  # type: ignore[attr-defined]
+             for (kind, _), definition in heads.items() if kind != TOPOLOGY and (name := _name_of(definition))),
+            key=lambda row: row[:4])
+        # The limit applies first; a long name is cut to the bounded prompt form, never refused.
+        records = tuple(WorldRecord(ref, kind, _bounded(name)) for _, kind, _, _, ref, name in named[:limit])
+        return AuthoringContext(source, view.sources[source].manifest.title, records, len(named) > limit, basis)
 
     # -- review ---------------------------------------------------------------------------------
     def review(self, proposal: Proposal) -> ProposalReview:
@@ -171,7 +193,7 @@ class AuthoringLibrary:
                ) -> tuple[tuple[Duplicate, ...], tuple[LinkProblem, ...]]:
         existing: dict[tuple[str, tuple[str, ...]], list[object]] = {}
         for (kind, _), definition in heads.items():
-            name = getattr(definition, "name", "")
+            name = _name_of(definition)
             if name:
                 existing.setdefault((kind, name_key(name)), []).append(definition)
         duplicates = []
@@ -184,7 +206,7 @@ class AuthoringLibrary:
                 same.setdefault(str(named.ref), named)  # type: ignore[attr-defined]
             for _, definition in sorted(same.items()):
                 duplicates.append(Duplicate(candidate.key, existing=definition.ref,  # type: ignore[attr-defined]
-                                            existing_name=getattr(definition, "name", "")))
+                                            existing_name=_bounded(_name_of(definition))))
             for other in proposal.candidates:
                 if other.key != candidate.key and other.kind == candidate.kind and (
                         name_key(other.name) == key[1] or _slug(other.name, other.key) == slug):
@@ -199,8 +221,8 @@ class AuthoringLibrary:
                 problems.append(LinkProblem(link.link_id, "missing_endpoint"))
             elif head.ref != target:  # type: ignore[attr-defined]
                 problems.append(LinkProblem(link.link_id, "endpoint_moved"))
-            elif not _is_place(head, target):
-                problems.append(LinkProblem(link.link_id, "not_a_place"))
+            elif (reason := _place_problem(head, target)) is not None:
+                problems.append(LinkProblem(link.link_id, reason))
         return tuple(duplicates), tuple(problems)
 
     # -- decision -------------------------------------------------------------------------------
@@ -354,8 +376,9 @@ class AuthoringLibrary:
                 change = self.changes.revise(source, TOPOLOGY, entity_id, payload, evidence=evidence)  # type: ignore[arg-type]
         except ChangeSetError as error:
             raise AuthoringError(error.reason) from None
-        if head is not None and change.base != head.ref.revision:  # type: ignore[attr-defined]
-            raise AuthoringError("stale_review")  # the map moved since it was read: build again
+        if head is not None and (change.base != head.ref.revision  # type: ignore[attr-defined]
+                                 or change.base_etag != head.etag):  # type: ignore[attr-defined]
+            raise AuthoringError("stale_review")  # the map moved or was edited since it was read: build again
         return change, SourceRef(source, TOPOLOGY, entity_id, change.revision), tuple(pinned)  # type: ignore[arg-type]
 
     # -- approve, apply, reject -------------------------------------------------------------------

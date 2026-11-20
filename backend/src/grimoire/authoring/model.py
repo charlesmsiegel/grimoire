@@ -314,8 +314,9 @@ class Duplicate:
 
 @dataclass(frozen=True)
 class LinkProblem:
-    """A link the world can no longer carry: its existing endpoint is gone (``missing_endpoint``) or
-    is not a place (``not_a_place``)."""
+    """A link the world can no longer carry: its existing endpoint is gone (``missing_endpoint``), has
+    moved to another revision (``endpoint_moved``), is not a place (``not_a_place``) or is a generic
+    template place (``template_endpoint``)."""
 
     link_id: str
     reason: str
