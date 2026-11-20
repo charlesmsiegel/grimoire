@@ -40,7 +40,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 12/24 | ☐ | 049, 050, 051, 054, 055, 056, 057, 059, 060, 062, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 13/24 | ☐ | 049, 050, 051, 054, 055, 056, 057, 059, 060, 062, 063, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -593,9 +593,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-063"></a>
 ### 063 — Rumors And Information Flow
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/rumors-and-information-flow.md)).
-- Evidence: [`rumorstore/library.py`](../../backend/src/grimoire/rumorstore/library.py), [`test_rumor_store.py`](../../backend/tests/test_rumor_store.py) and [`test_rumor_recovery.py`](../../backend/tests/test_rumor_recovery.py) prove delayed authored edges, false retelling, explicitly admitted belief, stable sender projection and local crash reconciliation without altering events/rulings.
-- Scope / gap: Partial: the required distant rival acting on the delayed misleading belief is not established by the delivery/belief tests. Runtime/context/campaign readers must adopt the safe rumor projection before app exposure; sync, UI and the calendar adapter remain pending. Explicit supplied ticks are not integrated campaign time. See [contract](../RUMORS.md).
+- [x] Scheduled first-useful slice ([requirements](sprints/rumors-and-information-flow.md)).
+- Evidence: [`test_rumor_scenarios.py`](../../backend/tests/test_rumor_scenarios.py) runs the proving scenario through the scene runner: a witness's faithful retelling, then a distorted letter to a distant director NPC timed 21 days on the campaign's 055 calendar and carried only by a courier route; once it arrives and her belief is admitted, her recorded intention changes from trading to the challenge her agenda gates on that proposition, her brief carries the letter's account and never the true insult, and the insult event, its witness's perception, rulings and the proposition's reported standing are unchanged. [`evidencestore/library.py`](../../backend/src/grimoire/evidencestore/library.py) and [`core/knowledge.py`](../../backend/src/grimoire/core/knowledge.py) give every library reader (scene runner, context packs, campaign API, memory) the queued sends as `Knowledge.dispatches`, so a sender's view never changes on delivery; [`test_rumor_store.py`](../../backend/tests/test_rumor_store.py), [`test_rumors.py`](../../backend/tests/test_rumors.py) and [`test_rumor_recovery.py`](../../backend/tests/test_rumor_recovery.py) prove calendar timing, the overlay's fail-closed cases (damaged or missing rumor ledger) and crash reconciliation.
+- Scope / gap: Complete bounded first-useful slice. Belief admission on receipt is the director's explicit act, and delivery conditions are supplied explicitly rather than inferred. The rumor ledger is not synced (a peer without it shows no sends), faction/public-media spread at scale (milestone 3) and UI (115) remain pending. See [contract](../RUMORS.md).
 
 <a id="slice-064"></a>
 ### 064 — Scenario Preparation

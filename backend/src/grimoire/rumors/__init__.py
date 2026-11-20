@@ -1,1 +1,1 @@
-from .model import AuthoredSend, DeliveryConditions, Rumor
+from .model import AuthoredSend, CampaignTime, DeliveryConditions, Rumor

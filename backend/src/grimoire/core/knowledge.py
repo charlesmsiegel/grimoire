@@ -322,6 +322,38 @@ Evidence = Perception | Report
 
 
 @dataclass(frozen=True, slots=True)
+class Dispatch:
+    """An addressed communication its ``sender`` made at ``sent_at``; the receipt may come later or never.
+
+    Not a ledger record: a store supplies dispatches beside the ledger (063's authored rumor queue), so the
+    sender's own projection shows the send from ``sent_at`` whether or not the recipient's report
+    (``evidence_id``) has been appended yet. Without one, a delayed report would appear in its sender's past
+    only once it was delivered, which tells the sender that it arrived. Once that report exists it must say
+    exactly what the dispatch says, and it is not listed a second time.
+    """
+
+    campaign_id: str
+    evidence_id: str
+    sender: InstanceRef
+    recipient: InstanceRef
+    proposition_id: str
+    channel: str
+    sent_at: Moment
+
+    def __post_init__(self) -> None:
+        def check() -> None:
+            validate_segment(self.campaign_id, "campaign_id")
+            name = _name("dispatch", self.evidence_id)
+            validate_segment(self.evidence_id, "id")
+            validate_segment(self.proposition_id, "proposition_id")
+            validate_segment(self.channel, "channel")
+            _actor(self.sender, self.campaign_id, name)
+            _actor(self.recipient, self.campaign_id, name)
+            _moment(self.sent_at)
+        _guarded(self, "dispatch", self.evidence_id, check)
+
+
+@dataclass(frozen=True, slots=True)
 class Belief:
     """The holder's own conclusion about a proposition; never promoted to truth.
 
@@ -388,6 +420,7 @@ class _Index:
     evidence_by_holder: MappingProxyType
     beliefs_by_holder: MappingProxyType
     sent_by: MappingProxyType
+    dispatched_by: MappingProxyType
     rulings_by_proposition: MappingProxyType
     reports_by_proposition: MappingProxyType
     superseded_by: MappingProxyType
@@ -422,6 +455,9 @@ class Knowledge:
     evidence: tuple[Evidence, ...] = ()
     beliefs: tuple[Belief, ...] = ()
     disclosures: tuple[Disclosure, ...] = ()
+    #: sends a store knows were made, beside the ledger (``Dispatch``); ``None`` when the store could not
+    #: tell, so no actor is shown any send at all (fail closed)
+    dispatches: tuple[Dispatch, ...] | None = ()
     _index: _Index | None = field(default=None, init=False, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -436,11 +472,24 @@ class Knowledge:
                 raise KnowledgeError("invalid_record")
             object.__setattr__(self, attribute,
                                tuple(sorted(records, key=lambda r, f=id_field: getattr(r, f))))
+        if self.dispatches is not None:
+            supplied = self.dispatches
+            if isinstance(supplied, (str, bytes)) or not isinstance(supplied, Iterable):
+                raise KnowledgeError("invalid_record")
+            records = tuple(supplied)
+            if not all(isinstance(record, Dispatch) for record in records):
+                raise KnowledgeError("invalid_record")
+            object.__setattr__(self, "dispatches", tuple(sorted(records, key=lambda r: r.evidence_id)))
         object.__setattr__(self, "_index", _validate(self))
 
     def __reduce__(self) -> tuple[object, ...]:
         return (Knowledge, (self.campaign_id, self.events, self.propositions, self.rulings,
-                            self.evidence, self.beliefs, self.disclosures))
+                            self.evidence, self.beliefs, self.disclosures, self.dispatches))
+
+    def with_dispatches(self, dispatches: Iterable[Dispatch] | None) -> Knowledge:
+        """This ledger with ``dispatches`` beside it (``None``: the store could not tell what was sent)."""
+        return Knowledge(self.campaign_id, self.events, self.propositions, self.rulings, self.evidence,
+                         self.beliefs, self.disclosures, None if dispatches is None else tuple(dispatches))
 
     # Lookups for ``perspective``. Actor-facing consumers read projections, not these.
     def event(self, event_id: str) -> Event:
@@ -465,6 +514,13 @@ class Knowledge:
     def reports_sent_by(self, sender: InstanceRef) -> tuple[Report, ...]:
         """Addressed reports only: what the sender knowingly sent."""
         return self._index.sent_by.get(sender, ())
+
+    def dispatches_by(self, sender: InstanceRef) -> tuple[Dispatch, ...]:
+        """The sender's dispatches, delivered or not (none when ``dispatches`` is ``None``)."""
+        return self._index.dispatched_by.get(sender, ())
+
+    def has_proposition(self, proposition_id: str) -> bool:
+        return _is_segment(proposition_id) and proposition_id in self._index.propositions
 
     def rulings_on(self, proposition_id: str) -> tuple[Ruling, ...]:
         return self._index.rulings_by_proposition.get(proposition_id, ())
@@ -574,11 +630,27 @@ def _validate(knowledge: Knowledge) -> _Index:
         _require(event is not None, "unknown_event", name)
         _require(disclosure.moment.sequence >= event.moment.sequence, "before_event", name)
 
+    dispatched_by: dict = defaultdict(list)
+    seen: set = set()
+    for dispatch in knowledge.dispatches or ():
+        name = f"dispatch:{dispatch.evidence_id}"
+        _require(dispatch.campaign_id == knowledge.campaign_id, "campaign_mismatch", name)
+        _require(dispatch.evidence_id not in seen, "duplicate_id", name)
+        seen.add(dispatch.evidence_id)
+        delivered = evidence.get(dispatch.evidence_id)
+        if delivered is not None:  # the report that arrived must be this send, exactly
+            _require(isinstance(delivered, Report) and delivered.addressed
+                     and (delivered.sender, delivered.holder, delivered.proposition_id, delivered.channel,
+                          delivered.sent_at)
+                     == (dispatch.sender, dispatch.recipient, dispatch.proposition_id, dispatch.channel,
+                         dispatch.sent_at), "dispatch_mismatch", name, f"evidence:{dispatch.evidence_id}")
+        dispatched_by[dispatch.sender].append(dispatch)
+
     return _Index(
         events=MappingProxyType(events), propositions=MappingProxyType(propositions),
         evidence=MappingProxyType(evidence), beliefs=MappingProxyType(beliefs),
         evidence_by_holder=_proxy(evidence_by_holder), beliefs_by_holder=_proxy(beliefs_by_holder),
-        sent_by=_proxy(sent_by), rulings_by_proposition=_proxy(rulings_by_proposition),
+        sent_by=_proxy(sent_by), dispatched_by=_proxy(dispatched_by), rulings_by_proposition=_proxy(rulings_by_proposition),
         reports_by_proposition=_proxy(reports_by_proposition),
         superseded_by=MappingProxyType(superseded_by),
     )
