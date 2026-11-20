@@ -276,7 +276,9 @@ class SceneRunner:
 
     @traced("open")
     def open(self, chat: ChatRef) -> Scene:
-        """The chat as it stands now; nothing is written. With an effects library, its problems also name
+        """The chat as it stands now. Nothing is written but 020 knowledge of accepted effects still pending (see
+        below), so every read that opens a chat (the hub, the knowledge view, the inbox, the story page) may write
+        it. With an effects library, its problems also name
         every 021 problem of the campaign (``effects``) and each acceptance cut short (``effect_unsettled``,
         ``<turn id>:<event id>:<shape>``) for ``recover_effects``, or, one another device started, for that device
         (``effect_elsewhere``, ``<turn id>:<event id>:<device tag>``), or one of unknown device for the owner's

@@ -7,7 +7,8 @@ append, exactly once:
   under an accepted id, so the director's events file holds no witness: 020 keeps events and evidence apart);
 - one 012 ``Perception`` for each cast actor who saw it happen, judged by 041's ``perceptions`` on the chat's
   stage at the event's own sequence, as an open happening in the area of the turn's acting character, and only
-  for an effect the table itself is shown (the hub's ``turn_view`` rule: a player holds a key on it).
+  for a witness whose player holds a key on the effect (that player was shown its summary), both when it was
+  accepted and now. An NPC witness gets none: its knowledge outlives a hand-over of the character to a player.
 
 This is best effort and never a refusal: acceptance is 021's, and 021 never depended on 020. Every id is
 deterministic (the bridge is the accepted event's id, a perception is 041's ``perception_id``), and "done" is
@@ -20,8 +21,8 @@ See docs/SCENES.md#what-an-accepted-effect-leaves-in-knowledge.
 Fail closed, never on a guess, and never waiting for a stage: no stage (a chat played by the cast alone, or one
 lost on a restart), a stage the runner refused, a stage that changed after the event's sequence (``Stage.at``
 cannot go back), an acting character off stage or untracked, a private post (a whisper, telepathy, a withheld
-action), an area that cannot be told, a witness resting on assumed staging, and an effect only the director is
-shown write the event with **no** perception. 020 never takes a backdated record, so a perception cannot be
+action), an area that cannot be told, a witness resting on assumed staging, and an effect no player holds a key on
+write the event with **no** perception. 020 never takes a backdated record, so a perception cannot be
 added later: the event alone is final.
 """
 
@@ -29,9 +30,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from grimoire.core import DIRECTOR
 from grimoire.core.identity import AcceptedRef, ChatRef
+from grimoire.core import DIRECTOR
 from grimoire.core.knowledge import Event, Perception
+from grimoire.core.model import ControlAssignment
 from grimoire.effects import AcceptedEvent, EffectCodecError, EffectError, accepted_from_payload, as_knowledge_event
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.play.scene import _latest, _refuse
@@ -85,12 +87,17 @@ def _ledger(runner, campaign_id: str):
     return ledger, _latest(ledger.knowledge)
 
 
-def mark(runner, campaign_id: str) -> int:
-    """020's high-water mark, or 0 when 020 cannot be read now (then nothing is judged by it)."""
-    try:
-        return _ledger(runner, campaign_id)[1]
-    except SceneRefused:
-        return 0
+def controls_at(runner, campaign_id: str, position: int) -> tuple[ControlAssignment, ...]:
+    """The campaign's control as the sovereignty ledger stood at ``position`` (replayed from its history)."""
+    controllers: dict[str, str] = {}
+    for event in runner.sovereignty.load(campaign_id).control_history:
+        if event.seq > position:
+            break
+        if event.controller_id is None:
+            controllers.pop(event.actor_id, None)
+        else:
+            controllers[event.actor_id] = event.controller_id
+    return tuple(ControlAssignment(campaign_id, actor, controller) for actor, controller in sorted(controllers.items()))
 
 
 def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]:
@@ -99,10 +106,16 @@ def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]
     of an acceptance still cut short (``accepting``) anywhere in the campaign, or ``None``.
 
     Read raw: a turn or accepted file that cannot be read is skipped here (``open`` and acceptance already report
-    and refuse over it). An effect another device accepted has no 021 event here, so it is never this library's
-    to bridge. A bridge 020 quarantined (a damaged event file) counts as held: it is repaired, never written again.
+    and refuse over it). Only this device's acceptances are this library's to bridge (tagged with this device, or
+    with none): 028 merges 021's accepted events and 020's knowledge alike, so another device's acceptance arrives
+    with the knowledge that device wrote, judged on the stage it was played on. A bridge 020 quarantined (a damaged
+    event file) counts as held: it is repaired, never written again.
     """
     ledger, high = _ledger(runner, campaign_id)
+    try:
+        mine = runner.scenes.device()
+    except SceneRefused:  # a damaged identity: only untagged acceptances are known to be this library's
+        mine = None
     held = {event.event_id for event in ledger.knowledge.events}
     held |= {item.name.partition(":")[2] for item in ledger.quarantined if item.name.startswith("event:")}
     try:
@@ -122,6 +135,8 @@ def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]
                 unsettled = sequence if unsettled is None else min(unsettled, sequence)
             if effect.state != "accepted" or effect.event_id is None or effect.event_id in held:
                 continue
+            if effect.accepted_on is not None and effect.accepted_on != mine:  # that device writes its knowledge
+                continue
             address = AcceptedRef(campaign_id, effect.event_id)
             raw = accepted.get(address)
             if raw is None:
@@ -136,28 +151,43 @@ def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]
     return found, high, unsettled
 
 
-def records(scene, pending: Pending) -> tuple[Event | Perception, ...] | str:
+def records(runner, scene, pending: Pending) -> tuple[Event | Perception, ...] | str:
     """The bridge of ``pending``: its event, then each witness's perception; or why there is none (revoked since
     it was listed: an undone turn is never stored as fact). ``scene`` is its chat's, or ``None`` when that chat
-    cannot be opened now, which leaves the event alone."""
+    cannot be opened now, which leaves the event alone. Control at acceptance is replayed from the sovereignty
+    ledger position the acceptance recorded (``controls_at``; control now when none was recorded)."""
     try:
         event = as_knowledge_event(pending.event)
     except EffectError as error:
         return error.reason
     if scene is None:
         return (event,)
-    return (event, *witnessed(scene, pending.record, pending.effect, event))
+    then = scene.controls
+    if pending.effect.controls_at is not None:
+        try:
+            then = controls_at(runner, scene.chat.campaign_id, pending.effect.controls_at)
+        except (StoreError, ValueError):  # control then cannot be told: nobody's perception
+            return (event,)
+    return (event, *witnessed(scene, pending.record, pending.effect, event, then))
 
 
-def witnessed(scene, record: TurnRecord, effect: TurnEffect, event: Event) -> tuple[Perception, ...]:
+def _controller(controls, actor) -> str | None:
+    found = {item.controller_id for item in controls
+             if item.campaign_id == actor.campaign_id and item.actor_id == actor.instance_id}
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def witnessed(scene, record: TurnRecord, effect: TurnEffect, event: Event, then=None) -> tuple[Perception, ...]:
     """Each present cast actor's perception of ``event``, an open happening where the turn's acting character
     stands, on the chat's stage at the event's sequence; ``()`` whenever that cannot be told without a guess.
 
-    Only an effect the table is shown leaves a perception, by the hub's own rule (``turn_view``): one a player
-    holds a key on. A director-only effect (no endorser: an NPC's act the director proposed) is the director's
-    alone, and its summary is the director's own words, so no witness gets them; covert acts are not modelled.
-    A player character's perception is then its player's to read, so it goes only to one whose player holds a
-    key on this effect (what that player's turn view shows); an NPC's knowledge is the director's.
+    The percept is the effect's summary, and only a player who holds a key on the effect was shown it (the hub's
+    ``turn_view`` rule), so a perception goes only to a witness that player controls, both when the effect was
+    accepted (``then``, by default control now) and now. A director-only effect (no endorser) leaves none, and
+    neither does an NPC witness: the director may have written in the summary what no character there could
+    see, and an NPC's evidence would reach whichever player is given that character later. A character handed
+    over after its perception was written takes it to its new player, as a hand-over takes what that character
+    was shown; covert acts, and NPC perspectives of play, are not modelled.
 
     With no stage (the cast alone decides, a world-less chat) nobody gets one: the cast says who is present, not
     who could see, and a stage lost on restart or refused reads the same way. The stage is the source's latest,
@@ -179,8 +209,9 @@ def witnessed(scene, record: TurnRecord, effect: TurnEffect, event: Event) -> tu
     except StagingRefused:  # rests on assumed staging, or the event cannot be judged on this stage: nobody
         return ()
     present = set(scene.on_stage)  # the stage's actors are the cast (check_cast); never anyone else
-    return tuple(item for item in found if item.holder in present
-                 and (scene.controller(item.holder) == DIRECTOR or scene.controller(item.holder) in keys))
+    then = scene.controls if then is None else then
+    return tuple(item for item in found if item.holder in present and _controller(then, item.holder) in keys
+                 and scene.controller(item.holder) in keys)  # a key is a human player's, never the director's
 
 
 def _area(stage, record: TurnRecord) -> str | None:
@@ -222,7 +253,7 @@ def _append(runner, pending: Pending, found: tuple) -> tuple[str | None, bool]:
 def write(runner, scene, pending: Pending) -> tuple[str | None, bool]:
     """Append ``pending``'s bridge to 020 once: ``(None, False)`` when 020 holds it, else why not and whether the
     reason holds for every later bridge too. A witness 020 will not take (an actor gone) leaves the event alone."""
-    found = records(scene, pending)
+    found = records(runner, scene, pending)
     if isinstance(found, str):
         return found, False
     reason, wide = _append(runner, pending, found)
@@ -292,5 +323,5 @@ def problems(runner, scene) -> list[tuple[str, str]]:
     return [("unbridged", f"{len(mine)}:{clearing[0] if clearing else 'backdated'}")]
 
 
-__all__ = ["CHANNEL", "Left", "Pending", "mark", "problems", "records", "settle", "unbridged", "witnessed",
+__all__ = ["CHANNEL", "Left", "Pending", "controls_at", "problems", "records", "settle", "unbridged", "witnessed",
            "write"]

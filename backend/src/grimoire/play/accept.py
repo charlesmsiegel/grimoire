@@ -47,7 +47,6 @@ from grimoire.core import DIRECTOR
 from grimoire.core.authority import AuthorityError, PlayerContribution
 from grimoire.core.identity import AcceptedRef, ChatRef, TurnRef
 from grimoire.core.knowledge import Moment
-from grimoire.core.model import ControlAssignment
 from grimoire.effects import (
     EffectError, EffectHoldings, EffectProposal, EndorsementRecord, authorize, revocation_fingerprint,
 )
@@ -55,7 +54,8 @@ from grimoire.effectstore import Endorsement, InvalidEffect
 from grimoire.play.adjudicate import _029, _UNAVAILABLE, outcome_of
 from grimoire.play.obstacles import applied, due_changes, holds_due
 from grimoire.play.scene import NOW, WRITE_RETRIES, _readable, _refuse
-from grimoire.play.witness import mark, settle
+from grimoire.play.witness import controls_at as _controls_at
+from grimoire.play.witness import settle
 from grimoire.play.witness import problems as unbridged_problems
 from grimoire.scene import MAX_EFFECTS, SceneRefused, TurnEffect, TurnRecord, Waiver, turn_from_payload
 from grimoire.scenestore import StoredTurn
@@ -588,12 +588,6 @@ def _accepting(runner, scene, stored: StoredTurn, effect: TurnEffect, live: Mapp
         return _write(runner, stored, replace(effect, state="refused", reason="ambiguous_control"))
     except StoreError as error:
         raise _refuse("effects_unavailable", type(error).__name__) from None
-    # 020 has passed the proposal's sequence since it was taken (a writer outside play, or a bridge whose event was
-    # revoked since): its bridge could never be written, so it is refused before 021 commits, as 021's own floor
-    # refuses, and proposed again at a new sequence. Play's own writes never do this: every sequence it hands out is
-    # past 020's mark (``next_sequence``), and bridges carry 021's sequences, which that floor keeps in order.
-    if change.duplicate_of is None and proposal.moment.sequence < mark(runner, chat.campaign_id):
-        return _write(runner, stored, replace(effect, state="refused", reason="stale_sequence"))
     event_id = change.ref.event_id
     controls_at = _settled_play(runner, scene)
     if change.duplicate_of is not None:  # already in force (a retry): nothing to publish, only to record
@@ -627,19 +621,6 @@ def _settled_play(runner, scene) -> int:
     if set(state.controls) != set(scene.controls):
         raise _refuse("control_changed", "who plays a character changed meanwhile; give the key again")
     return max((event.seq for event in state.control_history), default=0)
-
-
-def _controls_at(runner, campaign_id: str, position: int) -> tuple[ControlAssignment, ...]:
-    """The campaign's control as the sovereignty ledger stood at ``position`` (replayed from its history)."""
-    controllers: dict[str, str] = {}
-    for event in runner.sovereignty.load(campaign_id).control_history:
-        if event.seq > position:
-            break
-        if event.controller_id is None:
-            controllers.pop(event.actor_id, None)
-        else:
-            controllers[event.actor_id] = event.controller_id
-    return tuple(ControlAssignment(campaign_id, actor, controller) for actor, controller in sorted(controllers.items()))
 
 
 def _commit(change, effect: TurnEffect) -> None:
