@@ -84,12 +84,11 @@ function circle(p, from, to, {cancel = false} = {}) {
 }
 const regionOf = p => ['x', 'y', 'w', 'h'].map(key => p.field(key).value);
 
-test('a drag is a contained region in either direction; the offered draft names a sketched spot', () => {
+test('a drag is a contained region in either direction; the offered draft names the spot in the player\'s words', () => {
   assert.deepEqual(dragRegion({x: .7, y: .9}, {x: .2, y: .1}), {x: .2, y: .1, w: .5, h: .8});
   assert.deepEqual(dragRegion({x: -.5, y: .5}, {x: 1.5, y: 2}), {x: 0, y: .5, w: 1, h: .5});
-  assert.equal(draftAction('I hide here', 'doorway', true), 'I hide here (Reference: doorway)');
-  assert.equal(draftAction('I hide here', '', true), 'I hide here (Reference: the circled spot on my sketch)');
-  assert.equal(draftAction('I hide here', '', false), 'I hide here');
+  assert.equal(draftAction('I hide here', 'doorway'), 'I hide here (Reference: doorway)');
+  assert.equal(draftAction('I hide here', ''), 'I hide here');
 });
 
 test('circling with a pointer sets the region the fields show; a tap or a cancel keeps it', async () => {
@@ -110,7 +109,7 @@ test('circling with a pointer sets the region the fields show; a tap or a cancel
   assert.match(p.status(), /cancelled/);
   assert.equal(p.composer.input.value, 'Existing draft', 'circling sends nothing');
   p.type('action', 'I hide here');
-  assert.match(p.root.querySelector('p.reference-draft').textContent, /circled spot on my sketch/);
+  assert.match(p.root.querySelector('p.reference-draft').textContent, /name the circled spot/);
   p.click('Clear');
 });
 
@@ -145,6 +144,8 @@ test('Use as draft offers the circled doorway and carries the marked sketch, wit
   assert.equal(p.attach.staged.length, 1);
   assert.match(p.status(), /Already used/);
   circle(p, [10, 20], [210, 120]);
+  assert.deepEqual(p.attach.unstaged, [1], 'a new circle takes the old marked sketch off the next post');
+  assert.match(p.status(), /taken off your next post/);
   await p.use();
   assert.equal(p.attach.staged.length, 2);
   assert.equal(p.saved.length, 1);
@@ -154,33 +155,90 @@ test('Use as draft offers the circled doorway and carries the marked sketch, wit
   p.attach.staged[1].carry.sent('turn:1');
   assert.match(p.status(), /went with your post/);
   byText(p.root, 'button', 'Clear')[0].click();
-  assert.deepEqual(p.attach.unstaged, [], 'nothing was waiting once it was sent');
+  assert.deepEqual(p.attach.unstaged, [1], 'nothing was waiting once it was sent');
 });
 
-test('with no label the spot is named as circled; Clear and the tray Remove take the sketch back', async () => {
+test('a sketch needs the spot named; Clear, the tray Remove and deleting the draft text take the sketch back', async () => {
   canvases();
   const p = page({draft: ''});
   await sketch(p);
   circle(p, [10, 20], [110, 70]);
   p.type('action', 'I hide here');
   await p.use();
-  assert.equal(p.composer.input.value, 'I hide here (Reference: the circled spot on my sketch)');
-  assert.match(p.attach.staged[0].carry.note, /the circled spot on my sketch; rectangle/);
+  assert.equal(p.composer.input.value, '', 'nobody reads the sketch, so an unnamed spot is not offered');
+  assert.equal(p.attach.staged.length, 0);
+  assert.match(p.status(), /Name the circled spot/);
+  p.type('region-label', 'doorway');
+  await p.use();
+  assert.equal(p.composer.input.value, 'I hide here (Reference: doorway)');
+  assert.match(p.attach.staged[0].carry.note, /doorway; rectangle/);
   p.attach.staged[0].carry.removed();
   assert.match(p.status(), /removed from your next post/);
-  assert.equal(p.composer.input.value, 'I hide here (Reference: the circled spot on my sketch)', 'the draft text is the player\'s');
+  assert.equal(p.composer.input.value, 'I hide here (Reference: doorway)', 'the draft text is the player\'s');
   await p.use();  // the text is there; the sketch goes back to the tray
   assert.equal(p.attach.staged.length, 2);
+  p.attach.staged[0].carry.sent('turn:old');  // a stale callback about the first staging changes nothing
   byText(p.root, 'button', 'Clear')[0].click();
   assert.deepEqual(p.attach.unstaged, [2]);
-  assert.equal(p.composer.input.value, 'I hide here (Reference: the circled spot on my sketch)');
+  assert.equal(p.composer.input.value, 'I hide here (Reference: doorway)');
+  // deleting the reference's text from the composer takes its sketch off the post the player makes instead
+  const q = page({draft: ''});
+  await sketch(q);
+  q.type('action', 'I hide here'); q.type('region-label', 'doorway');
+  await q.use();
+  q.composer.input.value = 'I run instead';
+  q.composer.input.dispatchEvent({type: 'input'});
+  assert.deepEqual(q.attach.unstaged, [1]);
+  assert.match(q.status(), /draft text for this reference was removed/);
+  byText(q.root, 'button', 'Clear')[0].click();
+});
+
+test('typing or posting while the sketch is drawn: the composer is appended as it is then, never restored', async () => {
+  let finish;
+  const made = canvases();
+  const p = page({draft: 'I creep forward'});
+  await sketch(p);
+  globalThis.OffscreenCanvas.prototype.convertToBlob = function ({type}) {
+    return new Promise(resolve => { finish = () => resolve(new Blob([new Uint8Array(PNG)], {type})); });
+  };
+  p.type('action', 'I hide here'); p.type('region-label', 'doorway');
+  byText(p.root, 'button', 'Use as draft')[0].click();
+  await tick();
+  p.composer.input.value = 'Wait';  // posted meanwhile, then typed again
+  finish();
+  await tick(); await tick();
+  assert.equal(made.length, 1);
+  assert.equal(p.composer.input.value, 'Wait\n\nI hide here (Reference: doorway)');
+  byText(p.root, 'button', 'Clear')[0].click();
+});
+
+test('a long description is cut in the note, and a post\'s picture waiting for Try again is never replaced', async () => {
+  canvases();
+  const p = page();
+  await sketch(p);
+  p.type('action', 'I hide here'); p.type('region-label', 'd'.repeat(2000));
+  await p.use();
+  const {note} = p.attach.staged[0].carry;
+  assert.ok(note.length <= 2000, note.length);
+  assert.match(note, /d…; rectangle at x 0/);
+  byText(p.root, 'button', 'Clear')[0].click();
+  const retry = tray();
+  retry.waits = () => 'retry';
+  const q = page({attach: retry});
+  await sketch(q);
+  q.type('action', 'I hide here'); q.type('region-label', 'doorway');
+  await q.use();
+  assert.equal(q.attach.staged.length, 0);
+  assert.equal(q.composer.input.value, 'Existing draft');
+  assert.match(q.status(), /Try again or Remove/);
+  byText(q.root, 'button', 'Clear')[0].click();
 });
 
 test('an image the player attached is never replaced, and a failed drawing adds nothing', async () => {
   canvases();
   const busy = page({attach: tray({busy: true})});
   await sketch(busy);
-  busy.type('action', 'I hide here');
+  busy.type('action', 'I hide here'); busy.type('region-label', 'doorway');
   await busy.use();
   assert.equal(busy.composer.input.value, 'Existing draft');
   assert.match(busy.status(), /already has an image attached\. Remove it first/);
@@ -190,7 +248,7 @@ test('an image the player attached is never replaced, and a failed drawing adds 
     canvases(broken);
     const p = page();
     await sketch(p);
-    p.type('action', 'I hide here');
+    p.type('action', 'I hide here'); p.type('region-label', 'doorway');
     await p.use();
     assert.equal(p.composer.input.value, 'Existing draft', JSON.stringify(broken));
     assert.equal(p.attach.staged.length, 0);

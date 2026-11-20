@@ -15,7 +15,8 @@
 //                         no pictures ("unsupported") or the person's own chosen image waits ("busy"): a post
 //                         carries one picture, and the person's choice is never replaced for them.
 //   unstage(token)        takes that file back out, if it is still the one waiting
-//   waits()               what is waiting: "own" (the person's chosen image), "staged" or null
+//   waits()               what is waiting: "own" (the person's chosen image), "retry" (a picture whose post was
+//                         made but whose upload failed, waiting for Try again or Remove), "staged" or null
 
 import { ACCEPT, MAX_UPLOAD, base64, openPicker, zoomClass, zoomOf } from "../art/picker.js";
 import { chatPictures } from "./pictures.js";
@@ -79,7 +80,8 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
   let staged = 0;
   function stage(file, carry) {
     if (!pictures.writes) return { refused: "unsupported" };
-    if (waiting && !waiting.carry) return { refused: "busy" };
+    // the person's own image, or any picture that already belongs to a post made (its Try again), is never replaced
+    if (waiting && (!waiting.carry || waiting.turn)) return { refused: "busy" };
     if (waiting && waiting.url) URL.revokeObjectURL(waiting.url);
     let url = null;
     try { url = URL.createObjectURL(file); } catch (error) { url = null; }
@@ -88,7 +90,7 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
     show();
     return token;
   }
-  function unstage(token) { if (waiting && waiting.carry && waiting.carry.token === token) drop(); }
+  function unstage(token) { if (waiting && waiting.carry && waiting.carry.token === token && !waiting.turn) drop(); }
 
   async function send(turn) {
     const held = waiting;
@@ -151,6 +153,6 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
     return row;
   }
 
-  const waits = () => (waiting ? (waiting.carry ? "staged" : "own") : null);
+  const waits = () => (!waiting ? null : waiting.turn ? "retry" : waiting.carry ? "staged" : "own");
   return { writes: pictures.writes, under, posted, stage, unstage, waits };
 }

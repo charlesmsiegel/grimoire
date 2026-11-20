@@ -11,7 +11,8 @@ const MAX_BYTES = 2 * 1024 * 1024;
 export const MAX_CARRIED = 32 * 1024 * 1024;
 // a drag smaller than this, either way, is a stray tap: the region it would replace is kept
 const MIN_DRAG = 0.01;
-const UNLABELLED = 'the circled spot on my sketch';
+// a carried picture's note is at most 2000 characters (mediaapi MAX_NOTE_CHARS); the label is cut to fit
+const MAX_NOTE_LABEL = 1500;
 
 export function validateRegion(region) {
   const {x, y, w, h} = region;
@@ -30,17 +31,18 @@ export function dragRegion(from, to) {
   return {x, y, w: Math.max(0, Math.min(round(x1 - x0), round(1 - x))), h: Math.max(0, Math.min(round(y1 - y0), round(1 - y)))};
 }
 
-// The draft action the panel offers: the typed action, and the spot it is about. A sketch with no typed label
-// is named for what the player did on it, so the post still says the spot was marked, not where it is.
-export function draftAction(action, label, sketched) {
-  const spot = label || (sketched ? UNLABELLED : '');
-  return action + (spot ? ' (Reference: ' + spot + ')' : '');
+// The draft action the panel offers: the typed action, and the spot it is about in the player's own words.
+// Nothing interprets the sketch and no model is sent it, so a carried sketch always has a typed description:
+// the post's text is all the table reads (Use as draft refuses a sketch with none).
+export function draftAction(action, label) {
+  return action + (label ? ' (Reference: ' + label + ')' : '');
 }
 
 // What the carried picture says of itself (its note in the campaign's art): public words only.
 export function carriedNote(label, shape, r) {
   const at = n => Number(n.toFixed(3));
-  return 'Player reference intent, not a world fact: ' + (label || UNLABELLED) + '; ' + shape + ' at x ' + at(r.x) + ', y '
+  const named = label.length > MAX_NOTE_LABEL ? label.slice(0, MAX_NOTE_LABEL) + '…' : label;
+  return 'Player reference intent, not a world fact: ' + named + '; ' + shape + ' at x ' + at(r.x) + ', y '
     + at(r.y) + ', width ' + at(r.w) + ', height ' + at(r.h) + ' of the sketch.';
 }
 
@@ -144,7 +146,7 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
       if (!remember()) return;
       state[name]=f.input.value.slice(0,2000);
       status.textContent='Local reference updated; not sent.';
-      if (['x','y','w','h'].includes(name)) draw(); else offer();
+      if (['x','y','w','h'].includes(name)) { stale(); draw(); } else offer();
     });
     return f.node;
   };
@@ -167,8 +169,10 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
   const carries = () => Boolean(state.image && attach && attach.writes);
   function offer() {
     const action = (inputs.action?.value || '').trim();
-    offered.textContent = action ? 'Draft action: ' + draftAction(action, (inputs['region-label']?.value || '').trim(), carries())
-      + (carries() ? ' · with your marked sketch' : '') : 'Draft action: type the intended action.';
+    const label = (inputs['region-label']?.value || '').trim();
+    offered.textContent = !action ? 'Draft action: type the intended action.'
+      : carries() && !label ? 'Draft action: ' + action + ' · name the circled spot (for example, doorway) to attach your marked sketch'
+      : 'Draft action: ' + draftAction(action, label) + (carries() ? ' · with your marked sketch' : '');
   }
   function draw() {
     offer();
@@ -224,11 +228,12 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
     }
     setRegion(r);
     status.textContent = 'Spot circled on your sketch; review the draft action. Nothing is sent.';
+    stale();
   };
   preview.addEventListener('pointerup', event => finish(event, false));
   preview.addEventListener('pointercancel', event => finish(event, true));
   const shape=ui.choice('Region shape',[{value:'rectangle',label:'Rectangle'},{value:'ellipse',label:'Ellipse'}],{
-    value:state.shape,onchange:value=>{if(remember()){state.shape=value;draw();}}});
+    value:state.shape,onchange:value=>{if(remember()){state.shape=value;stale();draw();}}});
   controls.append(shape.node,...[['x','Region x (0–1)'],['y','Region y (0–1)'],['w','Region width (0–1)'],['h','Region height (0–1)']].map(([key,label])=>field(key,label,{type:'number'})));
   const file=el('input',{type:'file',accept:'image/png,image/jpeg,image/webp',name:'reference-file',id:ui.id('reference-file')});
   file.addEventListener('change',async()=>{
@@ -249,23 +254,45 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
       if(!Number.isInteger(dimensions.width) || !Number.isInteger(dimensions.height) || dimensions.width < 1 || dimensions.height < 1
           || dimensions.width > 4096 || dimensions.height > 4096) throw Error('Decoded image must be at most 4096 × 4096 pixels.');
       if(!remember()) return;
-      release();state.image={file:chosen,...dimensions};
+      release();state.image={file:chosen,...dimensions};stale();
       status.textContent='Image retained locally; drag across it to circle a spot, then review the action.';draw();
     } catch(error) {
       if(token === generation && alive()) status.textContent='Image not changed: '+(error.message || 'could not decode image.');
     } finally { if(token === generation) pending=false; }
   });
-  // The marked sketch waiting for the next post is this panel's own while `token` names it in the tray.
-  const carriedHooks = () => ({
-    sent: () => { if (state.carried) state.carried = null; state.used = null; token = null; if (alive()) status.textContent = 'Your marked sketch went with your post, as your intent only.'; },
-    removed: () => { if (state.carried) state.carried = null; token = null; if (alive()) status.textContent = 'Marked sketch removed from your next post; your draft text is unchanged.'; },
-  });
+  // The marked sketch waiting for the next post is this panel's own while `token` names it in the tray. A
+  // callback about an earlier staging (an upload that ends after a newer sketch was staged) changes nothing.
   const restage = carried => {
-    const done = attach.stage(carried.file, {note:carried.note, origin:'player reference intent', label:'your marked sketch', ...carriedHooks()});
+    const mine = {token:null};
+    const done = attach.stage(carried.file, {note:carried.note, origin:'player reference intent', label:'your marked sketch',
+      sent: () => {
+        if (token !== mine.token) return;
+        state.carried = null; state.used = null; token = null;
+        if (alive()) status.textContent = 'Your marked sketch went with your post, as your intent only.';
+      },
+      removed: () => {
+        if (token !== mine.token) return;
+        state.carried = null; token = null;
+        if (alive()) status.textContent = 'Marked sketch removed from your next post; your draft text is unchanged.';
+      }});
     if (done && done.refused) return done.refused;
-    token = done; return null;
+    token = mine.token = done; return null;
   };
   const unstage = () => { if (token !== null && attach && attach.unstage) attach.unstage(token); token = null; state.carried = null; };
+  // A sketch, region or shape changed after its marked copy was attached: the copy no longer shows what the panel
+  // does, so it comes off the next post rather than going with it unseen.
+  const stale = () => {
+    if (token === null && !state.carried) return;
+    unstage();
+    if (alive()) status.textContent = 'The sketch or region changed, so the marked sketch was taken off your next post. Use as draft to attach the new one.';
+  };
+  // The player took the draft text out of the composer: its sketch does not go with whatever they post instead.
+  // (Posting clears the composer without an input event, so this never fires for the post itself.)
+  composer.input.addEventListener('input', () => {
+    if (token === null || !state.used || ('\n\n'+composer.input.value+'\n\n').includes('\n\n'+state.used+'\n\n')) return;
+    unstage();
+    if (alive()) status.textContent = 'Your draft text for this reference was removed, so its marked sketch was taken off your next post.';
+  }, {signal: ctx.signal});
   const use=ui.button('Use as draft',async()=>{
     if(!alive()) return;
     if(pending) {status.textContent='Wait for image validation before using this reference.';return;}
@@ -274,18 +301,21 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
       const action=inputs.action.value.trim(), label=inputs['region-label'].value.trim();
       if(!action) throw Error('Type the intended action first; an image is optional.');
       const sketch = state.image, carrying = carries();
-      const text=draftAction(action, label, carrying);
+      if(carrying && !label) throw Error('Name the circled spot (for example, doorway): the table reads only your words, never the sketch.');
+      const text=draftAction(action, label);
       const key = sketch ? [text, state.shape, r.x, r.y, r.w, r.h].join('|') : null;
-      const present = ('\n\n'+composer.input.value+'\n\n').includes('\n\n'+text+'\n\n');
-      const fresh = !(state.used === text || present);
+      // whether the composer still needs the text, read again after any wait: the player may have typed or
+      // posted meanwhile, and only the composer as it is now may be appended to
+      const needs = () => !(state.used === text || ('\n\n'+composer.input.value+'\n\n').includes('\n\n'+text+'\n\n'));
+      const fits = () => (composer.input.value+(composer.input.value ? '\n\n' : '')+text).length
+        <= (Number(composer.input.getAttribute('maxlength')) || 20000);
       const sketchFresh = carrying && !(state.carried && state.carried.key === key && state.carried.image === sketch && token !== null);
-      if(!fresh && !sketchFresh) {status.textContent='Already used; your current composer draft is unchanged.';return;}
+      if(!needs() && !sketchFresh) {status.textContent='Already used; your current composer draft is unchanged.';return;}
       if(!remember()) return;
-      const next=composer.input.value+(composer.input.value ? '\n\n' : '')+text;
-      const max=Number(composer.input.getAttribute('maxlength')) || 20000;
-      if(fresh && next.length > max) throw Error('Composer draft is full; shorten it before adding this intent.');
-      const busy = Error('Your next post already has an image attached. Remove it first: a post carries one picture.');
-      if (sketchFresh && attach.waits && attach.waits() === 'own') throw busy;
+      if(needs() && !fits()) throw Error('Composer draft is full; shorten it before adding this intent.');
+      const held = attach && attach.waits ? attach.waits() : null;
+      if (sketchFresh && held === 'own') throw Error('Your next post already has an image attached. Remove it first: a post carries one picture.');
+      if (sketchFresh && held === 'retry') throw Error('Your last post\'s picture is not attached yet. Try again or Remove it in the tray first.');
       if (sketchFresh) {
         pending = true;
         const epoch = generation;
@@ -294,17 +324,19 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
         catch (error) { throw Error('Your marked sketch could not be prepared (' + (error.message || 'drawing failed') + '); nothing was added.'); }
         finally { pending = false; }
         if (epoch !== generation || !alive() || state.image !== sketch) return;
+        if (needs() && !fits()) throw Error('Composer draft is full; shorten it before adding this intent.');
         const previous = token;
         const carried = {file:marked, key, image:sketch, note:carriedNote(label, state.shape, r)};
         const refused = restage(carried);
-        if (refused === 'busy') throw busy;
+        if (refused === 'busy') throw Error('Your next post already has an image attached. Remove it first: a post carries one picture.');
         if (refused) { token = previous; state.carried = null; }
         else state.carried = carried;
       }
+      const fresh = needs();
       if (fresh) {
-        composer.input.value=next;
-        composer.input.dispatchEvent(new Event('input',{bubbles:true}));
+        composer.input.value=composer.input.value+(composer.input.value ? '\n\n' : '')+text;
         state.used=text;
+        composer.input.dispatchEvent(new Event('input',{bubbles:true}));
       }
       status.textContent = !carrying && sketch ? 'Added to your draft only; this chat cannot keep pictures, so the sketch stays here. Review before posting.'
         : state.carried ? (fresh ? 'Added to your draft, with your marked sketch waiting for the same post. Review before posting.'
