@@ -721,9 +721,9 @@ Scheduled domain slices and UI exit 116 are not complete.
 <a id="slice-079"></a>
 ### 079 — Source Upgrades And Dependencies
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/source-upgrades-and-dependencies.md)).
-- Evidence: [`rebase/review.py`](../../backend/src/grimoire/rebase/review.py) and rebasestore implement reviewed same-entity ancestor/new-source/override field merges; [`test_rebase_review.py`](../../backend/tests/test_rebase_review.py) and [`test_rebasestore_scenarios.py`](../../backend/tests/test_rebasestore_scenarios.py) cover them.
-- Scope / gap: 042 is not 079 package upgrade/dependency handling: no source disable/removal impact preview and optional versioned dependency manifests.
+- [x] Scheduled first-useful slice ([requirements](sprints/source-upgrades-and-dependencies.md)).
+- Evidence: [`sourceupgrades`](../../backend/src/grimoire/sourceupgrades), [contract](../SOURCE_UPGRADES.md) and [`test_source_upgrades.py`](../../backend/tests/test_source_upgrades.py) prove read-only removal and update previews that resolve every reference to a source by its exact qualified id: removing a shared cast lists its chats, actors, portrayals, links and catalog references as missing and names neither of two namesake Maras (one in a lookalike source stored under the cast's folder); an update that swaps two catalogs' names and members keeps references from two world catalogs listing them in opposite orders on their own ids, pinned rows `unchanged` with the newer head offered, following chats and actors `follows_head`; edited bytes at a pinned revision and dropped revisions are flagged. Optional source dependencies are declared, pinned to a version digest, reported (`pinned`/`drifted`/`following`/`missing`) and re-pinned by a guarded manifest write.
+- Scope / gap: Headless and preview-only: no applying an update or removal, rollback, re-pinning of non-actor bindings (042 rebases actors), recursive dependencies or UI.
 
 <a id="slice-080"></a>
 ### 080 — Speech To Draft
