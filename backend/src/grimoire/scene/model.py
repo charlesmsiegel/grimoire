@@ -45,8 +45,9 @@ MAX_LABELS = 8
 #: A turn's proposed 021 effect (035 milestone 2): ``proposed`` (keys to collect), ``approved`` (the director's
 #: outcome key given), ``accepting`` (every key held and an event id allocated: written before the commit, so a
 #: crash leaves it for open-time recovery), ``accepted`` (the event is in force), ``refused`` (021 or 029 refused
-#: it, or recovery aborted it unpublished), ``superseded`` (a newer proposal replaced it) and ``revoked``
-#: (recovery aborted it after something landed, or its accepted event was revoked through 021 since).
+#: it, recovery aborted it unpublished, or it was ended unaccepted: reason ``withdrawn`` or ``declined``),
+#: ``superseded`` (a newer proposal replaced it) and ``revoked`` (recovery aborted it after something landed, or
+#: its accepted event was revoked through 021 since).
 EFFECT_STATES = ("proposed", "approved", "accepting", "accepted", "refused", "superseded", "revoked")
 #: Effect proposals per turn, kept for good.
 MAX_EFFECTS = 8

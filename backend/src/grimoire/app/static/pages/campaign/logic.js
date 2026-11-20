@@ -180,3 +180,26 @@ export function leaning(bearing) {
 }
 
 export function count(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
+
+// -- ending a waiting change --------------------------------------------------------------------------------
+
+const live = (effect) => effect.state === "proposed" || effect.state === "approved";
+
+// Who may end a change still waiting on a key, without accepting it. The director withdraws any; at the table,
+// a player withdraws only a change they proposed themselves (`proposed_by: player`, shown at the table only to a
+// player who holds a key on it). A player declines a change their own character acts in, key given or not; the
+// director's view gives no player's refusal, as it gives no player's key. The hub refuses anything else.
+export function mayWithdraw(hub, effect, director) {
+  return live(effect) && (director || effect.proposed_by === "player");
+}
+
+export function mayDecline(hub, effect, director) {
+  return live(effect) && !director && effect.endorsers.some((key) => key.principal === hub.player);
+}
+
+// How an effect's state is said: an ended one by how it ended, a refused one with the reason it was refused.
+export function effectState(effect) {
+  if (effect.state === "refused" && effect.reason === "withdrawn") return "withdrawn";
+  if (effect.state === "refused" && effect.reason === "declined") return "declined";
+  return effect.state + (effect.reason ? ": " + effect.reason : "");
+}

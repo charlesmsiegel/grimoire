@@ -48,7 +48,8 @@ from grimoire.ledgers.codec import ControlChange
 from grimoire.obstaclestore import ObstacleLibrary
 from grimoire.partystore import PartyLibrary
 from grimoire.play.accept import (
-    approve_effect, effect_problems, endorse_effect, propose_effect, recover_effects,
+    approve_effect, decline_effect, effect_problems, endorse_effect, propose_effect, recover_effects,
+    withdraw_effect,
 )
 from grimoire.play.boundaries import HELD, Boundaries, change as change_boundary, check_presented, in_force
 from grimoire.play.boundaries import view as boundary_view
@@ -1159,6 +1160,19 @@ class SceneRunner:
     def endorse_effect(self, chat: ChatRef, by, turn: str, number: int, fingerprint: str):
         """A player's own key on the exact effect shown (its fingerprint); the last key accepts it."""
         return endorse_effect(self, chat, by, turn, number, fingerprint)
+
+    @traced("withdraw_effect")
+    def withdraw_effect(self, chat: ChatRef, by, turn: str, number: int):
+        """End a live (proposed or approved) effect without accepting it, written ``refused`` (``withdrawn``): by
+        the director (the owner), or by the player who proposed it for their own post's turn. Its keys go with it;
+        the turn may be proposed for again."""
+        return withdraw_effect(self, chat, by, turn, number)
+
+    @traced("decline_effect")
+    def decline_effect(self, chat: ChatRef, by, turn: str, number: int, fingerprint: str):
+        """A named endorser refuses the exact effect shown (its fingerprint), given their key or not: it is ended
+        without being accepted, written ``refused`` (``declined``); the turn may be proposed for again."""
+        return decline_effect(self, chat, by, turn, number, fingerprint)
 
     @traced("recover_effects")
     def recover_effects(self, chat: ChatRef, by, *, abort: bool = False, endorsers=(), own: bool = False):

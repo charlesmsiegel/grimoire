@@ -26,6 +26,11 @@ An endorsement given with a player's own trusted handle is also recorded by the 
 authority writes and sync never carries). A recorded endorsement is presented to 021 again, on a handle minted
 for that player, only when that decision is in the authority's audit: an endorsement written into a turn file
 by hand or by a peer is refused ``invalid_endorsement``. See docs/TOOL_AUTHORITY.md.
+
+A live effect can also be ended without being accepted: withdrawn (by the director, or by the player who proposed
+it) or declined (by a player whose key it waits on). It is written ``refused`` with that reason (``withdrawn``,
+``declined``), so no new state is stored, and the authority records the ending first: an ended effect set live
+again in its turn file is refused at acceptance with the same reason.
 """
 
 from __future__ import annotations
@@ -53,6 +58,9 @@ from grimoire.store.layout import address_parts
 
 #: What an aborted acceptance's revocation records as its reason.
 ABORTED = "035 recovery: aborted by the director"
+#: Why a live effect was ended without being accepted: it is written ``refused`` with one of these reasons.
+WITHDRAWN, DECLINED = "withdrawn", "declined"
+ENDINGS = (WITHDRAWN, DECLINED)
 #: The shapes ``open`` names for an ``accepting`` effect (030): what landed of its acceptance.
 SHAPES = ("landed", "complete", "revoked", "adopt", "unpublished", "unreadable")
 
@@ -294,6 +302,94 @@ def endorse_effect(runner, chat: ChatRef, by, turn: str, number: int, fingerprin
     return endorsed
 
 
+# -- ending a live effect without accepting it -------------------------------------------------------
+
+def withdraw_effect(runner, chat: ChatRef, by, turn: str, number: int) -> TurnEffect:
+    """See ``SceneRunner.withdraw_effect``."""
+    def may(scene, stored: StoredTurn, effect: TurnEffect, principal: str) -> None:
+        if not _may_end(runner, stored.record, effect, principal, WITHDRAWN):
+            raise _refuse("not_proposer", "only the director, or the player who proposed it, withdraws an effect")
+    return _end(runner, chat, by, turn, number, WITHDRAWN, may)
+
+
+def decline_effect(runner, chat: ChatRef, by, turn: str, number: int, fingerprint: str) -> TurnEffect:
+    """See ``SceneRunner.decline_effect``."""
+    def may(scene, stored: StoredTurn, effect: TurnEffect, principal: str) -> None:
+        if fingerprint != effect.fingerprint:  # the effect as shown, as an endorsement names it
+            raise _refuse("fingerprint_mismatch", "decline the effect as it was shown: its fingerprint differs")
+        if not _may_end(runner, stored.record, effect, principal, DECLINED):
+            raise _refuse("not_endorser", "only a player whose character acts in this effect declines it")
+        try:
+            now = authorize(effect.proposal, scene.controls, contributions_of(stored.record)).endorsers
+        except (EffectError, AuthorityError):
+            now = None
+        if now is None or tuple(sorted(now.items())) != effect.endorsers:
+            raise _refuse("control_changed", "who plays a character of this effect changed since it was proposed")
+    return _end(runner, chat, by, turn, number, DECLINED, may)
+
+
+def _may_end(runner, record: TurnRecord, effect: TurnEffect, principal: str, reason: str) -> bool:
+    """Whether ``principal`` may end ``effect`` with ``reason``: a withdrawal is the director's (the library owner)
+    or, for a player's own proposal, that player's (whose post the turn is); a decline is a named endorser's."""
+    if reason == WITHDRAWN:
+        return principal in runner.authority.owners or (
+            effect.proposal.proposed_by == "player" and record.post is not None
+            and record.post.submitted_by == principal)
+    return reason == DECLINED and any(endorser == principal for _, endorser in effect.endorsers)
+
+
+def _end(runner, chat: ChatRef, by, turn: str, number: int, reason: str, may) -> TurnEffect:
+    """End a live effect (``proposed`` or ``approved``) as ``refused`` with ``reason``, without accepting it.
+
+    The checks are a key's (play not paused, the turn on the line, no fork or sync conflict, the effect still
+    collecting keys), then ``may``'s. The turn is written by compare-and-swap, so another key, a pause or a fork
+    landing since it was read is ``turn_changed`` and ends nothing. Under the store lock, once the write's own
+    checks have passed, the turn is still as read and just before it commits, the authority records the ending as
+    a decision of the asker's own handle (as an endorsement is recorded), written to its ledger with the turn's
+    commit, so an ending whose write would lose records nothing (in this process). That record is what
+    an acceptance checks, so an ended effect set live again in its turn file (by hand or by a peer) is refused at
+    acceptance with the same reason."""
+    scene, principal, _ = _playing(runner, chat, by)
+    stored = _turn(scene, turn)
+    effect = _effect(stored, number)
+    _collecting(effect)
+    may(scene, stored, effect, principal)
+    ended = replace(effect, state="refused", reason=reason)
+
+    def record() -> None:  # under the store lock: a turn changed since it was read records nothing (it would lose)
+        fresh = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == stored.record.ref), None)
+        if fresh is None or fresh.etag != stored.etag:
+            raise _refuse("turn_changed", "the turn changed since it was read; read it again")
+        _record_end(by, stored.record.ref, number, reason, effect.fingerprint)
+    runner._write(stored.record.with_effect(ended), stored, unpaused=True, before_commit=record)
+    return ended
+
+
+def end_address(ref: TurnRef, number: int, reason: str, fingerprint: str) -> str:
+    """The logical address the authority records an ending at: the turn, the effect's number, why, and the
+    fingerprint it was shown with (its proposal's, with any waivers)."""
+    return "/".join((*address_parts(ref), "ended", str(number), reason, fingerprint.removeprefix("sha256:")))
+
+
+def _record_end(handle, ref: TurnRef, number: int, reason: str, fingerprint: str) -> None:
+    """Have the authority record that ``handle`` ended effect ``number`` (as an endorsement is recorded: the
+    decision's outcome does not matter, only its audit record, which that trusted handle alone could make). It
+    never refuses: without the record, only the check against an ended effect set live again would be lost."""
+    handle.authorize(Permission.PROPOSE, end_address(ref, number, reason, fingerprint), fingerprint.encode("utf-8"))
+
+
+def _ended(runner, record: TurnRecord, effect: TurnEffect) -> str | None:
+    """Why the authority's audit says ``effect`` was ended (``withdrawn`` or ``declined``), by a principal who
+    may end it so, or ``None``: an effect ended once is never accepted, whatever its turn file says since."""
+    wanted = {end_address(record.ref, effect.number, reason, effect.fingerprint): reason for reason in ENDINGS}
+    for item in reversed(runner.authority.audit()):
+        reason = wanted.get(item.resource) if type(item.resource) is str else None
+        if reason is not None and item.trusted is True and item.permission is Permission.PROPOSE and _may_end(
+                runner, record, effect, item.principal, reason):
+            return reason
+    return None
+
+
 def endorsement_address(ref: TurnRef, contribution_id: str, fingerprint: str) -> str:
     """The logical address the authority records an endorsement at: the turn, the contribution, the fingerprint."""
     return "/".join((*address_parts(ref), "endorsements", contribution_id, fingerprint.removeprefix("sha256:")))
@@ -463,6 +559,9 @@ def _accepting(runner, scene, stored: StoredTurn, effect: TurnEffect, live: Mapp
         raise _refuse("no_adjudication", "every acceptance is checked by 029 first")
     proposal = effect.proposal
     try:
+        ended = _ended(runner, record, effect)  # withdrawn or declined once: never accepted, whatever the file says
+        if ended is not None:
+            raise _refuse(ended, "this effect was ended without being accepted; propose it again")
         _029(runner.adjudication.check_effect, proposal)
         # 040: an effect of a turn whose obstacle attempt made something due still holds it (a turn file edited
         # since, by hand or by a peer, could have dropped it). A waiver counts only with the authority's record
@@ -765,5 +864,6 @@ def _021(call: Callable, *args, **kwargs):
         raise _refuse("effects_unavailable", type(error).__name__) from None
 
 
-__all__ = ["ABORTED", "SHAPES", "approve_effect", "blockers", "contributions_of", "effect_problems",
-           "endorse_effect", "endorsement_address", "next_sequence", "propose_effect", "recover_effects", "shape_of"]
+__all__ = ["ABORTED", "DECLINED", "ENDINGS", "SHAPES", "WITHDRAWN", "approve_effect", "blockers", "contributions_of",
+           "decline_effect", "effect_problems", "end_address", "endorse_effect", "endorsement_address",
+           "next_sequence", "propose_effect", "recover_effects", "shape_of", "withdraw_effect"]
