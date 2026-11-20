@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "chronicle",
+  "route": "chronicle",
+  "title": "Chronicle",
+  "slot": "hidden",
+  "order": 20,
+  "owner": "115",
+  "entry": "page.js",
+  "requires": ["campaign.chats", "campaign.hub", "chronicle.clock", "chronicle.memory", "chronicle.coverage"],
+  "unavailable": null
+}
