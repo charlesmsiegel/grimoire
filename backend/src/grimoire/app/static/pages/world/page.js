@@ -146,6 +146,7 @@ async function showPlaces(slot, ctx, campaign) {
   let topologies = [];  // the library's topologies, listed apart from any one's view
   let current = null;   // the topology chosen
   let shown = null;     // its view in this campaign, or null when it could not be read (viewError)
+  let shownAt = 0;      // the read that drew `shown`: while a newer read is out, what is on screen is not acted on
   let viewError = null;
   let review = null;    // { args, plan }: committed exactly as reviewed, with its own operation id
   let found = null, routed = null;
@@ -169,6 +170,7 @@ async function showPlaces(slot, ctx, campaign) {
       catch (error) { if (error && error.reason === "left") return; failure = error; }
     }
     if (!reading.current(turn)) return;
+    shownAt = turn;
     current = ref;
     review = null;
     viewError = failure;
@@ -183,7 +185,8 @@ async function showPlaces(slot, ctx, campaign) {
   // A review or a change answers for the read it started from: once a newer read has run (another topology chosen,
   // even the same one chosen again), that read is what is shown, and the answer is not drawn over it.
   const plan = (path, blocked) => ctx.act(async () => {
-    const since = reading.now();
+    if (!reading.current(shownAt)) return true;  // another topology is being read: these roads are about to go
+    const since = shownAt;
     const args = { campaign, ...D, topology: shown.topology, path: path.path, blocked, operation_id: newOperationId(), expected: shown.etag };
     try {
       const answer = await ctx.api("world.path_plan", args);
@@ -200,8 +203,8 @@ async function showPlaces(slot, ctx, campaign) {
   });
   const commit = () => ctx.act(async () => {
     const reviewed = review;
-    if (!reviewed) return true;
-    const since = reading.now();
+    if (!reviewed || !reading.current(shownAt)) return true;  // a newer read is out: it drops this review when it lands
+    const since = shownAt;
     try {
       const answer = await ctx.api("world.path_commit", reviewed.args);
       ctx.notify(answer.done.already_applied ? "That change was already made; nothing was changed again." : "The road is changed in this campaign.");

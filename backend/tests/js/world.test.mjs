@@ -581,6 +581,27 @@ test("a road change answered while another topology is still being read keeps th
     || placesCard(root).textContent.includes("ferry"), "and its roads are what is shown");
 });
 
+test("a road shown while another topology is being read is not reviewed against the one chosen", async () => {
+  let releaseSea;
+  const { root, done, asked } = await mounted({ answers: {
+    "world.topologies": () => TWO,
+    "world.places": (args) => args.topology === SEA
+      ? new Promise((resolve) => { releaseSea = () => resolve(places("s|", { topology: SEA, road: "ferry" })); })
+      : places("g|", { topology: ROADS }),
+    "world.path_plan": (args) => planOf(args, places(args.expected).topology),
+  } });
+  await done;
+  choose(root, SEA);  // its read is still out
+  await settle(3);
+  roadButton(placesCard(root), "Block road").click();  // the old topology's road, still on screen
+  await settle();
+  releaseSea();
+  await settle();
+  assert.ok(!asked.some((item) => item.op === "world.path_plan"), "no review is asked of the roads being replaced");
+  assert.ok(!reviewOf(placesCard(root)), "and none is shown over the topology chosen");
+  assert.equal(field(placesCard(root), "Topology").value, SEA);
+});
+
 test("a hypothesis another one replaces can't be removed before it, so the chain stays one 060 admits", async () => {
   const { root, done } = await mounted();
   await done;
