@@ -162,6 +162,15 @@ def test_clock_requests_the_domain_would_not_take_are_refused_before_anything_is
         assert refused(app, "chronicle.clock", campaign="../elsewhere", **DIRECTOR).reason == "invalid_field"
         assert scope_bytes(device, campaign) == before
 
+    # a campaign scope this version cannot read is refused with its reason by every clock op, never a server error
+    path = folder / "campaigns" / campaign / "scope.json"
+    path.write_text(path.read_text().replace('"grimoire.play-scope/1"', '"grimoire.play-scope/2"'))
+    with Device(folder) as device:
+        app = AppApi(device.api)
+        assert refused(app, "chronicle.clock", campaign=campaign, **DIRECTOR).reason == "unsupported_schema"
+        for op in ("chronicle.clock_plan", "chronicle.clock_commit"):
+            assert refused(app, op, **base, operation="initialize", date="1024-03-01").reason == "unsupported_schema"
+
 
 def test_an_npcs_memory_is_the_directors_and_play_packs_what_the_director_wrote(desk):
     folder, chat = desk
@@ -198,6 +207,12 @@ def test_an_npcs_memory_is_the_directors_and_play_packs_what_the_director_wrote(
         (topic,) = corrected["topics"]
         assert [item["account"] for item in topic["current"]] == ["corrected"]
         assert [(item["account"], item["status"]) for item in topic["history"]] == [("recap", "superseded")]
+
+        # an account written later may rest on older evidence than the last one, on another detail
+        alias = app.call("chronicle.remember", {**ask, **DIRECTOR, "operation_id": "alias", "topic": "aldric",
+                                                "text": "Maren keeps a monk's habit for disguises.", "evidence": ["masked"]})
+        assert {entry["topic"]: [item["status"] for item in entry["current"]] for entry in alias["memory"]["topics"]} \
+            == {"aldric": ["current"], "visitor-identity": ["current"]}
 
         lines = [item["line"] for item in device.api.runner.inspect_context(chat, InstanceRef.parse(mara))["items"]]
         assert "You remember: The visitor was Sister Maren in disguise." in lines

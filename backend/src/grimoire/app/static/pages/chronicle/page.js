@@ -92,6 +92,8 @@ async function showClock(slot, ctx, campaign) {
   // so a commit retried after a lost answer finds the operation it already made.
   let review = null;
   let clock = null;
+  // the deadline being written is kept (across a review, a cancel or a stale commit) until it is scheduled
+  const DEADLINE = "deadline:" + campaign + ":";
 
   const load = async () => { clock = await ctx.api("chronicle.clock", { campaign, audience: "director" }); draw(); };
   const plan = (args) => ctx.act(async () => {
@@ -105,6 +107,7 @@ async function showClock(slot, ctx, campaign) {
   const commit = () => ctx.act(async () => {
     try {
       const answer = await ctx.api("chronicle.clock_commit", review.args);
+      if (review.args.operation === "schedule") for (const part of ["label", "date", "time"]) ctx.draft(DEADLINE + part).clear();
       review = null;
       clock = answer.clock;
       ctx.notify(answer.done.already_applied ? "That change was already made; nothing was changed again." : "The clock is changed.");
@@ -179,10 +182,10 @@ async function showClock(slot, ctx, campaign) {
   }
 
   function scheduleForm() {
-    const label = ui.field("What is due", { draft: ctx.draft("deadline:" + campaign) });
+    const label = ui.field("What is due", { draft: ctx.draft(DEADLINE + "label") });
     const kind = ui.choice("Kind", KINDS, { value: "deadline" });
-    const date = ui.field("Due date", { hint: "After now, in the calendar's own notation" });
-    const time = ui.field("Due time", { value: "00:00", hint: "24-hour, like 09:30" });
+    const date = ui.field("Due date", { draft: ctx.draft(DEADLINE + "date"), hint: "After now, in the calendar's own notation" });
+    const time = ui.field("Due time", { draft: ctx.draft(DEADLINE + "time"), value: "00:00", hint: "24-hour, like 09:30" });
     const go = () => {
       const minute = parseTime(time.value);
       time.setError(minute === null ? "Give a time like 09:30." : "");
@@ -190,7 +193,7 @@ async function showClock(slot, ctx, campaign) {
       date.setError(date.value.trim() ? "" : "Give the date it is due.");
       if (minute === null || !label.value.trim() || !date.value.trim()) return;
       plan({ operation: "schedule", deadline: (topicId(label.value).slice(0, 60) || "due") + "-" + newOperationId().slice(3, 9), label: label.value.trim(),
-        kind: kind.value, date: date.value.trim(), minute }).then((done) => { if (done) label.clear(); });
+        kind: kind.value, date: date.value.trim(), minute });
     };
     return form(ui, "Schedule a deadline", [label.node, kind.node, date.node, time.node], ui.button("Review", go));
   }
@@ -234,17 +237,21 @@ async function showMemory(slot, ctx, chat, audience, address) {
     if (member.actor === actor) chip.setAttribute("aria-current", "true");
     return chip;
   }));
+  // Only the character selected now is drawn: an answer for one selected before it (read or saved) is dropped.
+  let reading = 0;
   const open = async () => {
+    const turn = ++reading;
     pane.replaceChildren(el("p", { class: "g-muted" }, "Reading…"));
     try {
-      draw(await ctx.api("chronicle.memory", { chat, actor, audience }));
+      const memory = await ctx.api("chronicle.memory", { chat, actor, audience });
+      if (turn === reading) draw(memory);
     } catch (error) {
       if (error && error.reason === "left") return;
-      pane.replaceChildren(ui.errorBox(error));
+      if (turn === reading) pane.replaceChildren(ui.errorBox(error));
     }
   };
   function draw(memory) {
-    pane.replaceChildren(...dossier(ctx, memory), recordForm(ctx, memory, (answer) => draw(answer.memory), { chat, audience }));
+    pane.replaceChildren(...dossier(ctx, memory), recordForm(ctx, memory, (answer) => { if (actor === memory.actor) draw(answer.memory); }, { chat, audience }));
   }
   drawChips();
   await open();
@@ -288,7 +295,8 @@ function account(ctx, item) {
 function recordForm(ctx, memory, done, { chat, audience }) {
   const { ui } = ctx;
   const { el } = ui;
-  const key = "account:" + memory.actor;
+  // an unsent account is the present editor's: a character handed to another controller never shows it
+  const key = "account:" + memory.editor + ":" + memory.actor;
   const topic = ui.field("What it is about", { draft: ctx.draft(key + ":topic"), hint: "A short name for the detail, like the visitor's identity" });
   const text = ui.field("The account", { draft: ctx.draft(key + ":text"), multiline: true, hint: "In your own words, at most " + memory.max_text + " characters" });
   const picked = new Set();

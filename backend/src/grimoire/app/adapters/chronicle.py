@@ -28,10 +28,11 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
-from grimoire.app.adapter import Adapter, AdapterContext
+from grimoire.app.adapter import Adapter, AdapterContext, Handler
 from grimoire.calendars import CalendarDefinition, CalendarError, Duration
 from grimoire.calendarstore import CalendarLibrary
 from grimoire.campaignapi import parse
+from grimoire.chats.codec import ChatCodecError
 from grimoire.core import DIRECTOR
 from grimoire.core.authority import AuthorityError
 from grimoire.core.identity import ScopeRef, validate_segment
@@ -122,8 +123,19 @@ def _clock_view(view) -> dict:  # type: ignore[no-untyped-def]
             "now": _moment(calendar, state.now), "deadlines": deadlines, "operations": len(state.receipts)}
 
 
-def _clock_failure(error: CalendarError) -> ApiRefused:
+def _clock_failure(error: CalendarError | ChatCodecError) -> ApiRefused:
     return ApiRefused(error.reason, str(error))
+
+
+def _calendar(handler: Handler) -> Handler:
+    """A clock op whose campaign scope 055 refuses to read (a sync conflict, an unknown or invalid scope payload)
+    answers that refusal and its reason, never a server error."""
+    def guarded(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
+        try:
+            return handler(ctx, args)
+        except (CalendarError, ChatCodecError) as error:
+            raise _clock_failure(error) from None
+    return guarded
 
 
 def _library(ctx: AdapterContext) -> CalendarLibrary:
@@ -205,7 +217,7 @@ def _clock_commit(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
 # -- memory (053) ----------------------------------------------------------------------------------------------
 def _memory_failure(error: Exception) -> ApiRefused:
     """053's refusals carry their reason as the message (``unavailable_evidence``, ``backdated``...)."""
-    reason = str(error.args[0]) if error.args else ""
+    reason = getattr(error, "reason", None) or (str(error.args[0]) if error.args else "")
     if isinstance(error, AuthorityError):
         return ApiRefused("not_authorized", reason or "this actor's memory is not yours to edit")
     if isinstance(error, LedgerInvalid):
@@ -282,8 +294,8 @@ def _memory(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
 
 
 def _remember(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
-    """Record one authored account of ``topic``, citing ``evidence`` the editor is shown, as of the latest
-    evidence it cites; ``supersedes`` names the editor's own earlier account of the same topic it replaces."""
+    """Record one authored account of ``topic``, citing ``evidence`` the editor is shown, as of the newest
+    evidence shown for the actor; ``supersedes`` names the editor's own earlier account of the same topic it replaces."""
     hub, chat, actor, whose, audience, name = _actor(ctx, args)
     operation_id = _segment(args, "operation_id")
     topic = _segment(args, "topic")
@@ -299,7 +311,10 @@ def _remember(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     unknown = [item for item in cited if item not in shown]
     if unknown:  # never cite (or probe for) evidence beyond what the editor is shown of this actor
         raise ApiRefused("unavailable_evidence", "an account may cite only evidence shown for this character")
-    at = max((shown[item]["moment"] or {}).get("sequence", 0) for item in cited)
+    # Recorded as of the newest evidence the editor is shown for this actor, not as of the evidence it cites: 053
+    # keeps an editor's records in order, and an account citing older evidence than the last one is still new.
+    # Its basis (what it rests on) is worked out from the evidence it cites.
+    at = max((item["moment"] or {}).get("sequence", 0) for item in shown.values())
     library, requester = _memories(ctx, whose)
     try:
         summary = MemorySummary(operation_id, actor, PLAY_COLLECTION, topic, text, tuple(cited), Moment(at),
@@ -362,7 +377,8 @@ def _coverage(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
 
 
 ADAPTER = Adapter("chronicle", owner="115",
-                  ops={"clock": _clock, "clock_plan": _clock_plan, "clock_commit": _clock_commit,
+                  ops={"clock": _calendar(_clock), "clock_plan": _calendar(_clock_plan),
+                       "clock_commit": _calendar(_clock_commit),
                        "memory": _memory, "remember": _remember, "coverage": _coverage},
                   refusals={CalendarError: "calendar_refused"})
 

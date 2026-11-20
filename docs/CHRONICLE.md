@@ -49,8 +49,12 @@ person may cite for that character, newest first.
   any other character refuses `not_your_character`, and one outside the chat's cast `no_actor`.
 - An account cites only evidence the hub shows for that character from that view (`unavailable_evidence`
   otherwise), so the page can never write one that rests on what the character did not perceive.
-- Its moment is the latest evidence it cites. The same operation id again changes nothing; reused for another
-  account it refuses `operation_conflict`. An account replaces only a current one of the same topic.
+- It is recorded as of the newest evidence shown for that character, so an account resting on older evidence
+  than the last one is still accepted; its basis is the evidence it cites. The same operation id again changes
+  nothing; reused for another account it refuses `operation_conflict`. An account replaces only a current one of
+  the same topic.
+- An unsent account is kept per editor and character, so a character handed to another controller never shows
+  the last one's draft. The page draws only the character chosen last, whatever answer comes back late.
 - The scene runner already packs an NPC's standing accounts into its context ("You remember: ..."), so what the
   director writes here is what the NPC plays from.
 

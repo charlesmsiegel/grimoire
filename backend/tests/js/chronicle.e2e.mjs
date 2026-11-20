@@ -99,11 +99,18 @@ test("a campaign's clock and memory, each change reviewed before it is made", { 
   await reviewAndMake(main, start, "Start the clock at 1024-03-01 10:00.");
   await until(() => section(main, "Campaign clock").textContent.includes("Now: 1024-03-01 10:00"), 15000, "the clock started");
 
-  const schedule = group(main, "Schedule a deadline");
-  type(schedule, "What is due", "The ship sails");
-  type(schedule, "Due date", "1024-03-05");
+  // a deadline reviewed and then cancelled is still being written; it is cleared only once it is scheduled
+  type(group(main, "Schedule a deadline"), "What is due", "The ship sails");
+  type(group(main, "Schedule a deadline"), "Due date", "1024-03-05");
+  byText(group(main, "Schedule a deadline"), "button", "Review").at(-1).click();
+  const cancelled = await until(() => group(main, "Review this change"), 15000, "the review");
+  byText(cancelled, "button", "Cancel").at(-1).click();
+  const schedule = await until(() => group(main, "Schedule a deadline"), 15000, "the form again");
+  assert.equal(input(schedule, "What is due").value, "The ship sails");
+  assert.equal(input(schedule, "Due date").value, "1024-03-05");
   await reviewAndMake(main, schedule, "Schedule \"The ship sails\" (deadline) for 1024-03-05 00:00. The clock stays at 1024-03-01 10:00.");
   await until(() => section(main, "Campaign clock").textContent.includes("The ship sails"), 15000, "the deadline");
+  assert.equal(input(group(main, "Schedule a deadline"), "What is due").value, "", "a scheduled deadline's draft is gone");
   assert.ok(byText(section(main, "Campaign clock"), "span", "Pending").length);
 
   const advance = group(main, "Advance time");
