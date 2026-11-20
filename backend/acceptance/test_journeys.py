@@ -1,5 +1,6 @@
 """Release contracts in an actual browser, not an HTTP-only stand-in."""
 import json
+import re
 from urllib.parse import unquote, urlsplit
 
 from playwright.sync_api import expect
@@ -128,7 +129,12 @@ def test_canonical_chat_indexes_and_draft(session):
     for filter_name, label in (("all", None), ("character", "Mara Vell"), ("scenario", "Saltmarch rain")):
         navigate(page, "chats?filter=" + filter_name)
         if label:
-            page.get_by_label(filter_name.title(), exact=True).select_option(label=label)
+            picker = page.get_by_role("combobox", name=filter_name, exact=True)
+            option = picker.get_by_role("option", name=re.compile(r"^" + re.escape(label) + r" · "))
+            expect(option).to_have_count(1)
+            qualified_ref = option.get_attribute("value")
+            assert qualified_ref and option.inner_text() == label + " · " + qualified_ref
+            picker.select_option(value=qualified_ref)
         links = page.get_by_role("main").locator('a[href="' + ("#" + urlsplit(url).fragment) + '"]')
         expect(links.first).to_be_visible()
         links.first.click()

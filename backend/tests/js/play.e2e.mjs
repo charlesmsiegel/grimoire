@@ -170,7 +170,7 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   // Anya is the persona: in the cast, in the scene bar and over the composer
   assert.ok(byText(main.querySelector("ul.chat-cast"), "li", "Anya Rook").some((node) => node.textContent.includes("You")), "Anya is the persona");
   assert.ok(byText(main, "span", "Anya · you").some((node) => node.classList.contains("chat-chip")), "the scene bar marks who you play");
-  assert.ok(main.querySelector("label").textContent.endsWith("Playing Anya Rook"), "the composer says who you play");
+  assert.ok(main.querySelector(".chat-composer").querySelector("label").textContent.endsWith("Playing Anya Rook"), "the composer says who you play");
   assert.equal(body.querySelector("div.g-crumb").textContent, "Chats");
   assert.deepEqual(main.querySelector("div.chat-tabs").querySelectorAll("button").map((node) => node.textContent), ["Cast", "Story", "Details"]);
   // "Last time" opens the last lines under the scene bar. This device has no last time with this chat yet, so
@@ -201,7 +201,7 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   await until(() => byText(main, "button", "Pause").length, 15000, "Details");
   await until(() => byText(main, "a", "Mara Vell").some((node) => node.classList.contains("chat-bound") && node.textContent.includes("Character")), 15000, "what the chat plays from");
   assert.ok(byText(main, "dd", "Mara Vell").some((node) => node.textContent.includes("(character)")), "Details says what the chat started from");
-  const composer = main.querySelector("textarea");
+  const composer = main.querySelector(".chat-composer").querySelector("textarea");
   type(composer, "\"Is the cargo safe?\"");
   const speech = byText(main, "button", "Speech")[0];
   speech.click();
@@ -213,15 +213,15 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   assert.ok(byText(main, "button", "Pause")[0].disabled, "the chat's buttons are off while the post is sent");
   await until(() => byText(main, "div", "The table is answering…").length, 15000, "the wait for an answer");
   assert.ok(send.disabled, "nothing is posted while a reply is being written");
-  assert.equal(main.querySelector("textarea").placeholder, "The table is answering…");
+  assert.equal(main.querySelector(".chat-composer").querySelector("textarea").placeholder, "The table is answering…");
   assert.ok(!takes(main).length);
   release();
   await until(() => takes(main).some((node) => node.textContent.includes("Safe as the tide.")), 30000, "the first take");
   await until(() => idle(body) && !byText(main, "button", "Pause")[0].disabled, 30000, "the answer");
   assert.ok(!byText(main, "div", "The table is answering…").length);
-  assert.equal(main.querySelector("textarea").value, "");
+  assert.equal(main.querySelector(".chat-composer").querySelector("textarea").value, "");
   assert.ok(send.disabled, "nothing is posted while a take is pending");
-  assert.equal(main.querySelector("textarea").placeholder, "Keep a take or pass the turn before you post again");
+  assert.equal(main.querySelector(".chat-composer").querySelector("textarea").placeholder, "Keep a take or pass the turn before you post again");
   assert.ok(main.querySelectorAll("div.chat-post").some((node) => node.textContent.includes("Anya Rook · you")), "the post is marked as yours");
   assert.ok(byText(takes(main)[0], "div", "Not part of the story until you keep it").length);
   assert.ok(!main.querySelector("button.chat-step"), "one take has nothing to step through");
@@ -231,7 +231,7 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   const pausedBar = await until(() => main.querySelectorAll("div.chat-hold").find((node) => node.textContent.includes("Play is paused. Corrections still work.")), 15000, "the paused bar");
   await until(() => !byText(pausedBar, "button", "Resume")[0].disabled, 15000, "the pause");
   assert.equal(byText(main, "button", "Resume").length, 2, "Resume is on the bar and in Details");
-  assert.equal(main.querySelector("textarea").placeholder, "Play is paused. Resume to post");
+  assert.equal(main.querySelector(".chat-composer").querySelector("textarea").placeholder, "Play is paused. Resume to post");
   assert.ok(byText(takes(main).at(-1), "button", "Keep this take")[0].disabled, "nothing is kept while play is paused");
   assert.ok(byText(takes(main).at(-1), "button", "Pass the turn")[0].disabled, "nothing is passed while play is paused");
   press("Enter");  // the keep key does nothing either
@@ -265,7 +265,7 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
   main.querySelector("button[aria-label=\"Previous take\"]").click();
   assert.ok(label().includes("Take 1 of 2"), "the stepper's own buttons step too");
   // keys typed in the composer are text, and a key that is not the take's is left alone
-  main.querySelector("textarea").focus();
+  main.querySelector(".chat-composer").querySelector("textarea").focus();
   press("ArrowRight");
   press("p");
   assert.ok(label().includes("Take 1 of 2") && takes(main).length, "keys typed in the composer are text");
@@ -342,7 +342,7 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
 
   // a reply that does not arrive: the post is kept, and the transcript says what happened and what to do
   const mend = fail("/api/generate", { error: "provider_failed", message: "the model did not answer" });
-  type(main.querySelector("textarea"), "\"Then where is it?\"");
+  type(main.querySelector(".chat-composer").querySelector("textarea"), "\"Then where is it?\"");
   byText(main, "button", "Post").at(-1).click();
   const failed = await until(() => main.querySelector("div.chat-failed"), 30000, "the failed reply");
   await until(() => idle(body), 15000, "the failure");
@@ -383,7 +383,7 @@ test("Start Chat, play a turn, correct it and find the chat again", { skip: !env
 
   // compare: Mara and Tamsin both answer, twice, and one line of each take is kept as one reply
   const refusals = body.querySelectorAll("div.g-bad").length;
-  type(main.querySelector("textarea"), "\"Who goes first?\"");
+  type(main.querySelector(".chat-composer").querySelector("textarea"), "\"Who goes first?\"");
   byText(main, "button", "Post").at(-1).click();
   await until(() => takes(main).some((node) => node.textContent.includes("Tamsin, one.")), 30000, "both answers");
   await until(() => idle(body), 15000, "the fifth answer");
@@ -552,14 +552,14 @@ test("with no model set up the chat says so, and a post still goes in", { skip: 
   // nothing offers an answer that could not come
   assert.ok(byText(main, "button", "Ask for a reply")[0].hidden, "no reply is offered");
   assert.ok(!byText(main, "button", "Ask to speak").length && !byText(main, "button", "Ask the director").length);
-  type(main.querySelector("textarea"), "\"Anyone here?\"");
+  type(main.querySelector(".chat-composer").querySelector("textarea"), "\"Anyone here?\"");
   byText(main, "button", "Post").at(-1).click();
   await until(() => main.querySelectorAll("div.chat-post").some((node) => node.textContent.includes("Anyone here?")), 15000, "the post");
   // the turn is open with nobody to answer it: it is passed, and then a post is taken again
   const waits = await until(() => byText(main, "div", "Nobody has answered this turn yet.").at(-1), 15000, "the open turn");
   await until(() => idle(body), 15000, "the post, sent");
   assert.ok(!main.querySelector("div.chat-failed") && !byText(main, "div", "The table is answering…").length);
-  assert.equal(main.querySelector("textarea").placeholder, "Pass the turn before you post again");
+  assert.equal(main.querySelector(".chat-composer").querySelector("textarea").placeholder, "Pass the turn before you post again");
   assert.ok(byText(main, "button", "Post").at(-1).disabled);
   byText(waits, "button", "Pass the turn")[0].click();
   await until(() => byText(main, "div", "The turn was passed.").length && !byText(main, "button", "Post").at(-1).disabled, 15000, "the passed turn");

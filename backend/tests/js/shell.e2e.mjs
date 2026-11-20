@@ -113,7 +113,7 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   assert.equal(main.querySelectorAll("button.chats-pin").length, rows().length);
   assert.ok(main.querySelectorAll("button.chats-pin").every((node) => node.getAttribute("aria-pressed") === "false" && node.textContent === "Pin"));
   const heads = () => main.querySelectorAll("button.chats-head");
-  assert.equal(main.querySelector("div.chats-status").textContent, total + " chats in " + heads().length + " groups");
+  assert.equal(main.querySelector("div.chats-status").textContent, total + " chats in this result · showing 1–" + total);
   assert.ok(byText(main, "button", "Not in a campaign").length, "a chat outside any campaign has its own group");
   assert.ok(rows().every((node) => main.querySelectorAll("ul.chats-rows").some((list) => list.contains(node))), "rows are list items");
   // a group hides and shows in place
@@ -125,13 +125,16 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   // ungrouped, by name; the search narrows it; nothing found says so
   pressed("None").click();
   assert.equal(heads().length, 1);
-  assert.equal(main.querySelector("div.chats-status").textContent, total + " chats");
+  assert.equal(main.querySelector("div.chats-status").textContent, total + " chats in this result · showing 1–" + total);
   pressed("A–Z").click();
+  await until(() => JSON.stringify(titles()) === JSON.stringify([...titles()].sort((a,b) => a.localeCompare(b, undefined, {sensitivity:"base", numeric:true}))), 15000, "server-sorted chats");
   assert.deepEqual(titles(), [...titles()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true })));
   const searchBox = main.querySelector("input.chats-search");
   type(searchBox, titles()[0]);
+  await until(() => rows().length >= 1 && rows().length < total, 15000, "server-filtered chats");
   assert.ok(rows().length >= 1 && rows().length < total, "the search narrows the list");
   type(searchBox, "zzzz no such chat");
+  await until(() => !rows().length && byText(main, "p", "No chats match.").length, 15000, "empty server search");
   assert.ok(!rows().length && byText(main, "p", "No chats match.").length);
   // what was typed and chosen is still there after going elsewhere, and is put back as it was
   window.location.hash = "#/home";
@@ -143,6 +146,7 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   type(main.querySelector("input.chats-search"), "");
   pressed("Campaign").click();
   pressed("Recent").click();
+  await until(() => rows().length === total, 15000, "cleared server search");
   assert.equal(rows().length, total);
   // one character's chats: the filter is in the address, and the character is chosen by its exact ref
   pressed("By character").click();
@@ -216,7 +220,7 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   assert.ok(namesake === -1 || options().indexOf(option) < namesake, "a chat comes before a character of the same name");
   option.click();
   await until(() => window.location.hash === chatHash && !body.querySelector("dialog"), 15000, "the chat from the palette");
-  const composer = await until(() => main.querySelector("textarea"), 15000, "the chat");
+  const composer = await until(() => main.querySelector(".chat-composer")?.querySelector("textarea"), 15000, "the chat");
   assert.equal(window.location.hash, chatHash);
   assert.equal(document.activeElement, body.querySelector("h1"), "focus moves to the new page's heading");
   composer.focus();
@@ -228,7 +232,7 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   await until(() => byText(main, "h2", "Your characters").length, 15000, "Home again");
   assert.equal(document.activeElement, body.querySelector("h1"), "a page with no control to return to starts at its heading");
   window.location.hash = chatHash;
-  const again = await until(() => main.querySelector("textarea"), 15000, "the chat again");
+  const again = await until(() => main.querySelector(".chat-composer")?.querySelector("textarea"), 15000, "the chat again");
   assert.equal(again.value, "Hello over the shell.");
   await until(() => document.activeElement === again, 15000, "focus back in the composer");
 
@@ -271,7 +275,7 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   // the answer is a take to keep or pass: until then Post stays off, and nothing else does
   await until(() => main.querySelector("article.chat-take") && !body.querySelectorAll("button").some((node) => node.disabled && node !== send), 30000, "the answer");
   assert.ok(send.disabled, "nothing is posted while a take is pending");
-  assert.equal(main.querySelector("textarea").value, "");
+  assert.equal(main.querySelector(".chat-composer")?.querySelector("textarea").value, "");
   assert.equal(window.sessionStorage.getItem("grimoire-draft:chat:composer:" + decodeURIComponent(chatHash.split("/")[2])), null);
 
   // the palette opens a character's sheet by its exact ref
