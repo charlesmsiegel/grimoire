@@ -24,12 +24,20 @@ from grimoire.app.adapter import Adapter, AdapterContext
 from grimoire.campaignapi import parse
 from grimoire.campaignapi.views import moment_view
 from grimoire.core import DIRECTOR
+from grimoire.core.authority import AuthorityError
 from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.core.knowledge import KnowledgeError
 from grimoire.core.perspective import player_knowledge
 from grimoire.play.scene import NOW
 from grimoire.store import StoreError
-from grimoire.story import MAX_LISTED, MAX_QUERY, search, table_search, table_thread, thread
+from grimoire.story import (
+    MAX_LISTED,
+    MAX_QUERY,
+    search,
+    table_search,
+    table_thread,
+    thread,
+)
 from grimoire.textapi import ApiRefused
 
 from .campaign import hub_of
@@ -69,8 +77,9 @@ class _Read:
             self.problems.append({"code": "knowledge_damaged", "detail": detail})
         self.player = None
         if self.stored is not None and not self.director:
-            self.player = player_knowledge(self.stored.knowledge, self.ctx.owner, self.scene.controls, as_of=NOW)
-            if not self.player.actors:  # the owner plays no character here: the table knows nothing of the ledger
+            try:
+                self.player = player_knowledge(self.stored.knowledge, self.ctx.owner, self.scene.controls, as_of=NOW)
+            except AuthorityError:  # the owner plays no character here: the table knows nothing of the ledger
                 self.problems.append({"code": "no_character", "detail": None})
 
     @property
@@ -127,12 +136,16 @@ def _entry(read: _Read, entry, turns) -> dict:  # type: ignore[no-untyped-def]
     view = {"kind": entry.kind, "record": entry.record, "grade": entry.grade, "moment": moment_view(entry.moment),
             "text": entry.text, "actors": [read.actor(actor) for actor in entry.actors],
             "source": _source(entry, turns)}
-    if entry.kind in ("report", "sent"):
+    if entry.kind == "report":
         view.update({"holder": read.actor(entry.holder), "attributed_to": read.actor(entry.attributed_to),
                      "confirmed": entry.confirmed})
         if read.director:  # who really sent it is the director's; the holder has only the attribution
             view.update({"sender": read.actor(entry.sender),
                          "sent_at": None if entry.sent_at is None else moment_view(entry.sent_at)})
+    elif entry.kind == "sent":  # who passed it on, to whom: at the table, the sender is the table's own character
+        view.update({"holder": read.actor(entry.holder), "sender": read.actor(entry.sender)})
+    elif entry.kind == "observation":
+        view.update({"holder": read.actor(entry.holder)})
     elif entry.kind == "belief":
         view.update({"holder": read.actor(entry.holder), "stance": entry.stance, "current": entry.current,
                      "inherited": bool(entry.inherited), "supersedes": entry.supersedes})

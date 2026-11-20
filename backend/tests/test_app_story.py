@@ -8,14 +8,27 @@ Synthetic cards and invented names; every model call is a scripted fake, and the
 from __future__ import annotations
 
 import pytest
+from generation_fixtures import say
 from scene_fixtures import MARA_VELL
 from test_app_play import Device, actor_named, keep_newest, refused
-from test_app_play_story import built, folder, start  # noqa: F401 -- the played card library fixtures
+from test_app_play_story import (  # noqa: F401 -- the played card library fixtures
+    built,
+    folder,
+    start,
+)
 
 from grimoire.app.adapters.campaign import hub_of
-from grimoire.core import DIRECTOR, Belief, Event, Moment, Proposition, Report, Ruling, Subject
+from grimoire.core import (
+    DIRECTOR,
+    Belief,
+    Event,
+    Moment,
+    Proposition,
+    Report,
+    Ruling,
+    Subject,
+)
 from grimoire.core.identity import ChatRef, InstanceRef
-from generation_fixtures import say
 
 PROMISE = "Mara will bring the harbour key back before the thaw"
 SOLD = "Mara sells the harbour key to a smuggler at the night market"

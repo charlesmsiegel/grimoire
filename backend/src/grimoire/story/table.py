@@ -2,9 +2,9 @@
 
 Spoiler exposure is controlled by building the table's thread from 012's ``player_knowledge`` alone, never by
 hiding parts of the director's: the reports the player's characters received (as each holder has them: who they
-take the source to be, never who really sent it), the reports they knowingly sent, and their beliefs, each graded
-``proposal`` or ``belief``. An NPC-era belief the present player did not author is kept and marked ``inherited``
-(012), never shown as theirs. There is no outcome: canon's standing, rulings, events, other characters' evidence
+take the source to be, never who really sent it), the reports they knowingly sent, their beliefs, and what they
+observed that those beliefs cite (their own percept), each graded ``proposal`` or ``belief``. An NPC-era belief
+the present player did not author is kept and marked ``inherited`` (012), never shown as theirs. There is no outcome: canon's standing, rulings, events, other characters' evidence
 and every contradiction with canon are the director's. A proposition none of the player's characters heard of or
 holds a belief about has no table thread at all (``unknown_proposition``), so even its existence stays the
 director's.
@@ -52,17 +52,29 @@ def _entries(player: PlayerKnowledge, origins: Mapping[str, ChatRef]) -> dict[st
                       chat_of("evidence", item.evidence_id), holder=known.actor, attributed_to=item.attributed_to,
                       confirmed=True))
         for sent in known.sent:
+            # the sender is the table's own character: who passed it on, to whom (as a director ``sent`` entry)
             add(sent.proposition_id, sent.text,
                 Entry("sent", f"evidence:{sent.evidence_id}", "proposal", sent.sent_at, sent.text,
-                      (known.actor, sent.recipient), chat_of("evidence", sent.evidence_id), holder=known.actor))
+                      (known.actor, sent.recipient), chat_of("evidence", sent.evidence_id), holder=sent.recipient,
+                      sender=known.actor))
+        seen = {item.evidence_id: item for item in known.evidence if item.kind == "perception"}
         for item, entry in _beliefs(known, chat_of):
             add(item.proposition_id, item.text, entry)
+            # what this character saw that their belief cites: their own percept, never the event as canon has it
+            for cited in item.evidence_ids:
+                percept = seen.get(cited)
+                if percept is not None:
+                    add(item.proposition_id, item.text,
+                        Entry("observation", f"evidence:{cited}", "proposal", percept.moment, percept.content,
+                              (known.actor,), chat_of("evidence", cited), holder=known.actor, confirmed=True))
     return found
 
 
 def _thread(knowledge: Knowledge, player: PlayerKnowledge, proposition_id: str, text: str,
             entries: list[Entry]) -> Thread:
-    entries = sorted({entry.record: entry for entry in entries}.values(), key=order)
+    # one entry per record and kind: a report one of the player's characters sent another is both a send and a
+    # receipt, and the table holds both
+    entries = sorted({(entry.kind, entry.record): entry for entry in entries}.values(), key=order)
     # the proposition record carries its text and id to the view; its moment, provenance and ``about`` are the
     # director's and are never shown in a table thread
     return Thread(knowledge.proposition(proposition_id), player.as_of, tuple(entries), None, (), scenes_of(entries))

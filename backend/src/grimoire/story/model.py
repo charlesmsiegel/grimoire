@@ -11,8 +11,9 @@ Each entry is graded, so a reader never takes an interpretation for truth:
 ``belief``
     one character's own conclusion: never the standing, whatever its stance;
 ``proposal``
-    an assertion only: the proposition as first recorded, or a report of it some character received (or sent).
-    Receiving, repeating or believing it never makes it established;
+    an assertion only: the proposition as first recorded, a report of it some character received (or sent), or
+    what a character observed that their belief cites (their own percept, never the event as canon has it).
+    Receiving, repeating, seeing or believing it never makes it established;
 ``revoked``
     an event whose accepted effect (021) was revoked: it no longer stands as world truth, though its 020 bridge
     is still stored (021 reports it as ``revoked_but_bridged``), and a ruling that rests on it says so.
@@ -26,9 +27,9 @@ from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.core.knowledge import Moment, Proposition
 
 GRADES = ("confirmed", "belief", "proposal", "revoked")
-#: the order of entries that share a moment: what is stated, what happened, who heard it, how canon ruled on it,
-#: and what each character concluded from all that
-KINDS = ("stated", "event", "report", "sent", "ruling", "belief")
+#: the order of entries that share a moment: what is stated, what happened, who saw or heard it, how canon ruled on
+#: it, and what each character concluded from all that
+KINDS = ("stated", "event", "observation", "report", "sent", "ruling", "belief")
 CONTRADICTIONS = ("reversed_ruling", "belief_against_canon", "revoked_ground")
 
 
@@ -37,8 +38,10 @@ class Entry:
     """One stored record of a thread.
 
     ``actors`` are those it involves: a report's holder (and, for the director, its sender and the one it is
-    attributed to), a belief's holder, an event's participants, the instances a proposition is overtly about.
-    ``text`` is what the record itself says: the proposition's text, an event's summary.
+    attributed to), a belief's or an observation's holder, an event's participants, the instances a proposition is
+    overtly about. ``text`` is what the record itself says: the proposition's text, an event's summary, a percept.
+    ``holder`` is who holds the record: a report's or a ``sent`` entry's recipient, a belief's or an observation's
+    holder; ``sender`` who passed a report on (in a table view, only for the table's own ``sent`` entries).
     ``chat`` is the chat 020 recorded it from (provenance only); ``moment`` carries the scene and turn labels.
     """
 
@@ -159,5 +162,15 @@ def summarize(thread: Thread) -> Summary:
                    len(thread.entries), len(thread.scenes), len(thread.contradictions), thread.actors)
 
 
-__all__ = ["CONTRADICTIONS", "Contradiction", "Entry", "GRADES", "KINDS", "Outcome", "Scene", "Summary", "Thread",
-           "summarize"]
+__all__ = [
+    "CONTRADICTIONS",
+    "GRADES",
+    "KINDS",
+    "Contradiction",
+    "Entry",
+    "Outcome",
+    "Scene",
+    "Summary",
+    "Thread",
+    "summarize",
+]

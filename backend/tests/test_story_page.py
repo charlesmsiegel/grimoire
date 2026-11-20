@@ -14,7 +14,10 @@ from pathlib import Path
 import pytest
 from generation_fixtures import say
 from test_app_play import Device
-from test_app_play_story import built, folder  # noqa: F401 -- the played card library fixtures
+from test_app_play_story import (  # noqa: F401 -- the played card library fixtures
+    built,
+    folder,
+)
 from test_app_story import PROMISE, SOLD, ledger, played
 
 from grimoire.app import AppServer

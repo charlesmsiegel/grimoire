@@ -5,7 +5,7 @@
 // (canon, a belief, only proposed, revoked) so an interpretation is never read as truth, and leads back to the
 // turn it was recorded at. What is said in words is logic.js.
 
-import { AUDIENCES, NOTES, address, contradictionText, count, entryLine, grade, problemText, readAddress, sceneText,
+import { AUDIENCES, NOTES, address, contradictionText, count, entryLine, grade, problemText, problemsOf, readAddress, sceneText,
   scenesWith, sourceOf, standingKind, standingText, summaryLine } from "./logic.js";
 
 export async function mount(root, ctx) {
@@ -58,7 +58,7 @@ export async function mount(root, ctx) {
     el("div", { class: "g-row story-views" }, views.node, el("span", { class: "g-grow g-muted" }, NOTES[state.audience])),
     el("div", { class: "g-row story-find" }, search, ui.button("Find", find, { kind: "primary", size: "small" }), who.node,
       state.q || state.actor ? ui.button("Clear", () => go({ q: null, actor: null, thread: null }), { kind: "linklike", size: "small" }) : null)));
-  for (const problem of listing.problems) root.append(ui.notice(problemText(problem), { kind: "soft" }));
+  for (const problem of problemsOf(listing, opened)) root.append(ui.notice(problemText(problem), { kind: "soft" }));
 
   // -- the threads that match ------------------------------------------------------------------------------
   const rows = listing.threads.map((item) => {
@@ -130,7 +130,7 @@ function showThread(root, ctx, state, thread) {
     return el("li", { class: "story-entry story-" + entry.grade, "data-record": entry.record },
       el("div", { class: "g-row story-entry-head" }, ui.pill(label, { kind }), el("span", { class: "story-line" }, entryLine(entry)),
         source.link ? ui.link(source.text, source.link.route, source.link.segments, source.link.query) : el("span", { class: "g-muted" }, source.text)),
-      entry.kind === "event" || entry.kind === "stated" ? el("p", { class: "story-text" }, entry.text) : null);
+      ["event", "stated", "observation"].includes(entry.kind) ? el("p", { class: "story-text" }, entry.text) : null);
   });
   const through = ui.section("Through the story", el("ol", { class: "story-entries" }, items));
   through.setAttribute("aria-label", "Through the story");

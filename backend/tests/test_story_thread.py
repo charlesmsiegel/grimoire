@@ -12,9 +12,21 @@ from __future__ import annotations
 
 import pytest
 
-from grimoire.core import (Belief, ChatRef, ControlAssignment, Event, InstanceRef, Knowledge, Moment, Perception,
-                           Proposition, Report, Ruling, Subject)
-from grimoire.core.knowledge import KnowledgeError
+from grimoire.core import (
+    Belief,
+    ChatRef,
+    ControlAssignment,
+    Event,
+    InstanceRef,
+    Knowledge,
+    Moment,
+    Perception,
+    Proposition,
+    Report,
+    Ruling,
+    Subject,
+)
+from grimoire.core.knowledge import Dispatch, KnowledgeError
 from grimoire.core.perspective import player_knowledge
 from grimoire.story import search, table_search, table_thread, thread
 
@@ -80,7 +92,8 @@ def test_the_promise_is_followed_from_the_scene_it_was_made_to_its_outcome():
         ("stated", "proposition:p-key", "proposal"), ("report", "evidence:r-promise", "proposal"),
         ("belief", "belief:b-trust", "belief"),
         ("report", "evidence:r-rumour", "proposal"), ("belief", "belief:b-doubt", "belief"),
-        ("event", "event:e-sale", "confirmed"), ("belief", "belief:b-saw", "belief"),
+        ("event", "event:e-sale", "confirmed"), ("observation", "evidence:w-sale", "proposal"),
+        ("belief", "belief:b-saw", "belief"),
         ("ruling", "ruling:ru-broken", "confirmed"), ("belief", "belief:b-still", "belief")]
     # canon decided it in scene 7, on the sale in scene 6; the storm and the thaw are other threads
     assert found.outcome.standing == "refuted" and found.outcome.ruling == "ru-broken"
@@ -201,3 +214,57 @@ def test_an_inherited_belief_is_marked_never_shown_as_the_players_own():
     player = player_knowledge(knowledge, PLAYER, CONTROLS, as_of=NOW)
     (inherited,) = [entry for entry in table_thread(knowledge, player, "p-map").entries if entry.kind == "belief"]
     assert inherited.inherited is True and inherited.current is True
+
+
+def test_a_send_names_who_passed_it_on_and_to_whom_in_both_views():
+    late = ledger(Report(C, "r-letter", WINIFRED, "p-key", "letter", at(12), "director", confirmed=True,
+                         sender=SERAPHINE, addressed=True, sent_at=at(10)))
+    (director,) = [entry for entry in thread(late, "p-key", as_of=at(11).sequence).entries
+                   if entry.record == "evidence:r-letter"]
+    player = player_knowledge(late, PLAYER, CONTROLS, as_of=at(11).sequence)
+    (table,) = [entry for entry in table_thread(late, player, "p-key").entries if entry.kind == "sent"]
+    for entry in (director, table):
+        assert (entry.kind, entry.sender, entry.holder) == ("sent", SERAPHINE, WINIFRED)
+
+
+def test_a_report_one_of_the_players_characters_sent_another_is_both_a_send_and_a_receipt():
+    both = (ControlAssignment(C, "seraphine", PLAYER), ControlAssignment(C, "winifred", PLAYER),
+            ControlAssignment(C, "mara", "director"))
+    knowledge = ledger(Report(C, "r-pass", WINIFRED, "p-key", "told", at(12), "director", confirmed=True,
+                              sender=SERAPHINE, attributed_to=SERAPHINE, addressed=True, sent_at=at(12)))
+    player = player_knowledge(knowledge, PLAYER, both, as_of=NOW)
+    passed = [(entry.kind, entry.holder) for entry in table_thread(knowledge, player, "p-key").entries
+              if entry.record == "evidence:r-pass"]
+    assert passed == [("report", WINIFRED), ("sent", WINIFRED)]
+
+
+def test_what_the_players_character_saw_is_in_the_table_thread_as_their_own_percept():
+    knowledge = ledger(
+        Perception(C, "s-sale", SERAPHINE, "e-sale", "seen", "A stranger pockets a key at the quay", at(6),
+                   "director", confirmed=True),
+        Belief(C, "b-seen", SERAPHINE, "p-key", "rejected", at(10), PLAYER, ("s-sale", "r-promise"),
+               supersedes="b-still"))
+    player = player_knowledge(knowledge, PLAYER, CONTROLS, as_of=NOW)
+    found = table_thread(knowledge, player, "p-key")
+    (seen,) = [entry for entry in found.entries if entry.kind == "observation"]
+    assert (seen.record, seen.grade, seen.holder, seen.text) == ("evidence:s-sale", "proposal", SERAPHINE,
+                                                                "A stranger pockets a key at the quay")
+    assert "Mara sells" not in repr(found)  # the event as canon has it stays the director's
+    assert [hit.proposition.proposition_id for hit in table_search(knowledge, player, query="stranger")[0]] == [
+        "p-key"]
+    director = thread(knowledge, "p-key", as_of=NOW)
+    assert {entry.record for entry in director.entries if entry.kind == "observation"} == {
+        "evidence:s-sale", "evidence:w-sale"}
+
+
+def test_a_queued_rumour_not_yet_delivered_is_a_send_in_the_directors_thread():
+    queued = ledger().with_dispatches([Dispatch(C, "rumor-out", SERAPHINE, WINIFRED, "p-key", "letter", at(12))])
+    (sent,) = [entry for entry in thread(queued, "p-key", as_of=NOW).entries if entry.kind == "sent"]
+    assert (sent.record, sent.sender, sent.holder, sent.moment) == ("evidence:rumor-out", SERAPHINE, WINIFRED, at(12))
+    assert not [entry for entry in thread(queued, "p-key", as_of=at(11).sequence).entries if entry.kind == "sent"]
+    delivered = ledger(Report(C, "rumor-out", WINIFRED, "p-key", "letter", at(13), "director", confirmed=True,
+                              sender=SERAPHINE, addressed=True, sent_at=at(12))).with_dispatches(
+        [Dispatch(C, "rumor-out", SERAPHINE, WINIFRED, "p-key", "letter", at(12))])
+    listed = [entry.kind for entry in thread(delivered, "p-key", as_of=NOW).entries
+              if entry.record == "evidence:rumor-out"]
+    assert listed == ["report"]  # listed once, as its report

@@ -54,7 +54,8 @@ export function entryLine(entry) {
       const from = entry.attributed_to ? who(entry.attributed_to) : null;
       return who(entry.holder) + " heard it" + (from ? " from " + from : "") + (entry.confirmed === false ? " (unconfirmed)" : "");
     }
-    case "sent": return who(entry.holder) + " passed it on";
+    case "sent": return who(entry.sender) + " passed it on" + (entry.holder ? " to " + who(entry.holder) : "");
+    case "observation": return who(entry.holder) + " saw this";
     case "belief": {
       const said = entry.current === false
         ? (PAST[entry.stance] || entry.stance) + ", then changed their mind"
@@ -141,6 +142,15 @@ export const PROBLEMS = {
   turns_unread: "Some turns could not be numbered, so they cannot be opened from here.",
   no_character: "You play no character in this campaign yet, so the table knows nothing of its story.",
 };
+
+// The problems of every answer the page drew from, each said once.
+export function problemsOf(...answers) {
+  const seen = new Map();
+  for (const answer of answers) {
+    for (const problem of (answer && answer.problems) || []) if (!seen.has(problem.code)) seen.set(problem.code, problem);
+  }
+  return [...seen.values()];
+}
 
 export function problemText(problem) {
   return (PROBLEMS[problem.code] || problem.code) + (problem.detail ? " (" + problem.detail + ")" : "");

@@ -134,6 +134,12 @@ test("searching, choosing a character and changing view each go to an address th
   assert.equal(seen.went.at(-1), "#/story/" + encodeURIComponent(CHAT) + "?audience=director");
 });
 
+test("a problem of the thread's own answer is shown too", async () => {
+  const { root } = await mounted({ audience: "director", thread: "p-key" }, {
+    "story.threads": listing("director", [SUMMARY]), "story.thread": { thread: DIRECTOR, problems: [{ code: "turns_unread", detail: null }] } });
+  assert.ok(root.textContent.includes("Some turns could not be numbered"));
+});
+
 test("a thread the view does not hold is said, and the answer's problems are shown", async () => {
   const gone = Object.assign(new Error("no thread"), { reason: "no_thread" });
   const { root } = await mounted({ thread: "p-stair" }, {
@@ -157,7 +163,10 @@ test("only the scenes with the chosen character are listed", async () => {
 test("the logic says each entry, each source and the address", () => {
   assert.equal(logic.entryLine({ kind: "belief", holder: anya, stance: "suspected", current: false, inherited: true }),
     "Anya suspected it, then changed their mind (before you played them)");
-  assert.equal(logic.entryLine({ kind: "sent", holder: anya }), "Anya passed it on");
+  assert.equal(logic.entryLine({ kind: "sent", sender: anya, holder: mara }), "Anya passed it on to Mara");
+  assert.equal(logic.entryLine({ kind: "observation", holder: anya }), "Anya saw this");
+  assert.deepEqual(logic.problemsOf({ problems: [{ code: "a" }] }, null, { problems: [{ code: "a" }, { code: "b" }] })
+    .map((problem) => problem.code), ["a", "b"]);
   assert.equal(logic.entryLine({ kind: "ruling", standing: "established" }), "Canon ruled it established");
   assert.equal(logic.entryLine({ kind: "report", holder: anya, attributed_to: null, confirmed: false }), "Anya heard it (unconfirmed)");
   assert.deepEqual(logic.sourceOf({ source: null }), { link: null, text: "Recorded outside any chat" });

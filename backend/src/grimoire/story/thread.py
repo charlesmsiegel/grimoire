@@ -4,7 +4,9 @@ Pure and read-only. What belongs to a thread is what the ledger links to the pro
 text suggests:
 
 - the proposition itself, at the moment it was recorded (``stated``);
-- every report of it, received or knowingly sent (``report``);
+- every report of it, received or knowingly sent (``report``; ``sent`` while only sent as of the read, including
+  063's queued dispatches not yet delivered);
+- what a character observed that their belief about it cites (``observation``);
 - every ruling on its standing (``ruling``) and every belief about it (``belief``);
 - the events those records name: a ruling's event grounds, the events the proposition is overtly about, and the
   events whose perception a belief about it cites (``event``).
@@ -27,10 +29,28 @@ from types import MappingProxyType
 
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import ChatRef, InstanceRef
-from grimoire.core.knowledge import Belief, Event, Knowledge, KnowledgeError, Perception, Report
+from grimoire.core.knowledge import (
+    Belief,
+    Dispatch,
+    Event,
+    Knowledge,
+    KnowledgeError,
+    Perception,
+    Report,
+)
 from grimoire.core.perspective import director_knowledge
 
-from .model import KINDS, Contradiction, Entry, Outcome, Scene, Summary, Thread, _actors, summarize
+from .model import (
+    KINDS,
+    Contradiction,
+    Entry,
+    Outcome,
+    Scene,
+    Summary,
+    Thread,
+    _actors,
+    summarize,
+)
 
 EMPTY: Mapping[str, ChatRef] = MappingProxyType({})
 #: how many threads one search lists at most
@@ -77,6 +97,11 @@ class _Ledger:
         self.propositions = [item.proposition for item in truth.propositions]
         self.events = {event.event_id: event for event in truth.events}
         self.perceptions = {item.evidence_id: item for item in truth.evidence if isinstance(item, Perception)}
+        # 063's queue: a rumour sent by now whose report is not in the ledger yet (a store may supply none)
+        self.dispatches: dict[str, list[Dispatch]] = {}
+        for dispatch in knowledge.dispatches or ():
+            if dispatch.sent_at.sequence <= as_of:
+                self.dispatches.setdefault(dispatch.proposition_id, []).append(dispatch)
         self.reports: dict[str, list[Report]] = {}
         for item in truth.evidence:
             if isinstance(item, Report):
@@ -117,6 +142,14 @@ class _Ledger:
                                  proposition.text, people, self._chat("evidence", report.evidence_id),
                                  holder=report.holder, sender=report.sender, attributed_to=report.attributed_to,
                                  sent_at=report.sent_at, confirmed=report.confirmed))
+        listed = {report.evidence_id for report in self.reports.get(proposition_id, ())}
+        for dispatch in self.dispatches.get(proposition_id, ()):
+            if dispatch.evidence_id in listed:  # delivered: its report is the entry (012 lists it once)
+                continue
+            entries.append(Entry("sent", f"evidence:{dispatch.evidence_id}", "proposal", dispatch.sent_at,
+                                 proposition.text, (dispatch.recipient, dispatch.sender),
+                                 self._chat("evidence", dispatch.evidence_id), holder=dispatch.recipient,
+                                 sender=dispatch.sender, sent_at=dispatch.sent_at))
         rulings = sorted(self.rulings.get(proposition_id, ()), key=lambda r: (r.moment.sequence, r.ruling_id))
         for ruling in rulings:
             grounds = tuple(str(item) for item in ruling.grounds)
@@ -125,15 +158,20 @@ class _Ledger:
                                  chat=self._chat("ruling", ruling.ruling_id), standing=ruling.standing,
                                  grounds=grounds))
         beliefs = self.beliefs.get(proposition_id, ())
+        observed: dict[str, Perception] = {}
         for belief in beliefs:
             for cited in belief.evidence_ids:
                 perception = self.perceptions.get(cited)
                 if perception is not None:
                     events.add(perception.event_id)
+                    observed[cited] = perception
             entries.append(Entry("belief", f"belief:{belief.belief_id}", "belief", belief.moment, proposition.text,
                                  (belief.holder,), self._chat("belief", belief.belief_id), holder=belief.holder,
                                  stance=belief.stance, current=self._current(belief), supersedes=belief.supersedes))
         entries += [self._event(self.events[event_id]) for event_id in sorted(events) if event_id in self.events]
+        entries += [Entry("observation", f"evidence:{item.evidence_id}", "proposal", item.moment, item.percept,
+                          (item.holder,), self._chat("evidence", item.evidence_id), holder=item.holder,
+                          confirmed=item.confirmed) for item in observed.values()]
         entries.sort(key=order)
 
         standing, ruling_id = self.standings[proposition_id]
@@ -179,13 +217,14 @@ def _query(text: object) -> str | None:
 
 
 def matches(item: Thread, query: str | None, actor: InstanceRef | None) -> bool:
-    """Whether ``query`` is in the proposition's text or in the summary of an event of its thread (so a search
-    for how a promise ended finds the promise), and ``actor`` is involved in it."""
+    """Whether ``query`` is in the proposition's text, in the summary of an event of its thread or in what a
+    character observed of it (so a search for how a promise ended finds the promise), and ``actor`` is involved
+    in it."""
     if actor is not None and not item.involves(actor):
         return False
     if query is None:
         return True
-    texts = [item.proposition.text, *(entry.text for entry in item.entries if entry.kind == "event")]
+    texts = [item.proposition.text, *(entry.text for entry in item.entries if entry.kind in ("event", "observation"))]
     return any(query in text.casefold() for text in texts)
 
 

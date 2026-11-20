@@ -18,7 +18,8 @@ from the other.
 |---|---|---|
 | `stated` | the proposition itself, when it was recorded | proposal |
 | `report` | a character received it (as they have it: who they take the source to be) | proposal |
-| `sent` | a character passed it on (for the director: a report sent by now but received later) | proposal |
+| `sent` | a character passed it on (`sender`) to another (`holder`): the table's own sends; for the director, also a report sent by now but received later, and a 063 rumour queued but not yet delivered | proposal |
+| `observation` | what a character saw that their belief about it cites: their own percept, never the event as canon has it | proposal |
 | `belief` | a character's own conclusion: believed, suspected or rejected; current or since changed | belief |
 | `ruling` | canon ruled on its standing | confirmed |
 | `event` | an event a ruling rests on, the proposition is overtly about, or a belief's perception cites | confirmed, or revoked |
@@ -34,7 +35,8 @@ Every entry carries one grade, so an interpretation is never read as truth:
 
 - **confirmed** (shown as *Canon*): an accepted event, or a ruling.
 - **belief**: one character's conclusion, whatever its stance. Never the standing.
-- **proposal** (shown as *Proposed*): an assertion only. Receiving, repeating or believing it never establishes it.
+- **proposal** (shown as *Proposed*): an assertion only, or what a character saw. Receiving, repeating, seeing or
+  believing it never establishes it.
 - **revoked**: an event whose 021 accepted effect was revoked. Its 020 bridge is still stored
   (`revoked_but_bridged`), so it stays in the thread, struck through, and a ruling resting on it says so.
 
@@ -66,7 +68,8 @@ parts of the director's:
 
 - **director** (`audience: director`): every entry, the outcome, the senders behind attributions and every
   contradiction. Ledger damage is said with its counts (`knowledge_damaged`).
-- **table** (the default): only what the library owner's own characters received, passed on and concluded. An
+- **table** (the default): only what the library owner's own characters received, passed on, saw (when their
+  belief cites it) and concluded. A report one of their characters passed to another is both a send and a receipt. An
   NPC-era belief the present player did not author is kept and marked inherited. There is no outcome, no ruling, no
   event, no sender and no other character's evidence. A proposition none of their characters knows of has no table
   thread at all: `story.thread` refuses it `no_thread` exactly as it refuses an id the ledger lacks, and a search
@@ -77,8 +80,9 @@ parts of the director's:
 
 `story.threads` lists the threads that match, oldest first (by when each first entered the story):
 
-- `query` (at most 200 characters, case-insensitive) is found in the proposition's text **or in the summary of an
-  event of its thread**, so a search for how a promise ended finds the promise. At the table only the text as the
+- `query` (at most 200 characters, case-insensitive) is found in the proposition's text, **in the summary of an
+  event of its thread** or in what a character observed of it, so a search for how a promise ended finds the
+  promise. At the table only the text as the
   table has it is searched.
 - `actor` (an instance of the chat's campaign) keeps only threads that involve them.
 - `limit` (1 to 200, default 50): at most this many are listed, and `total` says how many matched.
