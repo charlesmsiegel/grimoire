@@ -131,6 +131,20 @@ h1, h2, h3 { font-family: var(--g-serif); font-weight: 600; }
 .g-button:disabled { opacity: .45; cursor: default; }
 .g-link { text-decoration: underline; }
 
+/* -- touch screens: a finger needs a larger target than a mouse pointer. WCAG 2.5.8 asks 24 CSS px; phone
+   guidance is about 44. The emulated-phone sweep (backend/acceptance/test_phone.py) found 13-23px turn tools,
+   sort headers, tag buttons, disclosure summaries and the header's crumb link. Standalone controls grow here;
+   a link inside running text keeps its line, which 2.5.8 allows. ---------------------------------------- */
+@media (pointer: coarse) {
+  button, select, summary, input:not([type="checkbox"], [type="radio"], [type="hidden"]) {
+    min-height: 32px; }
+  button { min-width: 32px; }
+  summary { padding-block: 6px; }
+  .g-crumb { line-height: 32px; }  /* still a block, so a long crumb keeps its ellipsis */
+  .g-crumb > a { display: inline-block; min-height: 32px; }
+  .home-more { display: inline-flex; align-items: center; min-height: 32px; }
+}
+
 /* -- text ------------------------------------------------------------------------------------------ */
 .g-ref { font-family: var(--g-mono); font-size: 13px; word-break: break-all; }
 .g-mono { font-family: var(--g-mono); font-size: 13px; }

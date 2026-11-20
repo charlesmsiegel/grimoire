@@ -35,10 +35,12 @@ class OfflineApp(App):
 
 
 class Session:
-    def __init__(self, root, browser, model, v1):
+    def __init__(self, root, browser, model, v1, device=None):
+        """`device` is a Playwright device descriptor (touch, mobile viewport); the default is a desktop window."""
         self.home, self.browser, self.model, self.v1 = root, browser, model, v1
         root.mkdir()
-        self.context = browser.new_context(viewport={"width": 1280, "height": 900}, service_workers="block")
+        self.context = browser.new_context(**(device or {"viewport": {"width": 1280, "height": 900}}),
+                                           service_workers="block")
         self.blocked, self.errors = [], []
         self.app = None
         self.context.route("**/*", self.route)
@@ -73,8 +75,8 @@ class Session:
         expect(self.page.get_by_role("main").get_by_role("heading", level=2).first).to_be_visible()
 
     @contextlib.contextmanager
-    def new_client(self, name):
-        peer = Session(self.home.parent / name, self.browser, self.model, self.v1)
+    def new_client(self, name, device=None):
+        peer = Session(self.home.parent / name, self.browser, self.model, self.v1, device)
         try:
             yield peer
         finally:
@@ -91,8 +93,8 @@ class Session:
         assert not self.errors, "Browser exceptions: " + repr(self.errors)
 
 
-@pytest.fixture
-def session(tmp_path):
+@contextlib.contextmanager
+def first_session(tmp_path, device=None):
     v1 = voiced_v1_library(tmp_path / "synthetic-v1")
     before = snapshot(v1)
     executable = os.environ.get("GRIMOIRE_TEST_CHROMIUM") or shutil.which("chromium")
@@ -100,7 +102,9 @@ def session(tmp_path):
         browser = playwright.chromium.launch(executable_path=executable)
         current = None
         try:
-            current = Session(tmp_path / "desktop", browser, model, v1)
+            current = Session(tmp_path / ("phone" if device else "desktop"), browser, model, v1,
+                              playwright.devices[device] if device else None)
+            current.devices = playwright.devices
             yield current
         finally:
             try:
@@ -109,3 +113,20 @@ def session(tmp_path):
             finally:
                 browser.close()
                 assert snapshot(v1) == before, "The read-only synthetic V1 source changed"
+
+
+@pytest.fixture
+def session(tmp_path):
+    with first_session(tmp_path) as current:
+        yield current
+
+
+# An emulated Android phone: touch input, a mobile viewport and device pixel ratio, Chromium's mobile user
+# agent. Still Chromium on this machine, not a phone: docs/ACCEPTANCE.md keeps the physical-device check.
+PHONE = "Pixel 7"
+
+
+@pytest.fixture
+def phone(tmp_path):
+    with first_session(tmp_path, PHONE) as current:
+        yield current
