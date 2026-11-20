@@ -9,6 +9,7 @@ import pytest
 
 from grimoire.changesets import ChangeSet, ChangeSetError
 from grimoire.changesetstore import ChangeSetConflict
+from grimoire.core.identity import SourceRef
 from grimoire.security import Authorizer, Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, RecordEnvelope, WriteDenied
 from grimoire.store.errors import AuthorityUnavailable
@@ -82,6 +83,20 @@ def test_a_revision_keeps_its_base_owner_and_unknown_envelope_keys(store):
     assert written["owner"] == "human:author" and written["x-review"] == {"checked": True}
     created = json.loads((store.root / record_path(DOCKS.at("r1"))).read_text("utf-8"))
     assert created["owner"] == "human:owner"
+
+
+def test_a_created_record_declares_its_schema_and_a_revision_keeps_it(store):
+    # 087: a created entity is read by the families that dispatch on the envelope's schema
+    lib = library(store)
+    pier = lib.create(HARBOR, "location", "pier", {"name": "Pier", "nature": "individual", "traits": []},
+                      name="Pier", schema="grimoire.entity/0")
+    lib.apply(lib.review(ChangeSet("cs-pier", HARBOR, "Add the pier", "human:owner", (pier,))))
+    pier_ref = SourceRef(HARBOR, "location", "pier")
+    assert json.loads((store.root / record_path(pier_ref.at("r1"))).read_text("utf-8"))["schema"] == "grimoire.entity/0"
+    again = lib.revise(HARBOR, "location", "pier", {"name": "Pier", "nature": "individual", "traits": [],
+                                                    "description": "Rebuilt."})
+    lib.apply(lib.review(ChangeSet("cs-pier-2", HARBOR, "Rebuild the pier", "human:owner", (again,))))
+    assert json.loads((store.root / record_path(pier_ref.at("r2"))).read_text("utf-8"))["schema"] == "grimoire.entity/0"
 
 
 def test_a_revision_of_an_unowned_record_stays_unowned(store):
