@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from grimoire.calendars import CALENDAR_KEY, CalendarState, Duration
+from grimoire.calendars import CALENDAR_KEY, CalendarError, CalendarState, Duration
 from grimoire.calendars import state_from_payload as calendar_from_payload
 from grimoire.calendars import state_to_payload as calendar_to_payload
 from grimoire.chats import scope_from_payload
@@ -97,8 +97,12 @@ class DowntimeLibrary:
         stored = self.store.read(scope)
         record = stored.record
         scope_from_payload(scope, record.schema, record.payload)
-        calendar = None if CALENDAR_KEY not in record.payload else calendar_from_payload(
-            scope.campaign_id, record.payload[CALENDAR_KEY])
+        try:
+            calendar = None if CALENDAR_KEY not in record.payload else calendar_from_payload(
+                scope.campaign_id, record.payload[CALENDAR_KEY])
+        except CalendarError as error:
+            # Callers handle one refusal type; the calendar's reason (e.g. invalid_history) is kept.
+            raise DowntimeError(f"campaign calendar is unreadable: {error}", error.reason) from None
         state = empty(scope.campaign_id) if DOWNTIME_KEY not in record.payload else state_from_payload(
             scope.campaign_id, record.payload[DOWNTIME_KEY], calendar)
         return DowntimeView(scope, state, calendar, stored.etag), record

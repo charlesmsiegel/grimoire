@@ -232,6 +232,12 @@ def test_unauthorized_handle_cannot_commit(table):
         "after": {"fixed_day": 1, "minute": 0}, "triggered": []}),
     # Two pursuits replayed out of the calendar's order.
     lambda p: p["downtime"]["receipts"].insert(1, p["downtime"]["receipts"].pop()),
+    # Numbers and flags of the wrong JSON type, which Python's 1 == 1.0 == True would let replay accept.
+    lambda p: p["downtime"]["receipts"][-1].update(credited=1440.0),
+    lambda p: p["downtime"]["receipts"][0].update(completed=0),
+    lambda p: p["downtime"]["activities"][0].update(progress_minutes=2880.0),
+    # A corrupt calendar is refused as downtime authority too, not as a different error type.
+    lambda p: p["calendar"]["now"].update(fixed_day=1),
 ])
 def test_contradictory_histories_are_refused_without_writes(table, edit):
     library = begun(table)
@@ -239,8 +245,9 @@ def test_contradictory_histories_are_refused_without_writes(table, edit):
         library.pursue(SCOPE, name, "tide-cant", Duration(DAY), expected=library.read(SCOPE).etag).commit()
     rewrite(table, edit)
     data = bytes_of(table)
-    with pytest.raises(ValueError):
-        library.read(SCOPE)
-    with pytest.raises(ValueError):
-        library.pursue(SCOPE, "more", "tide-cant", Duration(DAY), expected="any")
+    for call in (lambda: library.read(SCOPE),
+                 lambda: library.pursue(SCOPE, "more", "tide-cant", Duration(DAY), expected="any")):
+        with pytest.raises(DowntimeError) as caught:
+            call()
+        assert caught.value.reason in {"invalid_history", "invalid_record", "unsupported_schema"}
     assert bytes_of(table) == data

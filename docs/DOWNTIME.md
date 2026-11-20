@@ -73,16 +73,22 @@ stop for a deadline, an encounter or a shortage is later work.
 `calendar`. It holds every activity's current progress and the full ordered operation receipts, as
 readable canonical JSON. Reads replay every receipt through the same rules that wrote it and check
 the stored activities against the replay. Each pursuit must match the calendar receipt with its id,
-in the calendar's order, and each begin or abandon must be dated to a time the calendar reached. A
-hand edit that claims study without the calendar moving, moves the calendar under a study, reorders
-pursuits, or adds unknown fields or schemas fails closed, without repair or writes. Plain calendar
+in the calendar's order, and each begin or abandon must be dated to a time the calendar reached. An
+inconsistent hand edit (study whose time the calendar lacks, progress or receipts that replay does
+not produce, reordered pursuits, mistyped numbers or flags, unknown fields or schemas) fails closed,
+without repair or writes. A pursuit's advance is an ordinary 055 advance, so a coherent manual
+replacement of both histories, such as deleting a pursuit together with its progress, is outside
+the receipt guarantee, as it is for the calendar. Plain calendar
 operations and ordinary scope edits preserve the extension. The log is not pruned: when the scope
 reaches the native file limit, new operations are refused rather than forgetting old ids.
 
 As with the calendar, sync compares the whole scope file. Study done on two disconnected devices is
 kept as a conflict, never summed; reads, planning and commit refuse until the explicit keep-mine or
-keep-peer resolution chooses one lineage, and a retry of an operation the resolution discarded is
-refused (`history_changed`) rather than resubmitted. The reader is director-facing canonical data,
+keep-peer resolution chooses one lineage. Exactly-once applies to that kept lineage: a plan made
+before the resolution for an operation it discarded is refused (`history_changed`), but replanning
+that operation afterwards is a new request against the kept history and would spend its time again.
+A client must not automatically resubmit an operation that an intentional resolution or manual
+restore discarded; the person decides whether that study happened. The reader is director-facing canonical data,
 not an actor's knowledge feed. Existing scopes without the extension remain valid; removing this
 code leaves it as opaque data for clients that preserve unknown scope fields.
 

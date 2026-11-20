@@ -2,9 +2,12 @@
 
 The ``downtime`` object sits beside 055's ``calendar`` in a campaign scope record. Reading it replays
 every retained receipt through the same rules that wrote it, and checks each pursuit against the
-calendar receipt that spent its time: a hand edit that claims study without the calendar moving,
-or moves the calendar without the study, fails closed. Unknown fields or schemas fail closed too,
-since dropping one could discard an authority rule from a newer writer.
+calendar receipt with its id: an inconsistent edit (study whose time the calendar lacks, progress
+replay does not produce, pursuits out of the calendar's order) fails closed. A pursuit's advance is
+an ordinary 055 advance, so a coherent manual replacement of both histories, such as deleting a
+pursuit together with its activity's progress, is outside the receipt guarantee, as in 055.
+Unknown fields or schemas fail closed too, since dropping one could discard an authority rule from
+a newer writer, and stored numbers and flags must have their exact JSON types.
 """
 from __future__ import annotations
 
@@ -104,8 +107,16 @@ def progress_to_payload(progress: Progress) -> dict:
             "settled_at": _moment_payload(progress.settled_at), "outcome": progress.outcome}
 
 
+def _exact(value: object, kind: type) -> object:
+    """``1 == True == 1.0`` in Python, so replay's equality alone would accept a mistyped record."""
+    if type(value) is not kind:
+        raise DowntimeError(f"downtime field must be {kind.__name__}", "invalid_record")
+    return value
+
+
 def progress_from_payload(value: object) -> Progress:
     raw = _object(value, "activity progress_minutes status settled_by settled_at outcome")
+    _exact(raw["progress_minutes"], int)
     return Progress(activity_from_payload(raw["activity"]), raw["progress_minutes"], raw["status"],
                     raw["settled_by"], _moment(raw["settled_at"]), raw["outcome"])
 
@@ -151,7 +162,8 @@ def _replay(campaign_id: str, value: object, calendar: CalendarState | None) -> 
                 raise DowntimeError("a begin or abandon spends no time", "invalid_history")
             position = _instant(calendar_receipts, position, after)
             state, expected = record(state, operation, at=after)
-        if expected != DowntimeReceipt(operation, stored["credited"], stored["completed"], before, after,
+        if expected != DowntimeReceipt(operation, _exact(stored["credited"], int), _exact(stored["completed"], bool),
+                                       before, after,
                                        _array(stored["triggered"])):
             raise DowntimeError("downtime receipt contradicts replay", "invalid_history")
     activities = tuple(progress_from_payload(item) for item in _array(raw["activities"]))
