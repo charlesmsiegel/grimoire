@@ -209,6 +209,32 @@ test("#694's per-tab cues move once into the device-local store, keeping what th
   assert.equal(second.background, "");
 });
 
+test("carrying #694's cues over never replaces a stored cue and resumes when storage was full", () => {
+  const v1 = (turns) => memory({ "grimoire.vn.v1:c": JSON.stringify({ version: 1, cues: Object.fromEntries(turns.map((t) =>
+    [t, { actors: {}, focus: "", background: "", transition: "none", note: "old " + t }])) }) });
+  // a newer build's cue for t1 stays as it is; t2 still comes across
+  const local = memory({ [K("c", "t1")]: JSON.stringify({ version: 3, cue: { future: true } }) });
+  const store = cueStore("c", local, v1(["t1", "t2"]));
+  assert.match(store.warning, /newer version/);
+  assert.equal(JSON.parse(local.data[K("c", "t1")]).version, 3);
+  assert.deepEqual(Object.keys(store.cues), ["t2"]);
+  // storage fills after the first cue: the rest stay in memory, and the next load writes them
+  const shared = memory();
+  let writes = 0, full = true;
+  const flaky = { get length() { return shared.length; }, key: shared.key, getItem: shared.getItem, removeItem: shared.removeItem,
+    setItem: (k, v) => { writes += 1; if (full && writes > 1) throw Error("quota"); shared.setItem(k, v); } };
+  const legacy = v1(["t1", "t2", "t3"]);
+  const first = cueStore("c", flaky, legacy);
+  assert.match(first.warning, /remain in memory/);
+  assert.deepEqual(Object.keys(first.cues).sort(), ["t1", "t2", "t3"]);
+  assert.deepEqual(turnsIn(shared, "c"), ["t1"]);
+  full = false;
+  const later = cueStore("c", flaky, legacy);
+  assert.equal(later.warning, "");
+  assert.deepEqual(turnsIn(shared, "c"), ["t1", "t2", "t3"]);
+  assert.equal(later.cues.t3.note, "old t3");
+});
+
 // The proving scenario. Seraphine wears two outfits across the scene; Winifred is a portrait-only NPC who
 // was present (silent) at the first turn and gone by the third; Mara's private aside stays private; a
 // hidden sprite is never requested; switching to the transcript changes no canonical text, and the stage

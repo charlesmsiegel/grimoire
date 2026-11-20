@@ -148,23 +148,24 @@ export function cueStore(chat, storage, legacy) {
       else found[turn] = cue;
     return found;
   }
-  function migrate(found) {
-    if (Object.keys(found).length || storage.getItem(MIGRATED + chat)) return found;
+  // #694's cues are queued as unsaved changes and written like any other, so a migration that storage
+  // interrupts resumes on the next load; the marker is set only once every write has succeeded. A turn this
+  // device already stores, readable or not, is never replaced by its older cue.
+  function migrate(found, problems) {
+    if (storage.getItem(MIGRATED + chat)) return;
     const old = legacy ? probe(() => legacy.getItem(STORE_V1 + chat)) : null;
     const parsed = old ? probe(() => JSON.parse(old)) : null;
     if (parsed?.version === 1 && validCues(parsed.cues, 1))
-      for (const [turn, cue] of Object.entries(parsed.cues)) {
-        found[turn] = fromV1(cue);
-        storage.setItem(keyOf(turn), JSON.stringify({ version: 2, cue: found[turn] }));
-      }
-    storage.setItem(MIGRATED + chat, "1");
-    return found;
+      for (const [turn, cue] of Object.entries(parsed.cues))
+        if (!(turn in found) && !problems.has(turn) && !unsaved.has(turn)) unsaved.set(turn, (found[turn] = fromV1(cue)));
+    flush();
   }
   function load() {
     try {
       const { found, problems } = storedTurns();
       unreadable = problems;
-      cues = overlay(migrate(found));
+      migrate(found, problems);
+      cues = overlay(found);
       warning = unsaved.size ? UNSAVED : describe();
     } catch {
       cues = overlay({ ...cues });
