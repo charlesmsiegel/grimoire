@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-Scheduled domain slices and UI exit 116 are not complete.
+078 is complete at its bounded first-proof boundary. Other domain slices and UI exit 116 remain incomplete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -715,7 +715,7 @@ Scheduled domain slices and UI exit 116 are not complete.
 ### 078 — Relationships And Reputation
 
 - [x] Scheduled first-useful slice ([requirements](sprints/relationships-and-reputation.md)).
-- Evidence: [`relationships/policy.py`](../../backend/src/grimoire/relationships/policy.py) admits a director-authored NPC attitude (trust, affection, fear, rivalry, resentment or debt toward one actor or group, a narrative account and an optional degree) only from the holder's own confirmed evidence or beliefs at that moment, at least one of which overtly concerns the target; perceptions, participation, membership and other actors' evidence never count. [`test_relationships.py`](../../backend/tests/test_relationships.py) runs the proving scenario: an insulted envoy resents and distrusts the newcomer, a dockhand who overheard likes them, two absent guild members hold nothing, and one comes to resent them only after the envoy's letter arrives, while every knowledge projection is unchanged. Supersession history, idempotent retries, PC-interiority and authority refusals and bounds are covered. See [contract](../RELATIONSHIPS.md).
+- Evidence: [`relationships/policy.py`](../../backend/src/grimoire/relationships/policy.py) admits a director-authored NPC attitude (trust, affection, fear, rivalry, resentment or debt toward one actor or group, a narrative account and an optional degree) only from the holder's own confirmed evidence or beliefs at that moment, at least one of which overtly concerns the target; perceptions, participation, membership and other actors' evidence never count. [`test_relationships.py`](../../backend/tests/test_relationships.py) runs the proving scenario: an insulted envoy resents and distrusts the newcomer, a dockhand who overheard likes them, two absent guild members hold nothing, and one comes to resent them only after the envoy's letter arrives, while every knowledge projection is unchanged. Groups hold no attitudes, a player taking an NPC over does not inherit its attitudes as their own, and supersession history, idempotent retries, future-dated changes, authority refusals and bounds are covered. See [contract](../RELATIONSHIPS.md).
 - Scope / gap: Authored, in-memory per-holder attitudes only: no community reputation with uncertainty (milestone 3), change of allegiance, persistence, brief/goal consumption, narrator proposals or UI. No provider calls.
 
 <a id="slice-079"></a>

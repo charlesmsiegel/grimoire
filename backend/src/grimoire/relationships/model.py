@@ -63,12 +63,13 @@ def bounded(values: object, maximum: int) -> tuple:
 
 
 def _ids(values: object) -> tuple[str, ...]:
+    """Grounds are a set in meaning: stored sorted, so equal grounds compare equal however supplied."""
     result = bounded(values, MAX_GROUNDS)
     for item in result:
         segment(item)
     if len(set(result)) != len(result):
         raise RelationshipError('duplicate_ground')
-    return result
+    return tuple(sorted(result))
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +79,7 @@ class Attitude:
     ``account`` is the holder's own narrative reading ("resents being called a lackey in front of
     the dockhands"); ``degree`` is an optional numeric interpretation, never required.
     ``evidence_ids`` and ``belief_ids`` name the holder's own 012 evidence and beliefs the change
-    rests on (1 to 8 in all): its episode provenance. ``supersedes`` names the previous head of
+    rests on (1 to 8 in all, stored sorted): its episode provenance. ``supersedes`` names the previous head of
     the same (holder, toward, dimension) chain.
     """
 
@@ -177,14 +178,15 @@ class AttitudeLedger:
 
 @dataclass(frozen=True, slots=True)
 class Disposition:
-    """A current attitude as its holder has it: no ids, grounds, provenance or authorship.
+    """A current attitude as its holder has it: no grounds, provenance, authorship or scene labels.
 
-    This is the shape a per-NPC brief (027) or a director panel may render; ids never reach a
-    prompt (012).
+    ``toward`` is still a reference: a renderer (027's brief, a director panel) must show it as a
+    name the holder knows it by, never as the reference text, because IDs never reach a prompt
+    (012). ``since`` is the change's campaign sequence.
     """
 
     toward: InstanceRef
     dimension: str
     account: str
     degree: int | None
-    moment: Moment
+    since: int

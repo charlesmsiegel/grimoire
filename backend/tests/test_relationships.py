@@ -14,7 +14,9 @@ from grimoire.core.model import ControlAssignment
 from grimoire.core.perspective import actor_knowledge, director_knowledge
 from grimoire.core.roster import CampaignRoster
 from grimoire.relationships import (MAX_RECORDS, Attitude, AttitudeLedger, Disposition, RelationshipError,
-                                    admit, attitudes_of, dispositions, history_of)
+                                    admit, history_of)
+from grimoire.relationships import attitudes_of as _attitudes_of
+from grimoire.relationships import dispositions as _dispositions
 
 C = 'guild-test'
 ENVOY, TOLD, AWAY, DOCKHAND, PC = (InstanceRef(C, 'character', x)
@@ -28,6 +30,14 @@ ROSTER = CampaignRoster(C, (*(EntityInstance(x, local_name=x.instance_id, added=
                             EntityInstance(CRATE, local_name='crate')))
 DEFINITIONS = DefinitionIndex((), ())
 CONTROLS = tuple(ControlAssignment(C, x.instance_id, 'player' if x == PC else DIRECTOR) for x in AGENTS)
+
+
+def attitudes_of(*args, controls=None, **kwargs):
+    return _attitudes_of(*args, controls=CONTROLS if controls is None else controls, **kwargs)
+
+
+def dispositions(*args, controls=None, **kwargs):
+    return _dispositions(*args, controls=CONTROLS if controls is None else controls, **kwargs)
 
 
 def about(*refs):
@@ -74,7 +84,7 @@ def attitude(**changes):
 
 def put(ledger, item, **changes):
     args = dict(knowledge=knowledge(), roster=ROSTER, definitions=DEFINITIONS, controls=CONTROLS,
-                authored_by=DIRECTOR, expected_revision=ledger.revision)
+                authored_by=DIRECTOR, now=9, expected_revision=ledger.revision)
     args.update(changes)
     return admit(ledger, item, **args)
 
@@ -117,8 +127,11 @@ def test_envoy_resents_the_insult_and_absent_members_do_not_until_told():
     assert attitudes_of(ledger, TOLD, as_of=4) == ()
     assert attitudes_of(ledger, AWAY, as_of=9) == ()
     # Asymmetry: nobody's attitude toward the envoy, and the PC has none written for them.
-    assert attitudes_of(ledger, PC, as_of=9) == ()
-    assert all(a.toward == PC for a in ledger.records)
+    with pytest.raises(RelationshipError):
+        attitudes_of(ledger, PC, as_of=9)
+    assert not any(a.holder == PC for a in ledger.records)
+    for holder in (ENVOY, TOLD, AWAY, DOCKHAND):
+        assert attitudes_of(ledger, holder, as_of=9, toward=ENVOY) == ()
     # Nothing about knowledge or truth changed.
     assert director_knowledge(facts, as_of=9, requested_by=DIRECTOR) == director_before
     assert {a: actor_knowledge(facts, a, as_of=9) for a in AGENTS} == views_before
@@ -178,7 +191,7 @@ def test_targets_resolve_and_groups_are_allowed():
                                                              toward=InstanceRef('other', 'character', 'pc')))
     with pytest.raises(RelationshipError):
         admit(AttitudeLedger(C), attitude(), knowledge=None, roster=ROSTER, definitions=DEFINITIONS,
-              controls=CONTROLS, authored_by=DIRECTOR, expected_revision=0)
+              controls=CONTROLS, authored_by=DIRECTOR, now=9, expected_revision=0)
 
 
 def test_a_change_supersedes_the_current_head_and_history_is_kept():
@@ -252,7 +265,7 @@ def test_degree_is_optional_and_trust_may_be_negative():
 def test_dispositions_hide_ids_grounds_and_provenance():
     ledger = put(AttitudeLedger(C), attitude())
     (view,) = dispositions(ledger, ENVOY, as_of=1)
-    assert view == Disposition(PC, 'resentment', attitude().account, 3, Moment(1))
+    assert view == Disposition(PC, 'resentment', attitude().account, 3, 1)
     assert not {'attitude_id', 'evidence_ids', 'belief_ids', 'provenance', 'holder'} & set(Disposition.__slots__)
     assert dispositions(ledger, TOLD, as_of=9) == ()
 
@@ -285,3 +298,63 @@ def test_ledger_bounds_and_mutable_input_are_defended():
         with pytest.raises(RelationshipError) as caught:
             AttitudeLedger(C, bad)
         assert caught.value.reason == reason
+
+
+def test_groups_hold_no_attitudes_even_with_agency_and_evidence():
+    agentic = CampaignRoster(C, tuple(replace(x, added=FacetBundle((Agent(),))) if x.ref == GUILD else x
+                                      for x in ROSTER.instances))
+    petition = Report(C, 'petition', GUILD, 'p2', 'written', Moment(5), 'scene:hall/t1', True, attributed_to=ENVOY)
+    refused('unsupported_holder_kind', AttitudeLedger(C), attitude(holder=GUILD, moment=Moment(5),
+                                                                  evidence_ids=('petition',)),
+            roster=agentic, knowledge=knowledge(petition),
+            controls=(*CONTROLS, ControlAssignment(C, 'guild', DIRECTOR)))
+
+
+def test_a_player_taking_over_an_npc_does_not_inherit_its_attitudes_as_their_own():
+    ledger = put(AttitudeLedger(C), attitude())
+    taken = tuple(replace(c, controller_id='player2') if c.actor_id == 'envoy' else c for c in CONTROLS)
+    for read in (lambda: attitudes_of(ledger, ENVOY, as_of=9, controls=taken),
+                 lambda: dispositions(ledger, ENVOY, as_of=9, controls=taken)):
+        with pytest.raises(RelationshipError) as caught:
+            read()
+        assert caught.value.reason == 'pc_interiority'
+    for bad, reason in ((tuple(c for c in CONTROLS if c.actor_id != 'envoy'), 'unknown_control'),
+                        ((*CONTROLS, ControlAssignment(C, 'envoy', 'player')), 'ambiguous_control'),
+                        (('envoy',), 'invalid_control')):
+        with pytest.raises(RelationshipError) as caught:
+            attitudes_of(ledger, ENVOY, as_of=9, controls=bad)
+        assert caught.value.reason == reason
+    # The director's audit history still holds the NPC era; nobody may revise it as the player's.
+    assert [a.attitude_id for a in history_of(ledger, ENVOY, PC, 'resentment', as_of=9)] == ['a1']
+    later = attitude(attitude_id='a2', moment=Moment(6), supersedes='a1')
+    refused('pc_interiority', ledger, later, controls=taken)
+    refused('npc_authority_required', ledger, later, authored_by='player2')
+
+
+def test_future_dated_changes_and_abandoned_beliefs_are_refused():
+    refused('future_moment', AttitudeLedger(C), attitude(), now=0)
+    refused('invalid_sequence', AttitudeLedger(C), attitude(), now=-1)
+    b1 = Belief(C, 'b1', ENVOY, 'p4', 'believed', Moment(2), DIRECTOR, ('shoved',))
+    b2 = Belief(C, 'b2', ENVOY, 'p4', 'rejected', Moment(3), DIRECTOR, ('shoved',), supersedes='b1')
+    facts = knowledge(beliefs=(b1, b2))
+    old = attitude(attitude_id='f1', dimension='fear', degree=3, moment=Moment(5), evidence_ids=(),
+                   belief_ids=('b1',), account='Still flinches at the newcomer.')
+    refused('unavailable_grounds', AttitudeLedger(C), old, knowledge=facts)
+    assert put(AttitudeLedger(C), replace(old, belief_ids=('b2',), degree=0,
+                                          account='No longer blames the newcomer.'), knowledge=facts).revision == 1
+
+
+def test_grounds_are_canonical_however_supplied():
+    assert attitude(evidence_ids={'saw', 'heard'}) == attitude(evidence_ids=('heard', 'saw'))
+    assert attitude(evidence_ids=('saw', 'heard')).evidence_ids == ('heard', 'saw')
+
+
+def test_retry_of_a_superseded_record_and_admission_at_the_cap():
+    first = put(AttitudeLedger(C), attitude(attitude_id='t1', dimension='trust', degree=-2))
+    second = put(first, attitude(attitude_id='t2', dimension='trust', degree=-1, moment=Moment(3),
+                                 supersedes='t1'))
+    assert put(second, attitude(attitude_id='t1', dimension='trust', degree=-2), expected_revision=0) is second
+    item = attitude()
+    full = AttitudeLedger(C, tuple(replace(item, attitude_id=f'r{i}', toward=InstanceRef(C, 'character', f'n{i}'))
+                                   for i in range(MAX_RECORDS)))
+    refused('budget_exceeded', full, attitude(attitude_id='over'))
