@@ -1,0 +1,85 @@
+{
+  "address": "campaign:q-1#chat/t-1",
+  "format": "grimoire.scope-record/1",
+  "owner": "human:owner",
+  "payload": {
+    "bindings": [
+      {
+        "actor": "campaign:q-1/character/mara-1",
+        "introduced_at": "2026-10-31T10:00:01Z",
+        "introduced_seq": 0,
+        "ref": "catalog:cards/character/mara@r1",
+        "resolved_revision": "r1",
+        "role": "character"
+      },
+      {
+        "detached_at": "2026-10-31T10:00:03Z",
+        "detached_seq": 2,
+        "introduced_at": "2026-10-31T10:00:01Z",
+        "introduced_seq": 0,
+        "ref": "catalog:cards/scenario/fog@r1",
+        "resolved_revision": "r1",
+        "role": "scenario"
+      },
+      {
+        "introduced_at": "2026-10-31T10:00:01Z",
+        "introduced_seq": 0,
+        "ref": "catalog:cards/lorebook/harbor-notes@r1",
+        "resolved_revision": "r1",
+        "role": "lorebook"
+      },
+      {
+        "actor": "campaign:q-1/character/sam-1",
+        "introduced_at": "2026-10-31T10:00:01Z",
+        "introduced_seq": 0,
+        "ref": "catalog:me/character/sam@r1",
+        "resolved_revision": "r1",
+        "role": "persona"
+      },
+      {
+        "actor": "campaign:q-1/character/anya-1",
+        "introduced_at": "2026-10-31T10:00:02Z",
+        "introduced_seq": 1,
+        "ref": "catalog:cards/character/anya@r1",
+        "resolved_revision": "r1",
+        "role": "character"
+      }
+    ],
+    "created_at": "2026-10-31T10:00:01Z",
+    "label": "Harbor night",
+    "last_activity": "2026-10-31T10:00:03Z",
+    "launch": {
+      "kind": "character",
+      "ref": "catalog:cards/character/mara@r1"
+    },
+    "roster": [
+      {
+        "actor": "campaign:q-1/character/mara-1",
+        "introduced_at": "2026-10-31T10:00:01Z",
+        "introduced_seq": 0,
+        "prior_history": "not_witnessed",
+        "role": "character",
+        "source": "catalog:cards/character/mara@r1"
+      },
+      {
+        "actor": "campaign:q-1/character/sam-1",
+        "introduced_at": "2026-10-31T10:00:01Z",
+        "introduced_seq": 0,
+        "prior_history": "not_witnessed",
+        "role": "persona",
+        "source": "catalog:me/character/sam@r1"
+      },
+      {
+        "actor": "campaign:q-1/character/anya-1",
+        "introduced_at": "2026-10-31T10:00:02Z",
+        "introduced_seq": 1,
+        "prior_history": "not_witnessed",
+        "role": "character",
+        "source": "catalog:cards/character/anya@r1"
+      }
+    ],
+    "seq": 2
+  },
+  "previous": "sha256:f8fec8e1d88bd8127e2a61e91a4ad5b5fc064f382e15b3d30957b784cc2044c3",
+  "schema": "grimoire.chat/1"
+}

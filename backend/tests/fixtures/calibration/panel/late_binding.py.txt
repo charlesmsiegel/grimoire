@@ -1,0 +1,8 @@
+"""Build one callback per slot; callback ``i`` reports slot ``i`` when called later."""
+
+
+def slot_callbacks(slots):
+    callbacks = []
+    for slot in range(slots):
+        callbacks.append(lambda: slot)
+    return callbacks

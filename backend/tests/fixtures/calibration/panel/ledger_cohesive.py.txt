@@ -1,0 +1,40 @@
+"""A lending shelf: copies go out to borrowers and come back.
+
+A copy is either on the shelf or on loan to exactly one borrower. A loan is never
+edited; returning a copy ends its loan. Overdue is a question asked of a loan at a
+given day, so the shelf keeps no clock of its own.
+"""
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Loan:
+    copy_id: str
+    borrower: str
+    due_day: int
+
+    def overdue(self, today):
+        return today > self.due_day
+
+
+class Shelf:
+    def __init__(self, copy_ids):
+        self._available = set(copy_ids)
+        self._loans = {}
+
+    def lend(self, copy_id, borrower, due_day):
+        if copy_id not in self._available:
+            raise ValueError('that copy is not on the shelf')
+        self._available.remove(copy_id)
+        loan = Loan(copy_id, borrower, due_day)
+        self._loans[copy_id] = loan
+        return loan
+
+    def give_back(self, copy_id):
+        loan = self._loans.pop(copy_id)
+        self._available.add(copy_id)
+        return loan
+
+    def overdue_loans(self, today):
+        return sorted((loan for loan in self._loans.values() if loan.overdue(today)),
+                      key=lambda loan: loan.due_day)

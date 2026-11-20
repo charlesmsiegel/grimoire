@@ -350,25 +350,21 @@ def _end(runner, chat: ChatRef, by, turn: str, number: int, reason: str, may) ->
 
     The checks are a key's (play not paused, the turn on the line, no fork or sync conflict, the effect still
     collecting keys), then ``may``'s. The turn is written by compare-and-swap, so another key, a pause or a fork
-    landing since it was read is ``turn_changed`` and ends nothing. Under the store lock, once the write's own
-    checks have passed, the turn is still as read and just before it commits, the authority records the ending as
-    a decision of the asker's own handle (as an endorsement is recorded), written to its ledger with the turn's
-    commit, so an ending whose write would lose records nothing (in this process). That record is what
-    an acceptance checks, so an ended effect set live again in its turn file (by hand or by a peer) is refused at
-    acceptance with the same reason."""
+    landing since it was read is ``turn_changed`` and ends nothing. Only once the turn write has committed (still
+    under the store lock) does the authority record the ending, as a decision of the asker's own handle (as an
+    endorsement is recorded): a write that never landed (another process's write, a disk error, a crash) records
+    nothing, so the effect stays live and takes its keys. That record is what an acceptance checks, so an ended
+    effect set live again in its turn file (by hand or by a peer) is refused at acceptance with the same reason.
+    A crash between the commit and the record leaves the turn's ``refused`` mark alone, which still ends it; only
+    the check against a revival is then lost. The record reaches the authority's ledger with its next flush."""
     scene, principal, _ = _playing(runner, chat, by)
     stored = _turn(scene, turn)
     effect = _effect(stored, number)
     _collecting(effect)
     may(scene, stored, effect, principal)
     ended = replace(effect, state="refused", reason=reason)
-
-    def record() -> None:  # under the store lock: a turn changed since it was read records nothing (it would lose)
-        fresh = next((s for s in runner.scenes.turns(chat).turns if s.record.ref == stored.record.ref), None)
-        if fresh is None or fresh.etag != stored.etag:
-            raise _refuse("turn_changed", "the turn changed since it was read; read it again")
-        _record_end(by, stored.record.ref, number, reason, effect.fingerprint)
-    runner._write(stored.record.with_effect(ended), stored, unpaused=True, before_commit=record)
+    runner._write(stored.record.with_effect(ended), stored, unpaused=True,
+                  on_commit=lambda: _record_end(by, stored.record.ref, number, reason, effect.fingerprint))
     return ended
 
 

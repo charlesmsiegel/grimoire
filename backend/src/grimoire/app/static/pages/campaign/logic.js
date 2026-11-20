@@ -186,12 +186,15 @@ export function count(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
 
 const live = (effect) => effect.state === "proposed" || effect.state === "approved";
 
-// Who may end a change still waiting on a key, without accepting it. The director withdraws any; at the table,
-// a player withdraws only a change they proposed themselves (`proposed_by: player`, shown at the table only to a
-// player who holds a key on it). A player declines a change their own character acts in, key given or not; the
-// director's view gives no player's refusal, as it gives no player's key. The hub refuses anything else.
-export function mayWithdraw(hub, effect, director) {
-  return live(effect) && (director || effect.proposed_by === "player");
+// Who may end a change still waiting on a key, without accepting it, as the runner allows it. The director
+// withdraws any; at the table, a player withdraws only a change they proposed themselves: a player's proposal
+// (`proposed_by: player`) on the turn of their own post (the table's view marks the post `mine`), never another
+// key holder. A player declines a change their own character acts in, key given or not; the director's view
+// gives no player's refusal, as it gives no player's key. The hub refuses anything else.
+export function mayWithdraw(hub, effect, director, turn) {
+  if (!live(effect)) return false;
+  if (director) return true;
+  return effect.proposed_by === "player" && Boolean(turn && turn.post && turn.post.mine === true);
 }
 
 export function mayDecline(hub, effect, director) {

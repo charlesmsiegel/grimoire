@@ -1,0 +1,28 @@
+{
+  "address": "world:emberfall/species/goblin@r1",
+  "format": "grimoire.record/1",
+  "name": "Goblin",
+  "payload": {
+    "description": "A small, quarrelsome humanoid",
+    "name": "Goblin",
+    "nature": "template",
+    "traits": [
+      {
+        "facet": "agent"
+      },
+      {
+        "facet": "biological"
+      },
+      {
+        "facet": "durable",
+        "max_integrity": 7
+      },
+      {
+        "facet": "physical",
+        "size": "small"
+      }
+    ]
+  },
+  "previous": null,
+  "schema": "grimoire.entity/0"
+}

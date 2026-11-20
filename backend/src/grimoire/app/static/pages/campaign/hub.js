@@ -437,7 +437,7 @@ function effectBlock({ ctx, hub, nameOf, write, director, chat, focusEffect }, t
       { fingerprint: effect.fingerprint }, "Decline effect " + effect.number + ", exactly as shown: " + effect.summary
         + "? It is ended without being accepted, and none of it becomes world truth.", "You declined effect " + effect.number + "."))));
   }
-  if (mayWithdraw(hub, effect, director)) {
+  if (mayWithdraw(hub, effect, director, turn)) {
     put(box, available(ctx, can.withdraw_effect, "Withdrawing this effect", () => ui.actions(ending("Withdraw", "withdraw_effect", {},
       "Withdraw effect " + effect.number + "? It is ended without being accepted, and any key given to it goes with it. "
         + "The turn can be given a new proposal.", "Effect " + effect.number + " is withdrawn."))));

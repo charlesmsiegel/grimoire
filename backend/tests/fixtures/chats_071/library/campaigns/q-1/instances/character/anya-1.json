@@ -1,0 +1,25 @@
+{
+  "address": "campaign:q-1/character/anya-1",
+  "art_pin": {
+    "base": "catalog:cards/character/anya@r1",
+    "format": "grimoire.art-pin/0",
+    "layers": [
+      {
+        "derived": false,
+        "entity": "catalog:cards/character/anya",
+        "placements": {}
+      }
+    ],
+    "problems": []
+  },
+  "base": "catalog:cards/character/anya@r1",
+  "base_etag": "sha256:2ec2114085927da1491b718412b28027d089668bcfeb2d4c6a0af08f2b21102f",
+  "derived_from": "catalog:cards/character/anya@r1",
+  "format": "grimoire.record/1",
+  "owner": "human:owner",
+  "payload": {
+    "source": "catalog:cards/character/anya@r1"
+  },
+  "previous": null,
+  "schema": "grimoire.entity/0"
+}
