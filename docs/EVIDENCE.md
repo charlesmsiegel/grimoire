@@ -5,7 +5,7 @@
 - `grimoire.evidencestore`: a store-backed service;
 - an additive, create-only record family in [the native store](STORAGE.md#events-and-evidence-020).
 
-There is **no app** yet. Nothing here calls a model. Nothing here decides which narration becomes an accepted event; that is [021](roadmap/sprints/turn-effects-and-wrap-up.md).
+There is **no app** yet. Nothing here calls a model. Nothing here decides which narration becomes an accepted event; that is [021](roadmap/sprints/turn-effects-and-wrap-up.md). In play, 035's runner appends each accepted effect's bridge (`as_knowledge_event`) together with a `witnessed` perception for each actor who could see it on the chat's stage, once, through `append` like any writer ([SCENES](SCENES.md#what-an-accepted-effect-leaves-in-knowledge)); the event file still names no witness.
 
 ## What it does
 
@@ -260,7 +260,7 @@ There is no widening flag. Every read scans the campaign's knowledge files and a
 | Retcons, correcting an event, invalidating witnessed evidence | 020 later milestone |
 | Guided repair tooling | 020 later milestone |
 | Materialized projections, caches, incremental reads | 020 later milestone / 065 |
-| Which narration becomes an accepted event | 021 ([EFFECTS](EFFECTS.md); its `as_knowledge_event` bridge yields the 012 `Event` to store here) |
+| Which narration becomes an accepted event | 021 ([EFFECTS](EFFECTS.md); its `as_knowledge_event` bridge yields the 012 `Event` to store here, and 035 stores it with its witnesses' perceptions: [SCENES](SCENES.md#what-an-accepted-effect-leaves-in-knowledge)) |
 | Transmission semantics | 032 |
 | Prompts from actor projections | 027 |
 | Cross-device merge of logs: done by copying ([028](roadmap/sprints/app-managed-device-sync.md), [SYNC](SYNC.md#knowledge-logs-028)); a merge that would need a choice (two devices ruling on one proposition, a forked belief chain) stays a conflict | 028 (done); semantic resolution: Wave 7 |

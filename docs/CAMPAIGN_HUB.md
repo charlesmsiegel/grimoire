@@ -63,6 +63,8 @@ In this slice the library owner is both the table's one player and its director 
 
 An actor's perspective is that actor's observations, sent reports and beliefs, each labelled with its `kind` and `holder`. It is never world truth and is never folded into the table's: another character's perspective asked at the table is refused (`director_only`), and an NPC's private observation appears in no hub view, not even the director's world truth.
 
+Play fills these perspectives: an effect accepted through the hub leaves its 012 event in 020 and a `witnessed` observation (the effect's summary) for each cast actor who could see it on the chat's stage, so the table's perspective shows what its own characters saw and an absent or shut-out actor's shows nothing ([SCENES](SCENES.md#what-an-accepted-effect-leaves-in-knowledge)). A chat with no stage leaves the event alone, with no observation. Nothing is disclosed out of character, so `table_events` stays empty. Until an accepted effect's knowledge is written, the hub's `problems` list it as `unbridged`; `recover_effects` writes it.
+
 ## Powers, goals, claims and sources
 
 - **`abilities`**: each shown actor's (a character in reserve included) effective 025 `abilities` facet, from the chat's 022 snapshot: every power with its effects (tags, range, certainty), limits (excluded tags), costs and prerequisites. An NPC's powers are the director's; the table sees its own characters'. No facet and an empty one both read as no powers. An actor whose definition cannot be composed now is left out with an `abilities_unreadable` problem. Using a power in play is not offered (`ability_use`, 035).

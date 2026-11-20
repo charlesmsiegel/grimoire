@@ -33,8 +33,10 @@ from grimoire.obstacles import (
     ACTOR, Approach, Cost, HoldingsChange, Obstacle, ObstacleFact, ObstacleStake, RelationChange,
 )
 from grimoire.play.scene import NOW
+from grimoire.play.stages import StageBook
 from grimoire.providers import RouteChoice
 from grimoire.runtime import LabelRuntime
+from grimoire.staging import Absence, Area, Placement, Stage
 from grimoire.textapi import ApiRefused
 
 DEBT = "Mara owes the harbour master a favour."
@@ -76,7 +78,7 @@ def hold(mara) -> Obstacle:
 class Hub:
     """One open library and its campaign hub: the owner plays and directs; the labeller is scripted."""
 
-    def __init__(self, folder, *replies: str, labelling: bool = True, agendas=()) -> None:
+    def __init__(self, folder, *replies: str, labelling: bool = True, agendas=(), stages=None) -> None:
         self.at = Table(folder, policy=LABEL_POLICY, labels=[say(text) for text in replies] if labelling else None)
         labels, labeller = self.at.labels, None
         if labelling:
@@ -85,7 +87,7 @@ class Hub:
         self.api = CampaignApi(self.at.store, self.at.authority, owner=OWNER, labeller=labeller,
                                label_handle=self.at.label_handle,
                                policy=LABEL_POLICY if labelling else None, agendas=agendas, clock=Clock(),
-                               new_id=Tagged("h"))
+                               new_id=Tagged("h"), stages=stages)
 
     def call(self, op: str, **args) -> dict:
         return self.api.call(op, args)
@@ -190,6 +192,42 @@ def test_an_absent_npcs_private_evidence_stays_hers(cards):
         anya = hub.api.runner.open(chat).persona
         own = hub.call("knowledge", chat=str(chat), actor=str(anya))
         assert own["audience"] == "table" and SECRET not in repr(own)  # Anya was not there
+
+
+def test_an_accepted_effect_is_known_to_the_characters_who_saw_it_and_never_to_an_absent_one(cards):
+    """On a stage: Anya and Mara at the hatch, Tamsin gone from the scene. Accepting the payoff gives the table its
+    own character's sight of it, the director Mara's, and Tamsin nothing."""
+    folder, chat = cards
+    book = StageBook()
+    with Hub(folder, BRIBE, stages=book) as hub:
+        tamsin = attach_tamsin(hub.at.store, hub.api.handle, chat)
+        runner = hub.api.runner
+        runner.seat(chat, OWNER)
+        scene = runner.open(chat)
+        anya = scene.persona
+        (mara,) = [actor for actor in scene.cast if actor not in (anya, tamsin)]
+        book.put(chat, Stage(chat.campaign_id, chat.chat_id, 1, (Area("hatch"),), (), (anya, mara, tamsin),
+                             (Placement(anya, area="hatch"), Placement(mara, area="hatch")), (Absence(tamsin),)))
+        assert hub.call("knowledge", chat=str(chat))["actors"][0]["observations"] == []  # nothing known yet
+        hub.api.obstacles.record(hold(mara))
+        turn = runner.post(chat, hub.api.handle, "*I press five coins into Mara's hand*").turn_id
+        hub.call("label", chat=str(chat), obstacle="hold")
+        hub.call("confirm", chat=str(chat))
+        effect = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        hub.call("endorse_effect", chat=str(chat), turn=turn, number=1, fingerprint=effect["fingerprint"])
+        assert hub.call("approve_effect", chat=str(chat), turn=turn, number=1)["done"]["effect"]["state"] == "accepted"
+
+        table = hub.call("knowledge", chat=str(chat))
+        (own,) = table["actors"]
+        assert own["actor"]["ref"] == str(anya)
+        assert [(item["channel"], item["content"]) for item in own["observations"]] == [
+            ("witnessed", "Anya pays Mara off.")]
+        assert table["table_events"] == []  # seen in the fiction; nothing was disclosed out of character
+        director = hub.call("knowledge", chat=str(chat), actor=str(mara), audience="director")
+        assert [item["content"] for item in director["actors"][0]["observations"]] == ["Anya pays Mara off."]
+        gone = hub.call("knowledge", chat=str(chat), actor=str(tamsin), audience="director")
+        assert gone["actors"][0]["observations"] == []
+        assert not any(p["code"] == "unbridged" for p in hub.call("hub", chat=str(chat))["problems"])
 
 
 def test_a_consent_names_the_frame_it_was_shown_and_only_the_acting_player_gives_it(cards):
