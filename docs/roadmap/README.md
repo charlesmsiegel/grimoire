@@ -316,14 +316,14 @@ The wave is not **user-visible complete** until its implemented user-facing doma
 
 ### Wave 9 — Advanced mechanics, authoring and audio foundations
 
-- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (1/16 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
+- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (2/16 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
 | 073 | [☑](IMPLEMENTATION_AUDIT.md#slice-073) | [Auxiliary Writing Tools](sprints/auxiliary-writing-tools.md) | **P1** | [Player Sovereignty](sprints/player-sovereignty.md), [Scene Workspace](sprints/scene-workspace.md) | frontend / draft helpers | Generate a hypothetical non-canonical reply |
 | 074 | [☐](IMPLEMENTATION_AUDIT.md#slice-074) | [Downtime And Long Activities](sprints/downtime-and-long-activities.md) | **P1** | [Calendar And Clocks](sprints/calendar-and-clocks.md), [Durable Action Recovery](sprints/durable-action-recovery.md) | gameplay / downtime | Complete a 20-day study and advance time once |
 | 075 | [☐](IMPLEMENTATION_AUDIT.md#slice-075) | [Mechanical Resolution](sprints/mechanical-resolution.md) | **P1** | [Ruleset Action Contracts](sprints/ruleset-action-contracts.md), [Durable Action Recovery](sprints/durable-action-recovery.md) | mechanics / resolution | Commit a recorded roll without narration re-rolling it |
-| 076 | [☐](IMPLEMENTATION_AUDIT.md#slice-076) | [Offscreen World Events](sprints/offscreen-world-events.md) | **P1** | [Calendar And Clocks](sprints/calendar-and-clocks.md), [Faction Decision Making](sprints/faction-decision-making.md), [Decision Policies](sprints/decision-policies.md) | simulation / offscreen scheduler | Advance one faction's plan during player absence |
+| 076 | [☑](IMPLEMENTATION_AUDIT.md#slice-076) | [Offscreen World Events](sprints/offscreen-world-events.md) | **P1** | [Calendar And Clocks](sprints/calendar-and-clocks.md), [Faction Decision Making](sprints/faction-decision-making.md), [Decision Policies](sprints/decision-policies.md) | simulation / offscreen scheduler | Advance one faction's plan during player absence |
 | 077 | [☐](IMPLEMENTATION_AUDIT.md#slice-077) | [Quests And Commitments](sprints/quests-and-commitments.md) | **P1** | [Turn Effects And Wrap Up](sprints/turn-effects-and-wrap-up.md), [Calendar And Clocks](sprints/calendar-and-clocks.md) | campaign / commitments | Track an accepted promise and deadline |
 | 078 | [☐](IMPLEMENTATION_AUDIT.md#slice-078) | [Relationships And Reputation](sprints/relationships-and-reputation.md) | **P1** | [Knowledge And Perspective](sprints/knowledge-and-perspective.md), [NPC Goals And Autonomy](sprints/npc-goals-and-autonomy.md) | social / relationship records | Update trust without giving absent NPCs global knowledge |
 | 079 | [☐](IMPLEMENTATION_AUDIT.md#slice-079) | [Source Upgrades And Dependencies](sprints/source-upgrades-and-dependencies.md) | **P1** | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md), [Catalog Composition](sprints/catalog-composition.md) | world / source upgrades | Preview removing or updating a source without mistaken ID matching |
