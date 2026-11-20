@@ -4,10 +4,18 @@
 // like a bookmark: the turn is never changed for it, and no model is sent it. A post whose turn was set aside
 // or is gone keeps its picture in the campaign's art (the Art page lists it); it is not shown here.
 //
-// makeAttach(ctx, chat, { field, run, redraw }) -> { under(turn, row), posted(scene, before) }
+// makeAttach(ctx, chat, { field, run, redraw }) -> { writes, under(turn, row), posted(scene, before), stage(file, carry), unstage(token) }
+//   writes                whether a picture can be attached to a post in this chat at all
 //   field                 the composer's field node: the button and the waiting thumbnail are added to it
 //   under(turn, row)      the post's row, with the picture on its turn (if any) under its text
 //   posted(scene, before) call after a post was written: attaches the waiting file to the turn it made
+//   stage(file, carry)    070: another part of the page (the reference-intent panel) puts its own file in the
+//                         waiting place, with the `note`, `origin` and `label` it is uploaded and shown with and
+//                         `sent(turn)`/`removed()` callbacks. Returns a token, or { refused } when this chat keeps
+//                         no pictures ("unsupported") or the person's own chosen image waits ("busy"): a post
+//                         carries one picture, and the person's choice is never replaced for them.
+//   unstage(token)        takes that file back out, if it is still the one waiting
+//   waits()               what is waiting: "own" (the person's chosen image), "staged" or null
 
 import { ACCEPT, MAX_UPLOAD, base64, openPicker, zoomClass, zoomOf } from "../art/picker.js";
 import { chatPictures } from "./pictures.js";
@@ -16,9 +24,11 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
   const { ui } = ctx;
   const { el } = ui;
   const pictures = chatPictures(ctx, chat, redraw);
-  if (!pictures.served) return { under: (_turn, row) => row, posted: () => {} };
+  if (!pictures.served) return { writes: false, under: (_turn, row) => row, posted: () => {}, stage: () => ({ refused: "unsupported" }), unstage: () => {}, waits: () => null };
 
-  let waiting = null;  // { file, url, turn: the post it failed to reach (set after a refused upload), problem }
+  // { file, url, turn: the post it failed to reach (set after a refused upload), problem, carry: 070's staged
+  // reference ({ token, note, origin, label, sent, removed }) or null for the person's own chosen image }
+  let waiting = null;
   const input = el("input", { type: "file", accept: ACCEPT, hidden: true, "aria-label": "Image to attach" });
   const button = el("button", { type: "button", class: "chat-attach-button", "data-focus-key": "chat-attach",
     onclick: () => input.click() }, "Attach an image");
@@ -28,19 +38,24 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
     waiting = null;
     show();
   };
+  // Remove pressed by the person: a staged reference's panel is told, so it no longer says it is carried
+  const removeWaiting = () => { const carry = waiting && waiting.carry; drop(); if (carry && carry.removed) carry.removed(); };
   function show() {
     button.hidden = Boolean(waiting);
     tray.hidden = !waiting;
     if (!waiting) { tray.replaceChildren(); return; }
-    const name = waiting.file.name || "the chosen image";
+    const carry = waiting.carry;
+    const name = (carry && carry.label) || waiting.file.name || "the chosen image";
     const thumb = el("span", { class: "chat-attach-thumb" }, waiting.url ? el("img", { src: waiting.url, alt: "" }) : null);
-    const remove = ui.button("Remove", () => { drop(); button.focus(); }, { kind: "linklike", size: "small" });
+    const remove = ui.button("Remove", () => { removeWaiting(); button.focus(); }, { kind: "linklike", size: "small" });
     remove.setAttribute("aria-label", "Remove the attached image");
     const again = waiting.turn ? ui.button("Try again", () => run(() => send(waiting.turn)), { size: "small" }) : null;
     tray.replaceChildren(...[thumb, el("span", { class: "chat-attach-text" },
       el("span", { class: "chat-attach-name" }, waiting.problem ? "Your post was made, but its image was not attached: " + waiting.problem
         : "Attached to your next post: " + name),
-      waiting.problem ? null : el("span", { class: "g-muted" }, "Shown under your post. No character sees it and no model is sent it.")),
+      waiting.problem ? null : el("span", { class: "g-muted" }, carry
+        ? "Shown under your post as your uncommitted intent. No character sees it, no model is sent it, and no map or scene record changes."
+        : "Shown under your post. No character sees it and no model is sent it.")),
     again, remove].filter(Boolean));
     if (waiting.problem) tray.setAttribute("role", "alert"); else tray.removeAttribute("role");
   }
@@ -51,8 +66,9 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
     if (file.size > MAX_UPLOAD) { ctx.notify("An image is at most 32 MiB.", { bad: true }); return; }
     let url = null;
     try { url = URL.createObjectURL(file); } catch (error) { url = null; }
+    if (waiting && waiting.carry && waiting.carry.removed) waiting.carry.removed();  // the person's choice replaces a staged reference
     if (waiting && waiting.url) URL.revokeObjectURL(waiting.url);
-    waiting = { file, url, turn: null, problem: null };
+    waiting = { file, url, turn: null, problem: null, carry: null };
     show();
   });
   if (pictures.writes) {
@@ -60,12 +76,27 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
     field.append(button, input, tray);
   }
 
+  let staged = 0;
+  function stage(file, carry) {
+    if (!pictures.writes) return { refused: "unsupported" };
+    if (waiting && !waiting.carry) return { refused: "busy" };
+    if (waiting && waiting.url) URL.revokeObjectURL(waiting.url);
+    let url = null;
+    try { url = URL.createObjectURL(file); } catch (error) { url = null; }
+    const token = ++staged;
+    waiting = { file, url, turn: null, problem: null, carry: { ...carry, token } };
+    show();
+    return token;
+  }
+  function unstage(token) { if (waiting && waiting.carry && waiting.carry.token === token) drop(); }
+
   async function send(turn) {
     const held = waiting;
     if (!held) return;
+    const carry = held.carry;
     try {
-      await ctx.api("media.upload", { scope: pictures.subject, media: await base64(held.file), note: null, origin: "attached to a post",
-        subject: pictures.subject, slot: "post." + turn, expected: null });
+      await ctx.api("media.upload", { scope: pictures.subject, media: await base64(held.file), note: carry ? carry.note || null : null,
+        origin: carry ? carry.origin : "attached to a post", subject: pictures.subject, slot: "post." + turn, expected: null });
     } catch (error) {
       if (error && error.reason === "left") return;
       // the post stands; the image waits here with the reason, to try again or to drop
@@ -73,6 +104,7 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
       return;
     }
     if (waiting === held) drop();
+    if (carry && carry.sent) carry.sent(turn);
     await pictures.reload();
   }
 
@@ -119,5 +151,6 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
     return row;
   }
 
-  return { under, posted };
+  const waits = () => (waiting ? (waiting.carry ? "staged" : "own") : null);
+  return { writes: pictures.writes, under, posted, stage, unstage, waits };
 }

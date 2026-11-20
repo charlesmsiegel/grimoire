@@ -81,7 +81,7 @@ export async function mount(root, ctx) {
   const backdrop = makeBackdrop(ctx, chat, { run, redraw: redrawPictures });
   const attach = makeAttach(ctx, chat, { field: composer.node, run, redraw: redrawPictures });
   const staging = makeStaging(ctx, chat, { log });
-  foot.prepend(makeReferenceIntent(ctx, chat, { composer }));
+  foot.prepend(makeReferenceIntent(ctx, chat, { composer, attach }));
   const panelBody = el("div", { class: "chat-panel-body" });
   // The panel's tabs. Each has something to show for every chat; a tab that might have nothing is left out here.
   const PANEL_TABS = [
