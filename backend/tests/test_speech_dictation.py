@@ -179,3 +179,21 @@ def test_a_scene_name_that_sounds_like_what_was_heard_is_only_suggested():
     # a name is offered only when it both sounds and is spelled close enough
     assert [s.name for s in suggest("I tell brannock and go", ("Brannoc", "Thane Corvin"))] == ["Brannoc"]
     assert suggest("we drank ale", ("Dorn Ashe",)) == ()
+
+
+@pytest.mark.parametrize(("draft", "last", "heard"), [
+    ("", None, "tell mara bell while mara bellows"),  # the same letters later on are not the span
+    ("We hide. ", None, "tell mara bell"),
+    ("We meet at the east gate. ", "We meet at the east gate.", "no i meant mara bell at the west gate"),
+    ("Go to the east gate", "Go to the east gate", "no i meant mara bells gate"),
+])
+def test_a_suggestion_says_where_its_words_are_in_the_draft_and_the_passage(draft, last, heard):
+    said = revise(draft, last, heard, names=NAMES)
+    found = [(revision, s) for revision in (said, said.alternative) if revision is not None for s in revision.suggestions]
+    assert found
+    for revision, s in found:
+        assert revision.text[s.at:s.at + len(s.heard)] == s.heard
+        assert revision.passage[s.offset:s.offset + len(s.heard)] == s.heard
+        assert revision.text.index(revision.passage) + s.offset == s.at
+    first = revise("", None, "tell mara bell while mara bellows", names=NAMES).suggestions[0]
+    assert (first.heard, first.at) == ("mara bell", 5)

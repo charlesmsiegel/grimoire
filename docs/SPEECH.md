@@ -353,7 +353,9 @@ there is nothing new to consent to. The strip says why it cannot record (voice
 off, microphone off, recognizer missing, a browser that cannot record) and shows
 **Dictate** only when it can. Dictate opens the microphone; **Stop dictating**
 sends the recording; **Cancel** or Esc closes it unsent; leaving the page or the
-recording limit (Settings, 1 to 60 s) closes it too. Pauses do not end a
+recording limit (Settings, 1 to 60 s) closes it too. Starting another action on
+the page (Post, Ask for a reply...) closes it unsent first, since the page's
+buttons, Stop dictating included, are off while that action runs. Pauses do not end a
 recording, so a long post is one recording. The token and sequence are latched at
 Dictate, so a recording made before a change of settings is dropped as
 `stale_capture`, and one recording is heard at a time.
@@ -373,7 +375,9 @@ dictated passage** only, never on typed text:
 
 **Undo** puts the draft back as it was before the recording. Names in the scene's
 cast that sound like part of what was heard ("mara bell" for Mara Vell) are only
-offered ("Use Mara Vell for “mara bell”"); an invented name the recognizer
+offered ("Use Mara Vell for “mara bell”"), and a press replaces exactly the
+words that were matched (each suggestion carries its place in the draft and the
+passage, `at` and `offset`), never the same letters elsewhere; an invented name the recognizer
 cannot know is the player's to type over. A recognizer confidence under 0.5
 (untuned) adds "check it". The player's own typing always wins: a draft typed in
 while a recording was heard is revised as it is now (`dictation.revise`), and an

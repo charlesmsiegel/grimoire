@@ -33,10 +33,11 @@ const RESULT_TEXT = {
 const quoted = (text) => "“" + text + "”";
 const MAX_DRAFT = 20000;  // the composer's own limit (grimoire.speech.dictation.MAX_DRAFT)
 
-// The last occurrence of `find` in `text` replaced by `put`, or null when it is not there.
-export function replaceLast(text, find, put) {
-  const at = find ? text.lastIndexOf(find) : -1;
-  return at < 0 ? null : text.slice(0, at) + put + text.slice(at + find.length);
+// `text` with the `find` that starts at `at` replaced by `put`, or null when `find` is not there: a suggestion
+// replaces exactly the words it matched, never the same letters elsewhere ("mara bellows").
+export function replaceAt(text, at, find, put) {
+  if (typeof text !== "string" || !Number.isInteger(at) || at < 0 || !find || text.slice(at, at + find.length) !== find) return null;
+  return text.slice(0, at) + put + text.slice(at + find.length);
 }
 
 // What a revision did, in a sentence after "Heard “…”."
@@ -236,10 +237,10 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
 
   function named(suggestion) {
     if (!current()) { changed(); return; }
-    const text = replaceLast(composer.value, suggestion.heard, suggestion.name);
+    const text = replaceAt(composer.value, suggestion.at, suggestion.heard, suggestion.name);
     if (text === null) { changed(); return; }
     if (text.length > MAX_DRAFT) { tell("Not changed: your reply would be longer than the message box allows."); return; }
-    const passage = state.passage ? replaceLast(state.passage, suggestion.heard, suggestion.name) : null;
+    const passage = replaceAt(state.passage, suggestion.offset, suggestion.heard, suggestion.name);
     put(text, passage === null ? state.passage : passage, { text: composer.value, passage: state.passage });
     tell("Changed " + quoted(suggestion.heard) + " to " + quoted(suggestion.name) + ".",
       ui.button("Undo", () => undo(), { size: "small" }));
@@ -256,7 +257,16 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
     state.recorder = null;
   }, { once: true });
 
+  // Another action on the page (Post, Ask for a reply...) is starting, and it turns the page's buttons off while
+  // it runs, Stop dictating and Cancel included: so a recording ends first, unsent, rather than leave the
+  // microphone open with no way to close it.
+  async function end() {
+    if (!state.recorder && !state.starting) return;
+    await drop(false);
+    tell("Stopped dictating: nothing recorded was used.");
+  }
+
   draw();
   refresh();
-  return { node };
+  return { node, end };
 }

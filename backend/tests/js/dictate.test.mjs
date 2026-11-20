@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { install, byText } from "./fakedom.mjs";
 import * as ui from "../../src/grimoire/app/static/shell/ui.js";
-import { describe, makeDictation, replaceLast } from "../../src/grimoire/app/static/pages/chat/dictate.js";
+import { describe, makeDictation, replaceAt } from "../../src/grimoire/app/static/pages/chat/dictate.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 async function settle() { for (let i = 0; i < 8; i += 1) await tick(); }
@@ -234,26 +234,46 @@ test("asking voice to post changes nothing, and the words can still be kept", as
   assert.equal(s.composer.value, "We run post it");
 });
 
-test("a scene name is only suggested, and used on a press", async () => {
-  const heard = revision({ text: "Tell mara bell", passage: "Tell mara bell", heard: "tell mara bell", uncertain: true,
-    suggestions: [{ heard: "mara bell", name: "Mara Vell" }] });
-  const s = strip({ answers: { "dictation.hear": () => ({ status: "ok", heard: "tell mara bell", revision: heard }) } });
+test("a scene name is only suggested, and used on a press, on exactly the words it matched", async () => {
+  // "mara bell" also starts "mara bellows" further on: only the matched span (at 5) is the name
+  const said = "Tell mara bell while mara bellows";
+  const heard = revision({ text: said, passage: said, heard: said.toLowerCase(), uncertain: true,
+    suggestions: [{ heard: "mara bell", name: "Mara Vell", offset: 5, at: 5 }] });
+  const s = strip({ answers: { "dictation.hear": () => ({ status: "ok", heard: said.toLowerCase(), revision: heard }) } });
   await settle();
   s.press("Dictate");
   await settle();
   s.press("Stop dictating");
   await settle();
-  assert.equal(s.composer.value, "Tell mara bell", "never put in by itself");
+  assert.equal(s.composer.value, said, "never put in by itself");
   assert.match(s.note(), /The recognizer wasn't sure: check it\./);
   s.press("Use Mara Vell for “mara bell”");
-  assert.equal(s.composer.value, "Tell Mara Vell");
+  assert.equal(s.composer.value, "Tell Mara Vell while mara bellows");
   s.press("Undo");
-  assert.equal(s.composer.value, "Tell mara bell");
+  assert.equal(s.composer.value, said);
 });
 
-test("helpers: the last occurrence is replaced, and every kind is described", () => {
-  assert.equal(replaceLast("a b a", "a", "c"), "a b c");
-  assert.equal(replaceLast("a b", "x", "c"), null);
+test("starting another action on the page ends a recording first, unsent", async () => {
+  const s = strip({ answers: { "dictation.hear": () => assert.fail("nothing is sent") } });
+  await settle();
+  s.press("Dictate");
+  await settle();
+  assert.ok(byText(s.made.node, "button", "Stop dictating").length);
+  await s.made.end();
+  assert.equal(s.recordings[0].cancelled, true, "the microphone closed");
+  assert.equal(s.ops("dictation.hear").length, 0);
+  assert.equal(byText(s.made.node, "button", "Stop dictating").length, 0);
+  assert.match(s.note(), /Stopped dictating: nothing recorded was used\./);
+  await s.made.end();  // nothing recording: nothing to say
+  assert.match(s.note(), /Stopped dictating/);
+});
+
+test("helpers: only the span at its place is replaced, and every kind is described", () => {
+  assert.equal(replaceAt("a b a", 0, "a", "c"), "c b a");
+  assert.equal(replaceAt("a b a", 4, "a", "c"), "a b c");
+  assert.equal(replaceAt("a b", 2, "a", "c"), null, "moved: not there any more");
+  assert.equal(replaceAt("a b", undefined, "a", "c"), null);
+  assert.equal(replaceAt(null, 0, "a", "c"), null);
   for (const kind of ["added", "corrected", "scratched", "not_posted", "too_long", "nothing"]) {
     assert.ok(describe(revision({ kind, before: "x", after: "y" })).length > 5, kind);
   }
@@ -322,7 +342,7 @@ test("typing that goes on while a revision is asked for is never overwritten", a
 
 test("a name suggestion that would pass the message box's limit changes nothing", async () => {
   const long = "x".repeat(19990) + " marabel";
-  const heard = revision({ text: long, passage: "marabel", heard: "marabel", suggestions: [{ heard: "marabel", name: "Mara Vellington" }] });
+  const heard = revision({ text: long, passage: "marabel", heard: "marabel", suggestions: [{ heard: "marabel", name: "Mara Vellington", offset: 0, at: 19991 }] });
   const s = strip({ answers: { "dictation.hear": () => ({ status: "ok", heard: "marabel", revision: heard }) } });
   await settle();
   s.press("Dictate");

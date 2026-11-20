@@ -165,7 +165,7 @@ def test_revise_answers_the_same_words_against_a_draft_typed_in_meanwhile(librar
         revision = api.call("dictation.revise", {"draft": "We hide. ", "last": None, "heard": "tell mara bell",
                                                  "confidence": 0.3, "names": NAMES})["revision"]
         assert (revision["text"], revision["uncertain"]) == ("We hide. Tell mara bell", True)
-        assert revision["suggestions"] == [{"heard": "mara bell", "name": "Mara Vell"}]
+        assert revision["suggestions"] == [{"heard": "mara bell", "name": "Mara Vell", "offset": 5, "at": 14}]
 
 
 def test_dictation_ops_never_take_the_library_lock():

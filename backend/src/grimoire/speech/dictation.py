@@ -23,7 +23,7 @@ Names from the scene that sound like part of what was heard are only *suggested*
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 
 #: The composer's own limit (the chat page's maxlength): a revision never makes a longer draft.
@@ -72,13 +72,18 @@ _GROUPS = {**dict.fromkeys("bfpv", "p"), **dict.fromkeys("cgjkqsxz", "k"), **dic
 
 @dataclass(frozen=True)
 class Suggestion:
-    """A scene name that sounds like ``heard``, a span of the new passage, offered to replace it on a tap."""
+    """A scene name that sounds like ``heard``, a span of the new passage, offered to replace it on a tap.
+
+    ``offset`` is where the span starts in the passage, and ``at`` where it starts in the revision's whole draft,
+    so a tap replaces exactly the words that were matched, never the same letters elsewhere ("mara bellows")."""
 
     heard: str
     name: str
+    offset: int = 0
+    at: int = 0
 
     def as_dict(self) -> dict:
-        return {"heard": self.heard, "name": self.name}
+        return {"heard": self.heard, "name": self.name, "offset": self.offset, "at": self.at}
 
 
 @dataclass(frozen=True)
@@ -363,10 +368,15 @@ def suggest(passage: str, names: tuple[str, ...]) -> tuple[Suggestion, ...]:
                     best = (sound + spelling, start, end)
         if best is not None:
             taken.append((best[1], best[2]))
-            found.append(Suggestion(passage[best[1]:best[2]], name))
+            found.append(Suggestion(passage[best[1]:best[2]], name, best[1]))
         if len(found) >= MAX_SUGGESTIONS:
             break
     return tuple(found)
+
+
+def _placed(words: str, at: int, names: tuple[str, ...], within: int = 0) -> tuple[Suggestion, ...]:
+    """``suggest`` for ``words`` that start at ``at`` in the draft and at ``within`` in the passage."""
+    return tuple(replace(found, offset=within + found.offset, at=at + found.offset) for found in suggest(words, names))
 
 
 def _added(draft: str, heard: str, confidence: float | None, names: tuple[str, ...]) -> Revision:
@@ -374,7 +384,8 @@ def _added(draft: str, heard: str, confidence: float | None, names: tuple[str, .
     text = _join(draft, passage)
     if len(text) > MAX_DRAFT:
         return Revision("too_long", draft, None, heard)
-    return Revision("added", text, passage, heard, uncertain=_uncertain(confidence), suggestions=suggest(passage, names))
+    return Revision("added", text, passage, heard, uncertain=_uncertain(confidence),
+                    suggestions=_placed(passage, len(text) - len(passage), names))
 
 
 def _last(draft: str, last: str | None) -> int:
@@ -413,7 +424,7 @@ def revise(draft: str, last: str | None, heard: str, *, confidence: float | None
         if len(text) > MAX_DRAFT:
             return verbatim
         offered = Revision("corrected", text, whole, heard, before=last, after=whole,
-                           uncertain=_uncertain(confidence), suggestions=suggest(whole, names))
+                           uncertain=_uncertain(confidence), suggestions=_placed(whole, at, names))
         return Revision(verbatim.kind, verbatim.text, verbatim.passage, heard, uncertain=verbatim.uncertain,
                         suggestions=verbatim.suggestions, alternative=offered)
     start, end = span
@@ -430,7 +441,7 @@ def revise(draft: str, last: str | None, heard: str, *, confidence: float | None
     if len(text) > MAX_DRAFT:
         return Revision("too_long", draft, last, heard)
     return Revision("corrected", text, passage, heard, before=replaced, after=put, uncertain=_uncertain(confidence),
-                    suggestions=suggest(put, names), alternative=other)
+                    suggestions=_placed(put, at + start, names, start), alternative=other)
 
 
 __all__ = ["LOW_CONFIDENCE", "MAX_ALIGN_WORDS", "MAX_CORRECTION_WORDS", "MAX_DRAFT", "MAX_NAME", "MAX_NAMES", "Revision", "Suggestion", "key", "revise",
