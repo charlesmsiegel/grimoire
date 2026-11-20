@@ -88,24 +88,39 @@ def _derive(sheet: SheetType, values: Mapping[str, SheetValue]) -> dict[str, int
     return derived
 
 
+#: Module values already found to be what their documents validate to, by identity. Each entry holds its
+#: module, so an id is never reused while it is here; a few recent ones are kept so grading does not
+#: re-validate a whole module every time. Deterministic: it changes how fast, never what, is returned.
+_VERIFIED: dict[int, MechanicsModule] = {}
+_VERIFIED_LIMIT = 32
+
+
 def _trusted(module: object, use: str) -> MechanicsModule:
     """``module`` if it is exactly what its own document validates to; a value built or altered by hand (say, an
     edited module stamped with an older revision) is refused, so a record never names rules it was not graded by."""
     if type(module) is not MechanicsModule:
         raise TypeError(f"{use} needs a validated MechanicsModule")
+    if _VERIFIED.get(id(module)) is module:
+        return module
     try:
         same = parse_module(module.document) == module
     except ModuleInvalid:
         same = False
     if not same:
         raise CheckError(f"module {module.id} is not what its own document validates to; parse it again")
+    if len(_VERIFIED) >= _VERIFIED_LIMIT:
+        del _VERIFIED[next(iter(_VERIFIED))]
+    _VERIFIED[id(module)] = module
     return module
 
 
 def fill_sheet(module: MechanicsModule, sheet_type: str, values: Mapping[str, object]) -> Sheet:
     """``values`` as a sheet of ``sheet_type``: unknown keys and wrong values are refused, absent fields
     take their defaults. ``SheetInvalid`` lists every field at fault."""
-    _trusted(module, "fill_sheet")
+    return _fill(_trusted(module, "fill_sheet"), sheet_type, values)
+
+
+def _fill(module: MechanicsModule, sheet_type: str, values: Mapping[str, object]) -> Sheet:
     sheet = module.sheets.get(sheet_type) if type(sheet_type) is str else None
     if sheet is None:
         raise SheetInvalid((Problem("sheet_type", f"module {module.id} has no sheet type {sheet_type!r}"),))
@@ -218,7 +233,7 @@ def run_check(module: MechanicsModule, sheet: Sheet, check_id: str, *, dice: tup
     if not isinstance(sheet.values, Mapping):
         raise CheckError("this sheet holds no field values")
     try:
-        refilled = fill_sheet(module, sheet.sheet_type, dict(sheet.values))  # a forged Sheet value is not trusted
+        refilled = _fill(module, sheet.sheet_type, dict(sheet.values))  # a forged Sheet value is not trusted
     except SheetInvalid as error:
         raise CheckError(f"this sheet's values do not fit its module: {error}") from None
     if refilled != sheet:
@@ -238,7 +253,7 @@ def confirm(module: MechanicsModule, record: CheckRecord) -> None:
     if not isinstance(record.values, Mapping):
         raise CheckError("the record holds no sheet values")
     try:
-        sheet = fill_sheet(module, record.sheet_type, dict(record.values))
+        sheet = _fill(module, record.sheet_type, dict(record.values))
     except SheetInvalid as error:
         raise CheckError(f"the record's sheet values do not fit: {error}") from None
     again = _grade(module, sheet, record.check, record.dice, record.modifier, record.difficulty)

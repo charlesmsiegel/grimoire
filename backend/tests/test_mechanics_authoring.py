@@ -405,3 +405,27 @@ def test_only_ascii_digits_and_names(text, reason):
 
 def test_leading_zeros_are_just_a_number():
     assert evaluate(parse("00000001"), {}) == 1
+
+
+@pytest.mark.parametrize("text", ["1 + 2", " 1", "1 ", "1 + 2"])
+def test_other_spaces_are_named_wherever_they_are(text):
+    with pytest.raises(ExprError, match="plain spaces"):
+        parse(text)
+
+
+def test_plain_spaces_tabs_and_line_breaks_separate_parts():
+    assert evaluate(parse(" 1\t+\n2\r\n "), {}) == 3
+
+
+def test_grading_a_trusted_module_again_does_not_revalidate_it(monkeypatch):
+    import grimoire.mechanics.sheet as sheet_module
+    module = parse_module(minimal())
+    sheet = fill_sheet(module, "fencer", {"blade": 2})
+    calls = []
+    real = sheet_module.parse_module
+    monkeypatch.setattr(sheet_module, "parse_module", lambda doc: calls.append(1) or real(doc))
+    confirm(module, run_check(module, sheet, "thrust", dice=(5,)))
+    assert calls == []
+    other = parse_module(minimal())  # an equal module that is another value is checked once
+    run_check(other, fill_sheet(other, "fencer", {"blade": 2}), "thrust", dice=(5,))
+    assert calls == [1]

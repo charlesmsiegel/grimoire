@@ -44,6 +44,8 @@ later edit changes new checks and never one already recorded. It is headless: th
 - **Derived values** are formulas over the sheet's numeric fields and other derived values. They are ordered
   so each uses only what comes before it; a loop is a problem, and so is a derived value that is not a whole
   number (or divides by zero) with every field at its default.
+- **Formulas** use plain spaces, tabs or line breaks between parts; any other character is a problem named
+  in the reason.
 - **A check** belongs to one sheet type. `dice.count` is a formula; `sides` is 2 to 1000; with a
   `dice.target` formula, each face at or above it is a success. `total` is a formula; without one the total
   is the successes when there is a target, and the dice sum otherwise. `outcomes` are conditions tried in
@@ -71,7 +73,8 @@ expression is at most 256 characters, 32 levels deep, with literals up to 1,000,
 ### Rules never run code
 
 A key asking for executable behaviour (`hooks`, `script`, `code`, `python`, `javascript`, `lua`, `exec`)
-is refused as a key at any level of the document. This keeps Sprint 007's obligation: authored rules
+is refused as a key of the module, a sheet type, a field, a check, its dice or an outcome; names the author
+chooses (sheet types, checks, derived values) are data, not behaviour. This keeps Sprint 007's obligation: authored rules
 compute with formulas; untrusted rule scripts are not run in-process with library authority.
 
 ### Problems

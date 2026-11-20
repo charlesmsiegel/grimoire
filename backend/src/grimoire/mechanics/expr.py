@@ -37,7 +37,8 @@ NAME = re.compile(r"[a-z][a-z0-9_]{0,63}", re.ASCII)
 KEYWORDS = frozenset({"and", "or", "not", "true", "false"})
 FUNCTIONS = {"floor": (1, 1), "ceil": (1, 1), "abs": (1, 1), "min": (2, 8), "max": (2, 8)}
 COMPARE = ("==", "!=", "<=", ">=", "<", ">")
-_TOKEN = re.compile(r"\s*(?:([0-9]+)|([A-Za-z_][A-Za-z0-9_]*)|(==|!=|<=|>=|[-+*/(),<>]))", re.ASCII)
+_SPACE = re.compile(r"[ \t\r\n]*")
+_TOKEN = re.compile(r"[ \t\r\n]*(?:([0-9]+)|([A-Za-z_][A-Za-z0-9_]*)|(==|!=|<=|>=|[-+*/(),<>]))", re.ASCII)
 
 Kind = Literal["number", "bool"]
 
@@ -98,11 +99,12 @@ def _tokens(text: str) -> list[str]:
     tokens: list[str] = []
     at = 0
     while at < len(text):
-        if text[at:].strip() == "":
+        at = _SPACE.match(text, at).end()  # type: ignore[union-attr]
+        if at == len(text):
             break
         match = _TOKEN.match(text, at)
         if match is None:
-            raise ExprError(f"unexpected character {text[at:].lstrip()[0]!r}")
+            raise ExprError(f"unexpected character {text[at]!r}; formulas use plain spaces between parts")
         tokens.append(match.group(match.lastindex or 0))
         at = match.end()
     return tokens

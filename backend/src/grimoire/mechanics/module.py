@@ -306,7 +306,7 @@ def _derived(report: _Report, path: str, raw: object, fields: tuple[Field, ...],
         assert isinstance(key, str)
         if key in RESERVED:
             report.add(f"{path}.{key}", f"{key!r} is a name checks supply themselves; choose another")
-            continue
+            continue  # not added to broken: in a check, the name means what the check supplies
         if key in taken:
             report.add(f"{path}.{key}", "has the same name as a field")
             continue
