@@ -51,6 +51,7 @@ from grimoire.sync import NoDeviceIdentity, SyncError, SyncInterrupted, device_o
 from grimoire.sync.turns import open_conflicts
 
 from .errors import ApiRefused
+from .continuity import configure_extractor
 from .views import (
     FILTER_ROLES,
     art_view,
@@ -149,6 +150,7 @@ class TextApi:
         self.adjudication = AdjudicationLibrary(store, authority, authority.handle_for(ADJUDICATOR, trusted=True))
         self.runner = SceneRunner(store, authority, self.owner_handle, owner=owner, runtime=runtime, policy=policy,
                                   voices=voices, adjudication=self.adjudication, stages=stages, agendas=agendas)
+        configure_extractor(self, getattr(runtime, "continuity_extractor", None))
         self.chats = ChatLibrary(store, self.owner_handle, clock=clock, new_id=new_id, owner=owner)
         self.quick = QuickStart(self.chats, self.runner)
         self.images = ImageLibrary(store, self.owner_handle, owner=owner)
@@ -163,6 +165,7 @@ class TextApi:
             "post": self._post, "generate": self._generate, "keep": self._keep, "pass": self._pass,
             "pause": self._pause, "resume": self._resume, "choose": self._choose, "add_art": self._add_art,
             "sync": self._sync, "resolve": self._resolve,
+            "continuity_review": self._continuity_review,
         }
 
     @property
@@ -429,8 +432,15 @@ class TextApi:
         # a director take that used lore no reply screen covered is kept only once the owner, who directs,
         # says so (035: ``unscreened_lore`` otherwise)
         acknowledge = field(args, "acknowledge_unscreened", bool, required=False, default=False)
-        self.runner.keep(chat, self.player_handle, take, acknowledge_unscreened=acknowledge, turn=turn)
+        review = field(args, "acknowledge_review", str, required=False)
+        self.runner.keep(chat, self.player_handle, take, acknowledge_unscreened=acknowledge,
+                         acknowledge_review=review, turn=turn)
         return self._scene(chat)
+
+    def _continuity_review(self, args: Mapping[str, object]) -> dict:
+        # TextApi authenticates the library owner; no ordinary player endpoint exposes evidence.
+        return self.runner.continuity_review(self._chat(args), self.owner_handle,
+                                            field(args, "turn", str), field(args, "take", int))
 
     def _pass(self, args: Mapping[str, object]) -> dict:
         chat = self._chat(args)

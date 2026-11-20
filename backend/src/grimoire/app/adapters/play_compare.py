@@ -24,7 +24,11 @@ def keep_lines(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
             or not all(type(item) is str and item for item in lines) or len(set(lines)) != len(lines)):
         raise ApiRefused("invalid_field", f"lines must be 1 to {MAX_PICKED} line ids, each once")
     acknowledge = field(args, "acknowledge_unscreened", bool, required=False, default=False)
-    ctx.runner.keep_lines(chat, ctx.handle, tuple(lines), acknowledge_unscreened=acknowledge, turn=turn)
+    reviews = field(args, "acknowledge_reviews", dict, required=False)
+    if reviews is not None and not all(type(key) is str and type(value) is str for key, value in reviews.items()):
+        raise ApiRefused("invalid_field", "acknowledge_reviews maps take numbers to review tokens")
+    ctx.runner.keep_lines(chat, ctx.handle, tuple(lines), acknowledge_unscreened=acknowledge,
+                          acknowledge_reviews=reviews, turn=turn)
     scene = ctx.core("open", {"chat": str(chat)})
     scene["unfinished"] = None
     return scene

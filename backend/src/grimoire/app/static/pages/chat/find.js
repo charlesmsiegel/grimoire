@@ -20,3 +20,34 @@ export function showTurn(rows, number, { timer = setTimeout } = {}) {
   timer(() => { for (const node of found) node.classList.remove(MARK); }, MARK_MS);
   return true;
 }
+
+// A page owns the highlight, not the replaceable transcript nodes. A late story/picture redraw
+// inherits the remaining lifetime; it never starts another timer or scrolls the reader again.
+export function trackTurn(number, { timer = setTimeout, cancel = clearTimeout } = {}) {
+  let started = false, active = false, disposed = false, pending = null, marked = [];
+  const clear = () => { for (const node of marked) node.classList.remove(MARK); marked = []; };
+  function refresh(rows) {
+    clear();
+    if (!active || disposed) return false;
+    marked = Array.from(rows.querySelectorAll("div")).filter((node) => node.getAttribute("data-turn-number") === String(number));
+    for (const node of marked) node.classList.add(MARK);
+    return marked.length > 0;
+  }
+  function start(rows) {
+    if (started || disposed || number === null) return false;
+    started = true;
+    active = true;
+    if (!refresh(rows)) { active = false; return false; }
+    if (typeof marked[0].scrollIntoView === "function") marked[0].scrollIntoView({ block: "center" });
+    pending = timer(() => { pending = null; active = false; clear(); }, MARK_MS);
+    return true;
+  }
+  function dispose() {
+    disposed = true;
+    active = false;
+    if (pending !== null) cancel(pending);
+    pending = null;
+    clear();
+  }
+  return { start, refresh, dispose };
+}

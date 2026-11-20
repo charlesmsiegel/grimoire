@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -21,12 +22,14 @@ from grimoire.providers import EnvironmentCredentials, ProviderEndpoint, Provide
 from grimoire.providers.adapter import ProviderAdapter
 from grimoire.providers.transport import HttpTransport
 from grimoire.runtime import GenerationRuntime
-from grimoire.security import Authorizer, Grant, Permission, ResourcePath
+from grimoire.narration_review import ExtractionRuntime
+from grimoire.security import Approval, Authorizer, Grant, Permission, ResourcePath, payload_digest
 
 RUNTIME_PRINCIPAL = "app:runtime"
+EXTRACTOR_PRINCIPAL = "app:continuity-extractor"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 KEYS = frozenset({"provider_id", "base_url", "model", "key_env", "max_tokens_field", "max_output_tokens",
-                  "director", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
+                  "director", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached", "critique"})
 #: The optional prices, per million tokens, of the configured ``model`` (not of its fallbacks): what one prompt
 #: token, one reply token and one cached prompt token cost. Decimal text, never a JSON number, so no price is
 #: ever a float; no currency is recorded (the number is in whatever currency the provider bills).
@@ -60,6 +63,7 @@ class ModelConfig:
     price_prompt: Decimal | None = None
     price_reply: Decimal | None = None
     price_cached: Decimal | None = None
+    critique_calls: int = 0
 
     @property
     def models(self) -> tuple[str, ...]:
@@ -80,6 +84,7 @@ class ProviderAccess:
     adapter: ProviderAdapter
     routes: tuple[RouteChoice, ...]
     handle: object
+    extractor: ExtractionRuntime | None = None
 
 
 def parse_price(value: object, name: str) -> Decimal | None:
@@ -117,8 +122,9 @@ def parse_model_config(raw: object) -> ModelConfig:
     tokens = raw.get("max_output_tokens", 1024)
     director = raw.get("director", DEFAULT_DIRECTOR_CALLS)
     attempts = raw.get("attempts", 1)
+    critique = raw.get("critique", 0)
     for name, value, low, high in (("max_output_tokens", tokens, 1, MAX_OUTPUT_TOKENS), ("director", director, 0, 1_000),
-                                   ("attempts", attempts, 1, MAX_ATTEMPTS)):
+                                   ("attempts", attempts, 1, MAX_ATTEMPTS), ("critique", critique, 0, 1)):
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
             # a director reply is at most one per turn whatever the cap (004); 044 took any count
             raise ConfigError(f"{name} must be a whole number from {low} to {high}")
@@ -138,7 +144,7 @@ def parse_model_config(raw: object) -> ModelConfig:
         raise ConfigError(f"fallbacks are tried only by retries: with {attempts} attempt(s) per call, name at most "
                           f"{attempts - 1} fallback model(s)")
     prices = [parse_price(raw.get(name), name) for name in PRICE_KEYS]
-    return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts, *prices)
+    return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts, *prices, critique)
 
 
 def config_json(config: ModelConfig) -> dict:
@@ -147,6 +153,8 @@ def config_json(config: ModelConfig) -> dict:
                  "model": config.model, "max_tokens_field": config.endpoint.max_tokens_field,
                  "max_output_tokens": config.max_output_tokens, "director": config.director_calls,
                  "fallbacks": list(config.fallbacks), "attempts": config.attempts}
+    if config.critique_calls:
+        raw["critique"] = config.critique_calls
     if config.key_env is not None:
         raw["key_env"] = config.key_env
     for name in PRICE_KEYS:  # written only when set, so a configuration with no prices is the file it always was
@@ -159,6 +167,8 @@ def config_json(config: ModelConfig) -> dict:
 def policy_for(config: ModelConfig) -> InferencePolicy:
     """The 004 policy a configuration plays turns under: a director reply only when enabled, and its attempts."""
     caps = {"director_generation": config.director_calls} if config.director_calls else {}
+    if config.critique_calls:
+        caps["critique"] = config.critique_calls
     return InferencePolicy(caps, max_attempts_per_call=config.attempts)
 
 
@@ -175,12 +185,43 @@ def build_access(config: ModelConfig, owner: str, *, environ=os.environ, transpo
     adapter = ProviderAdapter(ProviderRegistry([config.endpoint]), credentials, authorizer,
                               transport if transport is not None else HttpTransport())
     routes = tuple(RouteChoice(config.endpoint.provider_id, model) for model in config.models)
-    return ProviderAccess(adapter, routes, handle)
+    extractor = None
+    if config.critique_calls:
+        # The optional configuration and the subsequent Generate action authorize this bounded
+        # extra request. Model text cannot choose a principal, route, payload or approval.
+        authorizer.add_grant(Grant("app-extractor-providers", EXTRACTOR_PRINCIPAL,
+                                   frozenset({Permission.EXECUTE}), ResourcePath(("providers",)), owner))
+        extract_handle = authorizer.handle_for(EXTRACTOR_PRINCIPAL, trusted=False)
+
+        def approvals(label: str, attempt: int, payload: bytes) -> str:
+            approval_id = "extract-" + uuid.uuid4().hex
+            authorizer.register_approval(Approval(
+                approval_id, EXTRACTOR_PRINCIPAL, Permission.EXECUTE,
+                ResourcePath(("providers", label.split("@", 1)[0])), payload_digest(payload), owner))
+            return approval_id
+
+        extractor = ExtractionRuntime(adapter, routes, extract_handle, approvals=approvals,
+                                       max_output_tokens=min(config.max_output_tokens, 4096))
+    return ProviderAccess(adapter, routes, handle, extractor)
+
+
+class ConfiguredRuntime(GenerationRuntime):
+    """Generation plus a separate optional service for the app's composition root.
+
+    GenerationRuntime never invokes this extractor or interprets its result; SceneRunner does.
+    Keeping the bundle here preserves build_runtime's existing (runtime, policy) return contract.
+    """
+
+    def __init__(self, *args, continuity_extractor=None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.continuity_extractor = continuity_extractor
 
 
 def runtime_for(access: ProviderAccess, config: ModelConfig) -> GenerationRuntime:
     """027's runtime over ``access``: the turn's replies go where a test call goes."""
-    return GenerationRuntime(access.adapter, access.routes, access.handle, max_output_tokens=config.max_output_tokens)
+    return ConfiguredRuntime(access.adapter, access.routes, access.handle,
+                             max_output_tokens=config.max_output_tokens,
+                             continuity_extractor=access.extractor if config.critique_calls else None)
 
 
 def build_runtime(config: ModelConfig, owner: str, *, environ=os.environ, transport=None):  # type: ignore[no-untyped-def]

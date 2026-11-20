@@ -9,7 +9,7 @@ import { makeStory } from "./story.js";
 import { makeTray } from "./tray.js";
 import { makeBackdrop } from "./backdrop.js";
 import { makeAttach } from "./attach.js";
-import { showTurn, wantedTurn } from "./find.js";
+import { trackTurn, wantedTurn } from "./find.js";
 import { composerState, isCorrectable, isStopped, replyState, shownTake, stepTake, takeKey, takeLabel } from "./turn.js";
 
 const MODE_LABELS = { auto: "Auto", speech: "Speech", action: "Action" };
@@ -53,6 +53,8 @@ export async function mount(root, ctx) {
   const bars = el("div", { class: "chat-bars" });
   const sceneBar = el("div", { class: "chat-scene " + tint });
   const rows = el("div", { class: "chat-rows" });
+  const foundTurn = trackTurn(wantedTurn(ctx.query));
+  ctx.signal.addEventListener("abort", foundTurn.dispose, { once: true });
   const log = el("section", { class: "chat-log g-tint " + tint, "aria-label": "Transcript", tabindex: "0" }, rows);
   const composer = ui.field("Your turn", { draft: ctx.draft("composer:" + chat), multiline: true });
   const playing = composer.node.querySelector("label");
@@ -191,6 +193,7 @@ export async function mount(root, ctx) {
     bars.replaceChildren(...holds(scene));
     drawSceneBar(scene);
     rows.replaceChildren(...transcript(scene, reply));
+    foundTurn.refresh(rows);
     drawComposer(scene, reply);
     drawPanel();
     if (bottom) log.scrollTop = log.scrollHeight;
@@ -714,7 +717,11 @@ export async function mount(root, ctx) {
     }, () => { /* Details goes without the names */ });
   }
 
-  const leave = () => { scrolls.set(chat, log.scrollTop); };
+  const leave = () => {
+    scrolls.set(chat, log.scrollTop);
+    foundTurn.dispose();
+    ctx.signal.removeEventListener("abort", foundTurn.dispose);
+  };
   if (ctx.has("play.sources")) {
     // the cards the picker offers and the modes the app's play.post takes, read once; a failure leaves the
     // composer on Auto and the picker to read them when it is opened
@@ -724,8 +731,7 @@ export async function mount(root, ctx) {
   drawModes();
   render(await call("open", {}), { bottom: true });
   if (scrolls.has(chat)) log.scrollTop = scrolls.get(chat);  // back where the person left it
-  const wanted = wantedTurn(ctx.query);  // ?turn=<number>: a line the palette's search found
-  if (wanted !== null) showTurn(rows, wanted);
+  foundTurn.start(rows);  // after restoring scroll, open the turn found by search just once
   loadEntry();
   return leave;
 }

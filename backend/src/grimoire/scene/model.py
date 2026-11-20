@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+from .review import LineReview, REVIEW_STATES, valid_digest
+
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 
@@ -204,6 +206,7 @@ class SceneLine:
     actor_revision: SourceRef | None = None
     voice_profile: SourceRef | None = None
     review: str = "unlabelled"
+    review_detail: LineReview | None = None
 
     def __post_init__(self) -> None:
         validate_line_id(self.line_id)
@@ -220,8 +223,13 @@ class SceneLine:
             value = getattr(self, label)
             if value is not None and not (type(value) is SourceRef and value.pinned):
                 raise _fail("invalid_field", f"{label} is a pinned SourceRef")
-        if self.review != "unlabelled":
-            raise _fail("invalid_field", "no labeller reviews a line yet: every line is unlabelled")
+        if self.review not in REVIEW_STATES:
+            raise _fail("invalid_field", "unknown narration review state")
+        if (self.review == "unlabelled") != (self.review_detail is None):
+            raise _fail("invalid_field", "a reviewed line carries its exact review")
+        if self.review_detail is not None and (type(self.review_detail) is not LineReview
+                                               or not self.review_detail.matches(self.text)):
+            raise _fail("invalid_field", "the review must name this line's exact text")
         if self.audience:
             object.__setattr__(self, "audience", _actors(self.audience, "audience", self.audience[0].campaign_id))
 
@@ -293,8 +301,13 @@ class Take:
     by: str | None = None
     on_stage: tuple[InstanceRef, ...] | None = None
     players: tuple[InstanceRef, ...] | None = None
+    snapshot_fingerprint: str | None = None
+    review_token: str | None = None
 
     def __post_init__(self) -> None:
+        for value in (self.snapshot_fingerprint, self.review_token):
+            if value is not None and not valid_digest(value):
+                raise _fail("invalid_field", "review fingerprints are SHA-256 digests")
         if type(self.take) is not int or not 1 <= self.take <= MAX_TAKES:
             raise _fail("invalid_field", f"a take is numbered 1..{MAX_TAKES}")
         if self.state not in TAKE_STATES:
