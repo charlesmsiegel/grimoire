@@ -709,6 +709,35 @@ def test_a_key_landing_while_an_effect_is_ended_ends_nothing_and_records_nothing
         assert at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint).state == "accepted"
 
 
+@pytest.mark.parametrize("failure", [StaleWrite([("turn", "another process wrote it")]), OSError("disk full")])
+def test_an_ending_whose_turn_commit_fails_records_nothing_and_the_effect_stays_acceptable(cards, monkeypatch,
+                                                                                         failure):
+    folder, chat = cards
+    with table(folder) as at:
+        turn, effect = proposed(at, chat)
+        store = at.runner.scenes.store
+        transaction = store.transaction
+
+        def failing():  # the turn write passes every check and then its commit fails
+            txn = transaction()
+
+            def commit(*args, **kwargs):
+                raise failure
+            txn.commit = commit
+            return txn
+        monkeypatch.setattr(store, "transaction", failing)
+        with pytest.raises((SceneRefused, OSError)):
+            at.runner.decline_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        monkeypatch.setattr(store, "transaction", transaction)
+        assert stored_effect(at, chat, turn).state == "proposed"  # the turn never recorded it
+        address = accepting.end_address(_turn_ref(at, chat, turn), 1, "declined", effect.fingerprint)
+        assert not any(item.resource == address for item in at.authority.audit())
+        # Ana thinks again and endorses: the last key accepts it, never refused as declined
+        at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        accepted = at.runner.approve_effect(chat, at.owner, turn, 1)
+        assert accepted.state == "accepted" and len(events(at, chat).events) == 1
+
+
 @pytest.mark.parametrize("how", ["declined", "withdrawn"])
 def test_an_ended_effect_set_live_again_in_its_turn_file_is_never_accepted(cards, how):
     folder, chat = cards

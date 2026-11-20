@@ -187,7 +187,10 @@ test("the director's view approves a waiting change and is never offered the pla
 const WAITING = { number: 1, state: "proposed", reason: null, summary: "Anya pays Mara a coin.", proposed_by: "director",
   sequence: 1, operations: [], holdings: null, waivers: [], endorsers: [{ contribution: "t1.000001", principal: "human:owner", given: false }],
   approved_by: null, event: null, fingerprint: "e".repeat(64), accepted_on: null };
-const turnOf = (effect) => [{ turn: "t1.000001", number: 1, open: false, kept: true, passed: false, post: null, labels: [], effects: [effect], intentions: [] }];
+const turnOf = (effect, post = null) => [{ turn: "t1.000001", number: 1, open: false, kept: true, passed: false, post, labels: [], effects: [effect], intentions: [] }];
+// the turn's post as the table sees it (`mine`: this player submitted it): a player proposes, and withdraws, an
+// effect only on their own post's turn
+const postBy = (mine) => ({ actor: { ref: ANYA, name: "Anya" }, kind: "action", withheld: false, channel: null, mine });
 
 test("the table declines a change its character acts in, naming it as shown, and is never offered the director's withdrawal", async () => {
   let ended = false;
@@ -245,11 +248,18 @@ test("the director withdraws a waiting change after a confirmation, and a cancel
   assert.equal(document.activeElement, record);
 });
 
-test("a player withdraws their own proposal, and ending is named as unavailable while play is paused", async () => {
-  const own = hub("table", { turns: turnOf({ ...WAITING, proposed_by: "player" }), open_action: null });
+test("a player withdraws only their own proposal, and ending is named as unavailable while play is paused", async () => {
+  const proposal = { ...WAITING, proposed_by: "player" };
+  const own = hub("table", { turns: turnOf(proposal, postBy(true)), open_action: null });
   const mine = await mounted("table", own);
   assert.ok(byText(section(mine.root, "Changes waiting on approval"), "button", "Withdraw").length);
-  const held = hub("table", { turns: turnOf({ ...WAITING, proposed_by: "player" }), open_action: null,
+  // another player's proposal on their own post: this player holds a key on it, but the runner refuses them
+  const theirs = await mounted("table", hub("table", { turns: turnOf(proposal, postBy(false)), open_action: null }));
+  const block_ = section(theirs.root, "Changes waiting on approval");
+  assert.ok(!byText(block_, "button", "Withdraw").length && byText(block_, "button", "Decline").length, "a key holder declines; only the proposer withdraws");
+  const unposted = await mounted("table", hub("table", { turns: turnOf(proposal), open_action: null }));
+  assert.ok(!byText(unposted.root, "button", "Withdraw").length, "with no post to say whose turn it is, nothing is offered");
+  const held = hub("table", { turns: turnOf(proposal, postBy(true)), open_action: null,
     actions: hub("table").actions.map((entry) => (["withdraw_effect", "decline_effect"].includes(entry.op)
       ? { op: entry.op, available: false, reason: "play is paused" } : entry)) });
   const paused = await mounted("table", held);
@@ -269,8 +279,14 @@ test("who may end a waiting change, and how an ended one is said", () => {
   assert.ok(logic.mayDecline(table, WAITING, false) && !logic.mayDecline(table, WAITING, true));
   assert.ok(logic.mayDecline(table, { ...WAITING, endorsers: [{ ...WAITING.endorsers[0], given: true }] }, false), "a key given can still be taken back");
   assert.ok(!logic.mayDecline(table, { ...WAITING, endorsers: [{ contribution: "t1", principal: "human:other", given: false }] }, false));
-  assert.ok(logic.mayWithdraw(table, WAITING, true) && !logic.mayWithdraw(table, WAITING, false));
-  assert.ok(logic.mayWithdraw(table, { ...WAITING, proposed_by: "player" }, false));
+  const [mineTurn] = turnOf(WAITING, postBy(true)), [theirTurn] = turnOf(WAITING, postBy(false));
+  const [noPost] = turnOf(WAITING);
+  assert.ok(logic.mayWithdraw(table, WAITING, true, noPost), "the director withdraws any");
+  assert.ok(!logic.mayWithdraw(table, WAITING, false, mineTurn), "the director's proposal is not the table's to withdraw");
+  const players = { ...WAITING, proposed_by: "player" };
+  assert.ok(logic.mayWithdraw(table, players, false, mineTurn), "the proposing player, on their own post's turn");
+  assert.ok(!logic.mayWithdraw(table, players, false, theirTurn), "never another key holder");
+  assert.ok(!logic.mayWithdraw(table, players, false, noPost) && !logic.mayWithdraw(table, players, false, undefined));
   for (const state of ["accepting", "accepted", "refused", "superseded", "revoked"]) {
     const effect = { ...WAITING, state, reason: state === "refused" ? "withdrawn" : null };
     assert.ok(!logic.mayWithdraw(table, effect, true) && !logic.mayDecline(table, effect, false), state);
