@@ -83,14 +83,14 @@ operations and ordinary scope edits preserve the extension. The log is not prune
 reaches the native file limit, new operations are refused rather than forgetting old ids.
 
 As with the calendar, sync compares the whole scope file. Study done on two disconnected devices is
-kept as a conflict, never summed; reads, planning and commit refuse until the explicit keep-mine or
-keep-peer resolution chooses one lineage. Exactly-once applies to that kept lineage: a plan made
-before the resolution for an operation it discarded is refused (`history_changed`), but replanning
-that operation afterwards is a new request against the kept history and would spend its time again.
-A client must not automatically resubmit an operation that an intentional resolution or manual
-restore discarded; the person decides whether that study happened. The reader is director-facing canonical data,
-not an actor's knowledge feed. Existing scopes without the extension remain valid; removing this
-code leaves it as opaque data for clients that preserve unknown scope fields.
+kept as a conflict: sync never sums it, and reads, planning and commit refuse until the explicit
+keep-mine or keep-peer resolution chooses one lineage. Exactly-once applies to that kept lineage: a
+plan made before the resolution for an operation it discarded is refused (`history_changed`), but
+replanning that operation afterwards is a new request against the kept history and would spend its
+time again. So only a deliberate replan can add the discarded study back. A client must not resubmit
+it automatically; the person decides whether that study happened. The reader is director-facing
+canonical data, not an actor's knowledge feed. Existing scopes without the extension remain valid;
+removing this code leaves it as opaque data for clients that preserve unknown scope fields.
 
 ## Not in this slice
 
