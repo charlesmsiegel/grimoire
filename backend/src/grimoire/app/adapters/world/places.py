@@ -15,9 +15,11 @@ from dataclasses import replace
 from grimoire.app.adapter import AdapterContext
 from grimoire.core import DIRECTOR
 from grimoire.core.identity import SourceRef
+from grimoire.store import RecordNotFound
 from grimoire.textapi import ApiRefused
 from grimoire.topology import Path
-from grimoire.topologystore import TopologyLibrary
+from grimoire.topology.codec import decode_operation, fields, sequence
+from grimoire.topologystore import TopologyLibrary, overlay_ref
 
 from . import common
 
@@ -131,6 +133,20 @@ def _route(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                       "paths": list(found.paths)}}
 
 
+def _recorded(ctx: AdapterContext, ref: SourceRef, campaign: str, operation_id: str) -> Path | None:
+    """The path 059 recorded for this operation id among the campaign's overrides, or None if it made none. (The
+    view read just before has already checked those overrides; 059 checks them again when the change is built.)"""
+    try:
+        stored = ctx.store.read(overlay_ref(ref, campaign))
+    except RecordNotFound:
+        return None
+    for item in sequence(fields(stored.envelope.payload, "schema graph graph_etag operations")["operations"]):
+        operation = decode_operation(item)
+        if operation.operation_id == operation_id:
+            return operation.path
+    return None
+
+
 def _change(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no-untyped-def]
     """The 059 change the request names, built against the revision it was reviewed at (nothing is written)."""
     campaign, ref, view = _index(ctx, args)
@@ -145,7 +161,12 @@ def _change(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no
     current = next((path for path in view.index.topology.paths if path.path_id == path_id), None)
     if current is None:
         raise ApiRefused("no_path", "this topology has no such path")
-    wanted = replace(current, blocked=blocked)
+    recorded = _recorded(ctx, ref, campaign, operation_id)
+    if recorded is not None and recorded.path_id == path_id and recorded.blocked == blocked:
+        # a retry: the change as 059 recorded it, not rebuilt from the road as later changes left it
+        wanted = recorded
+    else:  # a new change (or this id reused for another one, which 059 refuses as operation_conflict)
+        wanted = replace(current, blocked=blocked)
     change = _library(ctx).change_path(ref, campaign, wanted, operation_id=operation_id, provenance=PROVENANCE,
                                        expected=overlay or None, requested_by=DIRECTOR)
     files = sorted(change.preview())

@@ -180,16 +180,20 @@ async function showPlaces(slot, ctx, campaign) {
     const kept = chosen.get();
     await view(topologies.some((item) => item.topology === kept) ? kept : topologies.length ? topologies[0].topology : null);
   };
+  // A review or a change answers for the read it started from: once a newer read has run (another topology chosen,
+  // even the same one chosen again), that read is what is shown, and the answer is not drawn over it.
   const plan = (path, blocked) => ctx.act(async () => {
+    const since = reading.now();
     const args = { campaign, ...D, topology: shown.topology, path: path.path, blocked, operation_id: newOperationId(), expected: shown.etag };
     try {
       const answer = await ctx.api("world.path_plan", args);
-      if (!shown || shown.topology !== args.topology) return true;  // another topology was chosen meanwhile
+      if (!reading.current(since)) return true;  // read again meanwhile: this review is of what was shown before
       review = { args, plan: answer.plan };
       replaced(answer.topology);
       draw();
     } catch (error) {
-      if (error && error.reason === "changed") { review = null; await view(chosen.get() || args.topology); }  // review it again, from now, on the topology chosen last
+      // review it again, from now, on the topology chosen last (unless a newer read already shows it)
+      if (error && error.reason === "changed" && reading.current(since)) { review = null; await view(chosen.get() || args.topology); }
       throw error;
     }
     return true;
@@ -197,11 +201,14 @@ async function showPlaces(slot, ctx, campaign) {
   const commit = () => ctx.act(async () => {
     const reviewed = review;
     if (!reviewed) return true;
+    const since = reading.now();
     try {
       const answer = await ctx.api("world.path_commit", reviewed.args);
       ctx.notify(answer.done.already_applied ? "That change was already made; nothing was changed again." : "The road is changed in this campaign.");
       if (review === reviewed) review = null;
-      if (shown && shown.topology === reviewed.args.topology) { replaced(answer.topology); draw(); }
+      if (reading.current(since)) { replaced(answer.topology); draw(); }
+      // read again meanwhile, perhaps before the change landed: read the topology chosen last once more
+      else if (current) await view(current);
     } catch (error) {
       if (error && error.reason === "changed") { review = null; await view(chosen.get() || reviewed.args.topology); }
       throw error;
@@ -539,6 +546,9 @@ async function minds(ctx, body, chat, cast) {
     const credited = ui.field("Tactic if credited", { draft: ctx.draft(KEY + "credited"), hint: "Like: bluff that the letter was read aloud" });
     const fallback = ui.field("Tactic otherwise", { draft: ctx.draft(KEY + "fallback"), hint: "Like: ask an open question" });
     let replaces = null, tacticChoice = null;
+    const truthSlot = el("div", {});
+    let truthShown = mind.truth;
+    truthSlot.replaceChildren(truthBlock(ui, truthShown, who));
 
     const drawList = () => {
       listed.replaceChildren(hypotheses.length ? el("ol", { class: "world-lines" }, hypotheses.map((item) => el("li", { class: "g-row" },
@@ -578,7 +588,12 @@ async function minds(ctx, body, chat, cast) {
         const asked = previewing.start();
         const answer = await ctx.api("world.mind_preview", { chat, ...D, owner: mind.owner.actor, hypotheses, tactic });
         // dropped when another NPC was chosen since, or a newer preview was asked
-        if (reading.current(turn) && previewing.current(asked)) result.replaceChildren(...previewed(ui, answer, who, nameOf));
+        if (!reading.current(turn) || !previewing.current(asked)) return true;
+        // the truth as the preview read it, after it: drawn in place of the one read with this NPC
+        const moved = JSON.stringify(answer.truth) !== JSON.stringify(truthShown);
+        truthShown = answer.truth;
+        truthSlot.replaceChildren(truthBlock(ui, truthShown, who));
+        result.replaceChildren(...previewed(ui, answer, who, nameOf, moved));
         return true;
       });
     };
@@ -587,7 +602,7 @@ async function minds(ctx, body, chat, cast) {
       el("h3", { class: "world-sub" }, who + "'s evidence"),
       mind.evidence.length ? el("ul", { class: "world-lines" }, mind.evidence.map((item) => el("li", {}, item.content,
         el("span", { class: "g-muted" }, " · " + item.kind + ", " + item.channel)))) : ui.empty(who + " holds no evidence yet."),
-      truthBlock(ui, mind.truth, who),
+      truthSlot,
       el("h3", { class: "world-sub" }, "Hypotheses"), listed,
       group(ui, "Write a hypothesis", about.node, alsoAbout.node, claim.node, confidence.node, evidence, formError, supersedes,
         ui.actions(ui.button("Add this hypothesis", add))),
@@ -605,15 +620,17 @@ function truthBlock(ui, truth, who) {
   const own = truth.beliefs.map((entry) => el("li", {}, el("strong", {}, entry.name || entry.actor), ": ",
     entry.beliefs.length ? entry.beliefs.map((item) => item.stance + " \"" + (item.text || item.proposition) + "\"").join("; ") : "no belief admitted"));
   return el("details", { class: "world-truth" }, el("summary", {}, "The director's truth, and each character's own beliefs"),
-    truth.rulings.length ? el("ul", { class: "world-lines" }, truth.rulings.map((item) => el("li", {}, "\"" + (item.text || item.proposition) + "\" is " + item.standing + ".")))
+    truth.rulings.length ? el("ul", { class: "world-lines" }, truth.rulings.map((item) => el("li", {}, "\"" + (item.text || item.proposition) + "\" is " + item.standing + ".",
+      (item.earlier || []).length ? el("span", { class: "g-muted" }, " Ruled earlier: " + item.earlier.map((before) => before.standing).join(", then ") + ".") : null)))
       : ui.empty("No ruling is made."),
     el("ul", { class: "world-lines" }, own),
     el("p", { class: "g-muted" }, "A hypothesis is " + who + "'s guess about a mind: it changes none of this."));
 }
 
-function previewed(ui, answer, who, nameOf) {
+function previewed(ui, answer, who, nameOf, moved) {
   const { el } = ui;
   const parts = [ui.notice("Nothing is saved: this is 060's answer for the hypotheses written here.", { kind: "soft" })];
+  if (moved) parts.push(el("p", { class: "g-muted" }, "The director's truth or a character's beliefs changed since " + who + " was read: they are shown above as they are now."));
   parts.push(el("h3", { class: "world-sub" }, "What " + who + " holds now"), answer.current.length
     ? el("ul", { class: "world-lines" }, answer.current.map((item) => el("li", {}, item.id + ": " + whose(item.about.map((person) => person.name || nameOf(person.actor)))
       + ", \"" + item.claim + "\", " + percent(item.confidence))))

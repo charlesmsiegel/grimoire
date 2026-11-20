@@ -483,3 +483,91 @@ test("a hypothesis can be about two characters, and what was laid out is what is
   assert.deepEqual(sent.members.map((item) => item.actor), [BEA], "Mara, unticked, is not laid out as a member");
   assert.deepEqual(sent.goals, ["a", "b"]);
 });
+
+const TWO = { campaign: "c1", topologies: [{ topology: ROADS, name: "Roads" }, { topology: SEA, name: "Sea" }] };
+const choose = (root, value) => { const node = field(placesCard(root), "Topology"); node.value = value; node.dispatchEvent({ type: "change" }); };
+
+test("a road review answered after its topology was left and chosen again is not drawn over the newer read", async () => {
+  let release, roadsReads = 0;
+  const plans = [];
+  const { root, done } = await mounted({ answers: {
+    "world.topologies": () => TWO,
+    "world.places": (args) => {
+      if (args.topology === SEA) return places("s|", { topology: SEA, road: "ferry" });
+      roadsReads += 1;
+      return places(roadsReads === 1 ? "g|" : "g|o2", { topology: ROADS });
+    },
+    "world.path_plan": (args) => {
+      plans.push(args.expected);
+      if (plans.length === 1) return new Promise((resolve) => { release = () => resolve(planOf(args, places("g|").topology)); });
+      return planOf(args, places(args.expected).topology);
+    },
+  } });
+  await done;
+  roadButton(placesCard(root), "Block road").click();  // reviewed against "g|", still out
+  await settle(3);
+  choose(root, SEA);
+  await settle();
+  choose(root, ROADS);  // the same topology again, read anew: "g|o2"
+  await settle();
+  release();
+  await settle();
+  assert.ok(!reviewOf(placesCard(root)), "the review of the read before is dropped, not shown again");
+  roadButton(placesCard(root), "Block road").click();
+  await settle();
+  assert.deepEqual(plans, ["g|", "g|o2"], "the newer read stays shown: the next review is made against it");
+});
+
+test("a road change answered after its topology was left and chosen again reads it once more", async () => {
+  let release, roadsReads = 0;
+  const { root, done } = await mounted({ answers: {
+    "world.topologies": () => TWO,
+    "world.places": (args) => {
+      if (args.topology === SEA) return places("s|", { topology: SEA, road: "ferry" });
+      roadsReads += 1;
+      return places("g|" + roadsReads, { topology: ROADS, blocked: roadsReads >= 3 });
+    },
+    "world.path_plan": (args) => planOf(args, places(args.expected).topology),
+    "world.path_commit": () => new Promise((resolve) => { release = () => resolve({ done: { already_applied: false }, topology: places("g|old").topology }); }),
+  } });
+  await done;
+  roadButton(placesCard(root), "Block road").click();
+  await settle();
+  button(reviewOf(placesCard(root)), "Make this change").click();  // the commit is still out
+  await settle(3);
+  choose(root, SEA);
+  await settle();
+  choose(root, ROADS);  // read while the change may not have landed yet
+  await settle();
+  assert.equal(roadsReads, 2);
+  release();
+  await settle();
+  assert.equal(roadsReads, 3, "the topology chosen last is read once more after the change");
+  assert.ok(roadButton(placesCard(root), "Open road"), "and what is shown is that read, with the road blocked");
+});
+
+test("a preview's truth replaces the one read with the NPC, and a ruling overtaken is shown as earlier", async () => {
+  const refuted = { rulings: [{ proposition: "p1", text: "Anya knows", standing: "refuted", ruling: "r1", at: 2, earlier: [] }], beliefs: [] };
+  const established = { rulings: [{ proposition: "p1", text: "Anya knows", standing: "established", ruling: "r2", at: 5,
+    earlier: [{ ruling: "r1", standing: "refuted", at: 2 }] }], beliefs: [] };
+  const { root, done } = await mounted({ answers: {
+    "world.mind": (args) => ({ ...mind(args.owner, "Mara's own sight"), truth: refuted }),
+    "world.mind_preview": () => ({ saved: false, owner: CAST[0], as_of: 2, admitted: ["h1"], unchanged: true, current: [], tactic: null, truth: established }),
+  } });
+  await done;
+  await settle();
+  const truth = () => minds(root).querySelector("details");
+  assert.ok(truth().textContent.includes("\"Anya knows\" is refuted."));
+  typeInto(minds(root), "What Mara thinks they think", "Anya read it");
+  typeInto(minds(root), "How sure", "0.6");
+  const box = minds(root).querySelectorAll("input").find((node) => node.getAttribute("value") === "e-Mara");
+  box.checked = true;
+  box.dispatchEvent({ type: "change" });
+  button(minds(root), "Add this hypothesis").click();
+  button(minds(root), "Show what Mara would do").click();
+  await settle();
+  assert.ok(truth().textContent.includes("\"Anya knows\" is established."), "the truth the preview read is drawn");
+  assert.ok(!truth().textContent.includes("is refuted."), "the refuted ruling is not shown as standing");
+  assert.ok(truth().textContent.includes("Ruled earlier: refuted."));
+  assert.ok(minds(root).textContent.includes("changed since Mara was read"));
+});

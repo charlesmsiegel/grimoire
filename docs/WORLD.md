@@ -35,7 +35,9 @@ refuses `operation_conflict`.
 The topology is the campaign's view: the source graph with this campaign's road replacements. A road is blocked or
 opened only in this campaign, through 059's own `change_path`, and the source topology is never changed. A name
 never stands for a place: two places of one name are shown with their refs, a search lists every match without
-picking one, and a route is asked only between exact refs. 059's refusals keep their reason: `missing_place`
+picking one, and a route is asked only between exact refs. A retry is recognized by what 059 recorded for that
+operation id (the road as the change made it), so a later change to the same road, through this page or any other
+059 caller, never turns the retry into `operation_conflict`. 059's refusals keep their reason: `missing_place`
 (a place with no definition, at either end), `unavailable_topology`, `invalid_conditions`, `unsupported_schema`
 (an unreadable campaign replacement); the page's own are `no_path` and `no_change` (the road is already so).
 
@@ -56,7 +58,9 @@ it rests on, its channel and the route conditions that carried it, when it was s
 A recipient believes a rumor only when the director admits that belief: 063 delivers a report, never a belief.
 Admission is 020's `admit_belief` through `EvidenceLibrary.append`, citing the rumor's report, for a delivered
 rumor whose recipient is a director-controlled NPC; a player character's belief is the player's own and is not
-offered. The belief is named for the operation (`admit-<operation id>`), so a retry finds it. Refusals:
+offered. The belief is named for the operation (`admit-<operation id>`), so a retry finds it first. The rumors'
+`etag` covers the evidence ledger's revision too, the one the admission is appended against: anything appended
+there between the review and the commit, even about something else, refuses `changed`. Refusals:
 `no_rumor`, `not_delivered`, `already_admitted`, `changed`, `operation_conflict`.
 
 Sending and delivering a rumor are not offered: they are `RumorLibrary`'s acts on the rumor queue's own
@@ -83,14 +87,17 @@ as not available.
 
 | Op | Args | Answer |
 |---|---|---|
-| `world.mind` | `chat`, `owner` (an NPC of the cast) | `{owner, now, evidence[], truth: {rulings[], beliefs[]}}` |
+| `world.mind` | `chat`, `owner` (an NPC of the cast) | `{owner, now, evidence[], truth: {rulings[], beliefs[]}}`: one ruling entry per proposition, `{proposition, text, standing, ruling, at, earlier[]}` |
 | `world.mind_preview` | `chat`, `owner`, `hypotheses[]` (`{id, about[], claim, confidence, evidence[], at, supersedes}`), `tactic` (`{hypothesis, minimum, credited, fallback}`, optional) | `{saved: false, admitted, current[], tactic, truth, unchanged}` |
 
 The director writes each hypothesis in their own words, about what another character believes, or what one character thinks a second believes (060's
 outer-to-inner order), citing evidence the NPC
 holds; the page holds them from the newest evidence they cite. The preview admits them in order into a ledger that
 lives for that one answer, recalls what the NPC holds current, and proposes the credited tactic or the fallback.
-It shows the director's truth and every cast member's actual beliefs, read again after the preview, and
+Each ruled proposition stands as 012's `standing` says (its latest ruling); the rulings before it are listed apart
+as `earlier`, so a proposition refuted and later established reads as established. The preview answers the
+director's truth and every cast member's actual beliefs, read again after it, and the page draws that truth in
+place of the one read with the NPC, and says when it changed since; and
 `unchanged` says that nothing in the library changed. 060's refusals keep their reason and name the hypothesis:
 `unavailable_evidence`, `npc_authority_required`, `nonmonotonic_revision`, `invalid_confidence`,
 `not_current_hypothesis`, `unresolved_actor`.
@@ -109,7 +116,10 @@ and what is picked or ticked too (a route's two ends, a faction's leader, its me
 characters a hypothesis is about and the evidence it rests on). A hypothesis being written is that NPC's own.
 
 Only the newest answer is drawn: the NPC chosen last, the topology chosen last (a review of the one before is
-dropped), the last search and route. A search or route answered before a road changed is cleared once it changes.
+dropped), the last search and route. A review or a road change answers for the read it started from: once the
+topology has been read again (another chosen, even the same one chosen again), a late review is dropped and a late
+change reads the topology chosen last once more. A search or route answered before a road changed is cleared once
+it changes.
 A review is cancelled or made with its own buttons; a stale one is dropped and the section read again.
 
 Tests: `backend/tests/test_app_world.py` (every op, its refusals, privacy, stale reviews and retries, run on a

@@ -88,7 +88,16 @@ def _names(ctx: AdapterContext, args: Mapping[str, object], campaign: str) -> di
     return {member.actor: member.name for member in cast_of(ctx, chat).members if member.name}
 
 
-def _view(ctx: AdapterContext, campaign: str, names: Mapping) -> dict:
+def _scanned(ctx: AdapterContext, campaign: str) -> tuple:
+    """The evidence ledger's revision as 020's append compares it: every file under it, and what is wrong there."""
+    scan = ctx.store.campaign_knowledge(campaign)
+    return scan.entries, scan.problems
+
+
+def _view(ctx: AdapterContext, campaign: str, names: Mapping, scanned: tuple | None = None) -> dict:
+    """The rumors as shown. Their etag covers the evidence ledger's revision too (``scanned``, read now unless
+    given): an admission is appended to that ledger, so anything appended there since the review refuses it."""
+    entries, problems = _scanned(ctx, campaign) if scanned is None else scanned
     rows = _rows(ctx, campaign)
     knowledge = _knowledge(ctx, campaign)
     controls = SovereigntyLedger(ctx.authority).load(campaign).controls
@@ -119,7 +128,8 @@ def _view(ctx: AdapterContext, campaign: str, names: Mapping) -> dict:
     answer = {"campaign": campaign,
               "now": None if state is None else common.moment_view(calendar, state.now.fixed_day, state.now.minute),
               "rumors": shown}
-    digest = hashlib.sha256(json.dumps(answer, sort_keys=True).encode()).hexdigest()
+    revision = {"entries": [list(item) for item in entries], "problems": sorted(f"{p.path}:{p.code}" for p in problems)}
+    digest = hashlib.sha256(json.dumps({**answer, "evidence": revision}, sort_keys=True).encode()).hexdigest()
     return {**answer, "etag": "rumors:" + digest[:32]}
 
 
@@ -148,6 +158,7 @@ def _admission(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore
     proposition = output_id(campaign, rid, "proposition")
     report = output_id(campaign, rid, "report")
     belief_id = BELIEF_PREFIX + operation_id
+    scanned = _scanned(ctx, campaign)  # first: the knowledge read after it, and the append built, must still match it
     knowledge = _knowledge(ctx, campaign)
     made = next((item for item in knowledge.beliefs if item.belief_id == belief_id), None)
     plan = {"operation": operation_id, "rumor": rid, "belief": belief_id, "stance": stance,
@@ -157,7 +168,7 @@ def _admission(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore
                                                                                    stance, (report,)):
             raise ApiRefused("operation_conflict", "this operation id already admitted another belief")
         return campaign, names, None, {**plan, "already_applied": True, "files": []}
-    if _view(ctx, campaign, names)["etag"] != expected:
+    if _view(ctx, campaign, names, scanned)["etag"] != expected:
         raise ApiRefused("changed", "the rumors changed since they were reviewed; read them again")
     if not rows[rid]["delivered"]:
         raise ApiRefused("not_delivered", "a belief is admitted only once the rumor has reached its recipient")
@@ -169,6 +180,8 @@ def _admission(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore
     belief = Belief(campaign, belief_id, rumor.recipient, proposition, stance, at, DIRECTOR, (report,))
     controls = SovereigntyLedger(ctx.authority).load(campaign).controls
     change = EvidenceLibrary(ctx.store, ctx.handle, owner=ctx.owner).append(campaign, [belief], controls=controls)
+    if change.snapshot != scanned:  # appended to since the revision checked: this is not the batch reviewed
+        raise ApiRefused("changed", "the rumors changed since they were reviewed; read them again")
     return campaign, names, change, {**plan, "already_applied": False, "files": sorted(change.preview())}
 
 

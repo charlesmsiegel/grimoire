@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from grimoire.app.adapter import AdapterContext
 from grimoire.core import DIRECTOR
 from grimoire.core.knowledge import Moment
-from grimoire.core.perspective import actor_knowledge
+from grimoire.core.perspective import actor_knowledge, standing
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.social_hypotheses import (
     MAX_RECORDS,
@@ -43,13 +43,23 @@ def _high(knowledge) -> int:  # type: ignore[no-untyped-def]
     return max((item.moment.sequence for item in records), default=0)
 
 
+def _ruled(knowledge, proposition: str, text: str | None, high: int) -> dict:  # type: ignore[no-untyped-def]
+    """One proposition's standing now, by 012's ``standing`` (its latest ruling), and the rulings before it, oldest
+    first, as earlier ones: a proposition refuted and later established is established, never both."""
+    rulings = sorted(knowledge.rulings_on(proposition), key=lambda item: (item.moment.sequence, item.ruling_id))
+    latest = max(knowledge.rulings_on(proposition), key=lambda item: item.moment.sequence)  # as 012 picks it
+    return {"proposition": proposition, "text": text, "standing": standing(knowledge, proposition, as_of=high),
+            "ruling": latest.ruling_id, "at": latest.moment.sequence,
+            "earlier": [{"ruling": item.ruling_id, "standing": item.standing, "at": item.moment.sequence}
+                        for item in rulings if item is not latest]}
+
+
 def _truth(knowledge, cast: Cast) -> dict:  # type: ignore[no-untyped-def]
     """The director's rulings and each cast member's own standing beliefs: what a hypothesis never changes."""
     texts = {item.proposition_id: item.text for item in knowledge.propositions}
     high = _high(knowledge)
-    return {"rulings": [{"ruling": item.ruling_id, "proposition": item.proposition_id,
-                         "text": texts.get(item.proposition_id), "standing": item.standing}
-                        for item in sorted(knowledge.rulings, key=lambda item: item.ruling_id)],
+    return {"rulings": [_ruled(knowledge, proposition, texts.get(proposition), high)
+                        for proposition in sorted({item.proposition_id for item in knowledge.rulings})],
             "beliefs": [{"actor": str(member.actor), "name": member.name,
                          "beliefs": [{"belief": item.belief_id, "proposition": item.proposition_id, "text": item.text,
                                       "stance": item.stance}

@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -362,6 +363,35 @@ def test_topology_requests_the_domain_would_not_take_are_refused_with_its_reason
         assert refused(app, "world.path_plan", **{**base, "expected": "elsewhere|"}, path="road").reason == "changed"
 
 
+def test_a_road_change_retried_after_its_road_was_changed_again_is_already_applied(desk):
+    """059 keeps what each operation recorded: the retry is recognized by that, not by the road as it is now."""
+    folder, chat = desk
+    with Device(folder, [say("Mara reads it.")]) as device:
+        campaign = seed_world(device, chat)["campaign"]
+        app = AppApi(device.api)
+        ask = {"campaign": campaign, **D, "topology": str(GRAPH)}
+        etag = app.call("world.places", ask)["topology"]["etag"]
+        block = {**ask, "path": "bridge", "blocked": True, "operation_id": "block-bridge", "expected": etag}
+        app.call("world.path_commit", block)
+        # another change to the same road, made through 059 itself: the bridge now needs a toll paid
+        library = TopologyLibrary(device.table.store, device.table.owner)
+        now = library.view(GRAPH, requested_by=DIRECTOR, campaign_id=campaign)
+        bridge = next(path for path in now.index.topology.paths if path.path_id == "bridge")
+        library.change_path(GRAPH, campaign, replace(bridge, requires=("toll",)), operation_id="toll-bridge",
+                            provenance="director:elsewhere", expected=now.overlay_etag,
+                            requested_by=DIRECTOR).commit()
+        settled = scope_bytes(device, campaign)
+        # the first block retried (its answer lost) is the change already made, and changes nothing
+        assert app.call("world.path_plan", block)["plan"]["already_applied"] is True
+        retried = app.call("world.path_commit", block)
+        assert retried["done"]["already_applied"] is True and scope_bytes(device, campaign) == settled
+        shown = next(item for item in retried["topology"]["paths"] if item["path"] == "bridge")
+        assert (shown["blocked"], shown["requires"]) == (True, ["toll"])
+        # the id reused for another change to that road is still refused
+        assert refused(app, "world.path_commit", **{**block, "blocked": False}).reason == "operation_conflict"
+        assert scope_bytes(device, campaign) == settled
+
+
 def test_an_unreadable_campaign_override_is_refused_with_its_reason_never_a_server_error(desk):
     folder, chat = desk
     with Device(folder, [say("Mara reads it.")]) as device:
@@ -412,6 +442,19 @@ def test_rumors_are_traced_and_the_directors_admission_of_a_belief_is_reviewed(d
         assert letter["recipient"] == {"actor": refs["mara"], "name": "Mara Vell", "role": "npc"}
         assert (gossip["status"], gossip["due"]["date"], gossip["can_admit"]) == ("on_the_way", "1203-04-10", False)
         assert gossip["recipient"]["role"] == "player"
+
+        # a review overtaken by anything appended to the evidence ledger, even about something else, is refused
+        coast = Coast(device, chat)
+        stale = {"campaign": campaign, "chat": str(chat), **D, "rumor": "letter", "stance": "believed",
+                 "operation_id": "too-late", "expected": shown["etag"]}
+        assert app.call("world.belief_plan", stale)["plan"]["files"]
+        coast.evidence.append(campaign, [Event(campaign, "gulls", "Gulls wheeled over the quay", coast.next(),
+                                               "scene:quay")]).commit()
+        appended = scope_bytes(device, campaign)
+        assert refused(app, "world.belief_commit", **stale).reason == "changed"
+        assert refused(app, "world.belief_plan", **stale).reason == "changed"
+        assert scope_bytes(device, campaign) == appended
+        shown = app.call("world.rumors", {"campaign": campaign, "chat": str(chat), **D})
 
         # admitting Mara's belief: a plan writes nothing, the commit writes it once
         before = scope_bytes(device, campaign)
@@ -531,8 +574,9 @@ def test_an_npcs_mistaken_theory_proposes_a_tactic_and_its_revision_another_with
         held = {item["evidence"]: item for item in mind["evidence"]}
         assert held["mara-glance"]["content"] == GLANCE and held["mara-asked"]["content"] == ASKED
         assert "oswin-saw" not in held  # Oswin's sight, never Mara's
-        assert mind["truth"]["rulings"] == [{"ruling": "truth", "proposition": "anya-knows", "text": SECRET,
-                                             "standing": "refuted"}]
+        (ruled,) = mind["truth"]["rulings"]
+        assert {key: ruled[key] for key in ("proposition", "text", "standing", "ruling", "earlier")} == {
+            "proposition": "anya-knows", "text": SECRET, "standing": "refuted", "ruling": "truth", "earlier": []}
         beliefs = {item["actor"]: item["beliefs"] for item in mind["truth"]["beliefs"]}
         assert [(item["belief"], item["stance"]) for item in beliefs[refs["mara"]]] == [("mara-doubts", "rejected")]
 
@@ -576,6 +620,15 @@ def test_an_npcs_mistaken_theory_proposes_a_tactic_and_its_revision_another_with
             == "unresolved_actor"
         assert refused(app, "world.mind", **{**ask, "owner": refs["oswin"]}).reason == "no_actor"
         assert scope_bytes(device, campaign) == before
+
+        # the director rules again, later: the proposition stands as ruled last, and the first ruling is earlier
+        coast = Coast(device, chat)
+        coast.evidence.append(campaign, [Ruling(campaign, "truth-after", "anya-knows", "established", coast.next(),
+                                                "director", grounds=(Subject("event", "asked"),))]).commit()
+        (ruled,) = app.call("world.mind", ask)["truth"]["rulings"]
+        assert (ruled["standing"], ruled["ruling"]) == ("established", "truth-after")
+        assert [(item["ruling"], item["standing"]) for item in ruled["earlier"]] == [("truth", "refuted")]
+        assert ruled["at"] > ruled["earlier"][0]["at"]
 
 
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")

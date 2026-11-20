@@ -7,10 +7,11 @@ export function newOperationId() {
 }
 
 // One request at a time is current: `start()` names a new one and `current(turn)` says whether it is still the
-// newest, so an answer that comes back after a newer request was made is dropped instead of drawn.
+// newest, so an answer that comes back after a newer request was made is dropped instead of drawn. `now()` names the
+// newest without starting one: work begun from it is current while no request was started since.
 export function latest() {
   let turn = 0;
-  return { start: () => { turn += 1; return turn; }, current: (asked) => asked === turn };
+  return { start: () => { turn += 1; return turn; }, current: (asked) => asked === turn, now: () => turn };
 }
 
 // The conditions a route is asked under, typed as words separated by commas or spaces ("ticket, night").
