@@ -126,7 +126,7 @@ test("divergent offline scenes and a reviewed retcon, on the desktop", { skip: !
   assert.ok(byText(divergent, "strong", "Merge both versions of a scene is not available yet.").length);
   assert.ok(byText(divergent, "a", "Devices and sync").length, "the sync page is linked, not repeated");
 
-  // the scene's card opens a preview of a retcon of it, which writes nothing
+  // the scene's card opens a preview of a retcon of it, which makes no story change
   byText(scene, "button", "Preview a retcon of this scene")[0].click();
   await idle();
   const first = await until(() => impacts(main), 15000, "the preview");
@@ -136,7 +136,7 @@ test("divergent offline scenes and a reviewed retcon, on the desktop", { skip: !
   const retcon = section(main, "Review a retcon or fork");
   const picked = retcon.querySelectorAll("input").filter((node) => node.getAttribute("type") === "checkbox" && node.checked);
   assert.deepEqual(picked.map((node) => node.getAttribute("value")), ["campaigns/c/turns/t-1.000001.json"], "the scene is the one picked");
-  assert.ok(labelled(main, "div", "What it would touch").textContent.includes("Nothing was changed"));
+  assert.ok(labelled(main, "div", "What it would touch").textContent.includes("No story change was made"));
   for (const item of ["Repair what depends on a changed scene", "Write a continuation", "Promote an alternative into the story"]) {
     assert.ok(byText(retcon, "strong", item + " is not available yet.").length, item + " is named, never offered");
   }

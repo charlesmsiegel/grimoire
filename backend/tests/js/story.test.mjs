@@ -325,7 +325,8 @@ test("a version that cannot be reviewed here counts as uncertain, and a certain 
 test("a deletion is shown under the devices that deleted it, with what taking it would break", async () => {
   const { root, done } = mounted({ divergent: () => ({ ...NOTHING_DIVERGENT,
     scenes: [divergentScene(SCENE.path, 1, { theirs: [], taking_theirs: [], their_deletion: true, peers: ["phone", "tablet"],
-      deleted_by: ["tablet"], taking_deletion: { reasons: ["accepted_scene_missing"], uncertain: true, scenes: [], endpoints: [] } }),
+      deleted_by: ["tablet"], breaks_recorded: true,
+      taking_deletion: { reasons: ["accepted_scene_missing"], uncertain: false, breaks_recorded: true, scenes: [], endpoints: [] } }),
     divergentScene(LATER.path, 2, { mine: { etag: null, deleted: true, peers: [], said: null, set_aside: false, unreadable: false } })] }) });
   await done;
   const deleted = article(root, "Divergent: Scene 1 · t-1");
@@ -333,7 +334,9 @@ test("a deletion is shown under the devices that deleted it, with what taking it
   assert.deepEqual(sides.map((node) => node.querySelector("div").textContent), ["This device", "tablet"], "titled by who deleted it, not every peer");
   assert.equal(sides[1].querySelector("p").textContent, "Deleted on tablet.");
   assert.ok(deleted.textContent.includes("Taking the deletion from tablet here would break what rests on it: an accepted event rests on a scene that would be missing."));
-  assert.ok(deleted.textContent.includes("Refused: its ancestry is uncertain"), "a deletion leaving an event without its scene is refused");
+  assert.ok(deleted.textContent.includes("Refused: it would leave a recorded premise missing."), "a deletion leaving an event without its scene is refused");
+  assert.ok(!deleted.textContent.includes("ancestry is uncertain") && !deleted.textContent.includes("not on record"),
+    "what rests on it is on record: it is never called uncertain");
   const mine = article(root, "Divergent: Scene 2 · t-1").querySelectorAll("div").filter((node) => node.classList.contains("story-side"))[0];
   assert.equal(mine.querySelector("p").textContent, "Deleted on this device.");
 });

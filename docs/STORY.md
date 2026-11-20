@@ -29,10 +29,12 @@ peers whose last sync held it), `taking_theirs` (049's reason codes for what tak
 leave unmet, from `semantic.validate_transition`; null for a version that cannot be read here), `deleted_by` and
 `taking_deletion` (the devices whose kept side is a deletion, and the same check with the file removed),
 `uncertain` (its ancestry is not recorded: a campaign-wide `ancestry` problem such as a legacy or unreadable
-accepted event, or a review that cannot be made or names an uncertain reason) and `continues` (an earlier scene of
-the same chat differs too: a divergent continuation). `uncertain` is the scene's own verdict: 049's admission
-check can find nothing unmet for a legacy history, and the page never calls such a version safe. The page shows
-uncertain ancestry and divergent continuations as **refused**, with the reason, and lists `ancestry`. `held` lists
+accepted event, or a review that cannot be made or names an uncertain reason), `breaks_recorded` (what rests on it
+is recorded exactly, and taking a version would leave that recorded premise missing: `accepted_scene_missing` or
+`missing_dependency_endpoint`) and `continues` (an earlier scene of the same chat differs too: a divergent
+continuation). `uncertain` is the scene's own verdict: 049's admission check can find nothing unmet for a legacy
+history, and the page never calls such a version safe. The page shows uncertain ancestry, a missing recorded
+premise and divergent continuations as **refused**, each with its own reason, and lists `ancestry`. `held` lists
 the accepted events and holdings the last sync held with them, so no effect is applied twice or lost.
 
 `retained` lists the retained forks the campaign holds: each scene's exact original from every device, which one
@@ -48,11 +50,13 @@ and sync (`pages/sync`), which the page links rather than repeats.
 |---|---|---|
 | `story.scenes` | `campaign`, `audience` | `{campaign, etag, coverage, records[], dependencies[], problems[], declarable[], actions[], unavailable[]}` |
 | `story.preview` | `action` (edit, cut, replace, replay, fork), `roots[]` (`{path, revision}` as shown, at most 64), optional `alternative` | `{complete, problems[], impacts[], corrections, corrections_refused, rehearsal, written: false}` |
-| `story.declare_plan` | `source`, `dependent` (`{path, revision}`), `reason` (dialogue, causal_action, asset), `operation_id`, `expected` (the `etag` shown) | `{plan: {operation, already_applied, source, dependent, reason, files[], reaches[]}, scenes}`; nothing is written |
+| `story.declare_plan` | `source`, `dependent` (`{path, revision}`), `reason` (dialogue, causal_action, asset), `operation_id`, `expected` (the `etag` shown) | `{plan: {operation, already_applied, source, dependent, reason, files[], reaches[]}, scenes}`; no story change is written |
 | `story.declare_commit` | the same args as the plan | `{done, scenes}` |
 
 Opening a chat may write an accepted effect's pending 020 knowledge, which 054 pins, so every revision these ops
-show or check (`etag`, a root's revision) is of the snapshot taken once the campaign's chats are open. A review
+show or check (`etag`, a root's revision) is of the snapshot taken once the campaign's chats are open. That is the
+settling every read that opens a chat does (the hub, the inbox); apart from it, only `story.declare_commit` writes,
+and it writes the one declaration. Each op opens each of the campaign's chats at most once. A review
 refused `changed` or `missing_record` reads the records again, and the next review is of what they are now.
 
 A preview names each record that rests on the roots, why (`reason`) and whether that is `known` or only
@@ -65,7 +69,7 @@ accepted event. The page shows the plan, then writes it only on **Make this chan
 and the snapshot revision as reviewed:
 
 - a snapshot changed since the review refuses `changed`, and the page reads it again;
-- the same declaration made again with its operation id is `already_applied` and writes nothing; the id reused
+- the same declaration made again with its operation id is `already_applied` and writes no declaration again; the id reused
   for another one refuses `operation_conflict`;
 - an edge already recorded refuses `already_declared`; one that would make a circle refuses `invalid_dependency`;
   an incomplete snapshot refuses `incomplete_snapshot`; a review not made refuses `review_required`.

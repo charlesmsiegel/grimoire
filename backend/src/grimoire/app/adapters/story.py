@@ -25,7 +25,7 @@ never offered.
 **Retcons and forks (054).** ``scenes`` reads 054's native snapshot (pins, recorded dependencies and problems) with
 a short label per record, and a revision of the whole snapshot (``etag``). ``preview`` answers 054's impact report
 for an edit, cut, replacement, replay or fork of the records named, with the pinned correction references 053
-would cite and, given an authored alternative, 054's bounded rehearsal (speculative, no model). Nothing is written.
+would cite and, given an authored alternative, 054's bounded rehearsal (speculative, no model). No story change is written.
 ``declare_plan`` and ``declare_commit`` record one explicit dependency the native records cannot establish (a
 line of dialogue that rests on an event, say) through ``ContinuityLibrary.declare_dependency``: reviewed against
 the snapshot revision the page was shown, and committed as reviewed, once, however often it is retried.
@@ -75,11 +75,14 @@ DECLARABLE = ("dialogue", "causal_action", "asset")
 MAX_ROOTS = 64
 #: 054's rehearsal takes 1 to 8 authored alternatives of at most 16,384 characters; the page sends one.
 MAX_ALTERNATIVE = 16384
-#: Reason codes of 049's semantic review that say its ancestry is uncertain, not recorded: a restoration refuses
-#: them whatever device is chosen (``continuitystore.forks``).
+#: Reason codes of 049's semantic review that say a scene's ancestry is uncertain, not recorded. A restoration
+#: refuses them whatever device is chosen (``continuitystore.forks``).
 UNCERTAIN = frozenset({"legacy_scene_history", "malformed_continuity_sources", "malformed_dependency",
-                       "malformed_semantic_record", "unreadable_semantic_sources", "potential_direct_relation_impact",
-                       "accepted_scene_missing", "missing_dependency_endpoint"})
+                       "malformed_semantic_record", "unreadable_semantic_sources", "potential_direct_relation_impact"})
+#: Reason codes that say what rests on a scene is recorded exactly, and taking a version would leave that recorded
+#: premise missing (an accepted event without its scene, a declaration without its endpoint). Refused as well,
+#: but never called uncertain.
+MISSING = frozenset({"accepted_scene_missing", "missing_dependency_endpoint"})
 #: What the domain does not do, said on the page and never offered as a control.
 UNAVAILABLE = (
     {"what": "Restore one device's scene as a retained fork",
@@ -290,7 +293,8 @@ def _impact(item, labels: Mapping[str, dict]) -> dict:  # type: ignore[no-untype
 
 def _preview(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     """054's impact report for ``action`` on ``roots`` (records as shown), with what 053 would cite and, given an
-    authored ``alternative``, the bounded rehearsal. Nothing is written and no model is called."""
+    authored ``alternative``, the bounded rehearsal. No story change is written (opening the chats may settle pending 020 knowledge,
+    as every read that opens one does) and no model is called."""
     campaign = _campaign(ctx, args)
     action = args.get("action")
     if action not in ACTIONS:
@@ -332,10 +336,12 @@ def _preview(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
 
 
 # -- declaring a dependency (054) ------------------------------------------------------------------------------
-def _declaration(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no-untyped-def]
+def _declaration(ctx: AdapterContext, args: Mapping[str, object], chats: _Chats):  # type: ignore[no-untyped-def]
     """The declaration the request names, checked against the snapshot revision it was reviewed at:
-    ``(campaign, library, snapshot, edge, ref, already_applied)``. Nothing is written."""
-    campaign = _campaign(ctx, args)
+    ``(campaign, library, snapshot, edge, ref, already_applied)``. No story change is written (opening the chats
+    may settle pending 020 knowledge, as every read that opens one does). ``chats`` is the op's one set of open
+    chats, opened here at most once each."""
+    campaign = chats.campaign
     operation_id = _segment(args, "operation_id")
     reason = args.get("reason")
     if reason not in DECLARABLE:
@@ -362,8 +368,8 @@ def _declaration(ctx: AdapterContext, args: Mapping[str, object]):  # type: igno
                 same = False
         if not same:
             raise ApiRefused("operation_conflict", "this operation id already records something else")
-        return campaign, library, _settled(ctx, campaign, _Chats(ctx, campaign)), edge, ref, True
-    snap = _settled(ctx, campaign, _Chats(ctx, campaign))
+        return campaign, library, _settled(ctx, campaign, chats), edge, ref, True
+    snap = _settled(ctx, campaign, chats)
     if _digest(snap) != expected:
         raise ApiRefused("changed", "the campaign's records changed since they were shown: review them again")
     if snap.problems:
@@ -378,12 +384,13 @@ def _declaration(ctx: AdapterContext, args: Mapping[str, object]):  # type: igno
     return campaign, library, snap, edge, ref, False
 
 
-def _declared(ctx: AdapterContext, campaign: str, snap, edge, ref, already: bool) -> dict:  # type: ignore[no-untyped-def]
-    """What the declaration does: the file it writes and what a change of its source would then reach."""
+def _declared(view: dict, snap, edge, ref, already: bool) -> dict:  # type: ignore[no-untyped-def]
+    """What the declaration does: the file it writes and what a change of its source would then reach, labelled
+    from ``view`` (the records view of ``snap``)."""
     before = {item.target.path for item in preview_impact(snap.pins.values(), snap.dependencies, (edge.source,)).impacts}
     deps = snap.dependencies if already else snap.dependencies + (edge,)
     after = preview_impact(snap.pins.values(), deps, (edge.source,))
-    labels = {item["path"]: item for item in _records_view(ctx, campaign, snap)["records"]}
+    labels = {item["path"]: item for item in view["records"]}
     newly = [_impact(item, labels) for item in after.impacts if item.target.path not in before
              or (item.target.path == edge.dependent.path and item.certainty == "known")]
     return {"operation": ref.record_id, "already_applied": already, "source": labels.get(edge.source.path),
@@ -392,13 +399,16 @@ def _declared(ctx: AdapterContext, campaign: str, snap, edge, ref, already: bool
 
 
 def _declare_plan(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
-    campaign, _, snap, edge, ref, already = _declaration(ctx, args)
-    return {"plan": _declared(ctx, campaign, snap, edge, ref, already), "scenes": _records_view(ctx, campaign, snap)}
+    chats = _Chats(ctx, _campaign(ctx, args))
+    campaign, _, snap, edge, ref, already = _declaration(ctx, args, chats)
+    view = _records_view(ctx, campaign, snap, chats)
+    return {"plan": _declared(view, snap, edge, ref, already), "scenes": view}
 
 
 def _declare_commit(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
-    campaign, library, snap, edge, ref, already = _declaration(ctx, args)
-    done = _declared(ctx, campaign, snap, edge, ref, already)
+    chats = _Chats(ctx, _campaign(ctx, args))
+    campaign, library, snap, edge, ref, already = _declaration(ctx, args, chats)
+    done = _declared(_records_view(ctx, campaign, snap, chats), snap, edge, ref, already)
     if not already:
         try:
             library.declare_dependency(ref.record_id, edge.source, edge.dependent, edge.reason)
@@ -407,7 +417,8 @@ def _declare_commit(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
             if "stale" in message or "missing" in message:
                 raise ApiRefused("changed", message) from None
             raise ApiRefused("invalid_dependency", message) from None
-    return {"done": done, "scenes": _records_view(ctx, campaign, _settled(ctx, campaign, _Chats(ctx, campaign)))}
+    # the declaration changes no chat: the chats already open label the records as they are now
+    return {"done": done, "scenes": _records_view(ctx, campaign, library.snapshot(campaign), chats)}
 
 
 # -- divergent offline scenes (049) ----------------------------------------------------------------------------
@@ -422,9 +433,10 @@ def _reasons(ctx: AdapterContext, campaign: str, path: str, data: bytes | None, 
                                                                    removals=(path,) if removal else ())
                  if review.campaign == campaign]
     except (StoreError, LibraryPathError, OSError, SyncError):
-        return {"reasons": ["unreadable_semantic_sources"], "uncertain": True, "scenes": [], "endpoints": []}
+        return {"reasons": ["unreadable_semantic_sources"], "uncertain": True, "breaks_recorded": False,
+                "scenes": [], "endpoints": []}
     reasons = sorted({reason for review in found for reason in review.reasons})
-    return {"reasons": reasons, "uncertain": bool(UNCERTAIN & set(reasons)),
+    return {"reasons": reasons, "uncertain": bool(UNCERTAIN & set(reasons)), "breaks_recorded": bool(MISSING & set(reasons)),
             "scenes": sorted({p for review in found for p in review.scenes}),
             "endpoints": sorted({p for review in found for p in review.endpoints})}
 
@@ -529,9 +541,10 @@ def _divergent(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                  "uncertain": bool(ancestry),
                  "chat": None if turn is None else str(ChatRef(campaign, turn[0])),
                  "number": None if turn is None else turn[1], "continues": None}
-        entry["uncertain"] = (entry["uncertain"] or any(review is None or review["uncertain"]
-                                                        for review in entry["taking_theirs"])
-                              or (entry["taking_deletion"] is not None and entry["taking_deletion"]["uncertain"]))
+        reviews = [*entry["taking_theirs"], *([entry["taking_deletion"]] if item["their_deletion"] else [])]
+        entry["uncertain"] = entry["uncertain"] or any(review is None or review["uncertain"] for review in reviews)
+        # what rests on it is recorded exactly, and taking a version would leave that premise missing
+        entry["breaks_recorded"] = any(review is not None and review["breaks_recorded"] for review in reviews)
         scenes.append(entry)
     # a later scene of the same chat that differs too is a divergent continuation: it may rest on the earlier one
     for entry in scenes:
@@ -561,4 +574,4 @@ _OPS: dict[str, Callable[[AdapterContext, Mapping[str, object]], dict]] = {
 
 ADAPTER = Adapter("story", owner="115", ops={name: _guarded(op) for name, op in _OPS.items()})
 
-__all__ = ["ACTIONS", "ADAPTER", "DECLARABLE", "UNAVAILABLE", "UNCERTAIN"]
+__all__ = ["ACTIONS", "ADAPTER", "DECLARABLE", "MISSING", "UNAVAILABLE", "UNCERTAIN"]

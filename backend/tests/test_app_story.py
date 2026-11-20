@@ -232,9 +232,40 @@ def test_taking_another_devices_deletion_is_reviewed_and_titled_by_who_deleted(p
     (scene,) = desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["scenes"]
     assert scene["their_deletion"] is True and scene["deleted_by"] == [PHONE] and scene["theirs"] == []
     review = scene["taking_deletion"]
-    assert "accepted_scene_missing" in review["reasons"] and review["uncertain"] is True
-    assert scene["uncertain"] is True  # a deletion that leaves an accepted event without its scene is refused
+    assert "accepted_scene_missing" in review["reasons"]
+    # what rests on the scene is on record exactly: taking the deletion leaves that premise missing, and is
+    # refused for it, never called an uncertain ancestry
+    assert (review["uncertain"], review["breaks_recorded"]) == (False, True)
+    assert (scene["uncertain"], scene["breaks_recorded"]) == (False, True)
     assert snapshot(pair[DESKTOP].store.root) == before
+
+
+def test_each_op_opens_each_chat_at_most_once(pair, desktop):
+    """Opening a chat reads all of it under the app's lock: an op opens each chat it labels once, and a review or a
+    commit opens no more than reading the records does."""
+    runner = desktop.api.runner
+    original = runner.open
+    opened: list = []
+
+    def counting(chat):
+        opened.append(chat)
+        return original(chat)
+
+    runner.open = counting
+
+    def opens(op, **args) -> list:
+        opened.clear()
+        answer = desktop.call(op, {"campaign": "c", **DIRECTOR, **args})
+        assert len(opened) == len(set(opened)), (op, opened)
+        return answer, list(opened)
+
+    shown, read = opens("story.scenes")
+    assert read, "the records are labelled from their chats"
+    request = {"operation_id": "once", "expected": shown["etag"], "reason": "dialogue",
+               "source": pin(shown, payment(shown)), "dependent": pin(shown, LATER)}
+    for op in ("story.declare_plan", "story.declare_commit", "story.declare_commit"):  # the last is a retry
+        assert sorted(map(str, opens(op, **request)[1])) == sorted(map(str, read)), op
+    assert sorted(map(str, opens("story.preview", action="edit", roots=[pin(shown, SCENE)])[1])) == sorted(map(str, read))
 
 
 def test_the_revision_shown_is_of_the_records_once_the_chats_are_open(pair, desktop):

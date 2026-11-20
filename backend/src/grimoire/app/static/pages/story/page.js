@@ -6,7 +6,7 @@
 // Everything is read from, and written through, the story.* ops. Both versions of a divergent scene stay kept
 // until the person resolves it: this page resolves nothing itself, says why keeping one side is refused where it
 // is, and links to Devices and sync and to Needs you, which keep one side where that is allowed. A preview
-// writes nothing. The one write, recording what rests on what, is reviewed first (story.declare_plan) and made as
+// writes no story change. The one write, recording what rests on what, is reviewed first (story.declare_plan) and made as
 // reviewed (story.declare_commit, with the same operation id and the snapshot revision as reviewed).
 
 import { campaignName } from "../campaign/logic.js";
@@ -154,12 +154,17 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
       || Boolean(scene.their_deletion && (!scene.taking_deletion || scene.taking_deletion.uncertain));
     const why = scene.theirs.map((version, index) => el("li", {}, takingText(version.peers.join(", ") || "the other device", scene.taking_theirs[index], { uncertain })));
     if (scene.their_deletion) why.push(el("li", {}, takingText(deleters, scene.taking_deletion, { uncertain, deletion: true })));
+    // what rests on it is recorded exactly, and a version taken would leave that recorded premise missing
+    const reviews = [...scene.taking_theirs, ...(scene.their_deletion ? [scene.taking_deletion] : [])];
+    const breaks = Boolean(scene.breaks_recorded) || reviews.some((review) => review && review.breaks_recorded);
     const article = el("article", { class: "g-stack story-scene", "aria-label": "Divergent: " + title },
       el("div", { class: "g-row" }, el("strong", { class: "g-grow" }, title), ui.pill("Both kept", { kind: "accent" }),
         scene.detected.length ? ui.pill("Held for review", { kind: "bad" }) : null),
       el("div", { class: "story-sides" }, sides),
       why.length ? el("ul", { class: "story-lines" }, why) : null,
       uncertain ? el("p", {}, el("strong", {}, "Refused: "), "its ancestry is uncertain, so neither version can be shown to fit what rests on it.") : null,
+      breaks ? el("p", {}, el("strong", {}, "Refused: "), "it would leave a recorded premise missing. What rests on this scene is on record, "
+        + "and taking that version would leave it without what it rests on.") : null,
       scene.continues ? el("p", {}, el("strong", {}, "Refused: "), "a divergent continuation. An earlier scene of this chat differs too, and "
         + "this one may rest on it, so neither device's earlier scene can be restored over it.") : null,
       scene.keep_one === "refused"
@@ -202,7 +207,7 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
   slot.replaceWith(node);
   const body = el("div", { class: "g-stack" });
   node.append(el("p", { class: "g-muted" }, "Pick what you would change and how, and see everything the campaign's own records say "
-    + "rests on it. A preview writes nothing, and no model is called."), body);
+    + "rests on it. A preview writes no story change, and no model is called."), body);
   let scenes = null;
   const picked = new Set();
   let action = "edit";
@@ -331,7 +336,7 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
         el("ul", { class: "story-lines" }, answer.corrections.map((item) => el("li", {},
           recordText(scenes.records.find((record) => record.path === item.dependent)) + " ← " + recordText(scenes.records.find((record) => record.path === item.source))
           + " · " + certaintyText(item.certainty))))) : el("p", { class: "g-muted" }, answer.corrections_refused || ""),
-      el("p", { class: "g-muted" }, "Nothing was changed: the scene, its accepted effects and what follows stay as they are."));
+      el("p", { class: "g-muted" }, "No story change was made: the scene, its accepted effects and what follows stay as they are."));
     box.setAttribute("role", "region");
     box.setAttribute("aria-label", "What it would touch");
     return box;
