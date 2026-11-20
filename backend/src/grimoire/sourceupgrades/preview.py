@@ -13,14 +13,16 @@ from dataclasses import dataclass, field
 
 from grimoire.core.identity import ImageRef, SourceRef, validate_source_id
 from grimoire.core.index import MissingDefinition
-from grimoire.store import CanonicalScan, LibraryStore, LibraryView, StoredDefinition, etag
+from grimoire.store import CanonicalScan, LibraryStore, LibraryView, StoreError, StoredDefinition, etag
+from grimoire.store.jsonfmt import MAX_DEPTH as JSON_MAX_DEPTH
 from grimoire.store.jsonfmt import JsonError, parse_strict
 from grimoire.store.layout import SOURCE_DIR, SOURCES, classify, image_parts
 
+from .heads import entity_heads
 from .model import EntityChange, Problem, Reference, SourceChangePreview, SourceUpgradeError
 
-#: nesting the scan follows; stored payloads are far shallower, and a deeper one is not searched
-MAX_DEPTH = 64
+#: nesting the scan follows: the deepest JSON the store accepts; deeper is reported, not searched
+MAX_DEPTH = JSON_MAX_DEPTH + 1
 
 
 @dataclass(frozen=True)
@@ -47,15 +49,11 @@ class _Side:
         return found if isinstance(found, StoredDefinition) else None
 
     def heads(self) -> dict[SourceRef, tuple[str, str]]:
-        """Each head entity of the source (unpinned) to (revision, name), from the loaded view."""
+        """Each entity of the source (unpinned) to its head (revision, name) as the loaded index
+        resolves it, a declared head or, where the manifest declares none, the index's choice."""
         if self.view is None or self.source not in self.view.sources:
             return {}
-        found = {}
-        for ref in self.view.sources[self.source].manifest.head_refs():
-            stored = self.definition(ref)
-            if stored is not None:
-                found[ref] = (stored.ref.revision, stored.name)
-        return found
+        return {ref: (stored.ref.revision, stored.name) for ref, stored in entity_heads(self.view, self.source).items()}
 
     def file_etag(self, path: str) -> str | None:
         data = self.files.get(path)
@@ -78,12 +76,25 @@ def _record(path: str) -> str:
     return 'unknown' if found is None else found[0]
 
 
-def _references(payload: object, source: str) -> set[tuple[str, str]]:
-    """``(kind, text)`` for every string naming ``source``: ``definition``, ``image`` or ``source``."""
+#: key paths (list positions dropped) whose unpinned refs name an entity without reaching its content
+ART_LAYER = ('art_pin', 'layers', 'entity')
+EXCLUSIONS = ('payload', 'exclusions')
+CATALOG_SCHEMA = 'grimoire.catalog/1'
+
+
+def _references(payload: object, source: str) -> tuple[set[tuple[str, str]], bool]:
+    """``(kind, text)`` for every string naming ``source`` (``definition``, ``image`` or ``source``),
+    and whether a container past ``MAX_DEPTH`` went unsearched. An unpinned definition ref at an
+    identity-only key path (an art pin's layer entity beside its pinned base, a catalog's
+    exclusions) is left out: it reaches no content and follows nothing."""
     found: set[tuple[str, str]] = set()
-    stack: list[tuple[object, int]] = [(payload, 0)]
+    deep = False
+    identity = {ART_LAYER}
+    if isinstance(payload, Mapping) and payload.get('schema') == CATALOG_SCHEMA:
+        identity.add(EXCLUSIONS)
+    stack: list[tuple[object, int, tuple[str, ...]]] = [(payload, 0, ())]
     while stack:
-        value, depth = stack.pop()
+        value, depth, keys = stack.pop()
         if isinstance(value, str):
             if '#image/' in value:
                 try:
@@ -97,15 +108,19 @@ def _references(payload: object, source: str) -> set[tuple[str, str]]:
                 ref = SourceRef.parse(value)
             except ValueError:
                 continue
-            if ref.source == source:
+            if ref.source == source and (ref.pinned or keys not in identity):
                 found.add(('definition', value))
-        elif depth < MAX_DEPTH and isinstance(value, Mapping):
+        elif isinstance(value, (Mapping, list, tuple)) and depth >= MAX_DEPTH:
+            deep = True
+        elif isinstance(value, Mapping):
             if value.get('source') == source:
                 found.add(('source', source))
-            stack.extend((item, depth + 1) for item in (*value.keys(), *value.values()))
-        elif depth < MAX_DEPTH and isinstance(value, (list, tuple)):
-            stack.extend((item, depth + 1) for item in value)
-    return found
+            for key, item in value.items():
+                stack.append((key, depth + 1, keys))
+                stack.append((item, depth + 1, (*keys, key) if isinstance(key, str) else keys))
+        elif isinstance(value, (list, tuple)):
+            stack.extend((item, depth + 1, keys) for item in value)
+    return found, deep
 
 
 def _status(before: str | None, after: str | None, before_etag: str | None, after_etag: str | None,
@@ -149,11 +164,16 @@ def _preview(store: LibraryStore, source: str, new: _Side, action: str) -> Sourc
     except (ValueError, TypeError) as error:
         raise SourceUpgradeError('invalid_source', str(error)) from None
     old, scan = _scan_side(store, source)
-    problems = [Problem(path, reason) for path, reason in sorted(scan.blocked.items())]
+    # A blocked path inside the changed source is a problem of its before side, not a skipped referrer.
+    problems = [Problem(path, reason, 'before' if _owner(path) == source else 'library')
+                for path, reason in sorted(scan.blocked.items())]
     for side, label in ((old, 'before'), (new, 'after')):
         if side.view is not None:
             problems.extend(Problem(problem.path, problem.code, label)
                             for problem in side.view.problems if problem.source == source)
+        if label == 'after' and side.scan is not None:
+            problems.extend(Problem(path, reason, label) for path, reason in sorted(side.scan.blocked.items())
+                            if _owner(path) == source)
     rows: dict[tuple[str, str], Reference] = {}
     for path, data in sorted(scan.files.items()):
         if _owner(path) == source:
@@ -164,20 +184,19 @@ def _preview(store: LibraryStore, source: str, new: _Side, action: str) -> Sourc
             problems.append(Problem(path, 'unreadable'))
             continue
         record = _record(path)
-        found = _references(payload, source)
-        pinned = {SourceRef.parse(text).entity_key for kind, text in found
-                  if kind == 'definition' and SourceRef.parse(text).pinned}
+        found, deep = _references(payload, source)
+        if deep:
+            problems.append(Problem(path, 'too_deep'))
         for kind, text in sorted(found):
             if kind == 'definition':
-                ref = SourceRef.parse(text)
-                if not ref.pinned and ref.entity_key in pinned:
-                    # Beside a pin of the same entity (an art layer, an actor's base), an unpinned
-                    # mention is that pin's identity, not a follow; the pinned row reports it.
-                    continue
                 row = _definition_row(path, record, text, old, new)
             elif kind == 'image':
-                where = '/'.join(image_parts(ImageRef.parse(text)))
-                row = _etag_row(path, record, text, old.file_etag(where), new.file_etag(where), 'edited')
+                try:
+                    where: str | None = '/'.join(image_parts(ImageRef.parse(text)))
+                except (StoreError, ValueError):  # an id no file can hold (``con``): it reaches nothing
+                    where = None
+                row = _etag_row(path, record, text, where and old.file_etag(where), where and new.file_etag(where),
+                                'edited')
             else:
                 row = _etag_row(path, record, text, old.manifest_etag, new.manifest_etag, 'changed')
             rows[(path, text)] = row
@@ -213,7 +232,9 @@ def preview_source_update(store: LibraryStore, source: str, candidate: LibrarySt
         validate_source_id(source)
     except (ValueError, TypeError) as error:
         raise SourceUpgradeError('invalid_source', str(error)) from None
-    side, _ = _scan_side(candidate, source)
-    if source not in side.view.sources:
+    side, scan = _scan_side(candidate, source)
+    if not side.files and not any(_owner(path) == source for path in scan.blocked):
         raise SourceUpgradeError('candidate_missing_source', source)
+    # A candidate that holds the source but cannot load it (a malformed manifest) is previewed with
+    # nothing resolving after, and its load problems are reported on the ``after`` side.
     return _preview(store, source, side, 'update')

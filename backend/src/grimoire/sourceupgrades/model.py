@@ -117,10 +117,10 @@ class SourceChangePreview:
 
 @dataclass(frozen=True)
 class Dependency:
-    """One declared optional dependency; ``manifest_etag`` pins the dependency's manifest bytes."""
+    """One declared optional dependency; ``version`` pins the dependency's ``source_version``."""
 
     source: str
-    manifest_etag: str | None = None
+    version: str | None = None
 
 
 @dataclass(frozen=True)

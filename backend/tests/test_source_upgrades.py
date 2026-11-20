@@ -17,7 +17,7 @@ from grimoire.chatstore import ChatLibrary
 from grimoire.core.identity import SourceRef
 from grimoire.sourceupgrades import (
     DEPENDENCIES_KEY, SourceUpgradeError, dependency_report, pin_dependency, preview_source_removal,
-    preview_source_update,
+    preview_source_update, source_version,
 )
 from grimoire.sourceupgrades.preview import _owner, _references
 from grimoire.store import LibraryStore, RecordEnvelope, StaleWrite, StoreError
@@ -26,6 +26,7 @@ from grimoire.testing.fileops import snapshot as files_of
 ALPHA = SourceRef(CAST, 'catalog', 'alpha', 'r1')
 BETA = SourceRef(CAST, 'catalog', 'beta', 'r1')
 WORLD_PACK = SourceRef(MODERN, 'catalog', 'available', 'r1')
+VAMPIRE_PACK = SourceRef(VAMPIRE, 'catalog', 'available', 'r1')  # the same two, listed the other way
 LOOKALIKE = 'catalog:elderfen-cast:extra'  # a separate source stored under CAST's folder
 LOOKALIKE_MARA = SourceRef(LOOKALIKE, 'character', 'mara', 'r1')
 
@@ -35,8 +36,9 @@ def publish(store, catalog, name=None):
 
 
 def seed(store):
-    """Shared cast with two catalogs, three world portrayals of its Mara, a world catalog that
-    pins both cast catalogs, namesake Maras elsewhere, and two chats: one pinned, one following."""
+    """Shared cast with two catalogs, four world portrayals of its Mara, two world catalogs that
+    pin both cast catalogs in opposite orders, namesake Maras elsewhere, and two chats: one pinned,
+    one following."""
     seed_four_portrayals(store, owner_handle())
     tx = store.transaction()
     tx.put(manifest(LOOKALIKE), None)
@@ -45,6 +47,7 @@ def seed(store):
     publish(store, Catalog(ALPHA, (BASE,)), 'Alpha pack')
     publish(store, Catalog(BETA, (NOTES,)), 'Beta pack')
     publish(store, Catalog(WORLD_PACK, (MODERN_MARA,), (ALPHA, BETA)))
+    publish(store, Catalog(VAMPIRE_PACK, (), (BETA, ALPHA), (BASE.unpinned(),)))
     chats = ChatLibrary(store, owner_handle(), clock=Clock(), new_id=Ids(), owner=OWNER)
     pinned = chats.start_chat(Launch('character', BASE.unpinned()), attach=[(NOTES, 'lorebook')]).commit()
     following = chats.start_chat(Launch('character', BASE.unpinned()), follow=True).commit()
@@ -135,18 +138,47 @@ def test_update_reports_by_id_when_catalog_names_and_head_order_swap(tmp_path):
             assert files_of(store.root) == before
         rows = by_text(preview)
         for ref in (ALPHA, BETA):
-            [row] = rows[str(ref)]
-            assert row.path.startswith('sources/world/elderfen-modern/')
-            assert (row.status, row.before, row.after, row.newer_head) == ('unchanged', 'r1', 'r1', 'r2')
+            # Both world catalogs list both packs, in opposite orders: each row keeps its own id.
+            assert {row.path.split('/')[2] for row in rows[str(ref)]} == {'elderfen-modern', 'elderfen-vampire'}
+            assert {(row.status, row.before, row.after, row.newer_head) for row in rows[str(ref)]} == {
+                ('unchanged', 'r1', 'r1', 'r2')}
         changes = {entity.ref: entity for entity in preview.entities}
         assert (changes[ALPHA.unpinned()].name_before, changes[ALPHA.unpinned()].name_after) == ('Alpha pack', 'Beta pack')
         assert changes[ALPHA.unpinned()].renamed and changes[ALPHA.unpinned()].status == 'moved'
-        # Pinned actors and chats stay on r1 and are offered r2; the following chat would move.
+        # Pinned actors and chats stay on r1 and are offered r2; the following chat and its actor move.
         assert {(row.status, row.newer_head) for row in rows[str(BASE)]} == {('unchanged', 'r2')}
-        [moving] = rows[str(BASE.unpinned())]
-        assert moving.path.startswith(f'campaigns/{following.scope.campaign_id}/')
-        assert (moving.status, moving.before, moving.after) == ('follows_head', 'r1', 'r2')
-        assert moving in preview.attention and preview.edited == ()
+        moving = rows[str(BASE.unpinned())]
+        assert {row.record for row in moving} == {'chat', 'instance'}
+        assert all(row.path.startswith(f'campaigns/{following.scope.campaign_id}/') for row in moving)
+        assert {(row.status, row.before, row.after) for row in moving} == {('follows_head', 'r1', 'r2')}
+        assert set(moving) <= set(preview.attention) and preview.edited == ()
+        # The vampire catalog's exclusion of Mara reaches no content, so it never reads as a follow.
+        assert not any(row.path.startswith('sources/world/elderfen-vampire/_source/records/catalog/')
+                       for row in moving)
+
+
+def test_update_reports_a_binding_reattached_to_follow(tmp_path):
+    """A chat that detached a pinned lorebook and reattached it following its head still moves."""
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        pinned, _ = seed(store)
+        chats = ChatLibrary(store, owner_handle(), clock=Clock(), new_id=Ids(), owner=OWNER)
+        chats.detach_source(pinned.chat, NOTES, 'lorebook', expected=chats.read_chat(pinned.chat)[1]).commit()
+        chats.attach_source(pinned.chat, NOTES.unpinned(), 'lorebook', expected=chats.read_chat(pinned.chat)[1],
+                            follow=True).commit()
+
+        def update(copy):
+            source = copy.read_source(CAST)
+            tx = copy.transaction()
+            tx.put(RecordEnvelope(NOTES.at('r2'), {'entries': ['the ferry is gone']}, name='River notes'), None)
+            tx.put(replace(source.manifest, heads={**source.manifest.heads, 'lorebook/river-notes': 'r2'}),
+                   source.etag)
+            tx.commit(owner_handle())
+
+        with candidate_of(store, tmp_path, update) as candidate:
+            preview = preview_source_update(store, CAST, candidate)
+        chat_path = f'campaigns/{pinned.chat.campaign_id}/chats/{pinned.chat.chat_id}.json'
+        found = {(row.text, row.status) for row in preview.references if row.path == chat_path}
+        assert (str(NOTES.unpinned()), 'follows_head') in found
 
 
 def test_update_flags_edited_and_dropped_revisions(tmp_path):
@@ -194,10 +226,23 @@ def test_pin_and_report_an_optional_dependency(tmp_path):
         assert dependency_report(store.load(), MODERN) == ()
         pin_dependency(store, owner_handle(), MODERN, CAST, expected=store.read_source(MODERN).etag)
         declared = store.read_source(MODERN).manifest
-        assert declared.extra[DEPENDENCIES_KEY] == ({'source': CAST, 'manifest_etag': store.read_source(CAST).etag},)
+        assert declared.extra[DEPENDENCIES_KEY] == ({'source': CAST, 'version': source_version(store.load(), CAST)},)
         assert declared.links  # the portrayal link is kept
-        [status] = dependency_report(store.load(), MODERN)
-        assert status.status == 'pinned'
+        assert [s.status for s in dependency_report(store.load(), MODERN)] == ['pinned']
+        # Mutual pins hold, and the cast's own declarations and title are not its version.
+        pin_dependency(store, owner_handle(), CAST, MODERN, expected=store.read_source(CAST).etag)
+        source = store.read_source(CAST)
+        tx = store.transaction()
+        tx.put(replace(source.manifest, title='Renamed cast'), source.etag)
+        tx.commit(owner_handle())
+        assert [s.status for s in dependency_report(store.load(), MODERN)] == ['pinned']
+        assert [s.status for s in dependency_report(store.load(), CAST)] == ['pinned']
+        # Bytes edited at a head revision drift it, with no manifest change.
+        notes = store.root / 'sources/catalog/elderfen-cast/_source/records/lorebook/river-notes/r1.json'
+        original = notes.read_text()
+        notes.write_text(original.replace('the ferry runs at dusk', 'the ferry never runs'))
+        assert [s.status for s in dependency_report(store.load(), MODERN)] == ['drifted']
+        notes.write_text(original)
         # The cast moves a head: the declaration drifts, and the removal preview names it.
         source = store.read_source(CAST)
         tx = store.transaction()
@@ -205,7 +250,7 @@ def test_pin_and_report_an_optional_dependency(tmp_path):
         tx.put(replace(source.manifest, heads={**source.manifest.heads, 'character/mara': 'r2'}), source.etag)
         tx.commit(owner_handle())
         [status] = dependency_report(store.load(), MODERN)
-        assert status.status == 'drifted' and status.current == store.read_source(CAST).etag
+        assert status.status == 'drifted' and status.current == source_version(store.load(), CAST)
         manifest_rows = [row for row in preview_source_removal(store, CAST).references
                          if row.record == 'manifest' and row.text == CAST]
         assert [row.path for row in manifest_rows] == ['sources/world/elderfen-modern/_source/manifest.json']
@@ -213,6 +258,13 @@ def test_pin_and_report_an_optional_dependency(tmp_path):
         pin_dependency(store, owner_handle(), MODERN, CAST, expected=store.read_source(MODERN).etag)
         assert [s.status for s in dependency_report(store.load(), MODERN)] == ['pinned']
         assert len(store.read_source(MODERN).manifest.extra[DEPENDENCIES_KEY]) == 1
+        # A hand-written declaration without a pin follows the dependency.
+        source = store.read_source(MODERN)
+        tx = store.transaction()
+        tx.put(replace(source.manifest, extra={DEPENDENCIES_KEY: [{'source': CAST, 'version': None}]}),
+               source.etag)
+        tx.commit(owner_handle())
+        assert [s.status for s in dependency_report(store.load(), MODERN)] == ['following']
         # Optional: with the cast gone, the world still loads and reports it missing.
         shutil.rmtree(store.root / 'sources/catalog/elderfen-cast/_source')
         view = store.load()
@@ -239,7 +291,8 @@ def test_pin_refuses_stale_self_missing_and_unauthorized_writes(tmp_path):
 @pytest.mark.parametrize('declared, reason', [
     ('not a list', 'invalid_dependency'),
     ([{'source': 'Bad Id'}], 'invalid_dependency'),
-    ([{'source': CAST, 'manifest_etag': 'r1'}], 'invalid_dependency'),
+    ([{'source': CAST, 'version': 'r1'}], 'invalid_dependency'),
+    ([{'source': CAST, 'manifest_etag': None}], 'invalid_dependency'),
     ([{'source': CAST, 'extra': 1}], 'invalid_dependency'),
     ([{'source': CAST}, {'source': CAST}], 'invalid_dependency'),
     ([{'source': MODERN}], 'self_dependency'),
@@ -271,9 +324,34 @@ def test_raw_scan_matches_exact_source_ids_only():
                  {'source': LOOKALIKE}, {'title': CAST}, 'Mara', f'see {CAST}/character/mara@r1'],
         f'{CAST}/lorebook/key@r1': 'a key names it too',
     }
-    assert _references(payload, CAST) == {
+    assert _references(payload, CAST)[0] == {
         ('definition', f'{CAST}/character/mara@r1'), ('definition', f'{CAST}/character/mara'),
         ('image', f'{CAST}#image/portrait'), ('source', CAST), ('definition', f'{CAST}/lorebook/key@r1')}
     assert _owner('sources/catalog/elderfen-cast/extra/_source/manifest.json') == LOOKALIKE
     assert _owner('sources/catalog/elderfen-cast/_source/records/x/y/r1.json') == CAST
     assert _owner('campaigns/q-1/scope.json') is None
+
+
+def test_stray_strings_deep_nesting_and_a_damaged_candidate_do_not_break_a_preview(tmp_path):
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed(store)
+        nested: object = str(BASE)
+        for _ in range(90):
+            nested = [nested]
+        tx = store.transaction()
+        tx.put(RecordEnvelope(SourceRef(ELSEWHERE, 'lorebook', 'odd', 'r1'),
+                              {'art': f'{CAST}#image/con', 'deep': nested}, name='Odd'), None)
+        tx.commit(owner_handle())
+        rows = {row.text: row for row in preview_source_removal(store, CAST).references
+                if row.path.startswith('sources/world/elsewhere/')}
+        assert rows[f'{CAST}#image/con'].status == 'still_missing'  # no file can hold that id
+        assert rows[str(BASE)].status == 'missing'
+
+        def damage(copy):
+            (copy.root / 'sources/catalog/elderfen-cast/_source/manifest.json').write_text('{not json')
+
+        with candidate_of(store, tmp_path, damage) as candidate:
+            preview = preview_source_update(store, CAST, candidate)
+        assert preview.after is None and preview.complete
+        assert any(problem.side == 'after' for problem in preview.problems)
+        assert {row.status for row in preview.references} == {'missing', 'still_missing'}
