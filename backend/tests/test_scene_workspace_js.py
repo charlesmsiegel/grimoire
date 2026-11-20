@@ -1,6 +1,7 @@
 """065's first useful proof under Node: one thread reached from Chats, Characters, Scenarios, Campaigns and
-Worlds without losing its composer draft (``js/workspace.e2e.mjs``), against a real app server over a synthetic
-library; and the validated navigation cache behind those pages (``textapi/navcache.py``).
+Worlds without losing its composer draft, and a derived portrayal's chat reached only through the explicit
+descendant filter, never its namesake's (``js/workspace.e2e.mjs``), against a real app server over a synthetic
+library. The navigation cache behind those pages is tested in ``test_workspace.py``.
 
 The e2e run is skipped where Node is not installed: the Python suite is the gate, and that is the client side.
 """
@@ -16,9 +17,11 @@ from pathlib import Path
 import pytest
 import textapi_fixtures as tf
 from card_fixtures import SCENARIO, encode, land
+from portrayal_fixtures import BASE, MODERN_MARA, NAMESAKE, seed_elderfen
 from textapi_fixtures import Device
 
 from grimoire.app import AppServer
+from grimoire.chats import Launch
 from grimoire.core.identity import ChatRef, SourceRef
 
 TESTS = Path(__file__).with_name("js")
@@ -65,6 +68,10 @@ def test_one_thread_from_every_library_view_keeps_its_draft(tmp_path):
         chat = _campaign_chat(device)
         _record, etag = device.api.chats.read_chat(chat)
         device.api.chats.attach_source(chat, STORM, "scenario", expected=etag).commit()
+        # 022's portrayals of one catalog Mara: the base, a Modern portrayal derived from it, an unrelated namesake
+        seed_elderfen(device.table.store, device.api.owner_handle)
+        portrayed = {name: device.api.chats.start_chat(Launch("character", ref)).commit().chat
+                     for name, ref in (("BASE_CHAT", BASE), ("DERIVED_CHAT", MODERN_MARA), ("NAMESAKE_CHAT", NAMESAKE))}
         before = _written(device, chat)
         app = AppServer(device.api)
         thread = threading.Thread(target=app.serve_forever, daemon=True)
@@ -76,7 +83,8 @@ def test_one_thread_from_every_library_view_keeps_its_draft(tmp_path):
                 timeout=240, check=False,
                 env={**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token,
                      "GRIMOIRE_CHAT": str(chat), "GRIMOIRE_CHARACTER": str(CHARACTER), "GRIMOIRE_SCENARIO": str(STORM),
-                     "GRIMOIRE_CAMPAIGN": CAMPAIGN, "GRIMOIRE_WORLD": WORLD})
+                     "GRIMOIRE_CAMPAIGN": CAMPAIGN, "GRIMOIRE_WORLD": WORLD, "GRIMOIRE_BASE": str(BASE.unpinned()),
+                     **{"GRIMOIRE_" + name: str(ref) for name, ref in portrayed.items()}})
         finally:
             app.close()
             thread.join(10)

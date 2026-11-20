@@ -4,7 +4,7 @@
 
 A chat is reached by its exact reference from Chats and from every place in the library that holds it. A
 character's or scenario's page links **Browse these chats** (the workspace filtered by its exact qualified
-reference) and, for an entity with portrayals, **Include derived portrayals** (only portrayals whose validated
+reference) and, on a character (an entity, which portrayals derive from), **Include derived portrayals** (only portrayals whose validated
 composition chain contains it). A campaign's hub links **Browse in Chats** and, when the campaign stands in a
 world, **Chats in this world**; a world entry's page links its world's chats. On Chats, Campaign and World offer
 choosers of the campaigns and worlds the library's chats stand in, narrowed by a search, instead of an exact-ID

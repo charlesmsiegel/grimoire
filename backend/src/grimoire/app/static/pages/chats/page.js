@@ -155,7 +155,8 @@ export async function mount(root, ctx) {
       const listed = (filter === "campaign" ? page.campaigns : page.worlds) || [];  // none from a server without facets
       const total = (filter === "campaign" ? page.campaign_total : page.world_total) || listed.length;
       const current = ctx.query.get(filter) || "";
-      const named = (item) => filter === "campaign" ? (item.title || item.campaign) + " · " + item.campaign : item.world;
+      const named = (item) => filter === "campaign" ? (item.title || item.campaign) + " · " + item.campaign
+        : item.world + " · " + plural(item.campaigns, "campaign", "campaigns");
       const choices = [{ value: "", label: "Choose a " + filter },
         ...listed.map((item) => ({ value: item[filter], label: named(item) + " · " + plural(item.chats, "chat", "chats") }))];
       if (current && !choices.some((x) => x.value === current)) choices.push({ value: current, label: current });
@@ -165,7 +166,7 @@ export async function mount(root, ctx) {
         oninput: (text) => { clearTimeout(timer); timer = setTimeout(() => { ctx.query.set("scope_q", text); load(); }, 200); } });
       scopeSearch.setAttribute("data-focus-key", "chats:scope-search");
       picker.append(scopeSearch);
-      if (total > listed.length) picker.append(el("span", { class: "g-muted" }, "Showing " + listed.length + " of " + total + ". Search to narrow."));
+      if (total > listed.length) picker.append(el("span", { class: "g-muted", "aria-live": "polite" }, "Showing " + listed.length + " of " + total + ". Search to narrow."));
     }
     pager.replaceChildren();
     if (offset) pager.append(ui.button("Previous chats", () => load(Math.max(0, offset - 50), 0, 0, true)));

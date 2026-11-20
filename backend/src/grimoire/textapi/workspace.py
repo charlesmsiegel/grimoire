@@ -115,7 +115,8 @@ def workspace(api, args):  # type: ignore[no-untyped-def]
         sources = [item for item in sources if item['role'] == which]
     if sq:
         sources = [item for item in sources if sq in ((item['name'] or '') + ' ' + item['ref']).casefold()]
-    campaigns, worlds = scope_facets(basis, scope_q)
+    # the choosers are drawn only under Campaign and World: other filters skip the work and get none
+    campaigns, worlds = scope_facets(basis, scope_q) if which in ('campaign', 'world') else ([], [])
 
     def next_at(at, values):  # type: ignore[no-untyped-def]
         return at + limit if at + limit < len(values) else None

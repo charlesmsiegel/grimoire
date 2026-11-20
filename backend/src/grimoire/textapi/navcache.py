@@ -8,19 +8,24 @@ listing row per chat -- built once and reused while the library is unchanged.
 
 **Validation, not trust.** A basis is reused only when the library's *stamp* is unchanged. The stamp is the
 store's in-process commit ``generation`` plus a metadata walk of the store tree (each entry's relative path,
-type, size, ``mtime_ns``, ``ctime_ns`` and inode; links are recorded and never followed). Nothing is read or
-parsed, so the walk costs a small fraction of a load. Any in-process commit or recovery bumps ``generation``;
-a write from outside this process (another app, a sync folder, a hand edit) changes some entry's metadata,
-since rewriting a file updates its ``ctime`` even when a tool preserves ``mtime``. A pending transaction
-journal is a new entry, so the stamp changes and the next load refuses exactly as before. On any miss the
+type, size, ``mtime_ns``, ``ctime_ns`` and inode, and the root's device; links are recorded and never followed).
+Nothing is read or parsed, so the walk costs a small fraction of a load. Any in-process commit or recovery
+bumps ``generation``; a write from outside this process (another app, a sync folder, a hand edit) changes some
+entry's metadata. On POSIX a rewrite updates ``ctime`` even when a tool preserves ``mtime``. A pending
+transaction journal is a new entry, so the stamp changes and the next load refuses exactly as before; a hit
+still runs the store's own readability check first, so a closed store or a swapped root refuses as ``load()``
+does. On any miss the
 basis is rebuilt from ``store.load()``; deleting it is therefore the same as rebuilding, and the reused basis
 equals the rebuilt one (``NavigationIndex.to_json()`` and the fingerprint included). The stamp is taken
 *before* the load, so a write racing the load can only make the cached basis newer than its stamp, which the
 next request's stamp then rejects; it can never make a stale basis look current.
 
-**Limit.** A rewrite that keeps a file's size, ``mtime_ns``, ``ctime_ns`` and inode is not detected. That needs
-a filesystem whose timestamps do not move on write, which also defeats sync tools. The cache is per process
-and never persisted: the first request after a start pays one full load.
+**Limits.** A rewrite that keeps a file's size, ``mtime_ns``, ``ctime_ns`` and inode is not detected. On
+Windows ``st_ctime`` is the creation time, so an in-place, same-size rewrite whose tool restores ``mtime``
+(``rsync --inplace -t``, a time-preserving copy) is missed there; so are same-size rewrites inside one
+timestamp tick on coarse filesystems (FAT/exFAT keep 2-second ``mtime``). Ordinary saves, the store's own
+atomic replacements and sync clients move ``mtime``. The walk is linear in file count; the cache is per
+process and never persisted, so the first request after a start pays one full load.
 """
 from __future__ import annotations
 
@@ -28,6 +33,7 @@ import hashlib
 import json
 import os
 import stat
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -39,6 +45,7 @@ from grimoire.core.portrayal import PortrayalError
 from grimoire.effective.inspect import compose_in
 
 Stamp = tuple[Any, ...]
+WINDOWS = sys.platform == 'win32'
 
 
 def library_stamp(root: os.PathLike[str] | str, generation: int | None) -> Stamp:
@@ -48,7 +55,7 @@ def library_stamp(root: os.PathLike[str] | str, generation: int | None) -> Stamp
         top = os.lstat(base)
     except OSError as error:
         return (generation, ('<root>', type(error).__name__))
-    found: list[tuple[Any, ...]] = [('', top.st_mode, top.st_size, top.st_mtime_ns, top.st_ctime_ns, top.st_ino)]
+    found: list[tuple[Any, ...]] = [('', top.st_mode, top.st_size, top.st_mtime_ns, top.st_ctime_ns, top.st_ino, top.st_dev)]
     stack = [base] if stat.S_ISDIR(top.st_mode) else []
     while stack:
         folder = stack.pop()
@@ -59,7 +66,8 @@ def library_stamp(root: os.PathLike[str] | str, generation: int | None) -> Stamp
             continue
         for item in listing:
             try:
-                info = item.stat(follow_symlinks=False)
+                # DirEntry.stat leaves st_ino 0 on Windows; os.stat there reads the file ID
+                info = os.stat(item.path, follow_symlinks=False) if WINDOWS else item.stat(follow_symlinks=False)
             except OSError as error:
                 found.append((os.path.relpath(item.path, base), 'vanished', type(error).__name__))
                 continue
@@ -73,8 +81,7 @@ def library_stamp(root: os.PathLike[str] | str, generation: int | None) -> Stamp
 
 @dataclass(frozen=True)
 class Basis:
-    """What every workspace and listing request derives from one loaded snapshot."""
-    view: Any
+    """What every workspace and listing request derives from one loaded snapshot (the view itself is not kept)."""
     index: Any
     order: tuple[Any, ...]          # every chat ref, newest activity first (the index order)
     names: dict[str, str | None]    # unpinned source ref -> display name (presentation only)
@@ -114,7 +121,7 @@ def build_basis(api: Any, view: Any) -> Basis:
     listed = api._entries(view, index, order, names)
     rows = {str(ref): row for ref, row in zip(order, listed)}
     text = {key: json.dumps(row, ensure_ascii=False).casefold() for key, row in rows.items()}
-    return Basis(view, index, order, names, tuple(sources), tuple(diagnostics), rows, text, fingerprint)
+    return Basis(index, order, names, tuple(sources), tuple(diagnostics), rows, text, fingerprint)
 
 
 class NavigationCache:
@@ -130,6 +137,9 @@ class NavigationCache:
 
     def basis(self, api: Any) -> Basis:
         with self._lock:
+            # a held basis is still answered only from a store load would read: closed, swapped-root and
+            # pending-recovery stores refuse here exactly as ``load()`` does
+            self._store.require_readable()
             now = self._stamp(self._store.root, getattr(self._store, "generation", None))
             if self._held is not None and self._held[0] == now:
                 return self._held[1]

@@ -231,8 +231,9 @@ it does not infer semantic equivalence or provide a second source editor.
 world choosers by ID or title. The response contains `chats`, `total`, `next`, `snapshot`,
 `sources`/`source_total`/`source_next`, `comparisons`/`comparison_total`/`comparison_next`, up to 50
 `campaigns` (`campaign`, `title`, `world`, `chats`) with `campaign_total`, up to 50 `worlds` (`world`,
-`campaigns`, `chats`) with `world_total`, and up to 50 source `diagnostics`. The choosers list only scopes
-some chat stands in; a deep-linked campaign or world that is not listed stays selected by its ID.
+`campaigns`, `chats`) with `world_total`, and up to 50 source `diagnostics`. Campaigns and worlds are filled
+only under the `campaign` and `world` filters (empty otherwise). The choosers list only scopes some chat
+stands in; a deep-linked campaign or world that is not listed stays selected by its ID.
 Continuation refuses with `changed` if canonical navigation, source names, manifests, definition bytes
 or ancestry changed; the page offers an explicit restart. Legacy `chats` requests retain unpinned
 behavior; additive `match=exact` preserves pins.
@@ -244,15 +245,21 @@ paths, the continuation fingerprint and every chat's listing row and search text
 store's in-process commit generation plus a metadata-only walk of the store tree (each entry's path, type,
 size, `mtime_ns`, `ctime_ns` and inode; links are recorded, never followed). Nothing is read or parsed, so
 paging, searching and choosing a source in a large library no longer reparse it. A commit in this process,
-or any write from outside it (another app, a sync folder, a hand edit; a rewrite moves `ctime` even when a
-tool preserves `mtime`), changes the stamp and the next request rebuilds; a pending transaction journal is
-a new entry, so the next load refuses exactly as before. The stamp is taken before the load, so a racing
-write can only make the held basis newer than its stamp, never let a stale one look current. Limits: a
-rewrite that keeps size, both timestamps and inode is not detected (that needs a filesystem whose
-timestamps do not move on write); the stamp walk is still linear in file count, though far cheaper than a
-load; the basis is per process and not persisted, so the first request after a start pays one load.
-Campaigns list every chat of the library, not the most recent 1000, so a campaign whose chats are all old
-is still listed and its hub still finds them.
+or any write from outside it (another app, a sync folder, a hand edit), changes the stamp and the next request
+rebuilds. A hit still runs the store's readability check, so a closed store, a swapped root or a pending
+recovery refuses exactly as a load would. The stamp is taken before the load, so a racing write can only make
+the held basis newer than its stamp, never let a stale one look current. Limits: a rewrite that keeps size,
+both timestamps and inode is not detected. On POSIX a rewrite moves `ctime` even when a tool restores
+`mtime`; on Windows `st_ctime` is the creation time, so an in-place, same-size rewrite whose tool restores
+`mtime` (`rsync --inplace -t`, a time-preserving copy) is missed there, as are same-size rewrites inside one
+tick on coarse-timestamp filesystems (FAT/exFAT). Ordinary saves, the store's own atomic replacements and sync
+clients move `mtime`. The stamp walk is linear in file count, though far cheaper than a load; the basis is
+per process and not persisted, so the first request after a start pays one load.
+
+Campaigns list every chat of the library, not the most recent 1000, so a campaign whose chats are all old is
+still listed and its hub still finds them (`complete` is always true). The trade: the campaign list's reply
+(`campaign.chats` with no `campaign`) now grows with the library, one short row per chat; it is built from the
+held basis, so it costs no reload.
 
 Up to 20 named workspace filters can be saved, reapplied and deleted in device-local browser storage.
 Selections include query, source, match, grouping and sorting. They are explicitly unsynchronized;

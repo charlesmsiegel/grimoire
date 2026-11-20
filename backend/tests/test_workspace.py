@@ -5,6 +5,7 @@ import sys
 import pytest
 from textapi_fixtures import MARA_VELL, desktop_library, Device
 from grimoire.chats import Launch
+from grimoire.store import StoreError
 from grimoire.textapi import ApiRefused
 from grimoire.textapi.navcache import build_basis
 
@@ -230,13 +231,27 @@ def test_navigation_basis_is_reused_until_the_library_changes_in_or_outside_this
 def test_scope_choosers_list_campaigns_and_worlds_with_their_chats(tmp_path):
     table, card_chat = desktop_library(tmp_path / 'desk')
     with Device(table) as api:
-        everything = api('chats.workspace')
+        assert api('chats.workspace')['campaigns'] == []  # the choosers are filled only where they are drawn
+        everything = api('chats.workspace', filter='campaign')
         campaigns = {item['campaign']: item for item in everything['campaigns']}
         assert campaigns[card_chat.campaign_id]['chats'] == 1 and campaigns[card_chat.campaign_id]['world'] is None
         imported = next(item for item in campaigns.values() if item['world'] is not None)
         assert everything['worlds'] == [{'world': imported['world'], 'campaigns': 1, 'chats': imported['chats']}]
         assert everything['campaign_total'] == len(campaigns) and everything['world_total'] == 1
-        narrowed = api('chats.workspace', scope_q=imported['campaign'][:6].upper())
+        narrowed = api('chats.workspace', filter='campaign', scope_q=imported['campaign'][:6].upper())
         assert [item['campaign'] for item in narrowed['campaigns']] == [imported['campaign']]
         world = api('chats.workspace', filter='world', world=imported['world'])
         assert world['total'] == imported['chats'] and all(row['scope']['world'] == imported['world'] for row in world['chats'])
+
+
+def test_a_closed_store_refuses_even_with_a_held_basis(tmp_path):
+    table, _chat = desktop_library(tmp_path / 'desk')
+    with Device(table) as api:
+        api('chats.workspace')
+        assert api.api.navigation_cache.builds == 1
+        api.api.store.close()
+        for op in ('chats.workspace', 'chats'):
+            with pytest.raises(ApiRefused):  # the op boundary turns the store's refusal into its typed refusal
+                api(op)
+        with pytest.raises(StoreError):
+            api.api.listed_chats()
