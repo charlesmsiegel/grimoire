@@ -85,6 +85,8 @@ def test_a_correction_that_puts_in_takes_out_or_swaps_words_keeps_its_neighbours
     ("we open the west gate", "no I meant open east gate", "Open east gate"),  # never "open the open east gate"
     ("I pick the lock on the iron chest", "no I meant pick wooden chest", "Pick wooden chest"),
     ("We hire three guards and two archers", "I meant three archers", "Three archers"),  # "three" is already there
+    ("We pass the east tower and west gate", "no I meant the north gate", "The north gate"),  # keeps its "and"
+    ("We take the stairs to west gate", "no I meant the north gate", "The north gate"),  # keeps its "to"
 ])
 def test_a_correction_that_is_not_plainly_one_edit_is_kept_as_words_with_the_whole_passage_offered(passage, said, whole):
     kept = revise(passage, passage, said)

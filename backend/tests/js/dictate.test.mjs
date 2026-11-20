@@ -293,3 +293,43 @@ test("Dictate takes the sequence as it is when pressed, not as it was when the p
   await settle();
   assert.equal(s.ops("dictation.hear")[0].args.sequence, 5);
 });
+
+test("typing that goes on while a revision is asked for is never overwritten", async () => {
+  let heard, release;
+  const s = strip({ answers: {
+    "dictation.hear": () => new Promise((resolve) => { heard = () => resolve({ status: "ok", heard: "we run",
+      revision: revision({ text: "We run", passage: "We run", heard: "we run" }) }); }),
+    "dictation.revise": (args) => new Promise((resolve) => { release = () => resolve({
+      revision: revision({ text: args.draft + " We run", passage: "We run", heard: "we run" }) }); }),
+  } });
+  await settle();
+  s.press("Dictate");
+  await settle();
+  s.press("Stop dictating");
+  await settle();
+  s.composer.value = "Typed first.";  // typed while it was heard
+  heard();
+  await settle();
+  s.composer.value = "Typed first. More typing.";  // and still typing while the revision is worked out
+  release();
+  await settle();
+  assert.equal(s.ops("dictation.revise").length, 2, "asked again against the newer text");
+  assert.equal(s.ops("dictation.revise")[1].args.draft, "Typed first. More typing.");
+  release();
+  await settle();
+  assert.equal(s.composer.value, "Typed first. More typing. We run");
+});
+
+test("a name suggestion that would pass the message box's limit changes nothing", async () => {
+  const long = "x".repeat(19990) + " marabel";
+  const heard = revision({ text: long, passage: "marabel", heard: "marabel", suggestions: [{ heard: "marabel", name: "Mara Vellington" }] });
+  const s = strip({ answers: { "dictation.hear": () => ({ status: "ok", heard: "marabel", revision: heard }) } });
+  await settle();
+  s.press("Dictate");
+  await settle();
+  s.press("Stop dictating");
+  await settle();
+  s.press("Use Mara Vellington for “marabel”");
+  assert.equal(s.composer.value, long);
+  assert.match(s.note(), /longer than the message box allows/);
+});

@@ -59,6 +59,12 @@ _STOP = frozenset({"a", "an", "the", "to", "of", "and", "or", "in", "on", "at", 
                    "its", "their", "that", "this", "me", "us", "him", "them", "so", "but", "as", "be", "do"})
 #: Words that open a noun phrase: two of them side by side ("my a road") is never a correction.
 _DETERMINERS = frozenset({"a", "an", "the", "my", "our", "your", "his", "her", "its", "their", "this", "that"})
+#: What a stop word does in a phrase: a swap of stop words keeps each one's role, so "the" may become "a" but
+#: never "and" ("the east tower and west gate" keeps its "and").
+_ROLES = {**dict.fromkeys(_DETERMINERS, "determiner"),
+          **dict.fromkeys(("to", "of", "in", "on", "at", "for", "by", "with", "from"), "preposition"),
+          **dict.fromkeys(("and", "or", "but", "so", "as"), "conjunction"),
+          **dict.fromkeys(("i", "we", "you", "he", "she", "it", "they", "me", "us", "him", "them"), "pronoun")}
 #: Soundex-style groups: letters a recognizer readily swaps for one another in a name it does not know.
 _GROUPS = {**dict.fromkeys("bfpv", "p"), **dict.fromkeys("cgjkqsxz", "k"), **dict.fromkeys("dt", "t"),
            **dict.fromkeys("mn", "m"), "l": "l", "r": "r"}
@@ -168,6 +174,10 @@ def _submit(heard: str) -> bool:
     return bool(words) and words[0] in _SUBMIT_VERBS and tuple(words[1:]) in _SUBMIT_OBJECTS
 
 
+def _role(word: str) -> str:
+    return _ROLES.get(word, "other") if word in _STOP else "content"
+
+
 def _stops(words: list[str]) -> bool:
     return all(word in _STOP for word in words)
 
@@ -183,7 +193,7 @@ def _fits(window: list[str], wanted: list[str], before: str | None, after: str |
     Plainly means one edit, around shared words of which one is not a stop word:
 
     - a swap in place, of content words for as many or more content words ("east" for "west", "orc" for "goblin
-      chief"), or of words for words of the same kind one by one ("an old" for "the west");
+      chief"), or of words for words of the same kind one by one ("an old" for "the west", never "and" for "the");
     - new words put in between shared words ("the gate" for "the west gate"), at the passage's start ("Gate is
       shut" for "the west gate"), or content words put in at the window's start right after a stop word ("gate"
       for "west gate" in "to the gate");
@@ -200,7 +210,7 @@ def _fits(window: list[str], wanted: list[str], before: str | None, after: str |
     if _stops(shared):
         return None
     if tag == "replace":
-        alike = len(old) == len(new) and all((left in _STOP) == (right in _STOP) for left, right in zip(old, new))
+        alike = len(old) == len(new) and all(_role(left) == _role(right) for left, right in zip(old, new))
         if not (alike or (_content(old) and _content(new) and len(new) >= len(old))):
             return None
     elif tag == "insert":

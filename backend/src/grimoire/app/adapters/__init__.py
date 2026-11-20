@@ -4,6 +4,7 @@ list. Add ops to your own sprint's module; see ``grimoire.app.adapter``."""
 from __future__ import annotations
 
 from . import campaign, imports, inbox, media, play, providers, shell, sources
+from . import dictation  # 080's speech to draft, over 061's local voice (docs/SPEECH.md)
 
 #: Every adapter the app serves, in name order.
 ADAPTERS = tuple(module.ADAPTER for module in (campaign, imports, inbox, media, play, providers, shell, sources))
@@ -16,8 +17,6 @@ ADAPTERS = tuple(sorted((*ADAPTERS, shelf.ADAPTER, speech.ADAPTER), key=lambda a
 from . import voice  # noqa: E402 -- 061's private local voice input (docs/SPEECH.md)
 
 ADAPTERS = tuple(sorted((*ADAPTERS, voice.ADAPTER), key=lambda adapter: adapter.name))
-
-from . import dictation  # noqa: E402 -- 080's speech to draft, over 061's local voice (docs/SPEECH.md)
 
 ADAPTERS = tuple(sorted((*ADAPTERS, dictation.ADAPTER), key=lambda adapter: adapter.name))
 

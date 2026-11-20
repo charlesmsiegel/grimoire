@@ -31,6 +31,7 @@ const RESULT_TEXT = {
   invalid_output: "The recognizer gave an answer that couldn't be used. Your reply is unchanged.",
 };
 const quoted = (text) => "“" + text + "”";
+const MAX_DRAFT = 20000;  // the composer's own limit (grimoire.speech.dictation.MAX_DRAFT)
 
 // The last occurrence of `find` in `text` replaced by `put`, or null when it is not there.
 export function replaceLast(text, find, put) {
@@ -149,11 +150,18 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
       if (state.disposed || mine !== state.attempt) return;
       if (heard.status !== "ok") { tell(RESULT_TEXT[heard.status] || STATUS_TEXT[heard.status] || "Not used."); return; }
       let revision = heard.revision;
-      // typed in while it was being heard: the same words, against the reply as it is now
-      if (composer.value !== sent) {
-        revision = (await ctx.api("dictation.revise", { draft: composer.value, last: lastPassage(), names: sceneNames(),
+      // typed in while it was being heard: the same words, against the reply as it is now, and again if typing
+      // goes on meanwhile; a revision is only ever put in over the very text it was made from
+      let base = sent;
+      for (let tries = 0; composer.value !== base && tries < 3; tries += 1) {
+        base = composer.value;
+        revision = (await ctx.api("dictation.revise", { draft: base, last: lastPassage(), names: sceneNames(),
           heard: heard.heard, confidence: heard.confidence })).revision;
         if (state.disposed || mine !== state.attempt) return;
+      }
+      if (composer.value !== base) {
+        tell("Heard " + quoted(heard.heard) + ". Not added: you were still typing. Dictate again when you're ready.");
+        return;
       }
       show(revision);
     } catch (error) {
@@ -230,6 +238,7 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
     if (!current()) { changed(); return; }
     const text = replaceLast(composer.value, suggestion.heard, suggestion.name);
     if (text === null) { changed(); return; }
+    if (text.length > MAX_DRAFT) { tell("Not changed: your reply would be longer than the message box allows."); return; }
     const passage = state.passage ? replaceLast(state.passage, suggestion.heard, suggestion.name) : null;
     put(text, passage === null ? state.passage : passage, { text: composer.value, passage: state.passage });
     tell("Changed " + quoted(suggestion.heard) + " to " + quoted(suggestion.name) + ".",
