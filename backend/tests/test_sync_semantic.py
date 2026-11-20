@@ -1,4 +1,8 @@
 """Actual accepted relationship and scene changes cannot silently combine offline."""
+import os
+import subprocess
+import sys
+
 from grimoire.continuitywire.projection import scene_revision
 from grimoire.core.identity import ContinuityRef
 from grimoire.store import ScopeRecord
@@ -166,10 +170,7 @@ def test_generic_turn_resolve_rechecks_new_event_after_initial_review(pair, monk
 
 
 def test_native_fixture_imports_in_fresh_interpreter():
-    import os
-    import subprocess
-    import sys
-    env = dict(os.environ, PYTHONPATH='backend/src:backend/tests')
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(('backend/src', 'backend/tests')))
     result = subprocess.run([sys.executable, '-c', 'from ledger_fixtures import Device'],
                             env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

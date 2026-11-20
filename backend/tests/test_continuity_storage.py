@@ -99,19 +99,31 @@ def test_invalid_identity(text):
         ContinuityRef.parse(text)
 
 
-def test_scan_contains_malformed_and_reports_links_lookalikes(tmp_path):
+def test_scan_contains_malformed_and_reports_links(tmp_path):
     with LibraryStore.create(tmp_path / "lib") as store:
         put(store, record())
         folder = store.root / "campaigns/c/continuity"
         (folder / "broken.json").write_text("{bad")
         (folder / "stray.txt").write_text("stray")
         (folder / "linked.json").symlink_to(folder / "review.json")
-        (folder.parent / "Continuity").mkdir()
-        (folder.parent / "Continuity/hidden.json").write_text("{}")
         found = store.campaign_continuity("c")
         assert set(found.records) == {record().address}
-        assert {p.path.rsplit("/", 1)[-1] for p in found.problems} >= {"broken.json", "stray.txt", "linked.json", "Continuity"}
+        assert {p.path.rsplit("/", 1)[-1] for p in found.problems} >= {"broken.json", "stray.txt", "linked.json"}
         assert "campaigns/c/continuity/broken.json" in store.scan().blocked
+
+
+def test_scan_reports_noncanonical_continuity_folder_without_admitting_records(tmp_path):
+    with LibraryStore.create(tmp_path / "lib") as store:
+        put(store, record())
+        folder = store.root / "campaigns/c/continuity"
+        # A neutral intermediate name also changes the spelling on Windows.
+        temporary = folder.with_name("renamed")
+        folder.rename(temporary)
+        temporary.rename(folder.with_name("Continuity"))
+        found = store.campaign_continuity("c")
+        assert found.records == {}
+        assert "campaigns/c/Continuity" in {p.path for p in found.problems}
+        assert "campaigns/c/continuity/review.json" not in store.scan().files
 
 
 def test_sync_copies_and_same_id_collision_preserves_both(tmp_path):
