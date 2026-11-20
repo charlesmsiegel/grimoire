@@ -222,9 +222,10 @@ class KnowledgeChange:
 def _with_dispatches(store: LibraryStore, campaign_id: str, assembly: Assembly) -> Assembly:
     """The assembly with 063's queued sends beside its ledger, so no projection read through this library ever
     shows a delayed report only once it is delivered. A rumor ledger that cannot be trusted, or that disagrees
-    with a delivered report, is a problem: every actor is then shown no sends at all (fail closed). So is a
-    delivered rumor report the ledger does not name, as on a device that has the evidence but not the (unsynced)
-    rumor ledger."""
+    with a delivered report, gives ``dispatches=None``: every actor is then shown no sends at all (fail closed).
+    So does a delivered rumor report the ledger does not name, as on a device that has the evidence but not the
+    (unsynced) rumor ledger. The evidence ledger itself is intact either way, so this never refuses a write;
+    ``read`` reports it to the director."""
     try:
         dispatches = campaign_dispatches(store, campaign_id)
         named = {dispatch.evidence_id for dispatch in dispatches}
@@ -235,8 +236,7 @@ def _with_dispatches(store: LibraryStore, campaign_id: str, assembly: Assembly) 
             return assembly
         knowledge = assembly.knowledge.with_dispatches(dispatches)
     except (StoreError, KnowledgeError, ValueError):
-        return replace(assembly, knowledge=assembly.knowledge.with_dispatches(None),
-                       problems=tuple(sorted({*assembly.problems, f"{ledger_name(campaign_id)}:unreadable"})))
+        return replace(assembly, knowledge=assembly.knowledge.with_dispatches(None))
     return replace(assembly, knowledge=knowledge)
 
 
@@ -263,6 +263,8 @@ class EvidenceLibrary:
             raise AuthorityError("the stored ledger is the director's; read an actor projection instead")
         assembly, scan, _ = self._assembly(campaign_id)
         problems = _problems(assembly, scan)
+        if assembly.knowledge.dispatches is None:  # no actor is shown a send (above)
+            problems = tuple(sorted({*problems, f"{ledger_name(campaign_id)}:unreadable"}))
         if not self._campaign_exists(campaign_id):  # a typo'd id is not the same as "nothing known"
             problems = tuple(sorted({*problems, f"campaigns/{campaign_id}:absent"}))
         return CampaignKnowledge(assembly.knowledge, assembly.quarantined, problems, assembly.origins,

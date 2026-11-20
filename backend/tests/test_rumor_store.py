@@ -9,6 +9,7 @@ from grimoire.security import Grant, Permission, ResourcePath
 from grimoire.core import DIRECTOR
 from grimoire.ledgers import ControlChange, SovereigntyLedger
 from grimoire.rumors import Rumor, DeliveryConditions
+from grimoire.core import Proposition
 from grimoire.rumorledger import output_id
 from grimoire.rumorstore import RumorLibrary
 from grimoire.evidencestore import EvidenceLibrary
@@ -291,5 +292,8 @@ def test_a_delivered_rumor_without_its_ledger_shows_no_sends(tmp_path):
         evidence = EvidenceLibrary(store, owner_handle())
         assert evidence.actor_knowledge(C, MARA, as_of=100).sent == ()
         assert f'rumors/{C}:unreadable' in evidence.read(C, requested_by=DIRECTOR).problems
-        # what Ines heard is still hers
+        # what Ines heard is still hers, and the evidence ledger still takes writes
         assert any(x.content == 'a distorted account' for x in evidence.actor_knowledge(C, INES, as_of=100).evidence)
+        with open_authority(store) as authority:
+            writer = EvidenceLibrary(store, authority.handle_for('app:adjudicator', trusted=True))
+            writer.append(C, [Proposition(C, 'later', 'the tide turned', m(11), 'test')]).commit()
