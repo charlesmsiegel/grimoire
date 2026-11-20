@@ -32,6 +32,18 @@ waiting when Post was pressed goes with that post: an image attached while the p
 next one. They are
 `pages/chat/backdrop.js` and `pages/chat/attach.js`.
 
+**What might they say?**, a folded panel above the composer, asks how one of the chat's NPCs might answer a line
+the player has not posted ([a hypothetical reply](#a-hypothetical-reply)): **Who answers**, the line (typed there,
+or copied in from the composer with **Use my draft**, which leaves the draft as it is) and **Imagine a reply**.
+The line is read in the composer's mode, as Post would read it. Each reply is a card marked "Hypothetical · not
+in the story", with what its call used (model calls and tokens), **Copy reply**, **Ask again** (the same line, in
+the same mode, of the same character, once more) and **Discard**; **Discard all** clears them. Nothing on it reaches the composer,
+the transcript or the library: a reply goes into the story only if the player copies it into their own post. The
+replies are this tab's (the newest five, for each of the ten chats seen last); they come back with the chat and are
+gone with the tab. While play is held up, while a turn is open and with no model it asks nothing and says why
+beside its buttons, which stay pressable (`aria-disabled`): play's own controls are the only ones turned off while
+a turn waits. It is shown only where the app serves `play.imagine`. It is `pages/chat/imagine.js`.
+
 Not in this slice: a director instruction typed as a post (035 refuses it), conflict resolution beyond keeping one
 device's version (Sync, 114), costs (112), and campaigns with a world (113).
 
@@ -43,6 +55,7 @@ device's version (Sync, 114), costs (112), and campaigns with a world (113).
 | `play.options` | a **selection**: `kind` (`character`, `scenario`, `bundle` or `premise`), `ref` (the character or scenario), `lorebook` (a bundle's, optional: default the card's own), `premise` (text, for `premise`) | 052's `options`: `sources` (the pinned refs it would bind), `openings` (`id`, `text`, `group_only`), `default_opening`, `lorebook` (the card's own), `related` (052's chats this pick's card or scenario is already in, as `chats` lists them, for **Continue**), `last` (who was played the last time, or `null`: see below). Writes nothing |
 | `play.start` | a selection, `persona` (a character ref; required, else `no_persona`), `opening` (an id `play.options` offered), `label` (at most 200 characters) | 052's `start`: a new world-less chat, every source pinned, the persona seated with the player, opened with the chosen or default opening. The scene. Each call is a new chat |
 | `play.post` | `chat`, `text` (at most 20,000 characters), `mode` (`auto`, the default, also for `null`; `speech` or `action`) | the core `post` with 008's typed intent. A director instruction is not played yet, so `director` is refused `invalid_field`. A typed table request ("Grimoire, skip", "redirect: kinder") runs as that request, on the lines on show, and writes no turn. A line wholly in double quotes is its words said aloud in `speech` as in `auto`; a line 032 cannot read is refused with its reason and a hint on how to post it so it reads (quote the words, or name who a whisper is for). The scene |
+| `play.imagine` | `chat`, `speaker` (an NPC of the chat), `text` (the player character's line, at most 20,000 characters), `mode` (as for `play.post`) | how `speaker` might answer `text` as the next post, saved nowhere: see [a hypothetical reply](#a-hypothetical-reply). `canonical` and `saved` (both `false`), `speaker` (`actor`, `name`), `line` (how the line was read: `kind`, `channel`, `text`, `mode`, `to`), `replies` (each `speaker`, `actor`, `text`; none when no reply came), `outcome`, `calls` (each call that was not accepted, with its `status` and `reason`) and `usage` (`attempts`, `input_tokens`, `output_tokens`, a total `null` when the provider did not report it). Writes nothing |
 | `play.add_card` | `chat`, `ref`, `role` (`character` default, `lorebook` or `scenario`) | 052's `add_card`, pinned. A new character witnessed nothing and hears only what is said from now on, seated with the director. The scene |
 | `play.withdraw` | `chat`, `kind` (`skip`, `redirect` or `rephrase`), `lines` (1 to 200 line ids as the scene shows them), `direction` (at most 2,000 characters, for a redirect or rephrase) | 035's `request` on those lines. The scene |
 | `play.keep_lines` | `chat`, `turn` (the open turn the lines were read on), `lines` (1 to 64 line ids as the scene shows them, each once), `acknowledge_unscreened` (bool) | 035's `keep_lines`: the chosen lines kept as the turn's one kept take ([SCENES](SCENES.md#keeping-lines-of-several-takes)). `one_line_per_speaker`, `not_proposed`, `turn_changed`, `cast_changed`, `too_many_takes`, `paused`, `unscreened_lore`. The scene |
@@ -66,6 +79,36 @@ the same character with a lorebook share one history; a premise has none.
 
 Refusals are the services' own reasons (`no_persona`, `unknown_opening`, `missing_source`, `invalid_selection`,
 `not_kept`, `unknown_line`, `turn_changed`...), answered as the core ops answer them; a refused start writes nothing.
+
+## A hypothetical reply
+
+`play.imagine` (073, `grimoire.play.hypothetical.imagine`) answers how one present NPC *might* take a line before
+the player risks it at the table: "what would Mara say if I confessed?". It is asked of the scene as it stands, as
+its next turn, and leaves the scene exactly as it was.
+
+- **Read and briefed as the next turn.** The line is read as `play.post` would read it next (008's routing, 003's
+  authority, 032's audience), and the speaker is briefed as `generate` would brief it for that turn (the same prompt, but for the extra calls
+left out below): its own
+  knowledge, only what it heard (the line included), inside the context budget, with the configured secrets
+  screened. One `npc_generation` call is made under the app's runtime and policy, and its lines are screened as a
+  take's are.
+- **Nothing is written.** No turn, take, decision, labelling, knowledge, continuity or usage record: the answer is
+  the only place the reply exists, and it says so itself (`canonical: false`). Nobody in the story heard the line or
+  the reply, and no later prompt holds either. The only way into the story is the player's own post.
+- **Refused as a real reply would be,** before any call: a paused or held-up chat, an unseated or unreadable cast, a
+  speaker that is not a present NPC on stage (`not_an_npc`...), no model (`no_runtime`), a session-zero limit
+  (`held_by_boundary`, [SESSION_ZERO](SESSION_ZERO.md)), plus `turn_open` (a post is waiting for its answer, so
+  there is no next turn yet), `table_request` (a typed "Grimoire, skip" acts on the table) and `not_heard` (a line
+  whispered to someone else is never what this character answers). The lines are checked again when the reply
+  arrives, against the table as it stands then: a limit set, or a player seated, while the call is out holds them
+  back (`rejected`, `held_by_boundary`).
+- **One call.** No decision call (an NPC with an agenda is briefed with 039's deterministic choice, unrecorded), no
+  presentation suggestion (068) and no continuity review. Its attempts and token counts are in `usage`, because no
+  take holds them, and the panel shows them; nothing of it is booked in the library, so it is not priced and the
+  chat's cost totals (built from stored takes) leave it out.
+
+Not in this slice: polishing the player's own draft, a reviewed insert of a hypothetical as a post, and variants
+in another language or style (the rest of [auxiliary writing tools](roadmap/sprints/auxiliary-writing-tools.md)).
 
 ## The story so far
 
