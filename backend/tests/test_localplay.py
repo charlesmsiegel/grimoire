@@ -21,12 +21,17 @@ from grimoire.play.continuity_facts import authority_for
 from test_scene_continuity import setup_review
 from grimoire.core.identity import InstanceRef
 from grimoire.ledgers.codec import ControlChange
+from grimoire.ledgers import DurableAuthority
+from ledger_helpers import fixed_clock
+from grimoire.play import SceneRunner
 from grimoire.localplay import LocalPlay
 from grimoire.continuitystore import ContinuityLibrary
 from grimoire.textapi.views import turn_view
-from grimoire.scene import SceneRefused, heard_for, table_lines
-from grimoire.store import etag
-from grimoire.store.layout import secret_parts, is_secret_state, address_parts
+from grimoire.scene import SceneRefused, TurnRecord, heard_for, table_lines
+from grimoire.store import etag, LibraryStore, UnstorableIdentifier
+from grimoire.store.guard import path_length
+from grimoire.testing.fileops import snapshot
+from grimoire.store.layout import secret_parts, is_secret_state, address_parts, conflict_parts
 
 
 def refuses(reason, fn, *args, **kwargs):
@@ -41,6 +46,16 @@ def setup(table, chat):
     table.runner.sovereignty.record(chat.campaign_id, ControlChange(chat.campaign_id, second.instance_id, BOB), table.owner)
     first = table.runner.open(chat).persona
     return first, second
+
+
+def max_length_chat(table):
+    chats = ChatLibrary(table.store, table.owner, owner=OWNER, clock=Clock(),
+                        new_id=lambda prefix: 'x' * MAX_CHAT_ID if prefix == 't' else f'{prefix}-long')
+    chat = chats.start_chat(Launch('scenario', STORM)).commit().chat
+    _, stamp = chats.read_chat(chat)
+    chats.set_persona(chat, ANYA, expected=stamp).commit()
+    first, second = setup(table, chat)
+    return chat, first, second
 
 
 def filled(table, chat, first, second):
@@ -248,15 +263,13 @@ def test_edit_text_bound_refuses_before_write_and_exact_bound_reloads(tmp_path):
         assert len(service.read(chat, draft, table.player()).own[0].text) == 16000
 
 
-def test_max_length_chat_accepts_secondary_contribution_and_reloads(tmp_path):
-    folder, _, _ = card_library(tmp_path)
+def test_max_length_chat_accepts_secondary_contribution_and_reloads(tmp_path_factory):
+    # Full semantic IDs need room for the library's absolute paths on Windows. Keep
+    # the real Guard and a pytest-owned root, without the long test-name directory.
+    folder, _, _ = card_library(tmp_path_factory.mktemp("pc"))
     with Table(folder) as table:
-        chats = ChatLibrary(table.store, table.owner, owner=OWNER, clock=Clock(),
-                            new_id=lambda prefix: 'x' * MAX_CHAT_ID if prefix == 't' else f'{prefix}-long')
-        chat = chats.start_chat(Launch('scenario', STORM)).commit().chat
-        _, stamp = chats.read_chat(chat)
-        chats.set_persona(chat, ANYA, expected=stamp).commit()
-        first, second = setup(table, chat)
+        chat, first, second = max_length_chat(table)
+        assert len(chat.chat_id) == MAX_CHAT_ID == 97
         service, draft, rev = filled(table, chat, first, second)
         consent(table, chat, service, draft, rev)
         record = service.accept(chat, draft, table.owner, expected=rev)
@@ -267,6 +280,44 @@ def test_max_length_chat_accepts_secondary_contribution_and_reloads(tmp_path):
         tagged = turn_id(ChatRef(chat.campaign_id, 'x' * MAX_TAGGED_CHAT_ID), 1, '1234abcd')
         assert len(tagged) == 104
         assert len(contribution_id(tagged, 1)) <= 104
+    with Table(folder) as reopened:
+        assert reopened.runner.open(chat).last.posts == record.posts
+        assert LocalPlay(reopened.runner).accept(chat, draft, reopened.owner, expected=rev).turn_id == record.turn_id
+
+
+@pytest.mark.parametrize("turn_over_budget", [False, True], ids=["draft-only", "turn-and-draft"])
+def test_long_absolute_paths_refuse_without_writing(tmp_path_factory, turn_over_budget):
+    folder, _, _ = card_library(tmp_path_factory.mktemp("pc"))
+    with Table(folder) as table:
+        chat, first, second = max_length_chat(table)
+    target = folder.joinpath(*address_parts(TurnRecord(chat, 1, "opening").ref))
+    # Model the same absolute-path boundary portably through the store's public
+    # limit injection seam. No global OS limit, path mapping or Guard is bypassed.
+    conflict = folder.joinpath(*conflict_parts(address_parts(TurnRecord(chat, 1, "opening").ref),
+                                              "sha256:" + "0" * 64))
+    budget = (path_length(target) - 1 if turn_over_budget else max(path_length(target), path_length(conflict)))
+    with LibraryStore.open(folder, limits=lambda directory: (budget, 255)) as store:
+        authority = DurableAuthority.open(store, [OWNER], clock=fixed_clock())
+        try:
+            owner = authority.handle_for(OWNER, trusted=True)
+            runner = SceneRunner(store, authority, owner, owner=OWNER)
+            before = snapshot(folder)
+            if turn_over_budget:
+                with pytest.raises(UnstorableIdentifier):
+                    runner.post(chat, authority.handle_for(ANA, trusted=True), '"Hello."')
+                assert snapshot(folder) == before
+            else:
+                record = runner.post(chat, authority.handle_for(ANA, trusted=True), '"Hello."')
+                assert len(record.turn_id) == 104 and target.is_file()
+            service = LocalPlay(runner)
+            draft = "draft-" + "0" * 32
+            assert path_length(folder / "secrets" / service._name(chat, draft)) > budget
+            before = snapshot(folder)
+            with pytest.raises(UnstorableIdentifier):
+                service.create(chat, owner, (first, second), draft=draft)
+            assert snapshot(folder) == before
+        finally:
+            authority.close()
 
 
 def test_combined_ingestion_checks_every_controller_after_routing(tmp_path):

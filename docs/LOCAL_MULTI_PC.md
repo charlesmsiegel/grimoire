@@ -24,8 +24,19 @@ composition after such a change.
 Draft JSON lives under `secrets/local-pc/<campaign>/<chat>/<draft>.json`, through
 the existing transaction/recovery machinery, with a strict bounded decoder and an
 exact-depth path allowlist. This reserved root cannot receive normal grants and is
-excluded from replication. These are device-local unpublished drafts. Restart
-recovers draft text and order; it deliberately requires fresh confirmations.
+excluded from replication. These are device-local unpublished drafts.
+
+Semantic ID limits do not reserve room beneath every absolute library root: the
+unchanged store Guard also checks the full path (259 UTF-16 units on Windows). The draft layout is deeper
+than a turn path. For example, a 97-character chat ID, six-character campaign ID
+and default draft ID use 165 relative path characters, versus 132 for its turn
+target and 150 for the turn's conflict-reservation path, which is also checked.
+Choose a short library root when using maximum-length IDs. An over-budget draft
+refuses with `UnstorableIdentifier` before writing, even when a shorter turn path
+still fits; longer roots can likewise make ordinary turn writes refuse. IDs are
+never truncated or remapped.
+
+Restart recovers draft text and order; it deliberately requires fresh confirmations.
 Confirmations retain issued handles in service memory, so edited JSON cannot mint
 human approval. Hosts should retain one LocalPlay instance during a composition.
 
