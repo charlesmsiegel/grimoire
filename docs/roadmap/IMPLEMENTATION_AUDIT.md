@@ -181,7 +181,7 @@ All eight scoped foundation contracts and their integration proof are present; t
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/v1-cost-and-voice-regression.md)).
 - Evidence: [`backend/src/grimoire/evals/v021.py`](../../backend/src/grimoire/evals/v021.py); [`docs/evals/V021_BASELINE.md`](../../docs/evals/V021_BASELINE.md); [`backend/tests/test_v021_replay.py`](../../backend/tests/test_v021_replay.py); Capture conversion and receipt verification plus deterministic replay exist.
-- Scope / gap: [#686](https://github.com/charlesmsiegel/grimoire/pull/686) documents capture prerequisites only. No live provider-reported V0.2.1 measurement exists; baseline capture pending, so actual measured baseline/voice regression proof is missing.
+- Scope / gap: [#686](https://github.com/charlesmsiegel/grimoire/pull/686) documents capture prerequisites only. No live provider-reported V0.2.1 measurement exists: the one live attempt (2026-11-20, `anthropic`, `claude-sonnet-5-5`) failed on the second speaker's call, because 0.2.1 ends that request with an assistant turn and the model rejects it ([details](../evals/V021_BASELINE.md#live-attempt-2026-11-20)). Baseline capture is still pending, so actual measured baseline/voice regression proof is missing.
 
 <a id="slice-016"></a>
 ### 016 — Session Zero Boundaries
@@ -640,7 +640,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/coding-skills-calibration.md)).
 - Evidence: [`grimoire.calibration`](../../backend/src/grimoire/calibration.py) runs a pinned external deterministic-specialist corpus with three repeat trials, unknown-analysis handling and structural confusion counts. [`grimoire.judgepanel`](../../backend/src/grimoire/judgepanel.py) runs three pinned judges × three trials over a behavior-confirmed labelled corpus, with per-call coverage canaries, served-model pin checks, defect false-positive/negative rates, repeatability and pinned-rubric theory scoring; it reproduces the pinned rubric awarding 100 to unread verdicts and refuses to score them ([calibration report and limits](../CALIBRATION.md)).
-- Scope / gap: No live, provider-reported judge capture has been run (billed; needs an approved spend cap), so independent defect/theory accuracy, repeatability and false-positive rates are not established. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
+- Scope / gap: One live, provider-reported capture was run on 2026-11-20 (108 calls; Opus 5.5, Sonnet 5.5 and Haiku 5.5 judges) and `proof.established` is false: `defect_panel_complete` and `theory_panel_scored_and_discriminates` failed ([results](../CALIBRATION.md#live-capture-2026-11-20)). The panel had no false positive or false negative on the 9 defect cases it settled, but one case is unknown, the Sonnet judge gave malformed answers in 13 of 30 defect trials, and the cohesive theory unit was scored in one of three trials. A complete panel and theory discrimination are not established. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
 
 <a id="slice-070"></a>
 ### 070 — Multimodal Player Input
