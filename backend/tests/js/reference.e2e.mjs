@@ -121,7 +121,7 @@ test("a circled doorway on a sketch is offered as a draft action and carried wit
   assert.equal(after.turns.length, before.turns.length + 1);
   const posted = after.turns.at(-1);
   assert.equal(posted.post.text, "I hide here (Reference: doorway)");
-  assert.deepEqual(Object.keys(posted.post).sort(), ["actor", "channel", "kind", "private", "speaker", "text", "to", "withheld"],
+  assert.deepEqual(Object.keys(posted.post).sort(), ["actor", "by", "channel", "kind", "private", "speaker", "text", "to", "withheld"],
     "the turn's post carries nothing of the sketch");
   const art = await call("media.chat", { chat: CHAT });
   assert.deepEqual(art.posts.map((item) => [item.turn, item.state]), [[posted.turn, "shown"]]);
