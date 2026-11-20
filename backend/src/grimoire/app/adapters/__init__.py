@@ -12,4 +12,8 @@ from . import shelf  # noqa: E402 -- tags, pins and saved filters (docs/SHELF.md
 
 ADAPTERS = tuple(sorted((*ADAPTERS, shelf.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import voice  # noqa: E402 -- 061's private local voice input (docs/SPEECH.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, voice.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]
