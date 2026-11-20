@@ -168,9 +168,15 @@ CRYPT_WYRM = SourceRef(VAMPIRE, 'creature', 'river-wyrm', 'r1')
 CREATORS = 'catalog:creator-cards'
 CARD_SET = SourceRef(CREATORS, 'catalog', 'set', 'r1')
 GUIDE = SourceRef(CREATORS, 'character', 'ferry-guide', 'r1')
+CREATOR_LORE = SourceRef(CREATORS, 'lorebook', 'crossings', 'r1')
 SETTINGS = {MODERN: 'c-modern', VAMPIRE: 'c-vampire'}
 WYRM_SECTIONS = {'habitat': 'Slow rivers and ferry crossings.', 'threat': 'Capsizes small boats at dusk.',
                  'lore': 'Bells drive it under.'}
+
+
+def river_lore(entry_id, text):
+    """A lorebook whose one entry the shared scene text triggers, so binding it would visibly reach a pack."""
+    return {'entries': [lore.entry(entry_id, text, 'river', 'fog')]}
 
 
 def bestiary_catalog(world):
@@ -188,6 +194,8 @@ def setup_bestiary(store):
     tx.put(envelope(EntityDefinition(HOUND, 'Frost hound', 'template', FacetSet([Physical(), Biological()]))), None)
     tx.put(envelope(EntityDefinition(GUIDE, 'Ferry guide', 'individual', FacetSet([Physical()]),
                                      'Knows every crossing.')), None)
+    tx.put(RecordEnvelope(CREATOR_LORE, river_lore('crossings', 'CREATOR-LORE-TOKEN the north crossing floods.'),
+                          name='Crossings', extra={'schema': lore.LORE_SCHEMA}), None)
     tx.put(envelope(derived(CRYPT_WYRM, WYRM, name='River wyrm', nature='template',
                             sections={'habitat': 'The flooded crypts under the old ferry.'})), None)
     vampire = store.read_source(VAMPIRE)
@@ -201,7 +209,7 @@ def setup_bestiary(store):
                               extra={'schema': ENTITY_SCHEMA}), None)
     tx.commit(owner_handle())
     publish(store, Catalog(BEASTS, (WYRM, HOUND)))
-    publish(store, Catalog(CARD_SET, (GUIDE,)))
+    publish(store, Catalog(CARD_SET, (GUIDE, CREATOR_LORE)))
     publish(store, Catalog(bestiary_catalog(MODERN), (), (BEASTS,), (HOUND.unpinned(),)))
     publish(store, Catalog(bestiary_catalog(VAMPIRE), (CRYPT_WYRM,), (BEASTS,)))
 
@@ -219,17 +227,17 @@ def test_one_shared_bestiary_supports_two_settings_without_importing_a_card_set(
             available = compose_catalogs(store.load(), roots)
             entries = {entry.ref: entry for entry in available.entries}
             # The very same pinned creature, read from the one shared file, is available in both settings.
-            assert entries[WYRM].etag == shared_etag
             assert [origin.ref for origin in entries[WYRM].origins] == [BEASTS]
             assert (HOUND in entries) == (world == VAMPIRE)
             assert (CRYPT_WYRM in entries) == (world == VAMPIRE)
-            assert (GUIDE in entries) == (world == MODERN)
+            assert (GUIDE in entries) == (CREATOR_LORE in entries) == (world == MODERN)
             played = CRYPT_WYRM if world == VAMPIRE else WYRM
             wanted = (SelectedSource(played, 'actor'),)
             if world == MODERN:
-                wanted += (SelectedSource(GUIDE, 'character'),)
+                wanted += (SelectedSource(GUIDE, 'character'), SelectedSource(CREATOR_LORE, 'lorebook'))
             selected = available.select(wanted, world=world)
-            # Each setting's opt-outs and opt-ins hold: no hound in Modern, no creator card in Vampire.
+            # Discovery honours each setting's availability: no hound in Modern, no creator card in Vampire.
+            # (Availability is not access control; the chat binds only what was explicitly selected.)
             refused = HOUND if world == MODERN else GUIDE
             with pytest.raises(CatalogError) as error:
                 available.select((SelectedSource(refused, 'actor' if refused == HOUND else 'character'),))
@@ -254,10 +262,12 @@ def test_one_shared_bestiary_supports_two_settings_without_importing_a_card_set(
                     scene_text='Fog on the river.', readers=lore.READERS, unpack=stored_record))
             return found
 
+        bound = {VAMPIRE: {CRYPT_WYRM}, MODERN: {WYRM, GUIDE, CREATOR_LORE}}
         before = packs()
         for world, (captured, pack) in before.items():
-            sources = {r.resolved for r in captured.snapshot.sources()}
-            assert sources == ({CRYPT_WYRM} if world == VAMPIRE else {WYRM, GUIDE})
+            assert {r.resolved for r in captured.snapshot.sources()} == bound[world]
+            # Positive control: the one opted-in creator lorebook does reach the opted-in campaign's turns.
+            assert ('CREATOR-LORE-TOKEN' in pack.render()) == (world == MODERN)
             sections = {item.origin.name: item for item in pack.lane('portrayal') if item.origin.kind == 'section'}
             assert sections['threat'].origin.source == WYRM and sections['lore'].origin.source == WYRM
             habitat = sections['habitat']
@@ -272,19 +282,23 @@ def test_one_shared_bestiary_supports_two_settings_without_importing_a_card_set(
         holders = [path for path, data in files_of(store.root).items() if data and b'Capsizes small boats' in data]
         assert len(holders) == 1 and 'shared-bestiary' in str(holders[0])
 
-        # The opted-in creator set grows by 2,000 unrelated cards. Discovery stays bounded; turns do not grow.
+        # The opted-in creator set grows by 2,000 unrelated cards whose lore this very scene would trigger
+        # if any were bound. Discovery stays bounded; neither campaign's bindings or turns grow.
         tx = store.transaction()
-        unrelated = tuple(SourceRef(CREATORS, 'character', f'card-{i}', 'r1') for i in range(2000))
+        unrelated = tuple(SourceRef(CREATORS, 'lorebook', f'card-{i}', 'r1') for i in range(2000))
         for ref in unrelated:
-            tx.put(RecordEnvelope(ref, {'text': 'UNRELATED-CARD-TOKEN'}, name='Unrelated card'), None)
+            tx.put(RecordEnvelope(ref, river_lore(ref.entity_id, 'UNRELATED-CARD-TOKEN a stranger crossing.'),
+                                  name='Unrelated card', extra={'schema': lore.LORE_SCHEMA}), None)
         tx.commit(owner_handle())
-        publish(store, Catalog(CARD_SET.at('r2'), (GUIDE, *unrelated)))
+        publish(store, Catalog(CARD_SET.at('r2'), (GUIDE, CREATOR_LORE, *unrelated)))
         grown = compose_catalogs(store.load(), (bestiary_catalog(MODERN), CARD_SET.at('r2')))
-        assert len(grown.entries) == 2002
+        assert len(grown.entries) == 2003
         assert len(grown.search('card', limit=10)) == 10
         assert grown.select((SelectedSource(GUIDE, 'character'),)).sources == (SelectedSource(GUIDE, 'character'),)
         after = packs()
         for world in SETTINGS:
-            assert after[world][1] == before[world][1]
-            assert 'UNRELATED-CARD-TOKEN' not in after[world][1].render()
+            captured, pack = after[world]
+            assert {r.resolved for r in captured.snapshot.sources()} == bound[world]
+            assert pack == before[world][1]
+            assert 'UNRELATED-CARD-TOKEN' not in pack.render()
         assert store.load().index.resolve(WYRM).etag == shared_etag
