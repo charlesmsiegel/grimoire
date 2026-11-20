@@ -1,0 +1,13 @@
+{
+  "contract": 1,
+  "id": "world",
+  "route": "world",
+  "title": "World",
+  "slot": "hidden",
+  "order": 21,
+  "owner": "115",
+  "entry": "page.js",
+  "requires": ["campaign.chats", "world.places", "world.find_place", "world.route", "world.path_plan", "world.path_commit",
+    "world.rumors", "world.belief_plan", "world.belief_commit", "world.cast", "world.faction_preview", "world.mind", "world.mind_preview"],
+  "unavailable": null
+}

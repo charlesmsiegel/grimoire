@@ -145,5 +145,6 @@ test("a campaign's clock and memory, each change reviewed before it is made", { 
   const features = section(main, "Campaign features");
   assert.ok(byText(features, "a", "Private local voice").length);
   assert.ok(byText(features, "strong", "Reviewing a fork or retcon is not available yet").length);
-  assert.ok(byText(features, "strong", "What an NPC thinks others think is not available yet").length);
+  const world = byText(features, "a", "What an NPC thinks others think").find((node) => node.getAttribute("href").startsWith("#/world/" + encodeURIComponent(campaign)));
+  assert.ok(world && world.getAttribute("href").includes("chat="), "the World page is linked for this campaign and chat");
 });

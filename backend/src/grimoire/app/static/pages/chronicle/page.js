@@ -57,7 +57,7 @@ export async function mount(root, ctx) {
   await Promise.all([
     audience === "director" ? showClock(clockCard, ctx, campaign) : directorsOnly(clockCard, ctx),
     chat ? showMemory(memoryCard, ctx, chat, audience, address) : noChat(memoryCard, ctx, listing.complete),
-    showElsewhere(elsewhereCard, ctx),
+    showElsewhere(elsewhereCard, ctx, { campaign, chat, audience }),
   ]);
 }
 
@@ -357,7 +357,7 @@ function clip(text) { return text.length > 60 ? text.slice(0, 59) + "…" : text
 
 // -- the rest of Wave 8 ---------------------------------------------------------------------------------------
 
-async function showElsewhere(slot, ctx) {
+async function showElsewhere(slot, ctx, { campaign, chat, audience }) {
   const { ui } = ctx;
   const { el } = ui;
   const answer = await ctx.api("chronicle.coverage", {});
@@ -367,7 +367,9 @@ async function showElsewhere(slot, ctx) {
   const node = card(ui, "Campaign features",
     elsewhere.length ? el("div", { class: "g-stack" }, el("h3", { class: "chronicle-sub" }, "On other screens"),
       el("ul", { class: "chronicle-lines" }, elsewhere.map((item) => el("li", {},
-        ui.link(item.title, item.route), el("span", { class: "g-muted" }, " · " + item.where))))) : null,
+        item.campaign  // a campaign's own page, for the same chat and view
+          ? ui.link(item.title, item.route, [campaign], { chat: chat || undefined, audience: audience === "director" ? "director" : undefined })
+          : ui.link(item.title, item.route), el("span", { class: "g-muted" }, " · " + item.where))))) : null,
     el("div", { class: "g-stack" }, el("h3", { class: "chronicle-sub" }, "Not on a screen yet"),
       el("ul", { class: "chronicle-lines" }, waiting.map((item) => el("li", {}, ui.unavailable(item.title, item.reason))))));
   slot.replaceWith(node);

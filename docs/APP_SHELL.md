@@ -23,7 +23,8 @@ backend/src/grimoire/app/
                                ([INBOX](INBOX.md)); shelf, tags, pins and saved filters ([SHELF](SHELF.md));
                                speech 067, one listening window, captions, read-aloud, and voice 061, private
                                local voice input ([SPEECH](SPEECH.md)); chronicle 115, a campaign's clock and
-                               sourced memory ([CHRONICLE](CHRONICLE.md))
+                               sourced memory ([CHRONICLE](CHRONICLE.md)); world/ 115, the director's places,
+                               rumors, faction decisions and NPC minds ([WORLD](WORLD.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -172,6 +173,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `providers` | 112 | |
 | `campaign` | 113 | `/<campaign id>` |
 | `chronicle` | 115 | `/<campaign id>?chat=<ChatRef>&actor=<ActorRef>&audience=director` |
+| `world` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` (the director's; the table's view says only that) |
 | `art` | 114 | `?scope=<scope>&subject=<subject>&limit=<n>` |
 | `sync` | 114 | |
 

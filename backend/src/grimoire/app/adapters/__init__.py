@@ -21,4 +21,8 @@ from . import chronicle  # noqa: E402 -- 115's campaign clock and sourced memory
 
 ADAPTERS = tuple(sorted((*ADAPTERS, chronicle.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import world  # noqa: E402 -- 115's places, rumors, faction decisions and NPC minds (docs/WORLD.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, world.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]
