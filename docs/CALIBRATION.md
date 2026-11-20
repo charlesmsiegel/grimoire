@@ -101,11 +101,30 @@ a test checks that no corpus id or file name reaches a judge.
 coverage canary in its middle, new per judge, case and trial. An answer that does not
 echo it is `unknown` (`coverage`), however confident. So are malformed answers,
 `cannot_assess`, a `defect` without findings, findings on lines that do not exist,
-a theory verdict naming another unit, theory evidence citing anything but
-`<alias>:<line>` on a listed line, refused or
+a theory verdict naming another unit, refused or
 failed calls, and an unparseable source of either task (never sent). Unknown is never
 clean and never scored. The canary proves the listing reached the judge and was
 read through its middle; it does not prove the reasoning was sound.
+
+**Reading an answer (parser version 2).** An answer is the one JSON object in it whose
+`schema` is the task's. Prose before that object is tolerated and counted per judge
+(`parsing.text_outside_json`; a fence alone is not counted), but never read: a verdict
+stated only in prose is `malformed`. Nothing but a closing fence may follow the object,
+because text after it can retract it. Any other mention of the schema, such as a second
+object (even a broken one) or the object inside another (even one left unclosed), means the
+judge may have changed its mind or is quoting an example, so the answer is `ambiguous`
+(`parsing.ambiguous`), never the first or the last. So is an answer whose prose leaves a
+bracket open before the object.
+The prompts are unchanged, so a capture made under version 1 still replays.
+
+**Theory citations.** A citation that is not `<alias>:<line>` on a listed line supports
+nothing, so it is dropped (`parsing.citations_dropped`), never repaired or moved. The
+judge's step is kept only if it still stands: a step below 1.0 whose every citation was
+dropped makes the verdict `unknown` (`citation`), because the pinned rubric requires
+evidence for any lowered step. A step of 1.0 needs no evidence, so a bad citation on it
+costs nothing. Evidence that is not a list is `citation` too. Defect findings are not
+treated this way: a finding's line is the verdict itself, so a finding on a line that does
+not exist stays `malformed`.
 
 **Defects.** A judge's verdict on a case is settled only when all trials agree;
 otherwise it is `inconsistent` and excluded, and counted. A defect counts as found
@@ -143,6 +162,10 @@ defect found, missing analysis unscored, a complete defect panel (no unknown or
 inconsistent case), every theory unit scored with `ledger_cohesive` above
 `ledger_scrambled` in every trial, and every answer provider-reported. Scripted and replayed test captures meet the first three
 and the fourth with the pinned rubric, but are synthetic, so `established` is false.
+`established` also needs `captured_for_this_parser`: the capture's manifest must name the
+parser version that scores it. A capture taken before a parser change replays and is
+re-read, but it shaped that change, so it can never establish the proof; each parser change
+needs a fresh capture.
 
 ### Spending approval
 
@@ -210,4 +233,13 @@ missing-analysis probe behaved as designed: upstream 100.0, profile score withhe
 Still unproven: a complete defect panel, a `sonnet` false-negative rate, theory
 discrimination and theory grade repeatability for the cohesive unit. Closing them needs a
 new capture with its own approval.
+
+**After this capture.** Both failures were in reading answers, not in what the judges
+concluded, so [parser version 2](#independent-judge-panel) reads an answer out of prose
+before it and drops a citation of a line the listing lacks. This was decided from this
+capture's failures, so re-scoring this capture under version 2 checks the change but
+proves nothing: its manifest names no parser version, so `captured_for_this_parser` and
+`established` stay false. The proof needs a new capture. Whether
+version 2 recovers the two cohesive trials here depends on whether the bad citation was
+the only one on a lowered step; the recorded replies are not in the repository.
 
