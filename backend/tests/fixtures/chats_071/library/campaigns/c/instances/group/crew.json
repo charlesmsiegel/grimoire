@@ -1,0 +1,10 @@
+{
+  "address": "campaign:c/group/crew",
+  "format": "grimoire.record/1",
+  "owner": "human:owner",
+  "payload": {
+    "local_name": "Crew"
+  },
+  "previous": null,
+  "schema": "grimoire.entity/0"
+}
