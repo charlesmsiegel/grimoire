@@ -8,7 +8,7 @@ accuracy is claimed. The harness and its offline proof are described in
 ## Panel
 
 Three different Claude models are used, so the panel is not one model judging itself.
-Save this as `panel.json`, outside the repository:
+Save this as a file outside the repository, and set `PANEL` to its absolute path:
 
 ```json
 {"trials": 3, "judges": [
@@ -36,14 +36,18 @@ The key must be in `ANTHROPIC_API_KEY` in the environment the session starts wit
 these from `backend/` with `PYTHONPATH=src`:
 
 ```sh
-python -m grimoire.judgepanel plan    --corpus tests/fixtures/calibration/panel --panel panel.json
-python -m grimoire.judgepanel capture --corpus tests/fixtures/calibration/panel --panel panel.json \
+python -m grimoire.judgepanel plan    --corpus tests/fixtures/calibration/panel --panel "$PANEL"
+python -m grimoire.judgepanel capture --corpus tests/fixtures/calibration/panel --panel "$PANEL" \
     --out capture --confirm-billing --spend-cap "10 USD" --max-calls 108
-python -m grimoire.judgepanel score   --corpus tests/fixtures/calibration/panel --panel panel.json \
+python -m grimoire.judgepanel score   --corpus tests/fixtures/calibration/panel --panel "$PANEL" \
     --capture capture --coding-skills <checkout>
 ```
 
 - `plan` must report 108 planned calls before `capture` runs.
+- `--spend-cap` is recorded in the capture, not enforced. What holds the run under $10 is
+  `--max-calls 108` (the harness refuses a 109th call) with each answer bounded at 8000
+  output tokens, which caps the worst case at about $9. CMS's key also stops when its
+  credits run out. Do not raise either bound.
 - The `capture` folder must not exist yet. Every call is written before the next starts,
   and an interrupted call is recorded too. Do not rerun a capture to get a better result.
 - `<checkout>` is a clone of `coding-skills` at commit
