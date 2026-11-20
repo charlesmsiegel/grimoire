@@ -86,7 +86,8 @@ as not available.
 | `world.mind` | `chat`, `owner` (an NPC of the cast) | `{owner, now, evidence[], truth: {rulings[], beliefs[]}}` |
 | `world.mind_preview` | `chat`, `owner`, `hypotheses[]` (`{id, about[], claim, confidence, evidence[], at, supersedes}`), `tactic` (`{hypothesis, minimum, credited, fallback}`, optional) | `{saved: false, admitted, current[], tactic, truth, unchanged}` |
 
-The director writes each hypothesis in their own words, about one or two other characters, citing evidence the NPC
+The director writes each hypothesis in their own words, about what another character believes, or what one character thinks a second believes (060's
+outer-to-inner order), citing evidence the NPC
 holds; the page holds them from the newest evidence they cite. The preview admits them in order into a ledger that
 lives for that one answer, recalls what the NPC holds current, and proposes the credited tactic or the fallback.
 It shows the director's truth and every cast member's actual beliefs, read again after the preview, and

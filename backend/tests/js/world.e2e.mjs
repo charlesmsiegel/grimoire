@@ -169,7 +169,7 @@ test("the director's world: places, rumors, a faction's choice and an NPC's mind
   const write = (claim, sure, cited, replaces) => {
     mind = section(main, "What an NPC thinks");
     const form = group(mind, "Write a hypothesis");
-    input(form, "About").value = pc;
+    input(form, "Whose belief").value = pc;
     type(form, "What Mara Vell thinks they think", claim);
     type(form, "How sure", sure);
     tick(form, cited);
@@ -194,7 +194,7 @@ test("the director's world: places, rumors, a faction's choice and an NPC's mind
   await idle();
   mind = await until(() => section(main, "What an NPC thinks").textContent.includes("Ask an open question. (h2") && section(main, "What an NPC thinks"), 15000, "the revision");
   assert.ok(mind.textContent.includes("is below 50%, at 10%") && mind.textContent.includes("are unchanged"));
-  const held = mind.querySelectorAll("ul").find((node) => node.textContent.startsWith("h2: about"));
+  const held = mind.querySelectorAll("ul").find((node) => node.textContent.startsWith("h2: what"));
   assert.ok(held && !held.textContent.includes("h1:"), "the revision replaces the first theory");
   assert.ok(mind.textContent.includes("Mara Vell") && mind.textContent.includes("rejected \"Anya knows what the letter says.\""), "Mara's actual belief stands");
 
@@ -205,7 +205,7 @@ test("the director's world: places, rumors, a faction's choice and an NPC's mind
   window.location.hash = "#/world/" + encodeURIComponent(campaign) + "?chat=" + encodeURIComponent(chat) + "&audience=director";
   mind = await until(() => { const found = section(main, "What an NPC thinks"); return found && found.textContent.includes("Mara Vell's evidence") && found; }, 15000, "Mara's mind again");
   assert.equal(input(mind, "What Mara Vell thinks they think").value, "Anya is bluffing too.");
-  assert.ok(mind.textContent.includes("h2: about"), "the written hypotheses are kept until cleared");
+  assert.ok(mind.textContent.includes("h2: what"), "the written hypotheses are kept until cleared");
 
   // the chronicle links the World page for its slices; what has no screen yet is still named
   window.location.hash = "#/chronicle/" + encodeURIComponent(campaign) + "?chat=" + encodeURIComponent(chat) + "&audience=director";

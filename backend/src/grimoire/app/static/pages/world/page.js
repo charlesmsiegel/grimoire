@@ -13,7 +13,7 @@
 import { campaignName, count } from "../campaign/logic.js";
 import {
   heldFrom, latest, newOperationId, nextHypothesisId, parseConditions, parseConfidence, pathPlanText, pathText, percent,
-  placeLabels, readHypotheses, readList, routeText, rumorLine, rumorStatus,
+  placeLabels, readHypotheses, readList, routeText, rumorLine, rumorStatus, whose,
 } from "./logic.js";
 
 const AUDIENCES = [{ value: "table", label: "Table view" }, { value: "director", label: "Director view" }];
@@ -189,7 +189,7 @@ async function showPlaces(slot, ctx, campaign) {
       replaced(answer.topology);
       draw();
     } catch (error) {
-      if (error && error.reason === "changed") { review = null; await view(args.topology); }  // review it again, from now
+      if (error && error.reason === "changed") { review = null; await view(chosen.get() || args.topology); }  // review it again, from now, on the topology chosen last
       throw error;
     }
     return true;
@@ -203,7 +203,7 @@ async function showPlaces(slot, ctx, campaign) {
       if (review === reviewed) review = null;
       if (shown && shown.topology === reviewed.args.topology) { replaced(answer.topology); draw(); }
     } catch (error) {
-      if (error && error.reason === "changed") { review = null; await view(reviewed.args.topology); }
+      if (error && error.reason === "changed") { review = null; await view(chosen.get() || reviewed.args.topology); }
       throw error;
     }
     return true;
@@ -522,8 +522,8 @@ async function minds(ctx, body, chat, cast) {
     const save = () => listDraft.set(hypotheses.length ? JSON.stringify(hypotheses) : "");
 
     const people = others.map((member) => ({ value: member.actor, label: member.name || member.actor }));
-    const about = keptChoice(ui, "About", people, ctx.draft(KEY + "about"), people[0] ? people[0].value : "");
-    const alsoAbout = keptChoice(ui, "And about (optional)", [{ value: "", label: "No one else" }, ...people], ctx.draft(KEY + "about-also"), "");
+    const about = keptChoice(ui, "Whose belief", people, ctx.draft(KEY + "about"), people[0] ? people[0].value : "");
+    const alsoAbout = keptChoice(ui, "As they think this character believes it (optional)", [{ value: "", label: "No one else" }, ...people], ctx.draft(KEY + "about-also"), "");
     const claim = ui.field("What " + who + " thinks they think", { draft: ctx.draft(KEY + "claim"), hint: "In your own words, like: Anya knows what the letter says" });
     const confidence = ui.field("How sure", { draft: ctx.draft(KEY + "confidence"), hint: "From 0 to 1, or a percentage" });
     const held = new Set(mind.evidence.map((item) => item.evidence));
@@ -542,7 +542,7 @@ async function minds(ctx, body, chat, cast) {
 
     const drawList = () => {
       listed.replaceChildren(hypotheses.length ? el("ol", { class: "world-lines" }, hypotheses.map((item) => el("li", { class: "g-row" },
-        el("span", { class: "g-grow" }, el("strong", {}, item.id + ": "), "about " + item.about.map(nameOf).join(" and ") + ", \"" + item.claim + "\", "
+        el("span", { class: "g-grow" }, el("strong", {}, item.id + ": "), whose(item.about.map(nameOf)) + ", \"" + item.claim + "\", "
           + percent(item.confidence) + (item.supersedes ? ", replacing " + item.supersedes : "")),
         ui.button("Remove", () => { hypotheses = hypotheses.filter((other) => other.id !== item.id); save(); drawList(); }, { size: "small" }))))
         : ui.empty("No hypothesis is written yet."));
@@ -615,7 +615,7 @@ function previewed(ui, answer, who, nameOf) {
   const { el } = ui;
   const parts = [ui.notice("Nothing is saved: this is 060's answer for the hypotheses written here.", { kind: "soft" })];
   parts.push(el("h3", { class: "world-sub" }, "What " + who + " holds now"), answer.current.length
-    ? el("ul", { class: "world-lines" }, answer.current.map((item) => el("li", {}, item.id + ": about " + item.about.map((person) => person.name || nameOf(person.actor)).join(" and ")
+    ? el("ul", { class: "world-lines" }, answer.current.map((item) => el("li", {}, item.id + ": " + whose(item.about.map((person) => person.name || nameOf(person.actor)))
       + ", \"" + item.claim + "\", " + percent(item.confidence))))
     : ui.empty("No hypothesis stands."));
   if (answer.tactic) {

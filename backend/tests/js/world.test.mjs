@@ -194,9 +194,9 @@ test("a hypothesis being written is its NPC's own, and is kept across leaving th
   box.checked = true;
   box.dispatchEvent({ type: "change" });
   typeInto(minds(first.root), "How sure", "70%");
-  field(minds(first.root), "About").value = ANYA;
+  field(minds(first.root), "Whose belief").value = ANYA;
   button(minds(first.root), "Add this hypothesis").click();
-  assert.ok(minds(first.root).textContent.includes("h1: about Anya, \"Anya knows the letter\", 70%"));
+  assert.ok(minds(first.root).textContent.includes("h1: what Anya believes, \"Anya knows the letter\", 70%"));
   assert.equal(field(minds(first.root), "What Mara thinks they think").value, "", "the added claim is cleared from the form");
   typeInto(minds(first.root), "What Mara thinks they think", "half-written");
   minds(first.root).querySelectorAll("button").find((node) => node.textContent === "Bea").click();
@@ -208,7 +208,7 @@ test("a hypothesis being written is its NPC's own, and is kept across leaving th
   await again.done;
   await settle();
   assert.equal(field(minds(again.root), "What Mara thinks they think").value, "half-written");
-  assert.ok(minds(again.root).textContent.includes("h1: about Anya"), "the written hypotheses are kept for Mara");
+  assert.ok(minds(again.root).textContent.includes("h1: what Anya believes"), "the written hypotheses are kept for Mara");
 });
 
 test("a road change reviewed before another change is refused and read again, never made", async () => {
@@ -346,6 +346,34 @@ test("choosing another topology while an action runs shows its roads and drops t
   assert.ok(roadButton(placesCard(root), "Block ferry"));
 });
 
+test("a stale road change refused after another topology was chosen reads the one chosen last", async () => {
+  let release;
+  const { root, done } = await mounted({ answers: {
+    "world.topologies": () => ({ campaign: "c1", topologies: [{ topology: ROADS, name: "Roads" }, { topology: SEA, name: "Sea" }] }),
+    "world.places": (args) => places("g|", { topology: args.topology, road: args.topology === SEA ? "ferry" : "road" }),
+    "world.path_plan": (args) => planOf(args, places().topology),
+    "world.path_commit": () => new Promise((resolve, reject) => { release = () => reject(refused("changed")); }),
+  } });
+  await done;
+  roadButton(placesCard(root), "Block road").click();
+  await settle();
+  button(reviewOf(placesCard(root)), "Make this change").click();  // the commit is still out
+  await settle(3);
+  const choose = field(placesCard(root), "Topology");
+  choose.value = SEA;
+  choose.dispatchEvent({ type: "change" });
+  await settle();
+  release();
+  await settle();
+  assert.equal(field(placesCard(root), "Topology").value, SEA, "the stale commit does not bring back the first topology");
+  assert.ok(roadButton(placesCard(root), "Block ferry"), "the sea's roads are still shown");
+});
+
+test("a hypothesis about a nested belief reads outer to inner", () => {
+  assert.equal(logic.whose(["Anya"]), "what Anya believes");
+  assert.equal(logic.whose(["Anya", "Bea"]), "what Anya thinks Bea believes");
+});
+
 test("one section refused leaves the others working, and it can be read again", async () => {
   let rumorReads = 0;
   const { root, done } = await mounted({ answers: {
@@ -399,10 +427,10 @@ test("what is picked and ticked for a faction or a mind is kept across leaving t
   tickIn(faction, "Mara is a member", false);
   tickIn(faction, "Anya", true);
   const mind = minds(first.root);
-  field(mind, "About").value = ANYA;
-  field(mind, "About").dispatchEvent({ type: "change" });
-  field(mind, "And about (optional)").value = BEA;
-  field(mind, "And about (optional)").dispatchEvent({ type: "change" });
+  field(mind, "Whose belief").value = ANYA;
+  field(mind, "Whose belief").dispatchEvent({ type: "change" });
+  field(mind, "As they think this character believes it (optional)").value = BEA;
+  field(mind, "As they think this character believes it (optional)").dispatchEvent({ type: "change" });
   tickIn(mind, "Mara's own sight (perception, sight)", true);
 
   const again = await mounted({ drafts });
@@ -415,8 +443,8 @@ test("what is picked and ticked for a faction or a mind is kept across leaving t
   assert.equal(ticked(kept, "Bea is a member"), true);
   assert.equal(ticked(kept, "Anya"), true);
   const keptMind = minds(again.root);
-  assert.equal(field(keptMind, "About").value, ANYA);
-  assert.equal(field(keptMind, "And about (optional)").value, BEA);
+  assert.equal(field(keptMind, "Whose belief").value, ANYA);
+  assert.equal(field(keptMind, "As they think this character believes it (optional)").value, BEA);
   assert.equal(ticked(keptMind, "Mara's own sight (perception, sight)"), true);
 });
 
@@ -429,15 +457,15 @@ test("a hypothesis can be about two characters, and what was laid out is what is
   await done;
   await settle();
   const mind = minds(root);
-  field(mind, "About").value = ANYA;
-  field(mind, "And about (optional)").value = BEA;
+  field(mind, "Whose belief").value = ANYA;
+  field(mind, "As they think this character believes it (optional)").value = BEA;
   typeInto(mind, "What Mara thinks they think", "Anya thinks Bea read it");
   typeInto(mind, "How sure", "0.6");
   const box = mind.querySelectorAll("input").find((node) => node.getAttribute("value") === "e-Mara");
   box.checked = true;
   box.dispatchEvent({ type: "change" });
   button(mind, "Add this hypothesis").click();
-  assert.ok(minds(root).textContent.includes("h1: about Anya and Bea"));
+  assert.ok(minds(root).textContent.includes("h1: what Anya thinks Bea believes"));
   button(minds(root), "Show what Mara would do").click();
   await settle();
   assert.deepEqual(sent.hypotheses[0].about, [ANYA, BEA]);

@@ -106,3 +106,8 @@ export function nextHypothesisId(hypotheses) {
 }
 
 export function percent(value) { return Math.round(Number(value) * 100) + "%"; }
+
+// 060's inferred actors run outer to inner: [A] is what A believes, [A, B] what A thinks B believes.
+export function whose(names) {
+  return names.length > 1 ? "what " + names[0] + " thinks " + names[1] + " believes" : "what " + (names[0] || "someone") + " believes";
+}
