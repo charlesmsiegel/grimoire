@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from grimoire.adjudication.model import PROSE_MAX
+from grimoire.adjudication.model import DIRECTOR_ATTEMPT, PROSE_MAX
 from grimoire.core.authority import PlayerContribution, Resolution
 from grimoire.core.identity import TEXT_MAX
 from grimoire.rulesets import (
@@ -25,7 +25,7 @@ from grimoire.rulesets.families import FamilyAction, FamilyResult, check_result
 
 #: A roll no player contribution backs binds narration under this prefix (029's convention), so it can
 #: never share an attempt id with a player's action contribution: 003 binds a result by attempt id alone.
-DIRECTOR_ROLL = "director:"
+DIRECTOR_ROLL = DIRECTOR_ATTEMPT
 
 #: A PbtA partial result's cost or choice is the director's to offer, and the player's to take. The roll
 #: only says one is owed; it never picks one (062: a partial keeps its choice unresolved).
@@ -103,6 +103,11 @@ def result_token(result: FamilyResult) -> str:
     raise RollError("only a rolled result binds narration", "no_roll")
 
 
+def attempt_for(request: ActionRequest, contribution: PlayerContribution | None) -> str:
+    """The attempt a roll binds: the player's contribution id, or ``director:<request id>`` with none."""
+    return request.request_id if contribution is not None else f"{DIRECTOR_ROLL}{request.request_id}"
+
+
 def check_backing(request: ActionRequest, contribution: PlayerContribution) -> None:
     """A player's own action contribution backs exactly this request: same campaign, actor and id."""
     if type(contribution) is not PlayerContribution:
@@ -159,8 +164,7 @@ class RecordedRoll:
     @property
     def attempt_id(self) -> str:
         """The attempt narration names: the player's contribution id, or ``director:<request id>``."""
-        rid = self.request.request_id
-        return rid if self.contribution is not None else f"{DIRECTOR_ROLL}{rid}"
+        return attempt_for(self.request, self.contribution)
 
     @property
     def outcome(self) -> str:

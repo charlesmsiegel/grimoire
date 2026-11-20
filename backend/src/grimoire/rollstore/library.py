@@ -29,7 +29,7 @@ from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution
 from grimoire.core.identity import InstanceRef, validate_segment
 from grimoire.ledgers import DurableAuthority, SovereigntyLedger
 from grimoire.ledgers.codec import envelope, exact
-from grimoire.rolls import DIRECTOR_ROLL, RecordedRoll, RollError, check_backing, dice_for, roll_from_payload, roll_to_payload
+from grimoire.rolls import RecordedRoll, attempt_for, RollError, check_backing, dice_for, roll_from_payload, roll_to_payload
 from grimoire.rulesets import ActionRequest, RulesetModule
 from grimoire.security import is_human, is_valid_principal
 from grimoire.store import LibraryStore
@@ -189,7 +189,7 @@ class RollLibrary:
             check_backing(request, contribution)
         sides = dice_for(request.action)
         campaign_id = request.actor.campaign_id
-        attempt = request.request_id if contribution is not None else f"{DIRECTOR_ROLL}{request.request_id}"
+        attempt = attempt_for(request, contribution)
         with self._authority.lock:  # control is read, the dice drawn and the entry appended as one step
             builder = self._builder(campaign_id)
             done = builder.rolls.get(attempt)

@@ -13,7 +13,7 @@ from grimoire.chatstore import campaign_taken_ids
 from grimoire.core import DIRECTOR
 from grimoire.core.authority import AuthorityError, NarrationClaim, NarrationContext, review_narration
 from grimoire.core.identity import InstanceRef, SourceRef
-from grimoire.ledgers import ControlChange, LedgerInvalid, SovereigntyLedger
+from grimoire.ledgers import AuthorityUnavailable, ControlChange, LedgerInvalid, SovereigntyLedger
 from grimoire.rolls import RollError, roll_to_payload
 from grimoire.rollstore import RollLibrary, roll_actor_ids
 from grimoire.rulesets import (
@@ -197,8 +197,10 @@ def test_a_contribution_no_ledger_could_hold_is_refused_before_a_die_is_drawn(ta
 
 def test_an_unusable_authority_refuses_before_a_die_is_drawn(table):
     library = _library(table, Dice(4))
+    library.roll(MODULE, sneak("d0", actor=IRIS))  # the ledgers are read, so only the roll itself can refuse
+    library._draw = Dice(20)
     table.authority._poison(OSError("disk gone"))
-    with pytest.raises(Exception):
+    with pytest.raises(AuthorityUnavailable):
         library.roll(MODULE, sneak("d1", actor=IRIS))
     assert library._draw.asked == []
 
