@@ -1,0 +1,234 @@
+{
+ "clips": {
+  "bg-chatter": {
+   "role": "background",
+   "sha256": "83c06d1db14e8a7525ec7b4762e2f4b99752478f83167a6b94662e3e01e7f04b",
+   "text": "the weather was lovely so we walked home along the river",
+   "voice": "mb-en1"
+  },
+  "bg-command": {
+   "role": "background",
+   "sha256": "7baf7f96e422c44616432bcef032b01a32eda7f06c20b4aab68df6df59141375",
+   "text": "delete scene",
+   "voice": "mb-us1"
+  },
+  "bg-delete": {
+   "role": "background",
+   "sha256": "1f63953ef7775d4062e7cedc6de5d39946d81ddf8be00496278e29384ec73cb6",
+   "text": "okay so we should delete the scene and start over tomorrow",
+   "voice": "mb-us2"
+  },
+  "bg-open": {
+   "role": "background",
+   "sha256": "0f832cfa9a90ae4577500aec892fd4571753c2f72aa645cbac2da74df9ba8922",
+   "text": "open the map",
+   "voice": "mb-us3"
+  },
+  "bg-yes": {
+   "role": "background",
+   "sha256": "eafaa6bfb9a5e78e486422ea2011431134a4b98b89da54a1b2ccdccbde3bd8f1",
+   "text": "yes",
+   "voice": "mb-us3"
+  },
+  "en1-delete": {
+   "role": "foreground",
+   "sha256": "5a62daf32415d724146d22430a83e79747ffe76a212cf24bb714edffe9a353f5",
+   "text": "delete scene",
+   "voice": "mb-en1"
+  },
+  "en1-open": {
+   "role": "foreground",
+   "sha256": "1af32084d1377b9358ebe1d963e7a50a97dd02cfc00d1d1dafd5edc0755b8c30",
+   "text": "open inventory",
+   "voice": "mb-en1"
+  },
+  "en1-pause": {
+   "role": "foreground",
+   "sha256": "94b9889c6e36304ec9639f85591b9852e1eb84f6fe227fbb133bc7187c9c7213",
+   "text": "pause",
+   "voice": "mb-en1"
+  },
+  "en1-stop": {
+   "role": "foreground",
+   "sha256": "047c130700955c8bbec5ae6e3d0ee589dbcdc985a7a1eb104b1e3e95f8c9f3ce",
+   "text": "stop",
+   "voice": "mb-en1"
+  },
+  "en1-yes": {
+   "role": "foreground",
+   "sha256": "512fd32a655f1ea0d39ec27d11223fab6c3ccfedb75757fe652d81c5fd6e9531",
+   "text": "yes",
+   "voice": "mb-en1"
+  },
+  "robot-delete": {
+   "role": "foreground",
+   "sha256": "f571fbf6b21ea525ed929c72aabb6e126be8e28e95f333b534ddd5e0790b93e6",
+   "text": "delete scene",
+   "voice": "en-us"
+  },
+  "robot-open": {
+   "role": "foreground",
+   "sha256": "49badc77cd45ad9c0e7ecb41d3556c6595582ab3cec9e44142323caaded9a7e6",
+   "text": "open inventory",
+   "voice": "en-us"
+  },
+  "robot-pause": {
+   "role": "foreground",
+   "sha256": "a893f5229dcce8c95ed4369ac949b206d7c65ba386ee576fb99ae1fe53b533dd",
+   "text": "pause",
+   "voice": "en-us"
+  },
+  "robot-stop": {
+   "role": "foreground",
+   "sha256": "565109a0491f8ccaa14a6ce6bfb842bb51c8a397f26c6e2e9955517093498acd",
+   "text": "stop",
+   "voice": "en-us"
+  },
+  "robot-yes": {
+   "role": "foreground",
+   "sha256": "f8c3f6e01145d80821128c57e22410f4ad3aecb74f8cc202d66e7ef744205c29",
+   "text": "yes",
+   "voice": "en-us"
+  },
+  "us1-delete": {
+   "role": "foreground",
+   "sha256": "7baf7f96e422c44616432bcef032b01a32eda7f06c20b4aab68df6df59141375",
+   "text": "delete scene",
+   "voice": "mb-us1"
+  },
+  "us1-disfluent": {
+   "role": "foreground",
+   "sha256": "1a72d510e1cf121cb1af01bd60f0a70565369a84e7ae5b15417ab62fe6a195c6",
+   "text": "um pause",
+   "voice": "mb-us1"
+  },
+  "us1-open": {
+   "role": "foreground",
+   "sha256": "ff5ef25194312a29a420d1689773a3950235ec9f1fd9eeb8e78712462340ba86",
+   "text": "open inventory",
+   "voice": "mb-us1"
+  },
+  "us1-open-fast": {
+   "rate": 215,
+   "role": "foreground",
+   "sha256": "ba27dacb2635cb9f9c09da2427d17354f4bbee45760b532e7fa1ce73ba3e974b",
+   "text": "open inventory",
+   "voice": "mb-us1"
+  },
+  "us1-open-high": {
+   "pitch": 85,
+   "role": "foreground",
+   "sha256": "030716150dbc50165cb8d17cc0cf1b4ed9f83fef2166affee1d323e49e7ba24d",
+   "text": "open inventory",
+   "voice": "mb-us1"
+  },
+  "us1-open-slow": {
+   "rate": 95,
+   "role": "foreground",
+   "sha256": "2625044b96411f0484c7b3e088bead753798b7661fca14e539491d71163955fd",
+   "text": "open inventory",
+   "voice": "mb-us1"
+  },
+  "us1-pause": {
+   "role": "foreground",
+   "sha256": "065a8f3cd18f24eb3bf75fd017905b7300de5d6f95986ba748bcfc8ae58feee7",
+   "text": "pause",
+   "voice": "mb-us1"
+  },
+  "us1-stop": {
+   "role": "foreground",
+   "sha256": "8a8aea62f710ab93890a13fd2b345d30eb780d1e39cdeb5c55f18b441bf8e374",
+   "text": "stop",
+   "voice": "mb-us1"
+  },
+  "us1-yes": {
+   "role": "foreground",
+   "sha256": "3278392741de4ef3c5dd915a4c88cbdf96dda318585dcf7f0aa32e1d44d0dc8c",
+   "text": "yes",
+   "voice": "mb-us1"
+  },
+  "us1-yes-fast": {
+   "rate": 215,
+   "role": "foreground",
+   "sha256": "8dcfc29d7373c1e1dd99ff7d8292cc8e8b05b25aa67aefe5bdf540effe361aa0",
+   "text": "yes",
+   "voice": "mb-us1"
+  },
+  "us1-yes-high": {
+   "pitch": 85,
+   "role": "foreground",
+   "sha256": "c4a80ecbc19c89bce4dfc2789d7d937a29759673be928929163a82786a284e5e",
+   "text": "yes",
+   "voice": "mb-us1"
+  },
+  "us1-yes-slow": {
+   "rate": 95,
+   "role": "foreground",
+   "sha256": "4737ededa1773f968ca8e4948c4f2c916822a34b7b6c5bb2ede04a8bd6204c0a",
+   "text": "yes",
+   "voice": "mb-us1"
+  },
+  "us2-delete": {
+   "role": "foreground",
+   "sha256": "59a43daf9e3d75a436ad18993e5a6d55e0a49b98bed928b1e1091df53be0c431",
+   "text": "delete scene",
+   "voice": "mb-us2"
+  },
+  "us2-open": {
+   "role": "foreground",
+   "sha256": "e0e1543d1fa32cef1e5224f99745180d80d536cafb8165d450c1b02fabeb6170",
+   "text": "open inventory",
+   "voice": "mb-us2"
+  },
+  "us2-pause": {
+   "role": "foreground",
+   "sha256": "514eb562542e4ddec45998899ee89a6d99c96bc4b3313cdd1c8d50e4b42c44b9",
+   "text": "pause",
+   "voice": "mb-us2"
+  },
+  "us2-stop": {
+   "role": "foreground",
+   "sha256": "0cc364943e5dae09dded60104d9f9ad169ccbafd094c65145e0fd9f0b47a846d",
+   "text": "stop",
+   "voice": "mb-us2"
+  },
+  "us2-yes": {
+   "role": "foreground",
+   "sha256": "c14391842d4d1c336e55e4a98741238a1ab7930b268ef6099f1eb03aba47dbed",
+   "text": "yes",
+   "voice": "mb-us2"
+  },
+  "us3-delete": {
+   "role": "foreground",
+   "sha256": "e689f6e02a7080ac4c2afbbd67b4b1bd544ea0e2722455bfbc0f0ebba0bebc5e",
+   "text": "delete scene",
+   "voice": "mb-us3"
+  },
+  "us3-open": {
+   "role": "foreground",
+   "sha256": "dba513f3ea5b05e350455d3d89aff12e425970a125b6b5783fc1b24f0123f26e",
+   "text": "open inventory",
+   "voice": "mb-us3"
+  },
+  "us3-pause": {
+   "role": "foreground",
+   "sha256": "7a11b24f6a99d1bc2ed9901295e92e68d9c8b4fc9258e604fb1be312a3be1414",
+   "text": "pause",
+   "voice": "mb-us3"
+  },
+  "us3-stop": {
+   "role": "foreground",
+   "sha256": "e3b81b687162febdb07d613a1a6887c423da8ebb19d6e728e7e2b6195e15c98b",
+   "text": "stop",
+   "voice": "mb-us3"
+  },
+  "us3-yes": {
+   "role": "foreground",
+   "sha256": "eafaa6bfb9a5e78e486422ea2011431134a4b98b89da54a1b2ccdccbde3bd8f1",
+   "text": "yes",
+   "voice": "mb-us3"
+  }
+ },
+ "generator": "espeak-ng + MBROLA, resampled by ffmpeg to 16 kHz mono PCM16",
+ "synthetic": true
+}

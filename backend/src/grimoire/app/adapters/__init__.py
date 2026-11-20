@@ -9,7 +9,8 @@ from . import campaign, imports, inbox, media, play, providers, shell, sources
 ADAPTERS = tuple(module.ADAPTER for module in (campaign, imports, inbox, media, play, providers, shell, sources))
 
 from . import shelf  # noqa: E402 -- tags, pins and saved filters (docs/SHELF.md)
+from . import speech  # noqa: E402 -- voice status, one listening window, captions, read-aloud (067, docs/SPEECH.md)
 
-ADAPTERS = tuple(sorted((*ADAPTERS, shelf.ADAPTER), key=lambda adapter: adapter.name))
+ADAPTERS = tuple(sorted((*ADAPTERS, shelf.ADAPTER, speech.ADAPTER), key=lambda adapter: adapter.name))
 
 __all__ = ["ADAPTERS"]

@@ -41,7 +41,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 14/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 15/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064, 066 and 067 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -499,7 +499,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064, 066 and 067 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -623,9 +623,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-067"></a>
 ### 067 — Voice Accessibility And Testing
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/voice-accessibility-and-testing.md)).
-- Evidence (067 boundary added after the audit snapshot): [`speech_corpus.py`](../../backend/tests/speech_corpus.py), [`test_speech_evaluation.py`](../../backend/tests/test_speech_evaluation.py) and [`test_speech_control.py`](../../backend/tests/test_speech_control.py) add synthetic transcript/event noise and simultaneous-speaker cases, false-command/attribution/task metrics, safe confirmation and typed recovery; unsafe and all-blocked mutants fail evaluation. See [speech contract](../SPEECH.md).
-- Scope / gap: This is transcript/event evidence, not acoustic noise/simultaneous-audio recognition. Real backend/audio evaluation, playback/caption UI, hands-free operation and accessibility-user testing remain unverified; checkbox stays open.
+- [x] Scheduled first-useful slice ([requirements](sprints/voice-accessibility-and-testing.md)).
+- Evidence: false-command and noise tests now run on synthetic **audio** through a real offline recognizer, with no always-on microphone. [`speech/capture.py`](../../backend/src/grimoire/speech/capture.py) takes one gesture-opened window (keyboard, pointer or switch) and blocks speech already under way, late, cut-off, multi-segment or empty windows before recognition; [`speech/acoustic.py`](../../backend/src/grimoire/speech/acoustic.py) supplies deterministic quiet, noise, hum, far-talker and mixing degradations; [`evaluation.evaluate_audio`](../../backend/src/grimoire/speech/evaluation.py) measures unintended, wrong and bystander actions, completion and latency and refuses remote or paid backends. 37 synthetic espeak-ng/MBROLA clips ([`fixtures/speech_audio`](../../backend/tests/fixtures/speech_audio)) and 75 cases ([`speech_audio_corpus.py`](../../backend/tests/speech_audio_corpus.py)) run through PocketSphinx 5.0.4 ([`sphinx_recognizer.py`](../../backend/tests/sphinx_recognizer.py)): 0 unintended actions on 28 negatives, 0 wrong actions, 0 of 13 bystander utterances recognized, 72/75 tasks completed; background "delete scene" never acts; quiet and atypical (formant) speakers confirm a safe action by voice or Yes and return to typing ([`test_speech_acoustic.py`](../../backend/tests/test_speech_acoustic.py); unsafe mutants fail). The app's `speech.*` ops ([`adapters/speech.py`](../../backend/src/grimoire/app/adapters/speech.py), [`test_app_speech.py`](../../backend/tests/test_app_speech.py)) and the chat page's voice strip ([`voice.js`](../../backend/src/grimoire/app/static/pages/chat/voice.js), [`voice.test.mjs`](../../backend/tests/js/voice.test.mjs)) add captions, Yes/No review, Back to typing (Esc), Alt+V listen-once and read-aloud with pause and replay. Earlier transcript/event cases remain ([`test_speech_evaluation.py`](../../backend/tests/test_speech_evaluation.py)). See [speech contract](../SPEECH.md).
+- Scope / gap: the first-useful proof is synthetic audio and one test recognizer, not real rooms, microphones, accents or disabilities. A bystander who starts promptly inside the person's window is attributed to the person (measured as known limits: an instant command can act, never delete, undo, reroll or post). Still unverified, needing people and devices: a real microphone/speaker run, hands-free campaign play with switch or keyboard-only input, accessibility-user testing (sprint milestone 3), and 061's product backend through `evaluate_audio`.
 
 <a id="slice-068"></a>
 ### 068 — Actor Specific Inference
@@ -660,9 +660,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-072"></a>
 ### 072 — VN Staging And Cues
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/vn-staging-and-cues.md)).
-- Evidence: Existing UI scene reader and image slots render transcript/media.
-- Scope / gap: No authored VN stage cue timeline, multi-character blocking/focus or cue transitions separated from transcript.
+- [x] Scheduled first-useful slice ([requirements](sprints/vn-staging-and-cues.md)).
+- Evidence: [`app/static/pages/chat/cues.js`](../../backend/src/grimoire/app/static/pages/chat/cues.js); [`chat/staging.js`](../../backend/src/grimoire/app/static/pages/chat/staging.js); [`textapi/views.py`](../../backend/src/grimoire/textapi/views.py) `table_present`; [`backend/tests/js/staging_timeline.test.mjs`](../../backend/tests/js/staging_timeline.test.mjs); [`backend/tests/js/staging.test.mjs`](../../backend/tests/js/staging.test.mjs); [`backend/tests/test_textapi.py`](../../backend/tests/test_textapi.py). An authored cue timeline over kept turns carries blocking (place, outfit art, off stage) and background forward, with per-turn focus, none/fade/move transitions on arrival, reduced motion and plain-text stage directions. Staging is limited to each kept take's historical `present` (on a 041 stage only player characters and heard speakers). The proving scenario stages one character in two outfits and a portrait-only NPC with authored and automatic focus and historical arrival/departure, and switching to the transcript leaves its text and the scene payload unchanged with no library call.
+- Scope / gap: Cues are device-local and unsynced; art is the current decorative art for the authored slot, not a historical snapshot. Rule-based or inferred cue suggestions, line-level cues and adaptive cinematic composition (milestones 2–3) are not implemented; real-browser motion and screen-reader output are not certified.
 
 <a id="slice-115"></a>
 ### 115 — Wave 8 UI Exit: Reliable Campaign Play
