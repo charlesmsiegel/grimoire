@@ -18,14 +18,71 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, validate_segment, validate_source_id
 from grimoire.core.json_value import JsonObject, JsonValueError, freeze_object
 
-#: role -> definition kind; None is an explicit existing actor of any source kind (033).
-ROLE_KINDS: Mapping[str, str | None] = {"character": "character", "persona": "character", "scenario": "scenario",
-                                      "lorebook": "lorebook", "actor": None}
-ACTOR_ROLES = frozenset({"character", "persona", "actor"})
+#: How a role's binding relates to a campaign actor (071). ``NO_ACTOR``: the binding has none (scenario,
+#: lorebook). ``PER_SOURCE``: one actor per bound source, keyed by that source; the chat creates it as an
+#: instance of the definition's own kind, or reuses one of that kind derived from the source (character,
+#: persona). ``EXISTING``: an existing instance of any kind, keyed by the instance itself, so several
+#: same-species individuals bind independently; it is never created or re-keyed here (033).
+NO_ACTOR, PER_SOURCE, EXISTING = "none", "per_source", "existing"
+
+
+@dataclass(frozen=True, slots=True)
+class RoleRule:
+    """What one chat role binds (071): the single owner of the role/definition/actor decision.
+
+    ``definition_kind`` is the kind of source the role binds, ``None`` for any kind (only with
+    ``EXISTING``). The model's bindings and roster, and the chat library's checks before it writes, all ask
+    this rule, so a new role is one entry in ``ROLES`` rather than a decision repeated at every site."""
+
+    definition_kind: str | None
+    actor: str = NO_ACTOR
+
+    def __post_init__(self) -> None:
+        if self.actor not in (NO_ACTOR, PER_SOURCE, EXISTING):
+            raise ValueError(f"unknown actor mode {self.actor!r}")
+        if (self.definition_kind is None) != (self.actor == EXISTING):
+            raise ValueError("only an existing-instance role binds a source of any kind")
+
+    @property
+    def has_actor(self) -> bool:
+        return self.actor != NO_ACTOR
+
+    @property
+    def by_instance(self) -> bool:
+        """The binding is keyed (and detached) by its exact instance, not by its source alone."""
+        return self.actor == EXISTING
+
+    def binds(self, ref: SourceRef) -> bool:
+        return self.definition_kind is None or ref.kind == self.definition_kind
+
+    def admits(self, actor: InstanceRef) -> bool:
+        """Whether ``actor``'s kind may play this role: a per-source actor is of its definition's kind."""
+        return self.actor == EXISTING or (self.actor == PER_SOURCE and actor.kind == self.definition_kind)
+
+
+#: role -> its rule. ``role_rule`` reads this mapping at call time; nothing else decides a role.
+ROLES: Mapping[str, RoleRule] = MappingProxyType({
+    "character": RoleRule("character", PER_SOURCE),
+    "persona": RoleRule("character", PER_SOURCE),
+    "scenario": RoleRule("scenario"),
+    "lorebook": RoleRule("lorebook"),
+    "actor": RoleRule(None, EXISTING),
+})
+
+
+def role_rule(role: object) -> RoleRule | None:
+    """The rule for ``role``, or ``None`` for anything that is not a known role name."""
+    return ROLES.get(role) if type(role) is str else None
+
+
+#: Compatibility views of ``ROLES`` as exported before 071; internal code asks ``role_rule``.
+ROLE_KINDS: Mapping[str, str | None] = {role: rule.definition_kind for role, rule in ROLES.items()}
+ACTOR_ROLES = frozenset(role for role, rule in ROLES.items() if rule.has_actor)
 LAUNCH_KINDS = frozenset({"character", "scenario", "lorebook", "premise"})
 NOT_WITNESSED = "not_witnessed"  # a new actor saw none of the chat's earlier history
 CAMPAIGN_CONTINUITY = "campaign_continuity"  # a reused campaign actor keeps only its own history
@@ -132,9 +189,9 @@ class Launch:
             raise _fail("only a premise launch carries premise text", "launch_kind")
         if not isinstance(self.ref, SourceRef):
             raise _fail(f"a {self.kind} launch needs a source reference", "launch_kind")
-        if self.ref.kind != ROLE_KINDS[self.kind]:
-            raise _fail(f"a {self.kind} launch needs a {ROLE_KINDS[self.kind]} definition, not {self.ref}",
-                        "role_kind")
+        kind = role_rule(self.kind).definition_kind  # type: ignore[union-attr]  # every launch kind is a role
+        if self.ref.kind != kind:
+            raise _fail(f"a {self.kind} launch needs a {kind} definition, not {self.ref}", "role_kind")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,10 +210,11 @@ class SourceBinding:
     def __post_init__(self) -> None:
         if not isinstance(self.ref, SourceRef):
             raise _fail("a binding needs a SourceRef")
-        if type(self.role) is not str or self.role not in ROLE_KINDS:
+        rule = role_rule(self.role)
+        if rule is None:
             raise _fail(f"unknown role {self.role!r}", "role_kind")
-        if ROLE_KINDS[self.role] is not None and self.ref.kind != ROLE_KINDS[self.role]:
-            raise _fail(f"role {self.role} binds {ROLE_KINDS[self.role]} definitions, not {self.ref}", "role_kind")
+        if not rule.binds(self.ref):
+            raise _fail(f"role {self.role} binds {rule.definition_kind} definitions, not {self.ref}", "role_kind")
         try:
             validate_segment(self.resolved_revision, "resolved_revision")
         except ValueError as error:
@@ -165,10 +223,9 @@ class SourceBinding:
             raise _fail(f"a pinned binding resolves to its own revision, not {self.resolved_revision}")
         _seq(self.introduced_seq, "introduced_seq")
         check_timestamp(self.introduced_at, "introduced_at")
-        if (self.actor is not None) != (self.role in ACTOR_ROLES):
-            raise _fail(f"a {self.role} binding {'needs' if self.role in ACTOR_ROLES else 'has no'} actor")
-        if self.actor is not None and (not isinstance(self.actor, InstanceRef) or
-                                       (self.role != "actor" and self.actor.kind != "character")):
+        if (self.actor is not None) != rule.has_actor:
+            raise _fail(f"a {self.role} binding {'needs' if rule.has_actor else 'has no'} actor")
+        if self.actor is not None and (not isinstance(self.actor, InstanceRef) or not rule.admits(self.actor)):
             raise _fail("a binding needs an instance of the permitted kind")
         if (self.detached_seq is None) != (self.detached_at is None):
             raise _fail("detached_seq and detached_at come together")
@@ -189,7 +246,7 @@ class SourceBinding:
     @property
     def identity_key(self) -> tuple[object, ...]:
         """033: same-species individuals bind independently; legacy roles stay source-keyed."""
-        return (*self.key, self.actor) if self.role == "actor" else self.key
+        return (*self.key, self.actor) if role_rule(self.role).by_instance else self.key  # type: ignore[union-attr]
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,10 +261,14 @@ class RosterEntry:
     prior_history: str = NOT_WITNESSED
 
     def __post_init__(self) -> None:
-        if not isinstance(self.actor, InstanceRef) or (self.role != "actor" and self.actor.kind != "character"):
+        rule = role_rule(self.role)
+        if not isinstance(self.actor, InstanceRef):
             raise _fail("a roster actor is an instance of the permitted kind")
-        if type(self.role) is not str or self.role not in ACTOR_ROLES:
-            raise _fail(f"a roster entry's role is one of {sorted(ACTOR_ROLES)}", "role_kind")
+        if rule is None or not rule.has_actor:  # the role first, as a binding checks it (071)
+            actor_roles = sorted(role for role, each in ROLES.items() if each.has_actor)
+            raise _fail(f"a roster entry's role is one of {actor_roles}", "role_kind")
+        if not rule.admits(self.actor):
+            raise _fail("a roster actor is an instance of the permitted kind")
         if self.source is not None and not isinstance(self.source, SourceRef):
             raise _fail("a roster source is a SourceRef")
         _seq(self.introduced_seq, "introduced_seq")
@@ -337,13 +398,15 @@ class ChatRecord:
         return self._advance(at)._bind(new, at, self.seq + 1)
 
     def detach(self, ref: SourceRef, role: str, at: str, *, actor: InstanceRef | None = None) -> ChatRecord:
-        if role == "actor" and not isinstance(actor, InstanceRef):
+        rule = role_rule(role)
+        by_instance = rule is not None and rule.by_instance
+        if by_instance and not isinstance(actor, InstanceRef):
             raise _fail("detaching an actor binding needs its exact instance", "actor_required")
-        if role != "actor" and actor is not None:
+        if not by_instance and actor is not None:
             raise _fail("instance-targeted detach is for actor bindings", "role_kind")
         key = (role, ref.entity_key)
         position = next((i for i, b in enumerate(self.bindings) if b.active and b.key == key
-                         and (role != "actor" or b.actor == actor)), None)
+                         and (not by_instance or b.actor == actor)), None)
         if position is None:
             raise _fail(f"{ref.unpinned()} is not bound as {role}", "not_bound")
         seq = self.seq + 1

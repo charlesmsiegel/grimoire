@@ -1,0 +1,9 @@
+{
+  "address": "catalog:cards/scenario/fog@r1",
+  "format": "grimoire.record/1",
+  "name": "Fog",
+  "payload": {
+    "opening": "mist"
+  },
+  "previous": null
+}

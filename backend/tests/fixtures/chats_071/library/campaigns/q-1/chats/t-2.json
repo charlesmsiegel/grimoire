@@ -1,0 +1,43 @@
+{
+  "address": "campaign:q-1#chat/t-2",
+  "format": "grimoire.scope-record/1",
+  "owner": "human:owner",
+  "payload": {
+    "bindings": [
+      {
+        "introduced_at": "2026-10-31T10:00:04Z",
+        "introduced_seq": 0,
+        "ref": "catalog:cards/scenario/storm",
+        "resolved_revision": "r2",
+        "role": "scenario"
+      },
+      {
+        "actor": "campaign:q-1/character/mara-1",
+        "introduced_at": "2026-10-31T10:00:04Z",
+        "introduced_seq": 0,
+        "ref": "catalog:cards/character/mara@r1",
+        "resolved_revision": "r1",
+        "role": "character"
+      }
+    ],
+    "created_at": "2026-10-31T10:00:04Z",
+    "last_activity": "2026-10-31T10:00:04Z",
+    "launch": {
+      "kind": "scenario",
+      "ref": "catalog:cards/scenario/storm"
+    },
+    "roster": [
+      {
+        "actor": "campaign:q-1/character/mara-1",
+        "introduced_at": "2026-10-31T10:00:04Z",
+        "introduced_seq": 0,
+        "prior_history": "campaign_continuity",
+        "role": "character",
+        "source": "catalog:cards/character/mara@r1"
+      }
+    ],
+    "seq": 0
+  },
+  "previous": null,
+  "schema": "grimoire.chat/1"
+}
