@@ -23,6 +23,9 @@ from grimoire.chats import ChatCodecError
 from grimoire.comms import TransmissionError, Unread, read_message
 from grimoire.context import Budget
 from grimoire.contextstore import actor_context, chat_lore
+from grimoire.decisionstore import DecisionLibrary
+from grimoire.decisions import DecisionError, record_decision, replay
+from grimoire.generation.brief import heard_transcript
 from grimoire.effectstore import EffectRecovery, TurnEffectsLibrary
 from grimoire.core import DIRECTOR, snapshot_actor_view
 from grimoire.core.authority import (
@@ -147,7 +150,7 @@ class SceneRunner:
                  extractor: ExtractionRuntime | None = None, extract_handle=None,
                  adjudication: AdjudicationLibrary | None = None,
                  effects: TurnEffectsLibrary | None = None, obstacles: ObstacleLibrary | None = None,
-                 agendas: Iterable[Agenda] = (),
+                 agendas: Iterable[Agenda] = (), decisions: DecisionLibrary | None = None,
                  stages: StageSource | None = None,
                  tracer: Callable[[Trace], None] | None = None,
                  clock: Callable[[], float] = time.perf_counter) -> None:
@@ -183,6 +186,13 @@ class SceneRunner:
             raise _refuse("bad_obstacles", "obstacles must be this library's ObstacleLibrary on the adjudication key")
         if stages is not None and not callable(getattr(stages, "latest", None)):
             raise _refuse("bad_stages", "stages must be a StageSource: latest(chat) gives a chat's latest stage")
+        if decisions is not None and not (isinstance(decisions, DecisionLibrary)
+                and decisions.store is store and decisions._authority is authority
+                and decisions._principal.startswith("app:")
+                and decisions._principal not in {getattr(label_handle, "principal", None),
+                    getattr(adjudication, "principal", None),
+                    getattr(getattr(runtime, "_handle", None), "principal", None)}):
+            raise _refuse("bad_decisions", "decisions needs this library's distinct trusted app key")
         by_actor = _agendas(agendas)
         self.store = store
         self.authority = authority
@@ -202,7 +212,8 @@ class SceneRunner:
         self.effects = effects
         self.obstacles = obstacles
         self.recovery = None if effects is None else EffectRecovery(effects)
-        self._agendas = by_actor  # director-authored input, fixed here: nothing played can author or change one
+        self.decisions = decisions
+        self._agendas = by_actor  # director-authored input: played text cannot author or change one
         self.stages = stages
         self._stages: dict[tuple[str, str], Stage] = {}  # the latest stage this runner played each chat with
         self.tracer = tracer
@@ -211,6 +222,54 @@ class SceneRunner:
         self.sovereignty = SovereigntyLedger(authority)
 
     # -- reading ----------------------------------------------------------------------------------
+
+    def set_agendas(self, agendas: Iterable[Agenda]) -> None:
+        """Replace device-authored policy input; played text never supplies these values."""
+        checked = _agendas(agendas)
+        with self.store.lock:
+            self._agendas = checked
+
+    def inspect_context(self, chat: ChatRef, actor: InstanceRef) -> dict:
+        """Current actor-authorized context only, without providers or writes."""
+        context = self._context(chat)
+        _readable(context.scene)
+        chosen = self._speakers(context, (actor,))  # membership and sovereignty before assembly
+        if context.party_problems:
+            raise _refuse("party_unreadable", "the cast cannot be read")
+        ledger, _ = self._knowledge(chat)
+        if ledger.quarantined or ledger.problems:
+            raise _refuse("ledger_damaged", "the knowledge ledger cannot be read in full")
+        pending = context.scene.pending
+        entry = (self.decisions.get(pending.ref, actor)
+                 if self.decisions is not None and pending is not None else None)
+        if entry is not None and actor not in self._agendas:
+            raise _refuse("agenda_changed", "the recorded decision no longer has its authored agenda")
+        built = self._actor_assembly(context, actor, chosen[0][1], context.scene.records, ledger,
+                                     recorded=entry.record if entry is not None else None)
+        brief, pack = built["brief"], built["pack"]
+
+        def origin(value):
+            # No selection bases, global source diagnostics or other actors' identities.
+            result = {"kind": value.kind}
+            for name in ("source", "name", "record", "belief"):
+                field = getattr(value, name)
+                if field is not None:
+                    result[name] = str(field)
+            if value.actor == actor:
+                result["actor"] = str(actor)
+            if value.evidence:
+                result["evidence"] = list(value.evidence)
+            return result
+
+        return {"label": "Current generation context", "actor": str(actor),
+                "system": brief.system, "heard": heard_transcript(brief),
+                "items": [{"line": item.line, "tokens": item.tokens, "lane": item.lane,
+                           "provenance": origin(item.origin)} for item in pack.items],
+                "omitted": [{"reason": item.reason, "tokens": item.tokens, "lane": item.lane,
+                             "provenance": origin(item.origin)} for item in pack.omitted],
+                "budget": {"tokens": pack.tokens, "max_tokens": pack.budget.max_tokens,
+                           "measurement": pack.measurement, "lane_caps": dict(pack.budget.lane_caps),
+                           "item_overhead": pack.budget.item_overhead}}
 
     @traced("open")
     def open(self, chat: ChatRef) -> Scene:
@@ -594,12 +653,23 @@ class SceneRunner:
         plan_turn = record.plan_turn(number)
         history = scene.records if pending is None else scene.records[:-1]
         heard_turns = (*history, record)
+        existing = {} if self.decisions is None else {
+            entry.record.actor: entry.record for entry in self.decisions.decisions(record.ref)}
+        if any(actor not in self._agendas for actor in existing):
+            raise _refuse("agenda_changed", "a recorded decision no longer has its authored agenda")
+        if existing:
+            # A caller narrowing speakers cannot bypass a recorded actor's changed authority/agenda.
+            recorded_speakers = self._speakers(context, tuple(existing))
+            self._briefs(context, recorded_speakers, heard_turns, number, existing=existing)
+        deciders = [actor.instance_id for actor, _ in chosen
+                    if self.decisions is not None and actor in self._agendas and actor not in existing]
         try:
             with span("plan"):
                 plan = plan_generation_turn(chat.campaign_id, plan_turn,
                                             present=[a.instance_id for a in scene.on_stage],
                                             speakers=[a.instance_id for a, _ in chosen], controls=scene.controls,
-                                            director_reply=director, policy=self.policy)
+                                            director_reply=director, policy=self._decision_policy(record),
+                                            decisions=deciders)
         except GenerationError as error:
             raise _refuse(error.reason, "the turn cannot be planned") from None
         if director and not any(call.stage is InferenceStage.DIRECTOR_GENERATION for call in plan.calls):
@@ -608,7 +678,9 @@ class SceneRunner:
         captured = None
         try:
             with self.store.lock:
-                briefs, intentions = self._briefs(context, chosen, heard_turns, number)
+                assemblies = {}
+                briefs, intentions = self._briefs(context, chosen, heard_turns, number,
+                                                  existing=existing, assemblies=assemblies)
                 director_view = self._director(context, heard_turns) if director else None
                 if full_plan is not plan:
                     captured = continuity_snapshot(self, context, choices=tuple(
@@ -635,20 +707,30 @@ class SceneRunner:
         (token,) = claimed
         meter = TurnMeter(TurnUsageLedger(plan))
         silent = tuple(voice for actor, voice in self._voices(context) if actor not in {a for a, _ in chosen})
+        decision_outcomes = {}
         try:
             try:
                 with span("provider", calls=len(plan.calls)):
+                    if self.decisions is not None:
+                        briefs, intentions = self._decide(context, record, stored, running, plan, meter,
+                                                          token, assemblies, existing, decision_outcomes)
+                    if captured is not None:
+                        # Review the exact model-selected or replayed choices briefed below. Keep the
+                        # pre-provider facts and freshness fence: a decision call must not refresh canon.
+                        captured = replace(captured, facts=replace(captured.facts, intentions=tuple(
+                            brief.intention for brief in briefs if brief.intention is not None)))
                     outcome = self.runtime.run_turn(meter, briefs, controls=scene.controls,
                                                     director=director_view[0] if director_view else None,
                                                     token=token, scene_voices=silent, hears=_hearing(scene, rooms))
-            except GenerationError as error:
+            except Exception as error:
+                # Preserve every attempted decision/narration call after running was published.
                 outcome = None
-                failure = error.reason
+                failure = getattr(error, "reason", "decision_failed")
             else:
                 failure = None
             with span("review"):
                 take = self._finished(record, running, plan, meter, outcome, failure, scene,
-                                      director_view[1] if director_view else (), rooms)
+                                      director_view[1] if director_view else (), rooms, decision_outcomes)
                 if captured is not None:
                     take = continuity.extract(self, record, take, meter, full_plan, captured, scene, token)
         finally:
@@ -656,6 +738,32 @@ class SceneRunner:
         return self._land(chat, stored, take, token, intentions, principal)
 
     # -- generation helpers -----------------------------------------------------------------------
+
+    def _decision_policy(self, record: TurnRecord) -> InferencePolicy:
+        """Reserve decision capacity across every take of the scene turn, including crashed runs.
+
+        A published planned call can still be executing, even on a superseded take. Only a finished
+        call known not to have sent anything releases its reservation; a paid or uncertain attempt
+        spends one slot regardless of its outcome. A stored issued outcome without attempt detail
+        is unknown usage and also reserves a slot. Other stages retain the configured policy.
+        """
+        cap = self.policy.cap_for(InferenceStage.DECISION)
+        if cap is None:
+            return self.policy
+        spent = sum(
+            call.status == "planned"
+            or (not call.attempts and call.status != "not_issued")
+            or any(attempt.outcome != "not_sent" for attempt in call.attempts)
+            for take in record.takes for call in take.calls if call.stage is InferenceStage.DECISION)
+        if not spent:
+            return self.policy
+        caps = dict(self.policy.per_turn_call_caps)
+        remaining = max(0, cap - spent)
+        if remaining:
+            caps[InferenceStage.DECISION] = remaining
+        else:
+            caps.pop(InferenceStage.DECISION, None)  # absent is the policy's representation of zero
+        return replace(self.policy, per_turn_call_caps=caps)
 
     def _voices(self, context: _Context) -> list[tuple[InstanceRef, ResolvedVoice]]:
         found = []
@@ -692,37 +800,104 @@ class SceneRunner:
                                                                                      requested_by=DIRECTOR)
             return ledger, _latest(ledger.knowledge)
 
-    def _briefs(self, context: _Context, chosen, turns: Sequence[TurnRecord],
-                take: int) -> tuple[list, tuple[Intention, ...]]:
-        """Each speaker's brief, and the 039 intention of each speaker with an agenda, chosen afresh for ``take``."""
+    def _actor_assembly(self, context, actor, voice, turns, ledger, *, recorded=None):
+        """One shared pack/brief assembly for generation and read-only inspection."""
+        with span("brief.npc") as timed:
+            built = self._assemble_actor(context, actor, voice, turns, ledger, recorded=recorded)
+            timed.count(heard=len(built["brief"].heard))
+            return built
+
+    def _assemble_actor(self, context, actor, voice, turns, ledger, *, recorded=None):
+        scene, snap, chat = context.scene, context.captured.snapshot, context.scene.chat
+        as_of = _latest(ledger.knowledge)
+        _, bare = outcome_lines(self, turns, scene.names)
+        heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
+        seen = _perceived(scene, actor)
+        with span("pack") as packed:
+            built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
+                                  present=seen, scene_text=render(heard))
+            packed.count(items=len(built.pack.items), omitted=len(built.pack.omitted))
+        knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
+        view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
+        kwargs = dict(heard=heard, secrets=self.secrets, names=scene.names, context=built.pack, snapshot=snap)
+        brief = npc_brief(view, voice, **kwargs)
+        agenda = self._agendas.get(actor)
+        choice = None
+        if agenda is not None:
+            choice = self._choose(context, ledger, agenda, knowledge, brief, seen)
+            if recorded is not None:
+                try:
+                    choice = replay(recorded, agenda, knowledge, present=choice.present,
+                                    controls=scene.controls, unrecognised=choice.unrecognised)
+                except DecisionError as error:
+                    raise _refuse(error.reason, "the recorded decision cannot be replayed") from None
+            brief = npc_brief(view, voice, **kwargs, intention=choice)
+        return dict(brief=brief, pack=built.pack, choice=choice, view=view, voice=voice,
+                    kwargs=kwargs, knowledge=knowledge, agenda=agenda)
+
+    def _briefs(self, context: _Context, chosen, turns: Sequence[TurnRecord], take: int,
+                *, existing=None, assemblies=None) -> tuple[list, tuple[Intention, ...]]:
         if not chosen:
             return [], ()
-        scene, snap, chat = context.scene, context.captured.snapshot, context.scene.chat
-        ledger, as_of = self._knowledge(chat)
-        _, bare = outcome_lines(self, turns, scene.names)  # an NPC hears a result where it saw the action
+        ledger, _ = self._knowledge(context.scene.chat)
         briefs, intentions = [], []
         for actor, voice in chosen:
-            with span("brief.npc") as timed:
-                heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
-                seen = _perceived(scene, actor)  # 041: who is present to this NPC, not the whole cast
-                with span("pack") as packed:
-                    built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
-                                          present=seen, scene_text=render(heard))
-                    packed.count(items=len(built.pack.items), omitted=len(built.pack.omitted))
-                knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
-                view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
-                brief = npc_brief(view, voice, heard=heard, secrets=self.secrets, names=scene.names,
-                                  context=built.pack, snapshot=snap)
-                agenda = self._agendas.get(actor)
-                if agenda is not None:
-                    # 039: from the very projection the brief is built from, the cast split by whom it recognises
-                    choice = self._choose(context, ledger, agenda, knowledge, brief, seen)
-                    brief = npc_brief(view, voice, heard=heard, secrets=self.secrets, names=scene.names,
-                                      context=built.pack, snapshot=snap, intention=choice)
-                    intentions.append(_intention(take, choice, _sight(scene, actor)))
-                briefs.append(brief)
-                timed.count(heard=len(heard))
+            built = self._actor_assembly(context, actor, voice, turns, ledger,
+                                         recorded=(existing or {}).get(actor))
+            if assemblies is not None:
+                assemblies[actor] = built
+            briefs.append(built["brief"])
+            if built["choice"] is not None:
+                intentions.append(_intention(take, built["choice"], _sight(context.scene, actor)))
         return briefs, tuple(intentions)
+
+    def _decide(self, context, record, stored, running, plan, meter, token, assemblies, existing, outcomes):
+        scene = context.scene
+        for call in plan.calls:
+            if call.stage is not InferenceStage.DECISION:
+                continue
+            actor = next(actor for actor in assemblies if actor.instance_id == call.actor_id)
+            built = assemblies[actor]
+            outcome = self.runtime.decide(meter, call, built["brief"], controls=scene.controls, token=token)
+            outcomes[call.call_id] = outcome  # retain status before any post-call operation can fail
+            if outcome.pick is not None:
+                basis = built["choice"]
+                built["choice"] = choose(built["agenda"], built["knowledge"], present=basis.present,
+                                          unrecognised=basis.unrecognised, controls=scene.controls,
+                                          selected=outcome.pick)
+            built["decision"] = outcome
+            built["brief"] = npc_brief(built["view"], built["voice"], **built["kwargs"],
+                                       intention=built["choice"])
+        for actor, built in assemblies.items():
+            choice = built["choice"]
+            if choice is None or actor in existing:
+                continue
+            result = built.get("decision")
+            # A skip with too few candidates is a policy record, as required by 045's codec.
+            model = result is not None and result.status != "skipped"
+            decided = record_decision(choice, record.ref,
+                                      call=str(result.call_id) if model else None,
+                                      fallback=result.reason if model and result.pick is None else None)
+            # DurableAuthority.lock is this store's RLock. LibraryStore holds an exclusive process
+            # lease for its entire open session; no second writer process may open this library.
+            with self.authority.lock:
+                current_context = self._context(record.chat)
+                current = current_context.scene
+                last = current.turns.last
+                if (token.stale or current.paused or last is None or last.etag != stored.etag
+                        or last.record.ref != record.ref or not last.record.open
+                        or last.record.running != running):
+                    raise _refuse("turn_changed", "a newer take replaced this decision run")
+                if self._agendas.get(actor) != built["agenda"]:
+                    raise _refuse("agenda_changed", "the authored agenda changed during the decision")
+                current_voice = self._speakers(current_context, (actor,))[0][1]
+                self._actor_assembly(current_context, actor, current_voice, current.records,
+                                     self._knowledge(record.chat)[0], recorded=decided)
+                self.decisions.record(decided)
+        briefs = [built["brief"] for built in assemblies.values()]
+        intentions = tuple(_intention(running.take, built["choice"], _sight(scene, actor))
+                           for actor, built in assemblies.items() if built["choice"] is not None)
+        return briefs, intentions
 
     def _choose(self, context: _Context, ledger, agenda: Agenda, knowledge, brief,
                 seen: Sequence[InstanceRef]) -> Choice:
@@ -773,13 +948,17 @@ class SceneRunner:
 
     def _finished(self, record: TurnRecord, running: Take, plan, meter: TurnMeter, outcome, failure: str | None,
                   scene: Scene, unscreened: tuple[str, ...],
-                  rooms: Mapping[InstanceRef, tuple[InstanceRef, ...]]) -> Take:
+                  rooms: Mapping[InstanceRef, tuple[InstanceRef, ...]], decision_outcomes=None) -> Take:
         """The take a run ended with: every call's outcome and attempts, and the lines it kept. An NPC's line is
         heard by ``rooms``' audience of its speaker, judged before the run; a line by anyone else is rejected."""
         by_call = {}
         for attempt in meter.ledger.attempts:
             by_call.setdefault(attempt.call_id, []).append(attempt)
         statuses = {call.call_id: (call.status, call.reason) for call in outcome.calls} if outcome else {}
+        # 035's persisted call schema has no skipped state: retain its specific reason and
+        # the meter's not_sent attempt under not_issued rather than inventing a schema migration.
+        statuses.update({key: ("not_issued" if value.status == "skipped" else value.status, value.reason)
+                         for key, value in (decision_outcomes or {}).items()})
         lines: list[SceneLine] = []
         rejected: dict[object, str] = {}
         if outcome is not None and outcome.status != "stale":
@@ -856,7 +1035,7 @@ class SceneRunner:
                     landed = stored.record.with_take(take)
                     if bare:
                         landed = landed.with_intentions(take.take, ())
-                    elif intentions and not landed.intentions_of(take.take):
+                    elif intentions:
                         landed = landed.with_intentions(take.take, intentions)
                     try:
                         self._write(landed, stored, landing=True, before_commit=fence)
@@ -1308,7 +1487,8 @@ def _intention(take: int, choice: Choice, perceived: tuple[InstanceRef, ...] | N
     goal, approach = choice.goal, choice.approach
     entries = choice.considered
     cut = next((index for index, entry in enumerate(entries) if entry.outcome == "chosen"), len(entries))
-    kept = (*entries[:cut + 1], *(entry for entry in entries[cut + 1:] if entry.outcome == "forbidden"))
+    kept = (*(entry for entry in entries[:cut + 1] if entry.outcome != "outranked"),
+            *(entry for entry in entries[cut + 1:] if entry.outcome == "forbidden"))
     considered = tuple(IntentionOption(entry.goal_id, entry.approach_id, entry.outcome,
                                        tuple(condition.describe() for condition in entry.unmet), entry.forbidden_by)
                        for entry in kept)

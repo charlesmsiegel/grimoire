@@ -15,7 +15,7 @@ const page = await import(process.argv[2]);
 
 const totals = { attempts: 2, sums: { input_tokens: 10, output_tokens: 3, cache_read_tokens: 0, reasoning_tokens: 0 },
   unreported: { input_tokens: 1, output_tokens: 0, cache_read_tokens: 2, reasoning_tokens: 2 }, unmetered_calls: 2, not_issued_calls: 1, cost: null, cost_state: "unpriced", cost_lower_bound: false, unpriced_attempts: 0 };
-const models = { settings: { provider_id: "local", base_url: "http://127.0.0.1:1/v1", model: "m", fallbacks: ["n"], max_output_tokens: 99, attempts: 2, director: 1, key_env: null, key_set: null, max_tokens_field: "max_tokens", price_prompt: null, price_reply: null, price_cached: null },
+const models = { settings: { provider_id: "local", base_url: "http://127.0.0.1:1/v1", model: "m", fallbacks: ["n"], max_output_tokens: 99, attempts: 2, director: 1, critique: 1, key_env: null, key_set: null, max_tokens_field: "max_tokens", price_prompt: null, price_reply: null, price_cached: null },
   prices: { set: false, route: null }, test_call: { available: true, reason: null, seconds: 30 },
   etag: "sha256:x", file: { configured: true, exists: true }, generation: { available: true, problem: null, routes: ["local@x/m"], local: true },
   stages: [{ stage: "npc_generation", kind: "baseline", enabled: true, cap: null, available: true, note: "n" }, { stage: "decision", kind: "optional", enabled: false, cap: null, available: false, note: "no" }],
@@ -140,9 +140,9 @@ for (const op of ["models", "chats", "diagnostics", "usage", "save_models"]) ass
 const sent = calls.filter((c) => c[0] === "save_models").pop()[1];
 assert.deepEqual(sent.expected, "sha256:x");
 assert.deepEqual(sent.settings, { provider_id: "local", base_url: "http://127.0.0.1:1/v1", model: "edited-model", fallbacks: ["n"],
-  max_output_tokens: 99, attempts: 2, director: 1, key_env: "OPENROUTER_API_KEY", max_tokens_field: "max_tokens" },
+  max_output_tokens: 99, attempts: 2, director: 1, decision: 0, critique: 1, agendas: [], key_env: "OPENROUTER_API_KEY", max_tokens_field: "max_tokens" },
   "the key goes only as the name of its variable, and nothing else is added: an empty price is left out");
-assert.ok(!ops.some((op) => !["models", "chats", "diagnostics", "usage", "save_models", "check_models"].includes(op)));
+assert.ok(!ops.some((op) => !["models", "chats", "diagnostics", "usage", "save_models", "check_models", "context"].includes(op)));
 assert.ok(root.querySelector("div.providers-live").textContent.startsWith("Saved."));
 
 // the prices: three labelled fields in the Model card, saved as the text typed, never as a number
