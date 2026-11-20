@@ -656,9 +656,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-072"></a>
 ### 072 — VN Staging And Cues
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/vn-staging-and-cues.md)).
-- Evidence: Existing UI scene reader and image slots render transcript/media.
-- Scope / gap: No authored VN stage cue timeline, multi-character blocking/focus or cue transitions separated from transcript.
+- [x] Scheduled first-useful slice ([requirements](sprints/vn-staging-and-cues.md)).
+- Evidence: [`app/static/pages/chat/cues.js`](../../backend/src/grimoire/app/static/pages/chat/cues.js); [`chat/staging.js`](../../backend/src/grimoire/app/static/pages/chat/staging.js); [`textapi/views.py`](../../backend/src/grimoire/textapi/views.py) `table_present`; [`backend/tests/js/staging_timeline.test.mjs`](../../backend/tests/js/staging_timeline.test.mjs); [`backend/tests/js/staging.test.mjs`](../../backend/tests/js/staging.test.mjs); [`backend/tests/test_textapi.py`](../../backend/tests/test_textapi.py). An authored cue timeline over kept turns carries blocking (place, outfit art, off stage) and background forward, with per-turn focus, none/fade/move transitions on arrival, reduced motion and plain-text stage directions. Staging is limited to each kept take's historical `present` (on a 041 stage only player characters and heard speakers). The proving scenario stages one character in two outfits and a portrait-only NPC with authored and automatic focus and historical arrival/departure, and switching to the transcript leaves its text and the scene payload unchanged with no library call.
+- Scope / gap: Cues are device-local and unsynced; art is the current decorative art for the authored slot, not a historical snapshot. Rule-based or inferred cue suggestions, line-level cues and adaptive cinematic composition (milestones 2–3) are not implemented; real-browser motion and screen-reader output are not certified.
 
 <a id="slice-115"></a>
 ### 115 — Wave 8 UI Exit: Reliable Campaign Play
