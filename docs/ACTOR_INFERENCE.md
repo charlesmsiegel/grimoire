@@ -185,7 +185,8 @@ findings and token usage, reported apart), then V2 with planning against plain V
   prints the request ceiling (planned calls times attempts: 18 for the scenario at three attempts, 54
   with planning) before sending, reads the key only from the named variable and writes nothing that
   contains it. If it fails or is stopped, nothing is written and it prints what was already sent, as
-  counts only. Running it needs CMS's own spending approval, separate from 015's.
+  counts only. Running it needs CMS's own spending approval, separate from 015's; the one
+  approved run is [recorded below](#billed-comparison-2026-11-20).
 - V2 speaks only the OpenAI-compatible protocol. Against an `anthropic` capture it calls Anthropic's
   OpenAI-compatible endpoint, which offers no prompt caching and reports no cached-token counts,
   while 0.2.1 called the Messages API. The report says so, the cost comparison is `usage_incomplete`,
@@ -197,4 +198,34 @@ findings and token usage, reported apart), then V2 with planning against plain V
 
 Proofs: `backend/tests/test_presentation_planning.py` (runtime, play and app) and
 `backend/tests/test_capture_v2.py` (dry runs against 015's committed dry-run evidence, refusals, and
-the real HTTP transport against a loopback server). No billed comparison has been run.
+the real HTTP transport against a loopback server).
+
+### Billed comparison (2026-11-20)
+
+One billed comparison was run with `--live --with-planning` against 015's
+[measured baseline](evals/V021_BASELINE.md#measured-baseline-2026-11-20): 18 calls to
+`claude-sonnet-4-5-20250929` at `max_tokens=16000`, none retried, under a request ceiling of 54.
+**The gate failed both comparisons, so 068's proving scenario is not established.**
+
+| Run | Calls | Input tokens | Output tokens | Cast distinguishability | Choices unrealized |
+|---|---:|---:|---:|---:|---:|
+| 0.2.1 baseline (measured) | 6 | 15,618 | 1,396 | 0.833 | 0 |
+| V2, one call per speaking NPC | 6 | 3,110 | 788 | 1.000 | 1 |
+| V2 with planning | 12 (6 planning) | 7,111 | 1,585 | 0.833 | 2 |
+
+- **V2 against 0.2.1: FAIL**, two findings. `choice_negated` on turn 3 (`ask-song`, unrealized:
+  no model text gives effect to the choice), and `usage_incomplete`: the OpenAI-compatible
+  endpoint reported no cached-token counts, so cost cannot be compared. Leak rate 0 on both.
+- **Planning against plain V2: FAIL**, six findings. The baseline's own turn-3 finding
+  (`baseline_invalid`), `choice_negated` on turn 1 (`ask-ledger`) and turn 3, `usage_incomplete`
+  on both runs, and `voice_regression`: cast distinguishability fell from 1.000 to 0.833.
+  Planning added 6 calls and roughly doubled input and output tokens.
+- The token sums are not like for like: 0.2.1 called the Messages API with its own prompt
+  assembly, and V2's usage is provider-reported without capture evidence. V2's lower input
+  count is not a cost claim. Choices are unlabelled and judged on exact marker phrases, which
+  live text rarely contains, so the unrealized-choice findings may reflect the markers.
+- No cost is in either run. At an assumed list price of 3 USD input and 15 USD output per
+  million tokens the 18 calls come to about 0.07 USD, as an estimate.
+
+One three-turn scenario on one model is a single sample. It does not show that planning helps,
+and here it measured worse on both voice and choices.

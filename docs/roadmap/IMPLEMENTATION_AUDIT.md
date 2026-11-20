@@ -28,14 +28,14 @@ Historical refresh relative to #678: **+8 slices** (033, 051, 055, 057, 059, 060
 
 This is a code-and-test audit of the 119 scheduled **first-useful slices**, including inherited first-proof additions. Requirements were not narrowed to match the code. A check does not close later milestones, certify a live model, or prove physical-phone/browser accessibility. Unchecked entries distinguish missing implementation from a proof not yet established. The [ordered roadmap](README.md#implementation-checkmarks) carries the same checkmarks.
 
-The current reconciliation preserves the original proving obligations. Browser evidence is synthetic Chromium/loopback with keyboard, focus and emulated narrow viewport; it does not certify physical-phone touch, real screen-reader use or the global Wave 6/7 acceptance gates. 015 remains unchecked without the live provider-reported baseline.
+The current reconciliation preserves the original proving obligations. Browser evidence is synthetic Chromium/loopback with keyboard, focus and emulated narrow viewport; it does not certify physical-phone touch, real screen-reader use or the global Wave 6/7 acceptance gates. 015 was checked on 2026-11-20 on a live provider-reported token baseline; see its entry for the limits.
 
 ## Wave results
 
 | Wave | Checked slices | Wave complete | Exit / remaining limit |
 |---|---:|:---:|---|
 | [1](#wave-1) | 8/8 | ☑ | All eight scoped foundation contracts and their integration proof are present; this is not playable-product certification. |
-| [2](#wave-2) | 7/8 | ☐ | 015 has no live provider-reported V0.2.1 baseline capture. |
+| [2](#wave-2) | 8/8 | ☑ | 015's measured V0.2.1 baseline was captured on 2026-11-20 on a stand-in model; token counts are provider-reported, cost in money is not. |
 | [3](#wave-3) | 10/10 | ☑ | All ten scheduled headless first slices are present. Later subject-validation and other milestones remain open. |
 | [4](#wave-4) | 10/10 | ☑ | 033 follow-up adds public non-character chat rosters and scene-runner reserve proof; see its dated evidence below. |
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
@@ -137,7 +137,7 @@ All eight scoped foundation contracts and their integration proof are present; t
 <a id="wave-2"></a>
 ## Wave 2
 
-015 has no live provider-reported V0.2.1 baseline capture.
+All eight scheduled first slices are checked. 015's measured V0.2.1 baseline was captured on 2026-11-20 on a stand-in model; token counts are provider-reported, cost in money is not, and no cost parity is claimed.
 
 <a id="slice-009"></a>
 ### 009 — Entity Facets And Instance Model
@@ -179,9 +179,9 @@ All eight scoped foundation contracts and their integration proof are present; t
 <a id="slice-015"></a>
 ### 015 — V1 Cost And Voice Regression
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/v1-cost-and-voice-regression.md)).
-- Evidence: [`backend/src/grimoire/evals/v021.py`](../../backend/src/grimoire/evals/v021.py); [`docs/evals/V021_BASELINE.md`](../../docs/evals/V021_BASELINE.md); [`backend/tests/test_v021_replay.py`](../../backend/tests/test_v021_replay.py); Capture conversion and receipt verification plus deterministic replay exist.
-- Scope / gap: [#686](https://github.com/charlesmsiegel/grimoire/pull/686) documents capture prerequisites only. No live provider-reported V0.2.1 measurement exists: the one live attempt (2026-11-20, `anthropic`, `claude-sonnet-5-5`) failed on the second speaker's call, because 0.2.1 ends that request with an assistant turn and the model rejects it ([details](../evals/V021_BASELINE.md#live-attempt-2026-11-20)). Baseline capture is still pending, so actual measured baseline/voice regression proof is missing.
+- [x] Scheduled first-useful slice ([requirements](sprints/v1-cost-and-voice-regression.md)).
+- Evidence: [`backend/src/grimoire/evals/v021.py`](../../backend/src/grimoire/evals/v021.py); [`docs/evals/V021_BASELINE.md`](../../docs/evals/V021_BASELINE.md); [`backend/tests/test_v021_replay.py`](../../backend/tests/test_v021_replay.py); capture conversion, receipt verification and deterministic replay. A live capture of the unmodified 0.2.1 app on 2026-11-20 (`anthropic`, `claude-sonnet-4-5-20250929`) wrote its evidence, and `grimoire.evals.story_quality` with evidence verification reports it **measured**: 6 calls, 15,618 input and 1,396 output tokens, cast distinguishability 0.833, 0 findings ([measured baseline](../evals/V021_BASELINE.md#measured-baseline-2026-11-20)).
+- Scope / limit: one stand-in model chosen by the requester, not their play model, on the two-call profile (a lower bound). The provider reports no cost, so no cost in money and no cost parity is claimed. Choices are unlabelled. The capture came from a driver copy with one unexecuted diagnostic line, and two earlier live attempts that day failed. The evidence is consistent, not authenticated. The matched V2 comparison is 068's.
 
 <a id="slice-016"></a>
 ### 016 — Session Zero Boundaries
@@ -633,7 +633,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 - [ ] Scheduled first-useful slice ([requirements](sprints/actor-specific-inference.md)).
 - Evidence: [`actor_inference`](../../backend/src/grimoire/actor_inference), [`test_actor_inference.py`](../../backend/tests/test_actor_inference.py) and [`test_actor_inference_report.py`](../../backend/tests/test_actor_inference_report.py) provide opt-in actor-private planner/critic calls, baseline generation, conservative budget/cancellation, usage/latency reports and an injected synthetic comparison.
 - Runtime/UI adoption: the app's `planning` setting (0–16, off by default) runs one capped, untrusted presentation suggestion before each speaking NPC's reply through `GenerationRuntime`; with it off a turn is still one call per speaking NPC ([`test_presentation_planning.py`](../../backend/tests/test_presentation_planning.py)). `python -m grimoire.capture.v2` makes the billed V2-vs-V0.2.1 comparison one step on 015's capture ([`test_capture_v2.py`](../../backend/tests/test_capture_v2.py), dry run and loopback only).
-- Scope / gap: No billed comparison has been run: it waits on 015's live capture, and then needs its own spending approval. Actual billing remains unknown and matched measured V0.2.1 cost/voice evidence is absent. Against an `anthropic` capture, V2 reaches Anthropic through its OpenAI-compatible endpoint (no prompt caching, no cached-token counts), so cost will be reported `usage_incomplete`. Synthetic lexical quality and estimated/priced token usage cannot close the proving scenario; see [measurement limits](../ACTOR_INFERENCE.md).
+- Scope / gap: One billed comparison was run on 2026-11-20 against 015's measured baseline (18 calls, `claude-sonnet-4-5-20250929`) and **the gate failed both ways** ([results](../ACTOR_INFERENCE.md#billed-comparison-2026-11-20)). V2 against 0.2.1: one choice unrealized and `usage_incomplete`, because V2 reaches Anthropic through its OpenAI-compatible endpoint, which reports no cached-token counts. Planning against plain V2: a second unrealized choice and a voice regression (cast distinguishability 1.000 to 0.833) for about twice the tokens. The proving scenario is not established. Synthetic lexical quality and estimated/priced token usage cannot close the proving scenario; see [measurement limits](../ACTOR_INFERENCE.md).
 
 <a id="slice-069"></a>
 ### 069 — Coding Skills Calibration
