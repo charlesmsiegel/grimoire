@@ -316,7 +316,7 @@ The wave is not **user-visible complete** until its implemented user-facing doma
 
 ### Wave 9 — Advanced mechanics, authoring and audio foundations
 
-- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (3/16 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
+- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (5/16 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
@@ -329,11 +329,11 @@ The wave is not **user-visible complete** until its implemented user-facing doma
 | 079 | [☐](IMPLEMENTATION_AUDIT.md#slice-079) | [Source Upgrades And Dependencies](sprints/source-upgrades-and-dependencies.md) | **P1** | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md), [Catalog Composition](sprints/catalog-composition.md) | world / source upgrades | Preview removing or updating a source without mistaken ID matching |
 | 080 | [☐](IMPLEMENTATION_AUDIT.md#slice-080) | [Speech To Draft](sprints/speech-to-draft.md) | **P1** | [Spoken Command And Intent](sprints/spoken-command-and-intent.md), [Private And Local Voice](sprints/private-and-local-voice.md), [V2 Mobile Client](sprints/v2-mobile-client.md) | voice / speech input | Dictate a draft without submitting a fictional action |
 | 081 | [☐](IMPLEMENTATION_AUDIT.md#slice-081) | [Story Graph And Navigation](sprints/story-graph-and-navigation.md) | **P1** | [Memory Consolidation](sprints/memory-consolidation.md), [Scenes Forks And Retcons](sprints/scenes-forks-and-retcons.md) | frontend / story explorer | Find an old promise and its eventual outcome |
-| 082 | [☐](IMPLEMENTATION_AUDIT.md#slice-082) | [Agentic Investigations](sprints/agentic-investigations.md) | **P2** | [World Change Sets](sprints/world-change-sets.md), [Safe Tool Execution](sprints/safe-tool-execution.md) | agents / evidence jobs | Review a bounded read-only world audit |
+| 082 | [☑](IMPLEMENTATION_AUDIT.md#slice-082) | [Agentic Investigations](sprints/agentic-investigations.md) | **P2** | [World Change Sets](sprints/world-change-sets.md), [Safe Tool Execution](sprints/safe-tool-execution.md) | agents / evidence jobs | Review a bounded read-only world audit |
 | 083 | [☐](IMPLEMENTATION_AUDIT.md#slice-083) | [Character Voice Performance](sprints/character-voice-performance.md) | **P2** | [Private And Local Voice](sprints/private-and-local-voice.md), [Per Npc Generation Runtime](sprints/per-npc-generation-runtime.md) | voice / playback | Render separate voice performance from accepted actor text |
 | 084 | [☐](IMPLEMENTATION_AUDIT.md#slice-084) | [Cross Campaign Scene Transfer](sprints/cross-campaign-scene-transfer.md) | **P2** | [Scenes Forks And Retcons](sprints/scenes-forks-and-retcons.md), [Source Qualified Identity](sprints/source-qualified-identity.md) | campaign / transfer | Copy a transcript with reviewed identity mapping |
 | 085 | [☐](IMPLEMENTATION_AUDIT.md#slice-085) | [Live Context Preview](sprints/live-context-preview.md) | **P2** | [Context Retrieval](sprints/context-retrieval.md) | frontend / prompt preview | Preview likely retrieval without paying for a turn |
-| 086 | [☐](IMPLEMENTATION_AUDIT.md#slice-086) | [Mechanics Module Authoring](sprints/mechanics-module-authoring.md) | **P2** | [Ruleset Action Contracts](sprints/ruleset-action-contracts.md) | mechanics / module editor | Author an isolated validated mechanics sheet |
+| 086 | [☑](IMPLEMENTATION_AUDIT.md#slice-086) | [Mechanics Module Authoring](sprints/mechanics-module-authoring.md) | **P2** | [Ruleset Action Contracts](sprints/ruleset-action-contracts.md) | mechanics / module editor | Author an isolated validated mechanics sheet |
 | 087 | [☑](IMPLEMENTATION_AUDIT.md#slice-087) | [World Authoring Assistant](sprints/world-authoring-assistant.md) | **P2** | [World Change Sets](sprints/world-change-sets.md), [Catalog Composition](sprints/catalog-composition.md) | authoring / world proposals | Review three linked towns and accept two |
 
 

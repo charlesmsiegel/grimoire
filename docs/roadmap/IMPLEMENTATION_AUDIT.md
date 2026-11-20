@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the rows to **80/119**, and the Wave 9 087 proof to **81/119**. With Wave 2, **5/12 scoped waves** (1, 2, 3, 4, 5) are complete. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the rows to **80/119**, and the Wave 9 082, 086 and 087 proofs to **83/119**. With Wave 2, **5/12 scoped waves** (1, 2, 3, 4, 5) are complete. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 3/16 | ☐ | 075, 076 and 087 are complete at their bounded headless first-proof boundaries. Other domain slices and UI exit 116 remain incomplete. |
+| [9](#wave-9) | 5/16 | ☐ | 075, 076, 082, 086 and 087 meet their bounded headless first slices; the other domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-075, 076 and 087 meet their bounded first proofs; the other scheduled domain slices and UI exit 116 are not complete.
+075 (recorded rolls), 076 (offscreen plan steps), 082 (read-only world audits), 086 (validated module authoring with pinned revisions) and 087 (world authoring proposals accepted in part) meet their headless first slices; the other domain slices and UI exit 116 are not complete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -742,9 +742,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-082"></a>
 ### 082 — Agentic Investigations
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/agentic-investigations.md)).
-- Evidence: changesets and runtime tool permissions support reviewed writes and bounded basic calls.
-- Scope / gap: No multi-step read-only world-audit job with attributed evidence, budget and cancellation.
+- [x] Scheduled first-useful slice ([requirements](sprints/agentic-investigations.md)).
+- Evidence: [`investigations/job.py`](../../backend/src/grimoire/investigations/job.py)::run_job runs a worker's list/read/report actions within a step, read, finding and time budget, checks cancellation before every action, and keeps a finding only when every citation is a record the job read, at the same revision and etag, with a field that exists and a verbatim quote ([`evidence.py`](../../backend/src/grimoire/investigations/evidence.py)). [`investigationstore/service.py`](../../backend/src/grimoire/investigationstore/service.py)::InvestigationService grants the job `inspect` only over its source to its own principal, gives the read-only [`WorldToolbox`](../../backend/src/grimoire/investigationstore/toolbox.py) an untrusted handle that authorizes every read, revokes the grant however the job ends, and reviews findings for stale evidence. The deterministic [`ConsistencyAuditor`](../../backend/src/grimoire/investigations/auditor.py) reports dangling references, possible duplicates and missing links. [`test_investigation_store.py`](../../backend/tests/test_investigation_store.py) runs the proving scenario: a missing guild link and a possible duplicate, each cited, no file changed, and a cancelled run that keeps its finding and writes nothing; it also covers the audit trail, scope denials, lying workers and staleness. Docs: [INVESTIGATIONS](../INVESTIGATIONS.md).
+- Scope / gap: No model worker, persistence or resumption, and no process boundary for outside workers; the auditor's checks are lexical, and review does not mark a dangling-reference finding stale when the missing target is created. Proposed repairs (milestone 2), resumable jobs and user permission policy (milestone 3) and the UI (116) remain.
 
 <a id="slice-083"></a>
 ### 083 — Character Voice Performance
@@ -770,9 +770,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-086"></a>
 ### 086 — Mechanics Module Authoring
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/mechanics-module-authoring.md)).
-- Evidence: Existing entity editor validates ordinary facets.
-- Scope / gap: No mechanics-module sheet editor, family-specific schema validation or isolated recorded check authoring.
+- [x] Scheduled first-useful slice ([requirements](sprints/mechanics-module-authoring.md)).
+- Evidence: [`mechanics/module.py`](../../backend/src/grimoire/mechanics/module.py), [`mechanics/sheet.py`](../../backend/src/grimoire/mechanics/sheet.py), [`mechanics/expr.py`](../../backend/src/grimoire/mechanics/expr.py) and [`mechanicsstore/store.py`](../../backend/src/grimoire/mechanicsstore/store.py), with [`test_mechanics_authoring.py`](../../backend/tests/test_mechanics_authoring.py), [`test_mechanicsstore.py`](../../backend/tests/test_mechanicsstore.py) and [`test_mechanicsstore_recovery.py`](../../backend/tests/test_mechanicsstore_recovery.py). An author drafts a module (sheet types, derived values, named checks) as an owned JSON file kept exactly as saved; validation lists the problems it finds by path with did-you-mean hints, checks every formula name and type statically, applies d20/pool family shapes and refuses executable hooks (007). Only a module with no problem publishes, as an immutable content-named revision; a malformed draft cannot publish, load or bind. Sheets and recorded-dice checks pin the revision: the proving scenario edits a module, a fresh check changes and the earlier record still confirms under its own revision and is never re-graded. V0.2.1's d20-basic/pool-basic ship as templates. [Contract](../MECHANICS_AUTHORING.md).
+- Scope / gap: Headless first slice. No editor page (116), campaign selection of a published revision, compatibility/migration preview (milestone 2), interactive rule tests (3), rules compilation (4) or durable roll journal (075); `ref` fields, creation pools and advancement are not yet expressible.
 
 <a id="slice-087"></a>
 ### 087 — World Authoring Assistant
