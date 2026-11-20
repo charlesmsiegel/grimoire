@@ -44,7 +44,7 @@ These are **functional gates**, not dates. Import and phone play cannot be descr
 
 ## Implementation checkmarks
 
-Historical audit: [`b54b2bd8`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), **2026-11-20**, recorded **62 of 119 scheduled first-useful slices** and **4 of 12 scoped waves**. The bounded reconciliation at landed base [`0f7adcfb`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) recognizes **65 of 119 slices**, including 047, 050 and 112. The 049/054 proofs bring the current rows to **67 of 119 slices**, and 056's shared-bestiary proof with 064's scenario preparation to **69 of 119**; 053’s consolidation and 063’s delayed-rumor proofs bring them to 71, the 070 proof to 72, 067’s voice proof to 73, 072’s VN cue timeline to 74, 061’s local voice proof to 75, and 058’s two-player turn to **76 of 119**; **4 of 12 scoped waves** remain complete. Historical verification results remain pinned to their original snapshots.
+Historical audit: [`b54b2bd8`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), **2026-11-20**, recorded **62 of 119 scheduled first-useful slices** and **4 of 12 scoped waves**. The bounded reconciliation at landed base [`0f7adcfb`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) recognizes **65 of 119 slices**, including 047, 050 and 112. The 049/054 proofs bring the current rows to **67 of 119 slices**, and 056's shared-bestiary proof with 064's scenario preparation to **69 of 119**; 053’s consolidation and 063’s delayed-rumor proofs bring them to 71, the 070 proof to 72, 067’s voice proof to 73, 072’s VN cue timeline to 74, 061’s local voice proof to 75, and 058’s two-player turn to **76 of 119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the current rows to **80 of 119**, and with Wave 2 **5 of 12 scoped waves** are complete. Historical verification results remain pinned to their original snapshots.
 
 **☑** means the scheduled first-useful implementation and its required first-proof additions were found in code and executable tests. It does **not** mean all subsequent milestones or the moonshot are complete, nor does it certify live providers or physical devices. **☐** means a required implementation or proving scenario is missing or not established; it does not mean no work exists. Existing functionality can satisfy a slice even when delivered by an earlier sprint.
 
@@ -118,7 +118,7 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 
 ### Wave 2 — Native contracts, provider economics and executable V1 inventory
 
-- [ ] **Wave 2 complete for its scheduled first slices and exit gate** (7/8 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-2)
+- [x] **Wave 2 complete for its scheduled first slices and exit gate** (8/8 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-2)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
@@ -128,7 +128,7 @@ We still target the first **playable migrated desktop text campaign in Wave 5** 
 | 012 | [☑](IMPLEMENTATION_AUDIT.md#slice-012) | [Knowledge And Perspective](sprints/knowledge-and-perspective.md) | **P0** | [Source Qualified Identity](sprints/source-qualified-identity.md) | knowledge / perspective policy | Define typed witness/channel/time/evidence/claim contract; demonstrate actor-visible false reports without promoting them to truth |
 | 013 | [☑](IMPLEMENTATION_AUDIT.md#slice-013) | [Model Routing And Budgeting](sprints/model-routing-and-budgeting.md) | **P0** | [Turn Costs And Feature Flags](sprints/turn-costs-and-feature-flags.md), [Testing And Failure Injection](sprints/testing-and-failure-injection.md), [Safe Tool Execution](sprints/safe-tool-execution.md) | inference / provider adapter | Port a working planned-call provider adapter with real usage booking, execute authorization and bounded fault-injecting fake |
 | 014 | [☑](IMPLEMENTATION_AUDIT.md#slice-014) | [Characterization And Dialogue](sprints/characterization-and-dialogue.md) | **P0** | [Story Quality Benchmarks](sprints/story-quality-benchmarks.md), [Player Sovereignty](sprints/player-sovereignty.md) | generation / voice anchors | Test portrayal-scoped voice anchors and distinctive separately addressed NPC prompt inputs without a provider dependency |
-| 015 | [☐](IMPLEMENTATION_AUDIT.md#slice-015) | [V1 Cost And Voice Regression](sprints/v1-cost-and-voice-regression.md) | **P0** | [Story Quality Benchmarks](sprints/story-quality-benchmarks.md), [Turn Costs And Feature Flags](sprints/turn-costs-and-feature-flags.md) | evals / cost parity | Capture provider-reported 0.2.1 per-NPC voice/cost baseline (opt-in) and reconcile story-quality/2 with inference ledger |
+| 015 | [☑](IMPLEMENTATION_AUDIT.md#slice-015) | [V1 Cost And Voice Regression](sprints/v1-cost-and-voice-regression.md) | **P0** | [Story Quality Benchmarks](sprints/story-quality-benchmarks.md), [Turn Costs And Feature Flags](sprints/turn-costs-and-feature-flags.md) | evals / cost parity | Capture provider-reported 0.2.1 per-NPC voice/cost baseline (opt-in) and reconcile story-quality/2 with inference ledger |
 | 016 | [☑](IMPLEMENTATION_AUDIT.md#slice-016) | [Session Zero Boundaries](sprints/session-zero-boundaries.md) | **P0** | [Player Sovereignty](sprints/player-sovereignty.md) | campaign / creative boundaries | Define typed in-memory session-zero preferences and pause/skip/redirect intents; actual play execution belongs to 035 |
 
 <a id="wave-3"></a>
@@ -316,7 +316,7 @@ The wave is not **user-visible complete** until its implemented user-facing doma
 
 ### Wave 9 — Advanced mechanics, authoring and audio foundations
 
-- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (3/16 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
+- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (5/16 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
@@ -329,11 +329,11 @@ The wave is not **user-visible complete** until its implemented user-facing doma
 | 079 | [☐](IMPLEMENTATION_AUDIT.md#slice-079) | [Source Upgrades And Dependencies](sprints/source-upgrades-and-dependencies.md) | **P1** | [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md), [Catalog Composition](sprints/catalog-composition.md) | world / source upgrades | Preview removing or updating a source without mistaken ID matching |
 | 080 | [☐](IMPLEMENTATION_AUDIT.md#slice-080) | [Speech To Draft](sprints/speech-to-draft.md) | **P1** | [Spoken Command And Intent](sprints/spoken-command-and-intent.md), [Private And Local Voice](sprints/private-and-local-voice.md), [V2 Mobile Client](sprints/v2-mobile-client.md) | voice / speech input | Dictate a draft without submitting a fictional action |
 | 081 | [☐](IMPLEMENTATION_AUDIT.md#slice-081) | [Story Graph And Navigation](sprints/story-graph-and-navigation.md) | **P1** | [Memory Consolidation](sprints/memory-consolidation.md), [Scenes Forks And Retcons](sprints/scenes-forks-and-retcons.md) | frontend / story explorer | Find an old promise and its eventual outcome |
-| 082 | [☐](IMPLEMENTATION_AUDIT.md#slice-082) | [Agentic Investigations](sprints/agentic-investigations.md) | **P2** | [World Change Sets](sprints/world-change-sets.md), [Safe Tool Execution](sprints/safe-tool-execution.md) | agents / evidence jobs | Review a bounded read-only world audit |
+| 082 | [☑](IMPLEMENTATION_AUDIT.md#slice-082) | [Agentic Investigations](sprints/agentic-investigations.md) | **P2** | [World Change Sets](sprints/world-change-sets.md), [Safe Tool Execution](sprints/safe-tool-execution.md) | agents / evidence jobs | Review a bounded read-only world audit |
 | 083 | [☐](IMPLEMENTATION_AUDIT.md#slice-083) | [Character Voice Performance](sprints/character-voice-performance.md) | **P2** | [Private And Local Voice](sprints/private-and-local-voice.md), [Per Npc Generation Runtime](sprints/per-npc-generation-runtime.md) | voice / playback | Render separate voice performance from accepted actor text |
 | 084 | [☐](IMPLEMENTATION_AUDIT.md#slice-084) | [Cross Campaign Scene Transfer](sprints/cross-campaign-scene-transfer.md) | **P2** | [Scenes Forks And Retcons](sprints/scenes-forks-and-retcons.md), [Source Qualified Identity](sprints/source-qualified-identity.md) | campaign / transfer | Copy a transcript with reviewed identity mapping |
 | 085 | [☐](IMPLEMENTATION_AUDIT.md#slice-085) | [Live Context Preview](sprints/live-context-preview.md) | **P2** | [Context Retrieval](sprints/context-retrieval.md) | frontend / prompt preview | Preview likely retrieval without paying for a turn |
-| 086 | [☐](IMPLEMENTATION_AUDIT.md#slice-086) | [Mechanics Module Authoring](sprints/mechanics-module-authoring.md) | **P2** | [Ruleset Action Contracts](sprints/ruleset-action-contracts.md) | mechanics / module editor | Author an isolated validated mechanics sheet |
+| 086 | [☑](IMPLEMENTATION_AUDIT.md#slice-086) | [Mechanics Module Authoring](sprints/mechanics-module-authoring.md) | **P2** | [Ruleset Action Contracts](sprints/ruleset-action-contracts.md) | mechanics / module editor | Author an isolated validated mechanics sheet |
 | 087 | [☐](IMPLEMENTATION_AUDIT.md#slice-087) | [World Authoring Assistant](sprints/world-authoring-assistant.md) | **P2** | [World Change Sets](sprints/world-change-sets.md), [Catalog Composition](sprints/catalog-composition.md) | authoring / world proposals | Review three linked towns and accept two |
 
 
