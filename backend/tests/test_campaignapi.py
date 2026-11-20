@@ -302,6 +302,10 @@ def test_a_waiting_change_is_withdrawn_or_declined_and_the_turn_takes_another(ca
         table = declined["hub"]  # the table's view, which the call asked for
         assert [(effect["number"], effect["state"], effect["reason"]) for record in table["turns"]
                 for effect in record["effects"]] == [(1, "refused", "withdrawn"), (2, "refused", "declined")]
+        # the table learns only whether the turn's post is its own (what a player's withdrawal turns on), no principal
+        assert [record["post"]["mine"] for record in table["turns"] if record["post"]] == [True]
+        assert not any("mine" in record["post"] or "submitted_by" in record["post"] for record in withdrawn["hub"]["turns"]
+                       if record["post"])
         third = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
         hub.call("endorse_effect", chat=str(chat), turn=turn, number=3, fingerprint=third["fingerprint"])
         assert hub.call("approve_effect", chat=str(chat), turn=turn, number=3)["done"]["effect"]["state"] == "accepted"
