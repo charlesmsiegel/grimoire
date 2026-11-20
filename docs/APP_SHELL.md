@@ -21,7 +21,8 @@ backend/src/grimoire/app/
   adapters/<name>.py           one sprint's ops: sources 109, imports 110, play 111, providers 112,
                                campaign 113, media 114, shell 108; inbox, what waits on the person
                                ([INBOX](INBOX.md)); shelf, tags, pins and saved filters ([SHELF](SHELF.md));
-                               and voice 061, private local voice input ([SPEECH](SPEECH.md))
+                               speech 067, one listening window, captions, read-aloud, and voice 061, private
+                               local voice input ([SPEECH](SPEECH.md))
   pages.py                     the page manifest format and its checks
 ```
 
