@@ -4,8 +4,8 @@ Each tool asks the job's **untrusted** worker handle for ``inspect`` on the addr
 before reading anything, so the library's authority audits every read and a job reads only what its grant
 covers. The toolbox has no write method, and the handle's grant names only ``inspect``: a job that wanted
 to change a record would need a separate, human-approved World Change Set (043). Reads go through the
-store's own readers and heads resolve as ``load()`` resolves them (``ChangeSetLibrary.head``), so a job
-never sees a head the rest of the app would not.
+store's own readers and heads resolve as ``load()`` resolves them (``ChangeSetLibrary.head``), and an entity
+``load()`` drops is refused (``entity_dropped``), so a job never sees a head the rest of the app would not.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ from grimoire.store import LibraryStore, StoreError
 from grimoire.store.layout import RECORDS, source_parts
 
 _REFUSALS = frozenset({"missing_source", "excluded_source", "missing", "no_head", "unreadable"})
+#: ``check_definition`` reasons that mean ``load()`` would not admit the entity this toolbox found a head for
+_DROPPED = "entity_dropped"
 
 
 def source_address(source: str) -> str:
@@ -55,13 +57,17 @@ class WorldToolbox:
                 if isinstance(stored, str):
                     return ToolResult(stored)  # type: ignore[arg-type]
                 entities = store.source_entities(self._source)
+                dropped = {key for key in entities
+                           if store.check_definition(SourceRef(self._source, *key)) == _DROPPED}
         except (StoreError, OSError, ValueError):
             return ToolResult("unreadable")
         heads = stored.manifest.heads
         listed = []
         for (kind, entity_id), revisions in sorted(entities.items()):
             declared = heads.get(f"{kind}/{entity_id}")
-            if declared is not None:
+            if (kind, entity_id) in dropped:
+                head = None  # load() drops it (an id reused across kinds, say), so read refuses it too
+            elif declared is not None:
                 head = declared if declared in revisions else None
             else:
                 head = revisions[0] if len(revisions) == 1 else None
@@ -79,7 +85,10 @@ class WorldToolbox:
         if not allowed:
             return ToolResult("denied", detail=reason)
         try:
-            revision, envelope, etag = self._heads.head(self._source, kind, entity_id)
+            with self._store.lock:
+                if self._store.check_definition(SourceRef(self._source, kind, entity_id)) == _DROPPED:
+                    return ToolResult(_DROPPED)
+                revision, envelope, etag = self._heads.head(self._source, kind, entity_id)
         except ChangeSetError as error:
             outcome = error.reason if error.reason in _REFUSALS else "unreadable"
             return ToolResult(outcome)  # type: ignore[arg-type]

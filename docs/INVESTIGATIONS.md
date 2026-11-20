@@ -26,7 +26,9 @@ There is no app route or UI (the Wave 9 UI exit, 116, owns that), no model worke
 
 Every tool call asks the handle for `inspect` on the address it is about to read, before any I/O: `list` on the source address, `read` on `.../_source/records/<kind>/<id>`. So a job reads only what its grant covers, and with a `DurableAuthority` both the grant's lifecycle and every read decision are in the library's `security` audit ([TOOL_AUTHORITY](TOOL_AUTHORITY.md)). `WorldToolbox` refuses a trusted handle.
 
-Heads resolve as the rest of the app resolves them (`ChangeSetLibrary.head`), so a job never sees a head `load()` would not. Each tool call is its own read under the store lock; the job holds no lock between steps, so a long audit does not block the library ("explore outside file locks").
+Heads resolve as the rest of the app resolves them (`ChangeSetLibrary.head`), and an entity `load()` drops (an id reused across kinds, say) is listed with no head and refused on read (`entity_dropped`), so a job never sees a head `load()` would not. Each tool call is its own read under the store lock; the job holds no lock between steps, so a long audit does not block the library ("explore outside file locks").
+
+The job checks citations against **its own copies** of what it read, taken before the worker sees a result, and keeps a re-validated copy of each finding it accepts. So re-running a frozen value's `__init__` on what the worker was shown, or on a finding after it was accepted, changes no evidence and nothing kept.
 
 The worker is untrusted code **in the same process**. The boundary is the job's API (observations in, actions out), not an OS sandbox: Python code given to `run_job` could import the store itself. A worker from outside, such as an external script or agent, should drive a job over a process boundary. That adapter is not built.
 
@@ -45,7 +47,7 @@ The worker is untrusted code **in the same process**. The boundary is the job's 
 | `Report(Finding)` | Checks the finding's evidence; accepted as `f1`, `f2`, … or rejected with a reason. |
 | `Finish(note)` | Ends the job `finished`. |
 
-Each observation carries the step number, the action, its result and what is left of the budget. A refusal is an observation the worker can react to (`denied`, `missing`, `no_head`, `tool_not_allowed`, `invalid_target`, `unknown_action`).
+Each observation carries the step number, the action, its result and what is left of the budget. A refusal is an observation the worker can react to (`denied`, `missing`, `no_head`, `entity_dropped`, `tool_not_allowed`, `invalid_target`, `unknown_action`).
 
 | Status | Reason |
 |---|---|
@@ -83,7 +85,7 @@ A deterministic worker that needs no model: it lists the source, reads every ent
 - **`possible_duplicate`**: two entities of one kind whose display names match after normalization (NFKC, case-folded, punctuation as spaces, a leading "the" dropped) and that do not refer to each other. It cites both `/name` fields.
 - **`missing_link`**: one record's text names another entity's display name (the whole name, as words, any case, at least three characters) while neither refers to the other. It cites the mentioning field with the matched words, and the named entity's `/name`.
 
-Definitions in V2 have no structured relations, so a "link" is a payload string holding the other entity's reference. References to other sources are ignored.
+Definitions in V2 have no structured relations, so a "link" is a payload string holding the other entity's reference. A reference to another source is neither a link nor prose: a namesake here is not who `world:saltmarch/character/winifred` names.
 
 ## Review and stale evidence
 

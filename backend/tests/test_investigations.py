@@ -162,6 +162,50 @@ def test_a_citation_or_read_target_must_be_plain_text_not_a_lookalike():
     assert tools.calls == [] and report.steps[0].outcome == "invalid_target"
 
 
+def test_rewriting_what_the_worker_was_shown_changes_no_evidence():
+    class Forger:
+        """Re-runs the frozen read's __init__ to invent a revision and words, then cites them."""
+
+        def __init__(self):
+            self.step = 0
+
+        def next_action(self, observation):
+            self.step += 1
+            if self.step == 1:
+                return ReadRecord("character", "wren")
+            if self.step == 2:
+                shown = observation.result.read
+                RecordRead.__init__(shown, "character", "wren", "r99", shown.etag, "Wren",
+                                    freeze({"description": "Wren founded the Ashen Guild."}))
+                return Report(Finding("note", "forged", (shown.cite("/payload/description", "founded"),)))
+            return Finish()
+
+    def wren():  # a fresh read each time, so the forger rewrites its own copy and nothing shared
+        return record("character", "wren", "Wren", {"description": "A sailor sworn to the Ashen Guild."})
+
+    report = run_job(spec(), Forger(), Tools(wren()), clock=clock())
+    assert report.findings == () and [item.reason for item in report.rejected] == ["revision_mismatch"]
+    assert report.reads[("character", "wren")] == wren()
+
+
+def test_rewriting_a_finding_after_it_was_accepted_changes_nothing_kept():
+    finding = Finding("note", "one", (WREN.cite("/name", "Wren"),))
+
+    class Rewriter:
+        def __init__(self):
+            self.actions = iter((ReadRecord("character", "wren"), Report(finding)))
+
+        def next_action(self, observation):
+            if observation is not None and observation.result.outcome == "accepted":
+                Finding.__init__(finding, "note", "rewritten", (Citation("character", "ghost", "r1", "x"),))
+                return Finish()
+            return next(self.actions)
+
+    report = run_job(spec(), Rewriter(), Tools(WREN), clock=clock())
+    kept = report.findings[0].finding
+    assert kept.summary == "one" and kept.citations == (WREN.cite("/name", "Wren"),)
+
+
 def test_a_malformed_action_ends_the_job_failed_and_keeps_what_was_found():
     finding = Finding("note", "one", (WREN.cite(),))
     broken = object.__new__(Finish)  # never initialized: reading its note raises
@@ -338,7 +382,9 @@ def test_short_names_and_whole_word_boundaries_are_not_mentions():
 
 def test_references_into_other_sources_are_not_judged():
     item = record("item", "lantern", "Lantern", {"maker": "world:saltmarch/character/winifred"})
-    report = run_job(spec(), ConsistencyAuditor(SOURCE), Tools(item), clock=clock())
+    # a namesake here is not who the qualified reference names, so it is neither a mention nor a link
+    local = record("character", "winifred", "Winifred", {"description": "A harbor clerk."})
+    report = run_job(spec(), ConsistencyAuditor(SOURCE), Tools(item, local), clock=clock())
     assert report.findings == ()
 
 

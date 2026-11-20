@@ -233,7 +233,8 @@ class RecordRead:
 
 #: A tool's outcome. ``ok`` carried data; the others are refusals that read nothing or nothing usable.
 Outcome = Literal["ok", "denied", "missing", "no_head", "unreadable", "missing_source", "excluded_source",
-                  "tool_not_allowed", "invalid_target", "unknown_action", "accepted", "rejected", "finished"]
+                  "entity_dropped", "tool_not_allowed", "invalid_target", "unknown_action", "accepted",
+                  "rejected", "finished"]
 
 
 @dataclass(frozen=True, slots=True)

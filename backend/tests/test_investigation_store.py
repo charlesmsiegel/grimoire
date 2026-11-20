@@ -286,6 +286,31 @@ def test_a_dangling_reference_cites_the_value_that_names_a_missing_entity(tmp_pa
                                    "exist")
 
 
+def test_an_entity_load_drops_is_never_read_as_evidence(library):
+    store, authority, root = library
+    # one id reused across two kinds: load() drops both, so the audit may not cite either
+    for kind, name in (("character", "Pell"), ("item", "Pell's Oar")):
+        hand_write(root, f"sources/world/harbor/_source/records/{kind}/pell/r1.json",
+                   ('{"format": "grimoire.record/1", "name": "%s", "payload": '
+                    '{"description": "Named for the Ashen Guild."}}\n' % name).encode())
+    assert store.check_definition(SourceRef(HARBOR, "character", "pell")) == "entity_dropped"
+    audits = service(store, authority)
+    report = audits.run(spec())
+    assert not {("character", "pell"), ("item", "pell")} & set(report.reads)
+    assert {("character", "pell"), ("item", "pell")} <= set(report.unread)
+    assert all(citation.entity_id != "pell" for item in report.findings for citation in item.finding.citations)
+    handle_report = audits.run(spec("audit-2"), _ReadOne("character", "pell"))
+    assert [step.outcome for step in handle_report.steps if step.tool == "read"] == ["entity_dropped"]
+
+
+class _ReadOne:
+    def __init__(self, kind, entity_id):
+        self.actions = iter((ReadRecord(kind, entity_id), Finish()))
+
+    def next_action(self, observation):
+        return next(self.actions)
+
+
 def test_listing_shows_an_entity_with_no_head_and_the_audit_reports_it_unread(library):
     store, authority, root = library
     # a stray entity with two revisions and no declared head: listed, never read

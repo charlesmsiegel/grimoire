@@ -11,16 +11,16 @@ a clock nor the environment.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from typing import Protocol
 
 from grimoire.core.identity import validate_segment
 from grimoire.tracing import TraceBuilder
 
-from .evidence import check_finding, evidence_key
+from .evidence import check_finding, detach, evidence_key
 from .model import (
     AcceptedFinding,
-    Finding,
     Finish,
     InvestigationReport,
     InvestigationSpec,
@@ -174,7 +174,7 @@ def _act(run: _Run, action: object, tools: Tools) -> tuple[tuple[str, str, str] 
         else:
             result = _call(tools.list)
             if result.outcome == "ok":
-                run.listed = result.listed
+                run.listed = copy.deepcopy(result.listed)  # the job's own copy: the worker gets the other
             run.record("list", "", result.outcome, result.detail)
     elif type(action) is ReadRecord:
         target = _target(action)
@@ -193,7 +193,9 @@ def _act(run: _Run, action: object, tools: Tools) -> tuple[tuple[str, str, str] 
             if result.outcome == "ok":
                 if type(result.read) is not RecordRead or result.read.record != (action.kind, action.entity_id):
                     raise _ToolFailure("wrong_record")
-                run.reads[result.read.record] = result.read
+                # The evidence is the job's own copy, taken before the worker sees the result: re-running the
+                # worker's copy's __init__ cannot change what citations are checked against.
+                run.reads[result.read.record] = copy.deepcopy(result.read)
             run.record("read", target, result.outcome, result.detail)
     elif type(action) is Report:
         if len(run.findings) >= spec.budget.max_findings:
@@ -223,7 +225,9 @@ def _target(action: ReadRecord) -> str | None:
 
 def _report(run: _Run, finding: object) -> tuple[str | None, ToolResult]:
     number = len(run.steps) + 1
-    if type(finding) is not Finding:
+    try:
+        finding = detach(finding)  # check and keep a copy the worker cannot reach, never its own object
+    except Exception:  # a forged or re-initialized value: whatever it raises, it is not a finding
         run.rejected.append(RejectedFinding(number, None, "not_a_finding"))
         run.record("report", "", "rejected", "not_a_finding")
         return None, ToolResult("rejected", detail="not_a_finding")

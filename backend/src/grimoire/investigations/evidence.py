@@ -118,9 +118,26 @@ def check_finding(finding: Finding, reads: Mapping[tuple[str, str], RecordRead])
     return None
 
 
+def detach(finding: Finding) -> Finding:
+    """A fresh, re-validated copy of a worker's finding, sharing nothing it can still change.
+
+    The values are frozen dataclasses, but in-process code can still re-run one's ``__init__``. So the job
+    checks and keeps this copy, built from exact ``str`` fields (which nothing can change) through the
+    constructors' own validation, and never the object the worker holds. Raises when the finding is not
+    well formed."""
+    if type(finding) is not Finding:
+        raise TypeError("not a Finding")
+    citations = finding.citations
+    if type(citations) is not tuple or not all(type(item) is Citation for item in citations):
+        raise TypeError("citations must be a tuple of Citation values")
+    return Finding(finding.category, finding.summary,
+                   tuple(Citation(item.kind, item.entity_id, item.revision, item.etag, item.field, item.quote)
+                         for item in citations))
+
+
 def evidence_key(finding: Finding) -> tuple[str, frozenset[tuple[str, str, str | None]]]:
     """Two findings of one category citing the same fields of the same records are the same finding."""
     return finding.category, frozenset((*citation.record, citation.field) for citation in finding.citations)
 
 
-__all__ = ["check_citation", "check_finding", "envelope_view", "escape", "evidence_key", "resolve", "strings"]
+__all__ = ["check_citation", "check_finding", "detach", "envelope_view", "escape", "evidence_key", "resolve", "strings"]

@@ -50,12 +50,11 @@ def name_key(name: str | None) -> str:
     return text.removeprefix("the ")
 
 
-def _ref(text: str, source: str) -> SourceRef | None:
+def _ref(text: str) -> SourceRef | None:
     try:
-        ref = SourceRef.parse(text)
+        return SourceRef.parse(text)
     except ValueError:
         return None
-    return ref if ref.source == source else None
 
 
 class _Seen:
@@ -63,14 +62,14 @@ class _Seen:
 
     def __init__(self, read: RecordRead, source: str) -> None:
         self.read = read
-        self.refs: list[tuple[str, str, SourceRef]] = []  # pointer, text, ref
-        self.text: list[tuple[str, str]] = []  # pointer, text (references excluded)
+        self.refs: list[tuple[str, str, SourceRef]] = []  # pointer, text, ref into this source
+        self.text: list[tuple[str, str]] = []  # pointer, text (references to any source excluded)
         for pointer, value in strings(read.payload, "/payload"):
-            ref = _ref(value, source)
-            if ref is not None:
-                self.refs.append((pointer, value, ref))
-            else:
+            ref = _ref(value)
+            if ref is None:
                 self.text.append((pointer, value))
+            elif ref.source == source:  # a reference to another source is someone else, not a mention
+                self.refs.append((pointer, value, ref))
         self.links = frozenset((ref.kind, ref.entity_id) for _, _, ref in self.refs)
         name = (read.name or "").strip()
         #: how another record's text names this one: its whole display name, as words, in any case
