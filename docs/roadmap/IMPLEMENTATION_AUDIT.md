@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, the 070, 067, 072, 061 and 058 proofs to **76/119**, and 081's story threads to **77/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, the 070, 067, 072, 061 and 058 proofs to **76/119**, 081's story threads to **77/119** and 076's offscreen world events to **78/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 1/16 | ☐ | 081 is complete at its bounded first-proof boundary. Other domain slices and UI exit 116 remain incomplete. |
+| [9](#wave-9) | 2/16 | ☐ | 076 and 081 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -181,7 +181,7 @@ All eight scoped foundation contracts and their integration proof are present; t
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/v1-cost-and-voice-regression.md)).
 - Evidence: [`backend/src/grimoire/evals/v021.py`](../../backend/src/grimoire/evals/v021.py); [`docs/evals/V021_BASELINE.md`](../../docs/evals/V021_BASELINE.md); [`backend/tests/test_v021_replay.py`](../../backend/tests/test_v021_replay.py); Capture conversion and receipt verification plus deterministic replay exist.
-- Scope / gap: [#686](https://github.com/charlesmsiegel/grimoire/pull/686) documents capture prerequisites only. No live provider-reported V0.2.1 measurement exists; baseline capture pending, so actual measured baseline/voice regression proof is missing.
+- Scope / gap: [#686](https://github.com/charlesmsiegel/grimoire/pull/686) documents capture prerequisites only. No live provider-reported V0.2.1 measurement exists: the one live attempt (2026-11-20, `anthropic`, `claude-sonnet-5-5`) failed on the second speaker's call, because 0.2.1 ends that request with an assistant turn and the model rejects it ([details](../evals/V021_BASELINE.md#live-attempt-2026-11-20)). Baseline capture is still pending, so actual measured baseline/voice regression proof is missing.
 
 <a id="slice-016"></a>
 ### 016 — Session Zero Boundaries
@@ -640,7 +640,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/coding-skills-calibration.md)).
 - Evidence: [`grimoire.calibration`](../../backend/src/grimoire/calibration.py) runs a pinned external deterministic-specialist corpus with three repeat trials, unknown-analysis handling and structural confusion counts. [`grimoire.judgepanel`](../../backend/src/grimoire/judgepanel.py) runs three pinned judges × three trials over a behavior-confirmed labelled corpus, with per-call coverage canaries, served-model pin checks, defect false-positive/negative rates, repeatability and pinned-rubric theory scoring; it reproduces the pinned rubric awarding 100 to unread verdicts and refuses to score them ([calibration report and limits](../CALIBRATION.md)).
-- Scope / gap: No live, provider-reported judge capture has been run (billed; needs an approved spend cap), so independent defect/theory accuracy, repeatability and false-positive rates are not established. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
+- Scope / gap: One live, provider-reported capture was run on 2026-11-20 (108 calls; Opus 5.5, Sonnet 5.5 and Haiku 5.5 judges) and `proof.established` is false: `defect_panel_complete` and `theory_panel_scored_and_discriminates` failed ([results](../CALIBRATION.md#live-capture-2026-11-20)). The panel had no false positive or false negative on the 9 defect cases it settled, but one case is unknown, the Sonnet judge gave malformed answers in 13 of 30 defect trials, and the cohesive theory unit was scored in one of three trials. A complete panel and theory discrimination are not established. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
 
 <a id="slice-070"></a>
 ### 070 — Multimodal Player Input
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-081 is complete at its bounded first-proof boundary. Other domain slices and UI exit 116 remain incomplete.
+076 and 081 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -700,9 +700,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-076"></a>
 ### 076 — Offscreen World Events
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/offscreen-world-events.md)).
-- Evidence: goals policy selects an actor’s current action.
-- Scope / gap: No offscreen clock-based faction plan scheduler or bounded absence advancement.
+- [x] Scheduled first-useful slice ([requirements](sprints/offscreen-world-events.md)).
+- Evidence: [`offscreen/schedule.py`](../../backend/src/grimoire/offscreen/schedule.py), [`offscreenstore/library.py`](../../backend/src/grimoire/offscreenstore/library.py) and [`OFFSCREEN.md`](../OFFSCREEN.md); [`test_offscreen.py`](../../backend/tests/test_offscreen.py)::test_rival_plan_progresses_during_twenty_days_of_travel advances a guild plan adopted under its 057 decision across a 20-day calendar advance (two steps flagged at their own due moments, one pending); [`test_offscreenstore.py`](../../backend/tests/test_offscreenstore.py) proves the native once-only skip, reopen retry, fail-closed replay and crash/I/O recovery. Budget deferral, deadline outcomes, ordering and the no-roster/no-model boundary are in `test_offscreen.py`.
+- Scope / gap: Headless first milestone: exact-duration plan steps only, director-facing developments that deliver no knowledge or accepted effect. No UI (116), model-backed or narrated developments, causal branching/hidden-consequence trees, multi-process cost measurement, plan withdrawal or persistent institutions.
 
 <a id="slice-077"></a>
 ### 077 — Quests And Commitments
