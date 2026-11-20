@@ -108,6 +108,21 @@ def heard(take: Take) -> tuple:
     return tuple(line for line in take.shown() if table.intersection(line.audience))
 
 
+def table_present(take: Take) -> tuple[InstanceRef, ...]:
+    """Who the table can place in the scene for ``take`` (072's VN stage), as of the take, never as of now.
+
+    A take written with no stage had its whole cast present, and the chat already shows the table its cast.
+    On a 041 stage only what the table could know: the player characters as of the take (``Take.players``)
+    and the speakers of the lines it heard (``heard``), each only while physically on stage. A present NPC
+    the table never heard stays off the VN stage, as its lines stay out of the transcript; a staged take
+    that recorded no players gives no one, as ``heard`` gives no lines. Cast order is kept."""
+    if take.on_stage is None:
+        return take.cast
+    known = set(take.players or ()) | {line.actor for line in heard(take) if line.actor is not None}
+    here = set(take.on_stage)
+    return tuple(actor for actor in take.cast if actor in known and actor in here)
+
+
 def _review_summary(line) -> dict | None:
     detail = line.review_detail
     if detail is None:
@@ -124,8 +139,13 @@ def _lines(take: Take) -> list[dict]:
             for line in heard(take)]
 
 
-def _take(take: Take) -> dict:
+def _take(take: Take, names: Mapping[InstanceRef, str]) -> dict:
     return {"take": take.take, "state": take.state, "origin": take.origin, "lines": _lines(take),
+            # 072: ``name`` is the actor's name now, or None for one no longer in the cast: the page labels such an
+            # actor by a line it spoke, never by a guess. ``staged`` tells the page that ``present`` is only what
+            # the table knew on a 041 stage, so an NPC missing from it may still be there unheard.
+            "present": [{"actor": str(actor), "name": names.get(actor)} for actor in table_present(take)],
+            "staged": take.on_stage is not None,
             "outcome": take.outcome, "declined": list(take.declined),
             "review_token": take.review_token,
             "calls": [{"actor": call.actor_id, "status": call.status, "reason": call.reason}
@@ -141,13 +161,13 @@ def turn_view(stored: StoredTurn, names: Mapping[InstanceRef, str]) -> dict:
               "withheld": post.withheld, "to": [names.get(actor, actor.instance_id) for actor in post.addressees]}
              for post in record.posts]
     kept = record.kept
-    offered = [] if not record.open else [_take(take) for take in record.takes
+    offered = [] if not record.open else [_take(take, names) for take in record.takes
                                           if take.state in ("proposed", "running")]
     return {
         "turn": record.turn_id, "number": record.number, "origin": record.origin, "device": record.device,
         # ``post`` is the first post (a client that reads one post a turn); ``posts`` every post of a combined
         # turn (058), in order, each with its character (``actor``) and who wrote it (``by``, its controller)
-        "post": posts[0] if posts else None, "posts": posts, "kept": None if kept is None else _take(kept),
+        "post": posts[0] if posts else None, "posts": posts, "kept": None if kept is None else _take(kept, names),
         "offered": offered,
         "open": record.open, "passed": record.passed_by is not None, "paused": record.paused,
         "set_aside": record.set_aside is not None,
@@ -183,4 +203,4 @@ def report_view(report) -> dict:  # type: ignore[no-untyped-def]
 
 
 __all__ = ["FILTER_ROLES", "art_view", "chat_entry", "filter_sources", "fork_view", "report_view", "role_of",
-           "set_aside_view", "source_key", "turn_view"]
+           "set_aside_view", "source_key", "table_present", "turn_view"]

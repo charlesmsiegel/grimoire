@@ -5,6 +5,7 @@
 // only once posted. Everything shown from the library (card text, model output) is set as text, never as markup.
 
 import { makeReferenceIntent } from "./reference-intent.js";
+import { makeVoice } from "./voice.js";
 import { makeStaging } from "./staging.js";
 import { makeCompare } from "./compare.js";
 import { makeStory } from "./story.js";
@@ -82,6 +83,9 @@ export async function mount(root, ctx) {
   const attach = makeAttach(ctx, chat, { field: composer.node, run, redraw: redrawPictures });
   const staging = makeStaging(ctx, chat, { log });
   foot.prepend(makeReferenceIntent(ctx, chat, { composer, attach }));
+  // voice as an optional assist beside the composer (./voice.js, 067): shown only where the app serves it
+  const voice = makeVoice(ctx, { composer });
+  if (voice.node) foot.prepend(voice.node);
   const panelBody = el("div", { class: "chat-panel-body" });
   // The panel's tabs. Each has something to show for every chat; a tab that might have nothing is left out here.
   const PANEL_TABS = [
@@ -198,6 +202,7 @@ export async function mount(root, ctx) {
     bars.replaceChildren(...holds(scene));
     drawSceneBar(scene);
     rows.replaceChildren(...transcript(scene, reply));
+    if (voice.node) voice.setLatest(latestLine(scene));
     foundTurn.refresh(rows);
     drawComposer(scene, reply);
     drawPanel();
@@ -743,4 +748,13 @@ export async function mount(root, ctx) {
   foundTurn.start(rows);  // after restoring scroll, open the turn found by search just once
   loadEntry();
   return leave;
+}
+
+// What Read aloud reads: the latest kept reply's lines, as text.
+function latestLine(scene) {
+  for (let at = scene.turns.length - 1; at >= 0; at -= 1) {
+    const kept = scene.turns[at].kept;
+    if (kept && kept.lines.length) return kept.lines.map((line) => line.text).join("\n");
+  }
+  return "";
 }

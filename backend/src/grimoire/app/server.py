@@ -76,9 +76,9 @@ COMMON_HEADERS = (("Cache-Control", "no-store"), ("X-Content-Type-Options", "nos
 
 
 #: The shell page's policy: only this server's own modules, style sheets, icons and fonts, no inline code (108).
-#: Library pictures arrive as ``blob:`` URLs (``ctx.picture``), never by address.
-PAGE_POLICY = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'self'; "
-               "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+#: Library pictures arrive as ``blob:`` URLs (``ctx.picture``), never by address; so does read-aloud audio (067).
+PAGE_POLICY = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src blob:; "
+               "font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 #: A module's or style sheet's own policy, should it ever be opened as a document.
 STATIC_POLICY = "default-src 'none'; sandbox"
 

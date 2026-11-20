@@ -78,8 +78,12 @@ client hands it back unchanged.
   Every slot carries its campaign-layer placement `etag` (`null`: none yet). `art` also carries `problems`.
 - `history`: an imported V1 scene's posts as the table heard them, or `null`
 - `turns`: each `turn`, `number`, `origin`, `device`, `posts` (each `speaker`, `actor`, `by`, `kind`, `channel`,
-  `text`, `private`, `withheld`, `to`), `post` (the first of them), `kept` (the kept take's shown lines), `offered` (the
-  takes still on offer while the turn is open), `open`, `passed`, `paused`, `set_aside`
+  `text`, `private`, `withheld`, `to`), `post` (the first of them), `kept` (the kept take's shown lines), `offered`
+  (the takes still on offer while the turn is open), `open`, `passed`, `paused`, `set_aside`. Each take also carries
+  `present` (072): who the table can place in the scene for it, each `actor` and `name` (`null` for an actor no
+  longer in the cast). A take written with no stage gives its whole cast; on a 041 stage (`staged` is true) only
+  the player characters as of the take and the speakers of the lines the table heard, each while on stage, so an
+  NPC missing there may still be present unheard. A staged take that recorded no players gives no one.
 - `drafts`: this device's drafts for the chat's next combined turn (058), each `actor`, `name`, `by`, `text`, `mode`
 - `set_aside`: turns a fork choice set aside, by `turn`, `number` and `device` only. Nobody heard them (035).
 - `fork`: the open fork, by `number`, `after`, `state` and `branches`, or `null`

@@ -1,0 +1,11 @@
+/* 067: the voice strip beside the composer. Captions stay readable text; nothing depends on colour or motion. */
+.chat-voice { display: grid; gap: .4rem; min-width: 0; }
+.chat-voice-bar:empty { display: none; }
+.chat-voice-bar { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.chat-voice-status { margin: 0; overflow-wrap: anywhere; }
+.chat-voice-question { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.chat-voice-question:empty { display: none; }
+.chat-voice-question p { margin: 0; flex: 1 1 12rem; font-weight: 600; overflow-wrap: anywhere; }
+.chat-voice-captions { margin: 0; padding-inline-start: 1.2rem; max-height: 8rem; overflow-y: auto; overflow-wrap: anywhere; }
+.chat-voice-captions:empty { display: none; }
+.chat-voice-captions li + li { margin-top: .15rem; }
