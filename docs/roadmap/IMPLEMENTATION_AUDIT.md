@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 4/16 | ☐ | 075, 076, 082 and 086 meet their bounded headless first slices; the other domain slices and UI exit 116 are not complete. |
+| [9](#wave-9) | 12/16 | ☐ | 073, 074, 075, 076, 077, 078, 079, 082, 083, 084, 085 and 086 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-075 (recorded rolls), 076 (offscreen plan steps), 082 (read-only world audits) and 086 (validated module authoring with pinned revisions) meet their headless first slices; the other domain slices and UI exit 116 are not complete.
+073, 074, 075, 076, 077, 078, 079, 082, 083, 084, 085 and 086 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -707,23 +707,23 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-077"></a>
 ### 077 — Quests And Commitments
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/quests-and-commitments.md)).
-- Evidence: Existing scene/turn records and graph relations record accepted fiction.
-- Scope / gap: No explicit promise/commitment deadline and fulfillment-provenance ledger; clocks unavailable.
+- [x] Scheduled first-useful slice ([requirements](sprints/quests-and-commitments.md)).
+- Evidence: [`commitments/`](../../backend/src/grimoire/commitments) (pure ledger, fold and codec), [`commitmentstore/library.py`](../../backend/src/grimoire/commitmentstore/library.py) and [`COMMITMENTS.md`](../COMMITMENTS.md); [`test_commitment_scenarios.py`](../../backend/tests/test_commitment_scenarios.py)::test_the_refusal_and_its_deadline_stay_on_the_record and ::test_later_narration_that_claims_the_mission_done_is_a_contradiction prove the proving scenario across three scenes and a reopened store: a player character's backed refusal and the 055 deadline stay recorded past the deadline, recording it fulfilled is refused, and the referee's new `fulfills` check reports a material contradiction. An accepted promise running overdue, a 021 retcon unwinding a step, a cited event still syncing (uncertain, never material), voids and every authority refusal are in `test_commitmentstore.py` and `test_commitments.py`.
+- Scope / gap: Milestone 1 plus milestone 2's recorded fulfilment, partial completion and abandonment, each citing 020 objective events. No commitment UI (116), no labeller or runner capture of `fulfills` claims (the extractor offers no commitment ids yet), no branching goals, quest stages, dependencies or planning aids (milestone 3), no delegation or transfer of a commitment, and no ledger compaction: the ledger shares `scope.json`'s native size cap with the calendar.
 
 <a id="slice-078"></a>
 ### 078 — Relationships And Reputation
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/relationships-and-reputation.md)).
-- Evidence: graph relations and actor-specific evidence implement relationships and knowledge scoping foundations.
-- Scope / gap: No asymmetric trust/reputation updates with episode provenance and absent-NPC social knowledge proof.
+- [x] Scheduled first-useful slice ([requirements](sprints/relationships-and-reputation.md)).
+- Evidence: [`relationships/policy.py`](../../backend/src/grimoire/relationships/policy.py) admits a director-authored NPC attitude (trust, affection, fear, rivalry, resentment or debt toward one actor or group, a narrative account and an optional degree) only from the holder's own confirmed evidence or beliefs at that moment, at least one of which overtly concerns the target; perceptions, participation, membership and other actors' evidence never count. [`test_relationships.py`](../../backend/tests/test_relationships.py) runs the proving scenario: an insulted envoy resents and distrusts the newcomer, a dockhand who overheard likes them, two absent guild members hold nothing, and one comes to resent them only after the envoy's letter arrives; admission writes no knowledge. Groups hold no attitudes, a player taking an NPC over does not inherit its attitudes as their own, and supersession history, idempotent retries, future-dated changes, authority refusals and bounds are covered. See [contract](../RELATIONSHIPS.md).
+- Scope / gap: Authored, in-memory per-holder attitudes only: no community reputation with uncertainty (milestone 3), change of allegiance, persistence, brief/goal consumption, narrator proposals or UI. No provider calls.
 
 <a id="slice-079"></a>
 ### 079 — Source Upgrades And Dependencies
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/source-upgrades-and-dependencies.md)).
-- Evidence: [`rebase/review.py`](../../backend/src/grimoire/rebase/review.py) and rebasestore implement reviewed same-entity ancestor/new-source/override field merges; [`test_rebase_review.py`](../../backend/tests/test_rebase_review.py) and [`test_rebasestore_scenarios.py`](../../backend/tests/test_rebasestore_scenarios.py) cover them.
-- Scope / gap: 042 is not 079 package upgrade/dependency handling: no source disable/removal impact preview and optional versioned dependency manifests.
+- [x] Scheduled first-useful slice ([requirements](sprints/source-upgrades-and-dependencies.md)).
+- Evidence: [`sourceupgrades`](../../backend/src/grimoire/sourceupgrades), [contract](../SOURCE_UPGRADES.md) and [`test_source_upgrades.py`](../../backend/tests/test_source_upgrades.py) prove read-only removal and update previews that resolve every reference to a source by its exact qualified id: removing a shared cast lists its chats, actors, portrayals, links and catalog references as missing and names neither of two namesake Maras (one in a lookalike source stored under the cast's folder); an update that swaps two catalogs' names and members keeps references from two world catalogs listing them in opposite orders on their own ids, pinned rows `unchanged` with the newer head offered, following chats and actors `follows_head`; edited bytes at a pinned revision and dropped revisions are flagged. Optional source dependencies are declared, pinned to a version digest, reported (`pinned`/`drifted`/`following`/`missing`) and re-pinned by a guarded manifest write.
+- Scope / gap: Headless and preview-only: no applying an update or removal, rollback, re-pinning of non-actor bindings (042 rebases actors), recursive dependencies or UI.
 
 <a id="slice-080"></a>
 ### 080 — Speech To Draft
@@ -749,9 +749,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-083"></a>
 ### 083 — Character Voice Performance
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/character-voice-performance.md)).
-- Evidence: [`voice/profile.py`](../../backend/src/grimoire/voice/profile.py) controls prose portrayal only; generation keeps actor text separate.
-- Scope / gap: No audio/TTS renderer for accepted actor/narrator text or per-character voice playback.
+- [x] Scheduled first-useful slice ([requirements](sprints/character-voice-performance.md)).
+- Evidence: a scene's **accepted** text is now performed in separate voices. [`voicecast`](../../backend/src/grimoire/voicecast) casts a local voice to the narrator (per campaign or every campaign), a character (any revision, or one pinned revision) or one campaign actor, with rights and consent recorded on each entry (`licensed`/`consented` need a note). [`plan_performance`](../../backend/src/grimoire/voicecast/plan.py) cues each non-private post and the kept take's table-heard lines, choosing each line's voice from the revision and voice profile the line **recorded** (never the source's head: an outfit cast on its own speaks in its own voice, otherwise in its base's), and lists every rule considered with a `why` sentence. An uncast speaker stays text, never another speaker's voice, and the accepted text and its digest are never changed. [`render_performance`](../../backend/src/grimoire/voicecast/render.py) makes one synthesis call per voiced cue with timings, and leaves a cue text when audio is off, the script is too long, or the engine, voice, synthesis or WAV fails; a fingerprint keeps windows in step and a forked chat is refused. The default engine is `ffmpeg`'s local Flite ([`flite.py`](../../backend/src/grimoire/voiceengines/flite.py)): no network, account or bill. The casting is one etag-checked file under `config/` ([`voicecaststore`](../../backend/src/grimoire/voicecaststore/__init__.py), crash-explored). The app's `voicecast.*` ops ([`adapters/voicecast.py`](../../backend/src/grimoire/app/adapters/voicecast.py)) read, cast, uncast, plan and render a chat. Proven by [`test_voice_performance.py`](../../backend/tests/test_voice_performance.py) (two NPCs and a narrator in their own voices, an outfit/revision switch, audio off, a disputed choice explained), [`test_voicecaststore.py`](../../backend/tests/test_voicecaststore.py) and [`test_app_voicecast.py`](../../backend/tests/test_app_voicecast.py), whose real Flite test runs in CI's voice job, including with no network. See [voice casting](../VOICE_CASTING.md).
+- Scope / gap: no page plays a performance yet (sprint 116 exposes it). Not yet built: author-controlled pronunciation, prosody and expression (milestone 2); mood and inflection cues (milestone 3); casting sync between devices; and an engine with licensed or consented voices. Still unverified, needing people: whether the Flite voices are told apart by ear in a real listening run.
 
 <a id="slice-084"></a>
 ### 084 — Cross Campaign Scene Transfer
@@ -763,9 +763,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-085"></a>
 ### 085 — Live Context Preview
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/live-context-preview.md)).
-- Evidence: [`app/inference.py`](../../backend/src/grimoire/app/inference.py) offers current saved actor context after the 112 follow-up; unsaved-draft retrieval is not offered. [`test_app_inference_context.py`](../../backend/tests/test_app_inference_context.py) proves the saved-state inspection boundary.
-- Scope / gap: No on-demand unsaved-draft retrieval/context preview. The 112 saved-state inspector does not implement that draft input.
+- [x] Scheduled first-useful slice ([requirements](sprints/live-context-preview.md)).
+- Evidence: [`backend/src/grimoire/play/preview.py`](../../backend/src/grimoire/play/preview.py)::preview_context; [`backend/src/grimoire/play/context_view.py`](../../backend/src/grimoire/play/context_view.py)::context_view; [`backend/src/grimoire/app/inference.py`](../../backend/src/grimoire/app/inference.py) (`providers.preview_context`); [`backend/src/grimoire/app/static/pages/providers/context.js`](../../backend/src/grimoire/app/static/pages/providers/context.js); [`backend/tests/test_context_preview.py`](../../backend/tests/test_context_preview.py)::test_a_draft_previews_the_recalled_promise_and_triggered_lore_without_any_write; [`backend/tests/test_context_preview.py`](../../backend/tests/test_context_preview.py)::test_a_recalled_memory_the_budget_sheds_is_a_warning_with_its_line; [`backend/tests/test_context_preview.py`](../../backend/tests/test_context_preview.py)::test_an_npc_that_would_not_hear_the_draft_keeps_its_saved_context.
+- Scope / gap: Milestone 1 at its bounded first-proof boundary: an explicit, owner-only, read-only preview of one NPC's context with an unsent draft read as `post` reads it, triggered lore (exact) and memories sharing the draft's words (an estimate, English stoplist), shed recalls flagged; the posted turn's context equals the preview. Inspecting the final prompt later is the saved-state inspector's rebuild; no snapshot of a submitted prompt is retained. No director or player-character preview, no phrasing deltas (milestone 2), no incremental previews (milestone 3), no chat-composer entry point (116).
 
 <a id="slice-086"></a>
 ### 086 — Mechanics Module Authoring
