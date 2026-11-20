@@ -1,25 +1,27 @@
-"""Durable, authored rumor queue over ordinary 020 evidence."""
-from dataclasses import asdict, replace
+"""Durable, authored rumor queue over ordinary 020 evidence, timed by the campaign's 055 calendar."""
+from dataclasses import asdict
 from collections.abc import Mapping
+from grimoire.calendarstore import CalendarLibrary
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution, controller_of, submit_contribution
-from grimoire.core.identity import InstanceRef, paired_instances, validate_segment
-from grimoire.core.knowledge import Moment, Proposition, Report
-from grimoire.core.perspective import SentReport, controller_knowledge
+from grimoire.core.identity import InstanceRef, ScopeRef, paired_instances, validate_segment
+from grimoire.core.knowledge import Moment
+from grimoire.core.perspective import controller_knowledge
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import envelope
-from grimoire.rumors import AuthoredSend, Rumor, DeliveryConditions
-from .codec import encode
+from grimoire.rumorledger import ledger_name
+from grimoire.rumorledger.codec import encode
+from grimoire.rumorledger.records import output_id as _id, output as _output, expected as _expected
+from grimoire.rumorledger.replay import replay
+from grimoire.rumors import AuthoredSend, CampaignTime, Rumor, DeliveryConditions
 from grimoire.security import is_human
-from grimoire.store.errors import LedgerInvalid, TakenIdsUnlisted
-from .replay import replay
-from .records import output_id as _id, output as _output, expected as _expected
+from grimoire.store.errors import TakenIdsUnlisted
 
 
 
 def rumor_actor_ids(store, campaign):
     validate_segment(campaign, 'campaign')
-    docs, unread = store.ledger_documents(f'rumors/{campaign}')
+    docs, unread = store.ledger_documents(ledger_name(campaign))
     if unread:
         raise TakenIdsUnlisted('rumor ledger cannot be read', unread)
     found, stack = set(), list(docs)
@@ -58,11 +60,18 @@ class RumorLibrary:
 
     def _load(self, campaign):
         validate_segment(campaign, 'campaign')
-        ledger = self.authority.read_ledger(f'rumors/{campaign}')
+        ledger = self.authority.read_ledger(ledger_name(campaign))
         return replay(campaign, ledger.entries), ledger.head
 
     def _write(self, campaign, head, kind, **fields):
-        return self.authority._append(f'rumors/{campaign}', [envelope(kind, self.authority.now(), **fields)], head)
+        return self.authority._append(ledger_name(campaign), [envelope(kind, self.authority.now(), **fields)], head)
+
+    def _now(self, campaign):
+        """The campaign's current 055 time: the only clock a rumor is sent or delivered by."""
+        state = CalendarLibrary(self.store, self.handle).read(ScopeRef(campaign)).state
+        if state is None:
+            raise ValueError('calendar_uninitialized')
+        return CampaignTime(state.now.fixed_day, state.now.minute)
 
     def _author(self, r, requested_by, contribution):
         self._trusted()
@@ -100,7 +109,7 @@ class RumorLibrary:
             raise ValueError('invalid_record')
         c = r.sender.campaign_id
         with self.authority.lock:
-            (rows, clock, _), head = self._load(c)
+            (rows, _), head = self._load(c)
             if r.communication_id in rows:
                 old = rows[r.communication_id]
                 if old['rumor'] != r or old['principal'] != self.handle.principal or old['contribution'] != (asdict(contribution) if contribution else None) or requested_by != (DIRECTOR if self.handle.principal.startswith('app:') else self.handle.principal):
@@ -108,8 +117,8 @@ class RumorLibrary:
                 self._trusted()
             else:
                 self._author(r, requested_by, contribution)
-                if clock is not None and clock != (r.clock_id, r.clock_unit):
-                    raise ValueError('clock_mismatch')
+                if r.sent_on > self._now(c):  # a message cannot leave its sender before campaign time reaches it
+                    raise ValueError('future_send')
                 self._source(r, r.authored_at)
                 # Reject unstorable or invalid output before reserving the communication id.
                 EvidenceLibrary(self.store, self.handle).append(c, [_output(r, 'enqueue', moment)])
@@ -117,7 +126,7 @@ class RumorLibrary:
             return self._resume(c, r.communication_id, 'enqueue', moment, head)
 
     def _resume(self, campaign, rid, phase, supplied, head=None, *, allow_write=True):
-        (rows, _, _), current = self._load(campaign)
+        (rows, _), current = self._load(campaign)
         head = current
         row = rows[rid]
         if row['enqueued' if phase == 'enqueue' else 'delivered']:
@@ -158,19 +167,19 @@ class RumorLibrary:
         self._write(campaign, head, 'complete', id=rid, phase=phase)
         return True
 
-    def advance(self, campaign, *, clock_id, clock_unit, tick, moment, conditions, requested_by, limit=100):
+    def advance(self, campaign, *, moment, conditions, requested_by, limit=100):
+        """Deliver what the campaign calendar's current time has made due, under explicit ``conditions``."""
         self._director(requested_by)
-        if type(tick) is not int or tick < 0 or type(moment) is not Moment or type(conditions) is not DeliveryConditions or type(limit) is not int or not 1 <= limit <= 500:
+        if type(moment) is not Moment or type(conditions) is not DeliveryConditions or type(limit) is not int or not 1 <= limit <= 500:
             raise ValueError('invalid_advance')
         with self.authority.lock:
-            (rows, clock, watermark), head = self._load(campaign)
-            if clock != (clock_id, clock_unit):
-                raise ValueError('clock_mismatch')
-            if tick < watermark:
+            (rows, watermark), head = self._load(campaign)
+            now = self._now(campaign)
+            if watermark is not None and now < watermark:  # a replaced calendar history, never a guess
                 raise ValueError('clock_backwards')
-            self._write(campaign, head, 'advance', clock_id=clock_id, clock_unit=clock_unit, tick=tick)
-            pending = sorted((row for row in rows.values() if row['enqueued'] and not row['delivered']), key=lambda row: (row['rumor'].due_tick, row['rumor'].communication_id))
-            eligible = [row for row in pending if row['rumor'].due_tick <= tick and conditions.allows(row['rumor'].route)]
+            self._write(campaign, head, 'advance', at=asdict(now))
+            pending = sorted((row for row in rows.values() if row['enqueued'] and not row['delivered']), key=lambda row: (row['rumor'].due_on, row['rumor'].communication_id))
+            eligible = [row for row in pending if row['rumor'].due_on <= now and conditions.allows(row['rumor'].route)]
             # Reconcile already-written reports even if their route is now blocked.
             recover = [row for row in pending if row not in eligible and row['attempts']['delivery']]
             delivered = []
@@ -206,22 +215,13 @@ class RumorLibrary:
             return self._load(campaign)[0]
 
     def actor_knowledge(self, campaign, actor, *, as_of, requested_by):
+        """The actor's projection, authorized as ``outbox`` is. Every store-backed projection already shows a
+        queued send from its enqueue Moment (``core.Dispatch``), so delivery never changes the sender's view."""
         with self.authority.lock:
             self._actor_reader(campaign, actor, requested_by)
-            rows = self._load(campaign)[0][0]
             evidence = EvidenceLibrary(self.store)
             if requested_by == DIRECTOR:
-                view = evidence.actor_knowledge(campaign, actor, as_of=as_of)
-            else:
-                knowledge = evidence.read(campaign, requested_by=DIRECTOR).knowledge
-                controls = SovereigntyLedger(self.authority).load(campaign).controls
-                view = controller_knowledge(knowledge, actor, requested_by, controls, as_of=as_of)
-            ids = {_id(campaign, rid, 'report') for rid in rows}
-            sent = [s for s in view.sent if s.evidence_id not in ids]
-            for rid, row in rows.items():
-                r = row['rumor']
-                if row['enqueued'] and r.sender == actor:
-                    at = row['attempts']['enqueue'][-1]
-                    if at.sequence <= as_of:
-                        sent.append(SentReport(_id(campaign, rid, 'report'), r.recipient, _id(campaign, rid, 'proposition'), r.text, r.channel, at))
-            return replace(view, sent=tuple(sorted(sent, key=lambda s: (s.sent_at.sequence, s.evidence_id))))
+                return evidence.actor_knowledge(campaign, actor, as_of=as_of)
+            knowledge = evidence.read(campaign, requested_by=DIRECTOR).knowledge
+            controls = SovereigntyLedger(self.authority).load(campaign).controls
+            return controller_knowledge(knowledge, actor, requested_by, controls, as_of=as_of)
