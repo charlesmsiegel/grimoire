@@ -111,6 +111,17 @@ export function replacedBy(hypotheses, id) {
   return hypotheses.filter((item) => item.supersedes === id).map((item) => item.id);
 }
 
+// Why a new hypothesis about `about` can't replace `id`, or "" when it can. 060's ledger keeps one chain per NPC and
+// actors: the replaced hypothesis is written before, nothing replaces it yet, and it is about the same characters.
+export function replacementProblem(hypotheses, id, about) {
+  if (!id) return "";
+  const previous = hypotheses.find((item) => item.id === id);
+  if (!previous) return id + " is not written here.";
+  if (replacedBy(hypotheses, id).length) return id + " is already replaced: pick one nothing replaces yet.";
+  if (JSON.stringify(previous.about) !== JSON.stringify(about)) return id + " is about other characters: a replacement keeps whose belief it is.";
+  return "";
+}
+
 // The next unused hypothesis id ("h1", "h2", …).
 export function nextHypothesisId(hypotheses) {
   const used = new Set(hypotheses.map((item) => item.id));

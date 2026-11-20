@@ -12,7 +12,7 @@
 
 import { campaignName, count } from "../campaign/logic.js";
 import {
-  heldAt, latest, replacedBy, newOperationId, nextHypothesisId, parseConditions, parseConfidence, pathPlanText, pathText, percent,
+  heldAt, latest, replacedBy, replacementProblem, newOperationId, nextHypothesisId, parseConditions, parseConfidence, pathPlanText, pathText, percent,
   placeLabels, readHypotheses, readList, routeText, rumorLine, rumorStatus, whose,
 } from "./logic.js";
 
@@ -558,7 +558,7 @@ async function minds(ctx, body, chat, cast) {
           ? el("span", { class: "g-muted" }, "Replaced by " + replacedBy(hypotheses, item.id).join(", ") + ": remove that first")
           : ui.button("Remove", () => { hypotheses = hypotheses.filter((other) => other.id !== item.id); save(); drawList(); }, { size: "small" }))))
         : ui.empty("No hypothesis is written yet."));
-      const ids = hypotheses.map((item) => ({ value: item.id, label: item.id + ": " + item.claim.slice(0, 50) }));
+      const ids = hypotheses.map((item) => ({ value: item.id, label: item.id + ": " + item.claim.slice(0, 50) + " (" + whose(item.about.map(nameOf)) + ")" }));
       // only a hypothesis nothing replaces yet can be replaced: 060 keeps one chain, each link replaced once
       const open = ids.filter((item) => !replacedBy(hypotheses, item.value).length);
       replaces = ui.choice("It replaces", [{ value: "", label: "Nothing: a new hypothesis" }, ...open], { value: "" });
@@ -574,12 +574,9 @@ async function minds(ctx, body, chat, cast) {
       formError.hidden = cited.length > 0;
       formError.textContent = cited.length ? "" : "Pick the evidence it rests on.";
       if (!claim.value.trim() || sure === null || !cited.length || !about.value) return;
-      if (replaces.value && (!hypotheses.some((item) => item.id === replaces.value) || replacedBy(hypotheses, replaces.value).length)) {
-        formError.hidden = false;
-        formError.textContent = replaces.value + " is already replaced: pick one nothing replaces yet.";
-        return;
-      }
       const whom = [about.value, ...(alsoAbout.value && alsoAbout.value !== about.value ? [alsoAbout.value] : [])];
+      const problem = replacementProblem(hypotheses, replaces.value, whom);
+      if (problem) { formError.hidden = false; formError.textContent = problem; return; }
       hypotheses = [...hypotheses, { id: nextHypothesisId(hypotheses), about: whom, claim: claim.value.trim(), confidence: sure,
         evidence: cited, at: heldAt(cited, mind.evidence, hypotheses.find((item) => item.id === replaces.value)),
         supersedes: replaces.value || null }];

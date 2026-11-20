@@ -603,6 +603,20 @@ test("a hypothesis another one replaces can't be removed before it, so the chain
   assert.ok(!first.querySelectorAll("button").some((node) => node.textContent === "Remove"), "h1 offers no Remove while h2 replaces it");
   const offered = field(minds(root), "It replaces").querySelectorAll("option").map((node) => node.getAttribute("value"));
   assert.deepEqual(offered, ["", "h2"], "h1 is replaced already, so only h2 can be replaced next");
+  // a replacement about other characters is refused on the page, not saved for 060 to refuse as different_chain
+  typeInto(minds(root), "What Mara thinks they think", "Bea knows it");
+  const tick2 = minds(root).querySelectorAll("input").find((node) => node.getAttribute("value") === "e-Mara");
+  tick2.checked = true;
+  tick2.dispatchEvent({ type: "change" });
+  typeInto(minds(root), "How sure", "40%");
+  field(minds(root), "Whose belief").value = BEA;
+  field(minds(root), "It replaces").value = "h2";
+  button(minds(root), "Add this hypothesis").click();
+  assert.ok(minds(root).textContent.includes("h2 is about other characters"), "the page says why");
+  assert.ok(!minds(root).querySelectorAll("li").some((node) => node.textContent.startsWith("h3:")), "and nothing is saved");
+  assert.equal(logic.replacementProblem([{ id: "h1", about: [ANYA] }], "h1", [ANYA]), "");
+  assert.ok(logic.replacementProblem([{ id: "h1", about: [ANYA] }], "h1", [ANYA, BEA]).includes("other characters"));
+  assert.ok(logic.replacementProblem([], "h9", [ANYA]).includes("not written"));
   rows.find((node) => node.textContent.startsWith("h2:")).querySelectorAll("button").find((node) => node.textContent === "Remove").click();
   const again = minds(root).querySelectorAll("li").find((node) => node.textContent.startsWith("h1:"));
   assert.ok(again.querySelectorAll("button").some((node) => node.textContent === "Remove"), "once h2 is gone, h1 can be removed");
