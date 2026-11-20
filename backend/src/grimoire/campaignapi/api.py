@@ -68,7 +68,8 @@ from .views import (
 AUDIENCES = ("table", "director")
 MAX_SUMMARY = 4000
 
-#: What the hub shows as not available yet, and the work that would make it so. Never offered as an action.
+#: What the hub shows as not available yet, and the work that would make it so. Never offered as an action. A
+#: campaign's clock (055) and its characters' sourced memory (053) are on its Chronicle page (115), not here.
 UNAVAILABLE = (
     {"feature": "revoke_effect", "blocker": "035",
      "reason": "the scene runner offers no revocation of an accepted effect yet; abort a cut-short acceptance "
@@ -77,8 +78,6 @@ UNAVAILABLE = (
      "reason": "the scene runner frames no ability use and refuses one on an effect in this slice"},
     {"feature": "proposed_by_narration", "blocker": "035/047",
      "reason": "no model proposes an effect from narration yet; effects are proposed here, in structured form"},
-    {"feature": "campaign_ledger", "blocker": "053", "reason": "memory consolidation (the long-term ledger) is Wave 8"},
-    {"feature": "clocks", "blocker": "055", "reason": "calendar and clocks are Wave 8"},
     {"feature": "npc_autonomy", "blocker": "039",
      "reason": "NPC agendas are the app's configuration; no screen edits them in this slice"},
     {"feature": "goal_progress", "blocker": "039",
