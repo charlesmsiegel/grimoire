@@ -1,0 +1,25 @@
+{
+  "address": "campaign:q-1/character/sam-1",
+  "art_pin": {
+    "base": "catalog:me/character/sam@r1",
+    "format": "grimoire.art-pin/0",
+    "layers": [
+      {
+        "derived": false,
+        "entity": "catalog:me/character/sam",
+        "placements": {}
+      }
+    ],
+    "problems": []
+  },
+  "base": "catalog:me/character/sam@r1",
+  "base_etag": "sha256:89574032d2a4290bbb5753c65f499df60d2f4125d9115b89a182f0a40ff3f97e",
+  "derived_from": "catalog:me/character/sam@r1",
+  "format": "grimoire.record/1",
+  "owner": "human:owner",
+  "payload": {
+    "source": "catalog:me/character/sam@r1"
+  },
+  "previous": null,
+  "schema": "grimoire.entity/0"
+}

@@ -1,0 +1,10 @@
+{
+  "address": "campaign:c/character/toma",
+  "format": "grimoire.record/1",
+  "owner": "human:owner",
+  "payload": {
+    "local_name": "Toma"
+  },
+  "previous": null,
+  "schema": "grimoire.entity/0"
+}
