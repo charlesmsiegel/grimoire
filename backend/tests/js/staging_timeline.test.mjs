@@ -141,6 +141,33 @@ test("two tabs editing different turns both keep their cues; unreadable stored c
   assert.match(cueStore("c", shared, null).warning, /malformed/i);
 });
 
+test("a change kept only in memory while storage is full survives the next successful save", () => {
+  const shared = memory();
+  let full = true;
+  const store = cueStore("c", { getItem: shared.getItem, setItem: (k, v) => { if (full) throw Error("quota"); shared.setItem(k, v); } }, null);
+  const cue = (note) => ({ actors: {}, focus: "auto", background: "inherit", transition: "none", note });
+  assert.equal(store.put("t1", cue("first")), "unsaved");
+  assert.match(store.warning, /remain in memory/);
+  full = false;
+  assert.equal(store.put("t2", cue("second")), true);
+  assert.deepEqual(Object.keys(JSON.parse(shared.data["grimoire.vn.v2:c"]).cues).sort(), ["t1", "t2"]);
+  assert.equal(store.put("t1", { ...cue("x"), transition: "spin" }), false, "an invalid cue is refused outright");
+});
+
+test("an art-only change keeps an off-stage actor off; unheard actors hold no place for new speakers", () => {
+  const turns = [1, 2].map((n) => kept("t" + n, n, [line("m", "Mara", "Line " + n)], who(["m", "Mara"])));
+  const cue = (actors) => ({ actors, focus: "auto", background: "inherit", transition: "none", note: "" });
+  const [, artOnly] = timeline(turns, { t1: cue({ m: { position: "off", art: "" } }), t2: cue({ m: { position: "", art: "expr.court.x" } }) });
+  assert.deepEqual(artOnly.actors, []);
+  assert.deepEqual(artOnly.carried, { m: { position: "off", art: "" } });
+  const staged = (turn, number, lines, present) => ({ turn, number, post: null, kept: { lines, present, staged: true } });
+  const [, second] = timeline([
+    staged("t1", 1, [line("p", "P", "1"), line("a", "A", "2"), line("b", "B", "3")], who(["p", "P"], ["a", "A"], ["b", "B"])),
+    staged("t2", 2, [line("p", "P", "4"), line("d", "D", "5")], who(["p", "P"], ["d", "D"])),
+  ], {});
+  assert.deepEqual(second.actors.map((x) => [x.actor, x.position]), [["p", "center"], ["d", "left"]]);
+});
+
 test("#694's per-tab cues move once into the device-local store, keeping what they meant", () => {
   const session = memory({
     "grimoire.vn.v1:c": JSON.stringify({ version: 1, cues: { t1: { actors: { a: { position: "left", art: "" } }, focus: "", background: "", transition: "fade", note: "n" } } }),

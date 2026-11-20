@@ -33,6 +33,8 @@ export function makeStaging(ctx, chat, { log }) {
   const button = (text, fn, attrs = {}) => el("button", { type: "button", "data-stage-focus": text, onclick: fn, ...attrs }, text);
   const mode = choice("stage-mode", [["transcript", "Transcript"], ["vn", "VN presentation"]], "transcript", () => {
     log.hidden = mode.value === "vn";
+    announce.textContent = ""; // nothing stale for a reading cursor once the transcript is back
+    shown = null; // coming back to the stage arrives at its turn again
     draw();
   });
   node.append(
@@ -140,7 +142,7 @@ export function makeStaging(ctx, chat, { log }) {
       );
       return;
     }
-    body.append(drawEditor(turn, staged[index - 1] || null));
+    body.append(drawEditor(turn, entry));
   }
 
   function resolveImage(image, holder, alt, epoch) {
@@ -211,11 +213,11 @@ export function makeStaging(ctx, chat, { log }) {
     return parts.join(" · ") || "no change";
   }
 
-  function drawEditor(turn, previous) {
+  function drawEditor(turn, entry) {
     const draft = editDraft || (editDraft = JSON.parse(JSON.stringify(store.cues[selected] || blankCue())));
     const editor = el("fieldset", {}, el("legend", {}, "Edit local cue"));
     const present = presentActors(turn, speakerLabels(scene.turns.filter((t) => t.kept)));
-    const carried = new Map((previous?.actors || []).map((a) => [a.actor, a]));
+    const carried = new Map(Object.entries(entry.carried));
     for (const a of present) {
       const state = draft.actors[a.actor] || { position: "", art: "" };
       draft.actors[a.actor] = state;
@@ -223,7 +225,7 @@ export function makeStaging(ctx, chat, { log }) {
       const art = actorArt(member(a.actor));
       editor.append(el("label", {}, a.name + " · " + a.actor + (a.speaking ? "" : " · silent"),
         choice("Position " + a.actor,
-          [["", "Unchanged (" + (was ? placeName(was.position) : a.speaking ? "placed automatically" : "off stage") + ")"],
+          [["", "Unchanged (" + (was ? (was.position === "off" ? "off stage" : placeName(was.position)) : a.speaking ? "placed automatically" : "not staged") + ")"],
             ...POSITIONS.map((x) => [x, x]), ["off", "Off stage"]],
           state.position, (v) => (state.position = v)),
         choice("Art " + a.actor,
@@ -255,7 +257,12 @@ export function makeStaging(ctx, chat, { log }) {
       el("label", {}, "Cue note", note),
       button("Save cue", () => {
         draft.note = note.value;
-        store.put(selected, trimCue(draft));
+        // A refused cue (too many, or stored cues this build cannot change) keeps the editor and its draft open;
+        // one kept only in memory is applied, with the warning saying so.
+        if (store.put(selected, trimCue(draft)) === false) {
+          draw("Save cue");
+          return;
+        }
         editing = false;
         draw("Edit cue");
       }),

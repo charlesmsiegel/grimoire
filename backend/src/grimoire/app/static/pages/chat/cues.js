@@ -101,6 +101,9 @@ export const blankCue = () => ({ actors: {}, focus: "auto", background: "inherit
 // them. `reload` takes up another tab's change (the page calls it on the `storage` event).
 export function cueStore(chat, storage, legacy) {
   let cues = {}, warning = "", unreadable = false;
+  // Turns whose last change could not be written (storage full or gone): turn -> cue, or null for a removal.
+  // Every later change re-applies them on top of what is stored, until one write carries them all.
+  const unsaved = new Map();
   const probe = (get) => { try { return get(); } catch { return null; } };
   // Only the page's own stores carry #694's cues forward: a caller that hands in a store hands in both.
   if (!storage) {
@@ -154,14 +157,17 @@ export function cueStore(chat, storage, legacy) {
       storage.setItem(key, JSON.stringify({ version: 2, cues }));
       warning = "";
       unreadable = false;
+      unsaved.clear();
       return true;
     } catch {
       warning = "Local cues not saved: storage unavailable or full; changes remain in memory.";
       return false;
     }
   }
-  // One turn's change, applied to the cues stored now (or to this tab's copy when storage is unusable).
-  function change(apply) {
+  // One turn's change (a cue, or null to remove it), applied with every still-unsaved change to the cues stored
+  // now (or to this tab's copy when storage is unusable). True: saved. "unsaved": applied in memory only, and
+  // kept for the next write. False: refused, nothing changed.
+  function change(turn, cue) {
     let base = cues;
     try {
       const now = stored();
@@ -172,12 +178,18 @@ export function cueStore(chat, storage, legacy) {
       }
       base = now.cues || {};
     } catch { /* unusable storage: change the copy in memory, and say so on write */ }
-    const next = apply({ ...base });
+    const next = { ...base };
+    for (const [id, value] of [...unsaved, [turn, cue]])
+      if (value === null) delete next[id];
+      else next[id] = value;
     if (!validCues(next)) {
       warning = `Invalid cues: maximum ${MAX_CUES} cues and ${MAX_NOTE} note characters.`;
       return false;
     }
-    return write(next);
+    if (write(next)) return true;
+    unsaved.delete(turn);
+    unsaved.set(turn, cue);
+    return "unsaved";
   }
   load();
   return {
@@ -185,8 +197,8 @@ export function cueStore(chat, storage, legacy) {
     get warning() { return warning; },
     get unreadable() { return unreadable; },
     reload: load,
-    put: (turn, cue) => change((next) => ({ ...next, [turn]: cue })),
-    remove: (turn) => change((next) => { delete next[turn]; return next; }),
+    put: (turn, cue) => change(turn, cue),
+    remove: (turn) => change(turn, null),
     // Replaces everything stored for this chat: Reset local cues, the one way past unreadable stored cues.
     save(next) {
       if (!validCues(next)) {
@@ -211,8 +223,10 @@ export function trimCue(cue) {
 // An unblocked speaker takes the first free place, in this order, so two speakers never share a place while
 // one is free. With every place taken it joins the centre.
 const AUTO_ORDER = ["center", "left", "right"];
-function freePlace(blocking, except) {
-  const taken = new Set([...blocking].filter(([id, b]) => id !== except && b.position !== "off").map(([, b]) => b.position));
+// Only actors the table can place at this turn (`here`) hold a place: on a stage, an unheard actor's kept
+// place is free for a new speaker, and the actor shares it if they return.
+function freePlace(blocking, except, here) {
+  const taken = new Set([...blocking].filter(([id, b]) => id !== except && here.has(id) && b.position !== "off").map(([, b]) => b.position));
   return AUTO_ORDER.find((p) => !taken.has(p)) || "center";
 }
 const copy = (blocking) => new Map([...blocking].map(([id, b]) => [id, { ...b }]));
@@ -231,8 +245,10 @@ export function speakerLabels(kept) {
 //   focus {actor, source: authored|automatic|none}, background ("" none, else an image ref), transition,
 //   note, directions (plain-text stage directions for the change into this turn), unavailable (authored
 //   references this turn cannot honour).
-// `blocking` holds every actor's carried place, including "off"; `shownAt` who was drawn at the previous turn,
-// so an entrance or a move is told against what the reader last saw.
+//   carried: each actor's place and art coming into this turn, before its cue ("off" included).
+// `blocking` holds every actor's carried place, including "off"; `shownAt` who was drawn at the previous kept
+// turn, so an entrance or a move is told against the turn before it in the transcript (the reader may have
+// jumped from elsewhere; the directions still describe the scene's own sequence).
 export function timeline(turns, cues) {
   const kept = (turns || []).filter((t) => t?.kept);
   const labels = speakerLabels(kept);
@@ -263,13 +279,14 @@ export function timeline(turns, cues) {
         continue;
       }
       const prior = blocking.get(id);
-      const position = change.position || (prior && prior.position !== "off" ? prior.position : "") || freePlace(blocking, id);
+      // An unchanged place stays as it was, off stage included; with none yet the actor takes a free place.
+      const position = change.position || prior?.position || freePlace(blocking, id, byId);
       blocking.set(id, { name: byId.get(id).name, position, art: change.art || prior?.art || "" });
     }
     // Speakers nobody blocked take a free place; one blocked off stage stays off (heard, not seen).
     for (const a of present)
       if (a.speaking && !blocking.has(a.actor))
-        blocking.set(a.actor, { name: a.name, position: freePlace(blocking, a.actor), art: "" });
+        blocking.set(a.actor, { name: a.name, position: freePlace(blocking, a.actor, byId), art: "" });
       else if (blocking.has(a.actor)) blocking.get(a.actor).name = a.name;
     const onStage = (id) => byId.has(id) && blocking.has(id) && blocking.get(id).position !== "off";
     // Focus is the cue's own; otherwise the turn's last staged speaker.
@@ -291,7 +308,8 @@ export function timeline(turns, cues) {
           from: shownAt.get(a.actor) || null, entered: !shownAt.has(a.actor) };
       });
     for (const a of actors) {
-      if (a.entered) directions.push(`${a.name} ${entries.length ? "enters" : "stands"} ${placeName(a.position)}.`);
+      if (a.entered && staged && before.has(a.actor)) directions.push(`${a.name} is seen again, ${placeName(a.position)}.`);
+      else if (a.entered) directions.push(`${a.name} ${entries.length ? "enters" : "stands"} ${placeName(a.position)}.`);
       else if (a.from !== a.position) directions.push(`${a.name} moves from ${placeName(a.from)} to ${placeName(a.position)}.`);
       const old = before.get(a.actor)?.art;
       if (!a.entered && old !== undefined && old !== a.art && outfitOf(a.art) && outfitOf(a.art) !== outfitOf(old))
@@ -304,7 +322,8 @@ export function timeline(turns, cues) {
     if (focus.actor) directions.push(`Focus on ${blocking.get(focus.actor).name}.`);
     if (entries.length && entries.at(-1).background !== background)
       directions.push(background ? "The background changes." : "The background clears.");
-    entries.push({ turn: turn.turn, number: turn.number, cue, actors, focus, background,
+    const carried = Object.fromEntries([...before].map(([id, b]) => [id, { position: b.position, art: b.art }]));
+    entries.push({ turn: turn.turn, number: turn.number, cue, actors, focus, background, carried,
       transition: cue?.transition || "none", note: cue?.note || "", directions, unavailable });
     shownAt = new Map(actors.map((a) => [a.actor, a.position]));
     // A cue from #694 staged its own turn only: the turns after it go back to what came before it, less any
@@ -312,7 +331,9 @@ export function timeline(turns, cues) {
     if (cue?.once) {
       const restored = new Map();
       for (const [id, b] of before) if (blocking.has(id)) restored.set(id, { ...b, name: blocking.get(id).name });
-      for (const [id, b] of blocking) if (!before.has(id) && !cue.actors[id]) restored.set(id, b); // auto-placed speakers
+      // speakers first placed at this turn keep a place, chosen again against the restored stage
+      for (const [id, b] of blocking)
+        if (!before.has(id) && !cue.actors[id]) restored.set(id, { ...b, position: freePlace(restored, id, byId) });
       blocking = restored;
       background = backgroundBefore;
     }
