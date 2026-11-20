@@ -427,6 +427,27 @@ def test_knowledge_waits_for_an_earlier_acceptance_still_cut_short_on_another_de
         assert unbridged(at, chat) == ["1:acceptance_unsettled"]  # counted, never named
 
 
+def test_another_devices_acceptance_whose_knowledge_never_arrived_is_counted_never_written(cards, monkeypatch):
+    """Its own device writes its knowledge, judged on the stage played there, and sync brings it: here it is only
+    counted, so a device retired before it could (or a replaced identity) never strands it unseen."""
+    folder, chat = cards
+    book = StageBook()
+    with table(folder, book) as at:
+        anya, mara, tamsin = cast(at, chat)
+        book.put(chat, stage(chat, anya, mara, tamsin))
+        turn = decided(at, chat)
+        no_bridge_append(monkeypatch)
+        with pytest.raises(Crash):
+            accepted(at, chat, anya, mara, turn)
+        monkeypatch.undo()
+        (stored_turn,) = [each for each in at.runner.scenes.turns(chat).turns if each.record.turn_id == turn]
+        theirs = replace(stored_turn.record.effect(1), accepted_on="0badcafe")
+        at.runner.scenes.write(stored_turn.record.with_effect(theirs), stored_turn)
+        assert unbridged(at, chat) == ["1:elsewhere"]
+        assert stored(at, chat).knowledge.events == () and seen(at, chat, anya) == []
+        assert unbridged(at, chat) == ["1:elsewhere"]  # still counted, still not written here
+
+
 # -- revoked, and behind the knowledge ledger -----------------------------------------------------------
 
 def test_an_effect_revoked_before_its_bridge_is_never_written_as_fact(cards, monkeypatch):

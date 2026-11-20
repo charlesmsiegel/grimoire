@@ -56,12 +56,15 @@ class Pending:
     """An accepted effect whose bridge 020 does not hold: its 021 event, its turn effect and the turn.
 
     ``behind`` is true once 020's high-water mark has passed the event's sequence: 020 refuses it as backdated
-    for good (no backdating, EVIDENCE.md), so it is only counted."""
+    for good (no backdating, EVIDENCE.md), so it is only counted. ``elsewhere`` is true for another device's
+    acceptance: that device writes its knowledge, and it arrives by sync, so this library only counts it while it
+    has not (a device retired before it could, a replaced or damaged identity), never writes it."""
 
     event: AcceptedEvent
     effect: TurnEffect
     record: TurnRecord
     behind: bool
+    elsewhere: bool = False
 
     @property
     def chat(self) -> ChatRef:
@@ -70,7 +73,8 @@ class Pending:
 
 @dataclass(frozen=True)
 class Left:
-    """A bridge still not in 020 after ``settle``, and why (``backdated``, ``acceptance_unsettled``, or 020's,
+    """A bridge still not in 020 after ``settle``, and why (``backdated``, ``acceptance_unsettled``, ``elsewhere``
+    for another device's acceptance whose knowledge has not arrived, or 020's,
     the store's or the effect's reason)."""
 
     pending: Pending
@@ -135,8 +139,7 @@ def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]
                 unsettled = sequence if unsettled is None else min(unsettled, sequence)
             if effect.state != "accepted" or effect.event_id is None or effect.event_id in held:
                 continue
-            if effect.accepted_on is not None and effect.accepted_on != mine:  # that device writes its knowledge
-                continue
+            elsewhere = effect.accepted_on is not None and effect.accepted_on != mine  # that device writes it
             address = AcceptedRef(campaign_id, effect.event_id)
             raw = accepted.get(address)
             if raw is None:
@@ -146,7 +149,7 @@ def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]
             except EffectCodecError:
                 continue
             if event.active and event.chat == record.chat:
-                found.append(Pending(event, effect, record, event.moment.sequence < high))
+                found.append(Pending(event, effect, record, event.moment.sequence < high, elsewhere))
     found.sort(key=lambda item: (item.event.moment.sequence, item.event.event_id))
     return found, high, unsettled
 
@@ -290,6 +293,9 @@ def settle(runner, scene) -> list[Left] | str:
         left, stop, opened = [], None, {scene.chat: scene}
         for item in pending:
             sequence = item.event.moment.sequence
+            if item.elsewhere:  # counted, never written here: its own device writes it, and it arrives by sync
+                left.append(Left(item, "elsewhere"))
+                continue
             if item.behind or sequence < high:
                 left.append(Left(item, "backdated"))
                 continue
