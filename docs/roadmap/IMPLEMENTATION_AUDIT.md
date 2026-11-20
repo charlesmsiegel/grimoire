@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 11/16 | ☐ | 073, 074, 075, 076, 077, 079, 082, 084, 085 and 086 meet their bounded first slices; 080 meets its first slice with a stand-in local recognizer; the other domain slices and UI exit 116 are not complete. |
+| [9](#wave-9) | 13/16 | ☐ | 073, 074, 075, 076, 077, 078, 079, 082, 083, 084, 085 and 086 meet their bounded first slices; 080 meets its first slice with a stand-in local recognizer; the other domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-073 (a hypothetical NPC reply), 074 (downtime), 075 (recorded rolls), 076 (offscreen plan steps), 079 (source upgrade previews), 082 (read-only world audits), 084 (reviewed transcript transfer), 085 (draft context preview) and 086 (validated module authoring with pinned revisions) meet their first slices; the other domain slices and UI exit 116 are not complete.
+073, 074, 075, 076, 077, 078, 079, 082, 083, 084, 085 and 086 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -714,9 +714,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-078"></a>
 ### 078 — Relationships And Reputation
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/relationships-and-reputation.md)).
-- Evidence: graph relations and actor-specific evidence implement relationships and knowledge scoping foundations.
-- Scope / gap: No asymmetric trust/reputation updates with episode provenance and absent-NPC social knowledge proof.
+- [x] Scheduled first-useful slice ([requirements](sprints/relationships-and-reputation.md)).
+- Evidence: [`relationships/policy.py`](../../backend/src/grimoire/relationships/policy.py) admits a director-authored NPC attitude (trust, affection, fear, rivalry, resentment or debt toward one actor or group, a narrative account and an optional degree) only from the holder's own confirmed evidence or beliefs at that moment, at least one of which overtly concerns the target; perceptions, participation, membership and other actors' evidence never count. [`test_relationships.py`](../../backend/tests/test_relationships.py) runs the proving scenario: an insulted envoy resents and distrusts the newcomer, a dockhand who overheard likes them, two absent guild members hold nothing, and one comes to resent them only after the envoy's letter arrives; admission writes no knowledge. Groups hold no attitudes, a player taking an NPC over does not inherit its attitudes as their own, and supersession history, idempotent retries, future-dated changes, authority refusals and bounds are covered. See [contract](../RELATIONSHIPS.md).
+- Scope / gap: Authored, in-memory per-holder attitudes only: no community reputation with uncertainty (milestone 3), change of allegiance, persistence, brief/goal consumption, narrator proposals or UI. No provider calls.
 
 <a id="slice-079"></a>
 ### 079 — Source Upgrades And Dependencies
@@ -749,9 +749,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-083"></a>
 ### 083 — Character Voice Performance
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/character-voice-performance.md)).
-- Evidence: [`voice/profile.py`](../../backend/src/grimoire/voice/profile.py) controls prose portrayal only; generation keeps actor text separate.
-- Scope / gap: No audio/TTS renderer for accepted actor/narrator text or per-character voice playback.
+- [x] Scheduled first-useful slice ([requirements](sprints/character-voice-performance.md)).
+- Evidence: a scene's **accepted** text is now performed in separate voices. [`voicecast`](../../backend/src/grimoire/voicecast) casts a local voice to the narrator (per campaign or every campaign), a character (any revision, or one pinned revision) or one campaign actor, with rights and consent recorded on each entry (`licensed`/`consented` need a note). [`plan_performance`](../../backend/src/grimoire/voicecast/plan.py) cues each non-private post and the kept take's table-heard lines, choosing each line's voice from the revision and voice profile the line **recorded** (never the source's head: an outfit cast on its own speaks in its own voice, otherwise in its base's), and lists every rule considered with a `why` sentence. An uncast speaker stays text, never another speaker's voice, and the accepted text and its digest are never changed. [`render_performance`](../../backend/src/grimoire/voicecast/render.py) makes one synthesis call per voiced cue with timings, and leaves a cue text when audio is off, the script is too long, or the engine, voice, synthesis or WAV fails; a fingerprint keeps windows in step and a forked chat is refused. The default engine is `ffmpeg`'s local Flite ([`flite.py`](../../backend/src/grimoire/voiceengines/flite.py)): no network, account or bill. The casting is one etag-checked file under `config/` ([`voicecaststore`](../../backend/src/grimoire/voicecaststore/__init__.py), crash-explored). The app's `voicecast.*` ops ([`adapters/voicecast.py`](../../backend/src/grimoire/app/adapters/voicecast.py)) read, cast, uncast, plan and render a chat. Proven by [`test_voice_performance.py`](../../backend/tests/test_voice_performance.py) (two NPCs and a narrator in their own voices, an outfit/revision switch, audio off, a disputed choice explained), [`test_voicecaststore.py`](../../backend/tests/test_voicecaststore.py) and [`test_app_voicecast.py`](../../backend/tests/test_app_voicecast.py), whose real Flite test runs in CI's voice job, including with no network. See [voice casting](../VOICE_CASTING.md).
+- Scope / gap: no page plays a performance yet (sprint 116 exposes it). Not yet built: author-controlled pronunciation, prosody and expression (milestone 2); mood and inflection cues (milestone 3); casting sync between devices; and an engine with licensed or consented voices. Still unverified, needing people: whether the Flite voices are told apart by ear in a real listening run.
 
 <a id="slice-084"></a>
 ### 084 — Cross Campaign Scene Transfer

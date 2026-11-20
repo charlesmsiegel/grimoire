@@ -86,7 +86,9 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.ar
                       "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi",
                       # Source upgrade previews (079) read a whole library through the store.
                       "grimoire.sourceupgrades",
-                      "grimoire.topologystore"})
+                      "grimoire.topologystore",
+                      # 083: the casting's file and the local speech engines (``ffmpeg``) of voice performance.
+                      "grimoire.voicecaststore", "grimoire.voiceengines"})
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,10 @@ PURE_PACKAGES = (
     PurePackage("grimoire.security", ("grimoire.security",)),
     # Tags, pins and saved filters: values, tag rules and codec; the files are the adapter ``grimoire.shelfstore``.
     PurePackage("grimoire.shelf", ("grimoire.shelf", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Voice performance (083): the casting, the plan of a chat's accepted text and its rendering through an engine it
+    # is given; the casting's file is ``grimoire.voicecaststore`` and the engines are ``grimoire.voiceengines``.
+    PurePackage("grimoire.voicecast", ("grimoire.voicecast", "grimoire.core", "grimoire.scene"),
+                never_import=("grimoire.core.inference",)),
     # World Change Sets (043): values, codec and diffs; reviewing and applying is an adapter.
     PurePackage("grimoire.changesets", ("grimoire.changesets", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
@@ -215,6 +221,10 @@ PURE_PACKAGES = (
                 never_import=("grimoire.core.inference",)),
     # Social hypotheses (060) consume actor evidence, never providers or another actor's actual mind.
     PurePackage("grimoire.social_hypotheses", ("grimoire.social_hypotheses", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    # Relationships (078): per-holder attitudes grounded in the holder's own 012 evidence; never providers,
+    # graph membership or another actor's mind.
+    PurePackage("grimoire.relationships", ("grimoire.relationships", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     # Recorded NPC decisions (045): the record of a 039 choice, its evidence and codec, and replay; the
     # ledger is an adapter. It calls no model, so it never touches the inference contracts.
