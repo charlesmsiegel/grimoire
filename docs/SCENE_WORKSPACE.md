@@ -1,5 +1,17 @@
 # Scene workspace
 
+## One thread from every library view (065)
+
+A chat is reached by its exact reference from Chats and from every place in the library that holds it. A
+character's or scenario's page links **Browse these chats** (the workspace filtered by its exact qualified
+reference) and, on a character (an entity, which portrayals derive from), **Include derived portrayals** (only portrayals whose validated
+composition chain contains it). A campaign's hub links **Browse in Chats** and, when the campaign stands in a
+world, **Chats in this world**; a world entry's page links its world's chats. On Chats, Campaign and World offer
+choosers of the campaigns and worlds the library's chats stand in, narrowed by a search, instead of an exact-ID
+box. Every one of these is a link: moving between them never changes a chat, its controller or its canonical
+state, and each chat's composer draft stays where the shell keeps it. Browsing contracts, the shared navigation
+basis that keeps large libraries fast, and its limits are in [CHATS](CHATS.md#scene-workspace-browsing-065).
+
 ## Local reference intent (070)
 
 The chat reference-intent panel stages a sketch or a typed description beside the existing composer. Import a PNG, JPEG or WebP of at most 2 MiB and 4096 × 4096 decoded pixels. No external image URL is fetched. Choose rectangle or ellipse, then drag across the sketch (mouse, touch or pen) to circle a spot; the labeled normalized x, y, width and height fields mirror the drag and remain the keyboard way to select a contained positive region. A tap, a drag smaller than 1% either way, or a cancelled pointer keeps the previous region. Typed intention and public region description work without an image.

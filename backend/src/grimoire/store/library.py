@@ -1021,6 +1021,12 @@ class LibraryStore:
             self._require_consistent()
             return loader.load(self._access)
 
+    def require_readable(self) -> None:
+        """Refuse exactly as :meth:`load` would before reading (closed store, swapped root, pending recovery),
+        for a caller answering from a snapshot it already validated (065's navigation cache)."""
+        with self.lock:
+            self._require_consistent()
+
     def conflicts(self) -> tuple[str, ...]:
         """Preserved versions awaiting a human, as root-relative paths (files only)."""
         self._require_open()
