@@ -91,7 +91,10 @@ The `offscreen` extension of `campaigns/<id>/scope.json` (schema `grimoire.offsc
 campaign id, the plans' current moment and the ordered receipt log. Progress is not stored separately:
 reading replays every receipt against the campaign's **current** calendar and refuses any receipt that
 replay does not reproduce (`invalid_history`), including a skip whose calendar advance is no longer in
-the calendar's history, or a hand edit that contradicts a later receipt. Replay cannot check what no
+the calendar's history, or a hand edit that contradicts a later receipt. Each adoption receipt
+records `calendar_receipts`, how many calendar receipts existed when it was adopted; replay checks the
+adoption against that prefix of the calendar, so a deadline scheduled only later, or a calendar
+history reordered under it, cannot justify it. Replay cannot check what no
 receipt has observed yet, such as the duration of a step no skip has reached: that is the user's
 canonical JSON, as authored. Unknown fields and schemas fail closed; other scope fields and the calendar
 extension survive writes, and calendar writes preserve this extension. Replay cannot recheck an

@@ -284,3 +284,21 @@ def test_scheduler_takes_no_roster_and_calls_no_model():
                                                                             "Shop restock")))),
                           Skip("travel", 4), calendar=cal)
     assert {d.plan_id for d in receipt.developments} == {"docks"} and receipt.deadlines == ()
+
+
+def test_replay_checks_each_adoption_against_the_calendar_as_it_stood_then():
+    """A deadline scheduled only after the adoption cannot justify it, even with the same due date."""
+    from grimoire.calendars import CalendarDefinition, Initialize
+    from grimoire.calendars import apply as calendar_apply
+    state, _, _ = apply(C, adopted(), Skip("a", 1), calendar=calendar(travel("a", 1)))
+    reordered = None
+    for operation in (Initialize("start", CalendarDefinition(), START), travel("a", 1),
+                      Schedule("schedule-festival", Deadline("festival", START.advance(21 * DAY), "Harbour festival"))):
+        reordered, _, _ = calendar_apply(C, reordered, operation)
+    with pytest.raises(OffscreenError, match="invalid_history"):
+        state_from_payload(C, state_to_payload(state), reordered)
+    for anchor in (0, 3, 99, True, "2"):
+        broken = state_to_payload(state)
+        broken["receipts"][0]["calendar_receipts"] = anchor
+        with pytest.raises(OffscreenError, match="invalid_history"):
+            state_from_payload(C, broken, calendar(travel("a", 1)))

@@ -12,7 +12,8 @@ from __future__ import annotations
 from dataclasses import replace
 
 from grimoire.calendars import Advance as CalendarAdvance
-from grimoire.calendars import CalendarError, CalendarState, Moment
+from grimoire.calendars import CalendarError, CalendarState
+from grimoire.calendars import Schedule as CalendarSchedule
 from grimoire.institutions.model import InstitutionState
 
 from .model import (
@@ -40,8 +41,8 @@ def apply(campaign_id: str, state: OffscreenState | None, operation: Adopt | Ski
     """
     if type(operation) is Adopt:
         return _apply(campaign_id, state, operation, calendar=calendar, institution=institution,
-                      at=None if type(calendar) is not CalendarState else calendar.now)
-    return _apply(campaign_id, state, operation, calendar=calendar, institution=None, at=None)
+                      anchor=None if type(calendar) is not CalendarState else len(calendar.receipts))
+    return _apply(campaign_id, state, operation, calendar=calendar, institution=None, anchor=None)
 
 
 def pending_skips(state: OffscreenState | None, calendar: CalendarState) -> tuple[str, ...]:
@@ -53,7 +54,7 @@ def pending_skips(state: OffscreenState | None, calendar: CalendarState) -> tupl
                  and state.skip(r.operation.operation_id) is None)
 
 
-def _apply(campaign_id, state, operation, *, calendar, institution, at, replay=False):
+def _apply(campaign_id, state, operation, *, calendar, institution, anchor, replay=False):
     """``replay`` rebuilds a stored history: the decision was checked when the plan was adopted
     (institutions are not persisted yet), and later calendar advances are not yet "pending"."""
     if type(campaign_id) is not str or type(calendar) is not CalendarState:
@@ -72,7 +73,7 @@ def _apply(campaign_id, state, operation, *, calendar, institution, at, replay=F
             _check_decision(operation.plan, institution)
         if old is not None:
             return state, old, True
-        return _adopt(campaign_id, state, operation, calendar, at, replay)
+        return _adopt(campaign_id, state, operation, calendar, anchor, replay)
     if old is not None:
         return state, old, True
     return _skip(state, operation, calendar)
@@ -90,14 +91,22 @@ def _check_decision(plan, institution) -> None:
         raise OffscreenError("decision_mismatch", "the plan is not the decision's choice")
 
 
-def _adopt(campaign_id, state, operation, calendar, at, replay):
+def _adopt(campaign_id, state, operation, calendar, anchor, replay):
     plan = operation.plan
-    if type(at) is not Moment:
-        raise OffscreenError("invalid_field", "adoption needs a calendar moment")
+    if type(anchor) is not int or not 1 <= anchor <= len(calendar.receipts):
+        raise OffscreenError("calendar_mismatch", "the adoption is not anchored in the calendar's history")
+    # The calendar as it stood at adoption: replay must not let a deadline scheduled later, or time
+    # that passed later, justify an earlier adoption.
+    history = calendar.receipts[:anchor]
+    at = history[-1].after
     if plan.group.campaign_id != campaign_id:
         raise OffscreenError("identity", "the plan's group belongs to another campaign")
-    if state is None and replay and all(r.after != at for r in calendar.receipts):
-        raise OffscreenError("calendar_mismatch", "the first plan did not start at a recorded calendar time")
+    if state is not None and replay:
+        position = {r.operation.operation_id: i for i, r in enumerate(calendar.receipts)
+                    if type(r.operation) is CalendarAdvance}
+        if any(type(r) is Advanced and position.get(r.operation.operation_id, anchor) >= anchor
+               for r in state.receipts):
+            raise OffscreenError("calendar_mismatch", "the adoption predates a skip applied before it")
     if state is not None:
         if state.as_of != at or (not replay and pending_skips(state, calendar)):
             # Starting a plan "now" while earlier time is unapplied would let it skip or double count.
@@ -110,7 +119,8 @@ def _adopt(campaign_id, state, operation, calendar, at, replay):
         if len(state.plans) >= MAX_PLANS:
             raise OffscreenError("limit", f"at most {MAX_PLANS} adopted plans")
     if plan.deadline_id is not None:
-        deadline = next((d for d in calendar.deadlines if d.deadline_id == plan.deadline_id), None)
+        deadline = next((r.operation.deadline for r in history if type(r.operation) is CalendarSchedule
+                         and r.operation.deadline.deadline_id == plan.deadline_id), None)
         if deadline is None:
             raise OffscreenError("unknown_deadline", f"no calendar deadline {plan.deadline_id}")
         if deadline.due <= at:
@@ -124,7 +134,7 @@ def _adopt(campaign_id, state, operation, calendar, at, replay):
             dues.append(due)
     except CalendarError:
         raise OffscreenError("out_of_range", "the plan runs past the calendar's supported range") from None
-    receipt = Adopted(operation, at)
+    receipt = Adopted(operation, at, anchor)
     progress = PlanProgress(plan, at, tuple(dues))
     if state is None:
         return OffscreenState(campaign_id, at, (progress,), (receipt,)), receipt, False

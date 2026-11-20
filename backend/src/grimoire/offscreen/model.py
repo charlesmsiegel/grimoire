@@ -180,8 +180,12 @@ class DeadlineOutcome:
 
 @dataclass(frozen=True, slots=True)
 class Adopted:
+    """``calendar_receipts`` anchors the adoption in calendar history: how many calendar receipts
+    existed when the plan was adopted. ``at`` is the time the last of them left the calendar at."""
+
     operation: Adopt
     at: Moment
+    calendar_receipts: int
 
 
 @dataclass(frozen=True, slots=True)
