@@ -36,7 +36,7 @@ function pick(select, value) {
   select.dispatchEvent({ type: "change" });
 }
 
-test("from the printed address to a kept draft and a post", { skip: !base }, async () => {
+test("from the printed address to a kept draft and a post", { skip: !base }, async (t) => {
   // a reserved route no page in this app has registered yet (read from the live registry, as the shell does)
   const registry = await (await fetch(base + "/shell/pages", { cache: "no-store" })).json();
   const taken = new Set(registry.pages.map((page) => page.route));
@@ -297,11 +297,28 @@ test("from the printed address to a kept draft and a post", { skip: !base }, asy
   assert.match(said.textContent, / · turn \d+$/, "who said it, in which chat, at which turn");
   assert.equal(results().at(-1), said, "lines come after everything else");
   const turn = /turn (\d+)$/.exec(said.textContent)[1];
+  // Hold the story response until the search mark is visible, then force the late redraw that
+  // used to discard that mark. This controls ordering rather than relying on machine speed.
+  const originalFetch = globalThis.fetch;
+  let releaseStory;
+  const storyGate = new Promise((resolve) => { releaseStory = resolve; });
+  t.after(() => { releaseStory(); globalThis.fetch = originalFetch; });
+  globalThis.fetch = async (url, options) => {
+    const response = await originalFetch(url, options);
+    if (String(url).includes("/api/play.story")) await storyGate;
+    return response;
+  };
   said.click();
   await until(() => window.location.hash === chatHash + "?turn=" + turn && !body.querySelector("dialog"), 15000, "the chat at the line's turn");
   const marked = await until(() => main.querySelectorAll("div.chat-found").length && main.querySelectorAll("div.chat-found"), 15000, "the turn marked");
   assert.ok(marked.every((node) => node.getAttribute("data-turn-number") === turn));
   assert.ok(marked.some((node) => node.classList.contains("chat-post") && node.textContent.includes("Hello over the shell.")));
+  releaseStory();
+  await until(() => !main.contains(marked[0]), 15000, "the late story redraw");
+  globalThis.fetch = originalFetch;
+  const redrawn = main.querySelectorAll("div.chat-found");
+  assert.ok(redrawn.length, "a late story response must preserve the active search highlight");
+  assert.ok(redrawn.every((node) => node.getAttribute("data-turn-number") === turn));
 
   // an address no page owns says so; a reserved one names its sprint
   if (waiting.length) {
