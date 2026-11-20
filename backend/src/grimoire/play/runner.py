@@ -663,13 +663,16 @@ class SceneRunner:
             self._briefs(context, recorded_speakers, heard_turns, number, existing=existing)
         deciders = [actor.instance_id for actor, _ in chosen
                     if self.decisions is not None and actor in self._agendas and actor not in existing]
+        # 068: an opt-in presentation suggestion for each speaker, capped per take by the policy; none when off.
+        planners = ([actor.instance_id for actor, _ in chosen]
+                    if self.policy.cap_for(InferenceStage.PLANNING) else [])
         try:
             with span("plan"):
                 plan = plan_generation_turn(chat.campaign_id, plan_turn,
                                             present=[a.instance_id for a in scene.on_stage],
                                             speakers=[a.instance_id for a, _ in chosen], controls=scene.controls,
                                             director_reply=director, policy=self._decision_policy(record),
-                                            decisions=deciders)
+                                            decisions=deciders, planners=planners)
         except GenerationError as error:
             raise _refuse(error.reason, "the turn cannot be planned") from None
         if director and not any(call.stage is InferenceStage.DIRECTOR_GENERATION for call in plan.calls):
