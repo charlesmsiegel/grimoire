@@ -8,7 +8,8 @@ listing row per chat -- built once and reused while the library is unchanged.
 
 **Validation, not trust.** A basis is reused only when the library's *stamp* is unchanged. The stamp is the
 store's in-process commit ``generation`` plus a metadata walk of the store tree (each entry's relative path,
-type, size, ``mtime_ns``, ``ctime_ns`` and inode, and the root's device; links are recorded and never followed).
+type, size, ``mtime_ns``, ``ctime_ns`` and inode, and the root's device; links, junctions and other reparse
+points are recorded and never entered).
 Nothing is read or parsed, so the walk costs a small fraction of a load. Any in-process commit or recovery
 bumps ``generation``; a write from outside this process (another app, a sync folder, a hand edit) changes some
 entry's metadata. On POSIX a rewrite updates ``ctime`` even when a tool preserves ``mtime``. A pending
@@ -38,7 +39,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import stat
 import sys
 import threading
 import time
@@ -50,6 +50,7 @@ from grimoire.core.identity import SourceRef
 from grimoire.core.index import MissingDefinition
 from grimoire.core.portrayal import PortrayalError
 from grimoire.effective.inspect import compose_in
+from grimoire.store.loader import _walkable
 
 Stamp = tuple[Any, ...]
 WINDOWS = sys.platform == 'win32'
@@ -63,7 +64,7 @@ def library_stamp(root: os.PathLike[str] | str, generation: int | None) -> Stamp
     except OSError as error:
         return (generation, ('<root>', type(error).__name__))
     found: list[tuple[Any, ...]] = [('', top.st_mode, top.st_size, top.st_mtime_ns, top.st_ctime_ns, top.st_ino, top.st_dev)]
-    stack = [base] if stat.S_ISDIR(top.st_mode) else []
+    stack = [base] if _walkable(top) else []
     while stack:
         folder = stack.pop()
         try:
@@ -80,7 +81,7 @@ def library_stamp(root: os.PathLike[str] | str, generation: int | None) -> Stamp
                 continue
             found.append((os.path.relpath(item.path, base), info.st_mode, info.st_size, info.st_mtime_ns,
                           info.st_ctime_ns, info.st_ino))
-            if stat.S_ISDIR(info.st_mode):
+            if _walkable(info):  # never a link, junction or other reparse point, as the loader walks
                 stack.append(item.path)
     found.sort(key=lambda entry: entry[0])
     return (generation, tuple(found))

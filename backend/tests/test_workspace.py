@@ -8,7 +8,9 @@ from grimoire.chats import Launch
 from grimoire.store.diskops import DiskOps
 from grimoire.store import StoreError
 from grimoire.textapi import ApiRefused
-from grimoire.textapi.navcache import build_basis
+import grimoire.store.loader as loader
+from grimoire.textapi import navcache
+from grimoire.textapi.navcache import build_basis, library_stamp
 
 
 def test_workspace_is_bounded_and_rejects_invalid_pages(tmp_path):
@@ -290,3 +292,35 @@ def test_a_load_degraded_by_a_transient_read_failure_is_retried_without_a_librar
         now[0] += 3600
         api('chats.workspace')
         assert cache.builds == builds + 1, 'a clean basis is reused for as long as its stamp holds'
+
+
+def test_the_stamp_walk_never_enters_a_link_or_a_junction(tmp_path, monkeypatch):
+    """Like the loader, the stamp records a link or a Windows junction (a directory that is a reparse point) and
+    never walks into it, so an outside tree joined to the library is neither scanned nor watched."""
+    library, outside = tmp_path / 'library', tmp_path / 'outside'
+    (library / 'records').mkdir(parents=True)
+    (library / 'joined').mkdir()
+    outside.mkdir()
+    (outside / 'far.json').write_text('{}')
+    if hasattr(os, 'symlink'):
+        try:
+            os.symlink(outside, library / 'linked', target_is_directory=True)
+        except OSError:
+            pass
+    real_stat = os.stat
+
+    def reparse(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        info = real_stat(path, *args, **kwargs)
+        if os.path.basename(path) != 'joined':
+            return info
+        fields = {name: getattr(info, name) for name in dir(info) if name.startswith('st_')}
+        return type('Junction', (), {**fields, 'st_file_attributes': 0x400})()
+    monkeypatch.setattr(navcache, 'WINDOWS', True)  # the Windows path, where os.stat reports file attributes
+    monkeypatch.setattr(navcache.os, 'stat', reparse)
+    monkeypatch.setattr(loader, '_REPARSE', 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT, absent off Windows
+    before = library_stamp(library, 0)
+    seen = {entry[0] for entry in before[1]}
+    assert 'joined' in seen and 'records' in seen
+    (library / 'joined' / 'inside.json').write_text('{}')  # behind the junction: not walked
+    assert not any(path.startswith('joined' + os.sep) for path in {entry[0] for entry in library_stamp(library, 0)[1]})
+    assert not any('far.json' in entry[0] for entry in before[1]), 'a link is recorded, never followed'
