@@ -57,6 +57,8 @@ _COURTESY = frozenset({"please"})
 _STOP = frozenset({"a", "an", "the", "to", "of", "and", "or", "in", "on", "at", "for", "by", "with", "from", "i",
                    "we", "you", "he", "she", "it", "they", "is", "are", "was", "my", "our", "your", "his", "her",
                    "its", "their", "that", "this", "me", "us", "him", "them", "so", "but", "as", "be", "do"})
+#: Words that open a noun phrase: two of them side by side ("my a road") is never a correction.
+_DETERMINERS = frozenset({"a", "an", "the", "my", "our", "your", "his", "her", "its", "their", "this", "that"})
 #: Soundex-style groups: letters a recognizer readily swaps for one another in a name it does not know.
 _GROUPS = {**dict.fromkeys("bfpv", "p"), **dict.fromkeys("cgjkqsxz", "k"), **dict.fromkeys("dt", "t"),
            **dict.fromkeys("mn", "m"), "l": "l", "r": "r"}
@@ -174,21 +176,21 @@ def _content(words: list[str]) -> bool:
     return not any(word in _STOP for word in words)
 
 
-def _fits(window: list[str], wanted: list[str], before: str | None) -> int | None:
+def _fits(window: list[str], wanted: list[str], before: str | None, after: str | None) -> int | None:
     """How many words ``window`` and ``wanted`` share when ``wanted`` is plainly a correction of ``window``, else
-    ``None``. ``before`` is the passage's word just before the window (``None`` at its start).
+    ``None``. ``before`` and ``after`` are the passage's words just outside the window (``None`` at its ends).
 
     Plainly means one edit, around shared words of which one is not a stop word:
 
-    - a swap in place, of content words for content words ("east" for "west", "orc" for "goblin chief"), or of
-      words for words of the same kind one by one ("an old" for "the west");
+    - a swap in place, of content words for as many or more content words ("east" for "west", "orc" for "goblin
+      chief"), or of words for words of the same kind one by one ("an old" for "the west");
     - new words put in between shared words ("the gate" for "the west gate"), at the passage's start ("Gate is
       shut" for "the west gate"), or content words put in at the window's start right after a stop word ("gate"
       for "west gate" in "to the gate");
     - content words taken out from between shared words ("the big west gate" for "the gate").
 
-    Anything else (a clause dropped, an article swapped for a phrase, words put in beside a content word) is not
-    applied: the words are kept as said and replacing the whole passage is offered, since fidelity comes first."""
+    Anything else (a clause dropped, an article swapped for a phrase, words put in beside a content word, or two
+    determiners left side by side, "my a road") is not applied: the words are kept as said and replacing the whole passage is offered, since fidelity comes first."""
     edits = [op for op in SequenceMatcher(None, window, wanted, autojunk=False).get_opcodes() if op[0] != "equal"]
     if len(edits) != 1:
         return None
@@ -199,7 +201,7 @@ def _fits(window: list[str], wanted: list[str], before: str | None) -> int | Non
         return None
     if tag == "replace":
         alike = len(old) == len(new) and all((left in _STOP) == (right in _STOP) for left, right in zip(old, new))
-        if not (alike or (_content(old) and _content(new))):
+        if not (alike or (_content(old) and _content(new) and len(new) >= len(old))):
             return None
     elif tag == "insert":
         if start == len(window) or (start == 0 and before is not None and (not _content(new) or before not in _STOP)):
@@ -208,13 +210,16 @@ def _fits(window: list[str], wanted: list[str], before: str | None) -> int | Non
             return None
     elif tag == "delete" and (start == 0 or end == len(window) or not _content(old)):
         return None
+    if tag != "delete" and ((start == 0 and before in _DETERMINERS and new[0] in _DETERMINERS)
+                            or (end == len(window) and after in _DETERMINERS and new[-1] in _DETERMINERS)):
+        return None
     return len(shared)
 
 
-def _repeats(words: list[str]) -> int:
-    """How many times a run of one to three words comes twice in a row ("the the", "and the and the")."""
-    return sum(words[at:at + size] == words[at + size:at + 2 * size]
-               for size in (1, 2, 3) for at in range(len(words) - 2 * size + 1))
+def _repeats(words: list[str]) -> set[tuple[str, ...]]:
+    """Each run of one to three words that comes twice in a row ("the the", "and the and the")."""
+    return {tuple(words[at:at + 2 * size]) for size in (1, 2, 3) for at in range(len(words) - 2 * size + 1)
+            if words[at:at + size] == words[at + size:at + 2 * size]}
 
 
 def _align(passage: str, replacement: str) -> tuple[int, int] | None:
@@ -242,7 +247,8 @@ def _align(passage: str, replacement: str) -> tuple[int, int] | None:
         for at in range(offset, len(spoken) - size + 1):
             window = spoken[at:at + size]
             if anchors.intersection(window):
-                shared = _fits(window, wanted, spoken[at - 1] if at > 0 else None)
+                shared = _fits(window, wanted, spoken[at - 1] if at > 0 else None,
+                               spoken[at + size] if at + size < len(spoken) else None)
                 if shared is None:
                     continue
                 score: tuple[float, int, int] = (float(shared), -size, at)
@@ -257,7 +263,7 @@ def _align(passage: str, replacement: str) -> tuple[int, int] | None:
             found.append((*score, at, at + size))
     for *_score, first, past in sorted(found, reverse=True):
         left, right = spoken[max(0, first - 6):first], spoken[past:past + 6]  # all a three-word repeat can reach
-        if _repeats(left + wanted + right) <= _repeats(left + spoken[first:past] + right) + _repeats(wanted):
+        if _repeats(left + wanted + right) <= _repeats(left + spoken[first:past] + right) | _repeats(wanted):
             return tokens[first][1], tokens[past - 1][2]
     return None
 

@@ -82,6 +82,7 @@ def test_a_correction_that_puts_in_takes_out_or_swaps_words_keeps_its_neighbours
     ("I draw my sword", "no I meant my swords", "My swords"),
     ("the captain and the guard leave", "no I meant the captain and guard", "The captain and guard"),
     ("we wait for the dawn", "no I meant for dawn", "For dawn"),  # never "for for dawn"
+    ("west my at road we", "no I meant a road", "A road"),  # never "my a road"
 ])
 def test_a_correction_that_is_not_plainly_one_edit_is_kept_as_words_with_the_whole_passage_offered(passage, said, whole):
     kept = revise(passage, passage, said)
