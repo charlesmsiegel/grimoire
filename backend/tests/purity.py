@@ -212,6 +212,8 @@ PURE_PACKAGES = (
     # NPC goals (039): authored agendas and the deterministic policy that chooses from the NPC's own
     # knowledge. It calls no model, so it never touches the inference contracts.
     PurePackage("grimoire.goals", ("grimoire.goals", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # 081: a story thread is computed over a read of the 012/020 ledger; it reads nothing itself.
+    PurePackage("grimoire.story", ("grimoire.story", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Quests and commitments (077): a cited ledger and its fold; 055 deadlines and 020/021 support are read by
     # the commitmentstore adapter and passed in.
     PurePackage("grimoire.commitments", ("grimoire.commitments", "grimoire.core"),

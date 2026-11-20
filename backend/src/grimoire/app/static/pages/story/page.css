@@ -1,0 +1,22 @@
+/* Story threads (081). Only story- classes; colours and fonts are the shell's tokens. */
+.story-top { margin-bottom: 18px; }
+.story-find { gap: 10px; align-items: flex-end; }
+.story-find .g-searchbox { flex: 1 1 260px; }
+.story-columns { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 2fr); gap: 24px; align-items: start; }
+@media (max-width: 760px) { .story-columns { grid-template-columns: 1fr; } }
+.story-row { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; color: inherit; text-decoration: none; }
+.story-row:hover { background: var(--g-raised); }
+.story-row[aria-current="true"] { background: var(--g-raised); box-shadow: inset 3px 0 0 var(--g-accent); }
+.story-row:focus-visible { outline: 3px solid var(--g-focus); outline-offset: -3px; }
+.story-entries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.story-entry { padding: 10px 12px; border-left: 3px solid var(--g-line); }
+/* the grade is in the pill's word too: the border only repeats it */
+.story-confirmed { border-left-color: var(--g-good); }
+.story-belief { border-left-style: dashed; border-left-color: var(--g-accent); }
+.story-proposal { border-left-style: dotted; }
+.story-revoked { border-left-color: var(--g-bad); }
+.story-revoked .story-text { text-decoration: line-through; }
+.story-entry-head { gap: 8px; }
+.story-line { flex: 1 1 auto; }
+.story-text { margin: 6px 0 0; font: italic 400 15px/1.45 var(--g-serif); overflow-wrap: anywhere; }
+.story-grounds, .story-contradictions { margin: 4px 0 0; padding-left: 20px; }
