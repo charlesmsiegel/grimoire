@@ -9,14 +9,15 @@ import pytest
 
 from grimoire.calendarstore import CalendarLibrary
 from grimoire.commitments import CommitmentError
-from grimoire.commitmentstore import CommitmentLibrary, Due, read_support
+from grimoire.chatstore import campaign_taken_ids
+from grimoire.commitmentstore import CommitmentLibrary, Due, commitment_party_ids, read_support
 from grimoire.core import DIRECTOR, Event, InstanceRef, Moment
 from grimoire.core.authority import AuthorityError
 from grimoire.core.model import ControlAssignment
 from grimoire.effects import accepted_token, as_knowledge_event
 from grimoire.effectstore import Endorsement
 from grimoire.evidencestore import EvidenceLibrary
-from grimoire.store import LibraryStore, StaleWrite
+from grimoire.store import LibraryStore, StaleWrite, TakenIdsUnlisted
 from grimoire.store import etag as etag_of
 from grimoire.sync import resolve, sync
 from grimoire.store.layout import address_parts
@@ -288,6 +289,29 @@ def test_a_retcon_after_planning_refuses_the_commit(world):
     before = scope_bytes(store)
     assert reason(change.commit) == "citation_changed"
     assert scope_bytes(store) == before
+
+
+def test_a_retcon_still_counts_after_its_bridge_is_removed(world):
+    store, handles, library = world
+    offered(library, mission(owed_by=(TAM,), owed_to=(WREN,), kind="promise"))
+    effects, ref, proposal = _accept_and_bridge(store, handles)
+    library.record(SCOPE, "op-2", "m-tower", "accepted", cites=[ref.event_id], expected=etag(library),
+                   controls=CONTROLS).commit()
+    _revoke(effects, handles, ref, proposal)
+    bridge = next(p for p in store.root.rglob(f"{ref.event_id}.json") if p.parent.name != "accepted")
+    bridge.unlink()  # the undone fiction's bridge is cleaned up, or has not synced here
+    state = library.read(SCOPE, requested_by=DIRECTOR).commitment("m-tower")
+    assert (state.status, state.certain, state.steps[0].support) == ("offered", True, "revoked")
+
+
+def test_a_commitments_parties_keep_their_ids_after_their_files_go(world):
+    store, handles, library = world
+    offered(library, mission(owed_by=(INES,), owed_to=(TAM,), deadline_id=None), due=None)
+    (store.root / "/".join(address_parts(INES))).unlink()
+    assert "ines" in campaign_taken_ids(store, C) and "ines" in commitment_party_ids(store, C)
+    (store.root / "/".join(address_parts(SCOPE))).write_text("{not json")
+    with pytest.raises(TakenIdsUnlisted):
+        commitment_party_ids(store, C)
 
 
 def test_an_event_that_is_not_there_makes_the_history_uncertain(world):

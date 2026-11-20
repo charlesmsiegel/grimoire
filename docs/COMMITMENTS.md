@@ -80,7 +80,7 @@ The library re-reads every citation's support from 020 and 021 on every read, pl
 | Support | Meaning |
 |---|---|
 | `supported` | The event is on the 020 ledger. If a 021 accepted event shares its id, that event decodes, is active and bridges to exactly it. |
-| `revoked` | Its accepted event was revoked: a retcon. The fiction it recorded did not happen. |
+| `revoked` | Its accepted event was revoked: a retcon. The fiction it recorded did not happen. A readable revoked record settles it even when its bridge is no longer on the 020 ledger. |
 | `missing` | It is not on the 020 ledger. It may still be syncing from another device. |
 | `unreadable` | It could not be checked: a quarantined or damaged record, an unreadable 020 ledger, or a 021 bridge whose accepted event is not here or could not be read. |
 
@@ -138,6 +138,9 @@ canon for the director, never an NPC's memory: give an actor only what 020 says 
 A scope with unresolved sync conflicts is refused (`scope_conflict`). So is an unreadable calendar
 (`calendar_unreadable`) or a ledger of an unknown schema (`unknown_schema`). Unknown fields fail closed: dropping
 a field a newer writer added could drop an authority record. Every other scope field is preserved.
+
+The parties a commitment names stay reserved in `campaign_taken_ids` ([CHATS](CHATS.md#taken-instance-ids)), so a
+new individual never takes a hand-deleted character's id and inherits its promises.
 
 ## Referee
 
