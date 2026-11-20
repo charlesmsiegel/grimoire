@@ -98,11 +98,76 @@ configuration, context changes or draft correction invalidate it. Ordinary new S
 pending speech and uses the existing typed intent router even with recording off.
 No speech method dispatches a command or commits fictional state.
 
-Returned transcript text and intent feedback support visible transcripts and
-captions for a future UI. Actual caption widgets, keyboard affordances,
-replay/pause playback controls and hands-free campaign interaction belong to
-115/105 integration and are not shipped here. No acoustic speaker attribution or
+Returned transcript text and intent feedback are shown as captions in the
+chat page's voice strip (below). No speaker identification or
 accessibility-user study is claimed.
+
+## One listening window, analyzed before recognition
+
+`grimoire.speech.capture` is the trusted capture boundary between a listening
+window and the session. A `Capture` is one window's mono 16-bit WAV, the
+explicit gesture that opened it (`keyboard`, `pointer` or `switch`; there is no
+always-on or wake-word trigger), the capture token latched when it opened and,
+when it answers a pending proposal, that proposal's token. `hear` first runs
+`analyze`, a 20 ms energy detector whose threshold sits 9 dB above the
+window's own noise floor (never below -60 dBFS). Audio is **blocked before any
+recognizer sees it** when the window holds:
+
+- `no_speech`: nothing above the floor;
+- `speech_at_open`: speech already under way within 0.12 s of the press, i.e.
+  someone else was talking when the person pressed;
+- `late_onset`: speech starting more than 3 s after the press;
+- `multiple_segments`: more than one stretch of speech (two talkers in turn, or
+  a bystander after the person);
+- `cut_off`: speech running into the window's end;
+- `too_long`: a window over 15 s.
+
+Only then is the audio transcribed through `perform(..., capture_token=...)`
+and turned into a foreground, engaged, final `Recognition`; all earlier gates
+(attribution, staleness, confidence, command gates, pending review) still apply.
+`voice_action` says what the page may do with the result: `act` only for an
+instant UI command, `draft` for the person's own words (placed in the composer,
+never posted), `show` otherwise. Authorized and confirm-gated commands, such as
+delete the scene, are only named; voice never presses their buttons.
+
+These are single-microphone heuristics, not speaker identification. A bystander
+who starts speaking promptly inside the person's window, with the person silent,
+is attributed to the person: an instant command can then act (for example opening
+a view), and a bystander "yes" can confirm the person's own pending safe proposal.
+It still cannot delete, undo, reroll or post. The evaluation keeps these as
+measured `KNOWN_LIMITS`, not passing cases.
+
+## In the app
+
+The `speech` adapter (`app/adapters/speech.py`) serves `speech.status`,
+`speech.listen`, `speech.confirm`, `speech.recover` and `speech.speak`. By
+default each open library has only the unsupported backend with recording off,
+so every op answers truthfully that voice is off and typing is untouched. An
+embedding application (061's private-voice settings, or a test) installs a
+trusted local backend and policy with `configure`; no request argument can.
+The server numbers its own invocations; nothing it returns executes a command,
+posts, deletes or writes the library.
+
+The chat page's voice strip (`static/pages/chat/voice.js`) shows only controls
+that can work, and a status line that says when voice is off or unavailable:
+
+- **Listen once** (or Alt+V, which a switch can map to) asks for the microphone
+  only on that press, records one bounded window that ends by itself after the
+  speech, at 15 s, on a second press, or on **Back to typing** (Esc), and
+  releases the microphone when the window ends. It says "Listening" only once the
+  microphone is taking samples, and pauses any reading aloud while it listens
+  (resuming afterwards unless what was said paused or stopped it). A cancelled
+  window is never sent, and an answer that arrives after Back to typing is dropped.
+- Every result is a caption in a `role=log` list; blocked windows say why.
+- An instant command (pause, stop, resume, cancel) acts; the person's words go
+  into the composer as a draft to check; a low-confidence miss can be used as a
+  draft only by pressing **Use as draft**.
+- An uncertain safe command asks "Did you mean …?" with **Yes** and **No**
+  (focus moves to Yes), or **Answer by voice**, which sends the proposal token
+  with the next window.
+- **Read aloud** reads the latest reply through the configured TTS route, with
+  **Pause reading** and **Read again**; its text stays on screen as the caption.
+  Audio plays from a `blob:` URL, the only media source the page policy allows.
 
 ## Evidence and reproducible metrics
 
@@ -110,27 +175,59 @@ Run the synthetic acceptance tests without any microphone or personal recordings
 
 ```sh
 PYTHONPATH=backend/src python -m pytest backend/tests/test_speech_privacy.py \
-  backend/tests/test_speech_control.py backend/tests/test_speech_evaluation.py -q
+  backend/tests/test_speech_control.py backend/tests/test_speech_evaluation.py \
+  backend/tests/test_speech_acoustic.py backend/tests/test_app_speech.py -q
+node --test backend/tests/js/voice.test.mjs
 ```
 
-The test-owned `speech_corpus.py` supplies invented **transcript/event** cases:
-quiet confidence, disfluency, spelling/recognition variants, noise hypotheses,
-background phrases, interruptions, simultaneous-speaker flags, ambiguous commands
-and clear positive controls. This is **not a synthetic acoustic speech corpus**:
-no acoustic backend was available or tested, and simultaneous audio/noise robustness
-is unmeasured. It must not be used to claim accent or disability performance.
-
+**Transcript/event cases.** The test-owned `speech_corpus.py` supplies invented
+transcript/event cases: quiet confidence, disfluency, spelling/recognition
+variants, noise hypotheses, background phrases, interruptions,
+simultaneous-speaker flags, ambiguous commands and clear positive controls.
 `evaluation.evaluate` reports unintended commands over negative command cases,
 wrong commands on positive cases, channel misattribution over background/unknown
 cases, wrong actors over foreground cases, exact task completion, and measured
-routing-only mean/p50/p95/max latency. Absent denominators are `None`; empty
-corpora cannot pass. Expected commands include arguments and actors are compared
-exactly. The synthetic gate requires all tasks to match and zero command/attribution
-errors. Deliberately unsafe and reject-everything routers fail the test harness.
+routing-only latency. Absent denominators are `None`; empty corpora cannot pass.
 Its `acoustic_tested=False` is a coverage label, not a measured zero error rate.
-Safe confirmation and keyboard recovery are separate executable sequence tests.
 
-Remaining full-sprint work includes actual on-device/backend validation, acoustic
-noise/simultaneous speech, partial streaming, playback, device resource budgets,
-accessibility-user validation and the sequential UI exit. No persisted schema or
-migration changes are introduced by this boundary.
+**Synthetic audio cases.** `backend/tests/fixtures/speech_audio/` holds 37
+synthetic clips (1.5 MB) made by `generate.py` with espeak-ng's MBROLA voices
+`us1`, `us2`, `us3` and `en1` plus the plain formant voice as an atypical,
+robotic speaker, at slow, fast and high-pitched variants and one disfluent
+command. `MANIFEST.json` records each clip's text, voice and SHA-256; no clip is
+a recording of a person. `speech_audio_corpus.py` builds 75 cases from them
+with `grimoire.speech.acoustic`'s deterministic degradations: quiet speech
+(-24 and -30 dB), white noise and mains hum, hiss-only windows, far background
+talkers already speaking at the press, simultaneous mixes with chatter and with
+a bystander saying "delete scene", cut-off and two-utterance windows, quiet
+confirmations (voice yes, typed yes, background yes) and back-to-typing.
+
+`evaluation.evaluate_audio` runs each case through a fresh session, `hear` and
+a real offline recognizer: the tests' `SphinxRecognizer`, CMU PocketSphinx
+5.0.4 with a JSGF command grammar and a filler-word loop (a test dependency in
+the `dev` extra, never a product backend; 061 owns the product's private
+backend). It refuses any backend that is not local, offline and free. Measured
+on the corpus:
+
+| Metric | Result |
+| --- | --- |
+| Cases / tasks completed | 75 / 72 (96%) |
+| Unintended actions on 28 negative cases | 0 |
+| Wrong actions | 0 |
+| Bystander utterances recognized / acted on (13 cases) | 0 / 0 |
+| Command hypotheses on negatives that did not act (shown only) | 5 |
+| Recognition latency per window (this machine) | p50 ~0.04 s, p95 ~0.16 s, max ~1 s |
+
+The three misses are recognizer errors on clean "stop"/"pause" clips; each
+fails safe (nothing acts). The test gate requires zero unintended, wrong and
+bystander actions, no bystander recognized, and completion of at least 85%.
+A capture analyzer that passes everything, or a recognizer that always hears
+"open map", fails the gate. Results depend on these synthetic voices and this
+recognizer; they say nothing about accents, disabilities, real rooms or real
+microphones, and must not be used to claim them.
+
+Remaining work needs people and devices, not more synthetic cases: a run with a
+real microphone and speakers in a real room, hands-free campaign play with the
+voice strip and alternative inputs (switch, keyboard only), and accessibility-user
+testing. 061's product backend must also pass `evaluate_audio`. No persisted
+schema or migration changes are introduced.
