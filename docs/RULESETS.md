@@ -82,7 +82,7 @@ into an actor prompt merely because it appears in a proposal.
 | PbtA move triggers, costs, clocks | Fiction review and move-specific result choices; clocks are proposed effects with their own owner, not a universal dice field |
 | Ars lab totals, vis and seasonal activity conflicts | Distinct lab/activity hooks and guarded season reservations; study does not implement laboratory magic |
 | Canonical effects, spending, elapsed time | Existing guarded effect owner; proposal text/arithmetic is never a write receipt |
-| Durable roll recording/retry | Sprint 075; this package is pure, so repeated identical inputs return equal proposals but IDs are not durable idempotence receipts |
+| Durable roll recording/retry | Sprint 075's [recorded rolls](ROLLS.md): dice drawn once and on record before they are seen, a retry reads them back; this package stays pure, so its IDs alone are not idempotence receipts |
 | Combat orchestration | Sprint 090; no initiative, turns, or combat action economy here |
 
 Bounds (30 dice, four family bindings, 2,000-character descriptive text, finite
