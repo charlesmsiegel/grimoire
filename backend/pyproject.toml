@@ -6,7 +6,9 @@ requires-python = ">=3.11"
 dependencies = ["pyluach>=2.2,<3"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pocketsphinx==5.0.4"]  # 067's offline reference recognizer, tests only; 5.0.4 has wheels for every CI cell
+#: 061's optional local speech recognizer (docs/SPEECH.md): free, offline, on-device. The same engine as dev's.
+voice = ["pocketsphinx>=5.0.4,<6"]
 
 [build-system]
 requires = ["hatchling"]

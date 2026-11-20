@@ -33,8 +33,10 @@ from grimoire.obstacles import (
     ACTOR, Approach, Cost, HoldingsChange, Obstacle, ObstacleFact, ObstacleStake, RelationChange,
 )
 from grimoire.play.scene import NOW
+from grimoire.play.stages import StageBook
 from grimoire.providers import RouteChoice
 from grimoire.runtime import LabelRuntime
+from grimoire.staging import Absence, Area, Placement, Stage
 from grimoire.textapi import ApiRefused
 
 DEBT = "Mara owes the harbour master a favour."
@@ -76,7 +78,7 @@ def hold(mara) -> Obstacle:
 class Hub:
     """One open library and its campaign hub: the owner plays and directs; the labeller is scripted."""
 
-    def __init__(self, folder, *replies: str, labelling: bool = True, agendas=()) -> None:
+    def __init__(self, folder, *replies: str, labelling: bool = True, agendas=(), stages=None) -> None:
         self.at = Table(folder, policy=LABEL_POLICY, labels=[say(text) for text in replies] if labelling else None)
         labels, labeller = self.at.labels, None
         if labelling:
@@ -85,7 +87,7 @@ class Hub:
         self.api = CampaignApi(self.at.store, self.at.authority, owner=OWNER, labeller=labeller,
                                label_handle=self.at.label_handle,
                                policy=LABEL_POLICY if labelling else None, agendas=agendas, clock=Clock(),
-                               new_id=Tagged("h"))
+                               new_id=Tagged("h"), stages=stages)
 
     def call(self, op: str, **args) -> dict:
         return self.api.call(op, args)
@@ -192,6 +194,42 @@ def test_an_absent_npcs_private_evidence_stays_hers(cards):
         assert own["audience"] == "table" and SECRET not in repr(own)  # Anya was not there
 
 
+def test_an_accepted_effect_is_known_to_the_characters_who_saw_it_and_never_to_an_absent_one(cards):
+    """On a stage: Anya and Mara at the hatch, Tamsin gone from the scene. Accepting the payoff gives the table its
+    own character's sight of it, and nothing to Mara (an NPC: play gives NPC perspectives nothing yet) or Tamsin."""
+    folder, chat = cards
+    book = StageBook()
+    with Hub(folder, BRIBE, stages=book) as hub:
+        tamsin = attach_tamsin(hub.at.store, hub.api.handle, chat)
+        runner = hub.api.runner
+        runner.seat(chat, OWNER)
+        scene = runner.open(chat)
+        anya = scene.persona
+        (mara,) = [actor for actor in scene.cast if actor not in (anya, tamsin)]
+        book.put(chat, Stage(chat.campaign_id, chat.chat_id, 1, (Area("hatch"),), (), (anya, mara, tamsin),
+                             (Placement(anya, area="hatch"), Placement(mara, area="hatch")), (Absence(tamsin),)))
+        assert hub.call("knowledge", chat=str(chat))["actors"][0]["observations"] == []  # nothing known yet
+        hub.api.obstacles.record(hold(mara))
+        turn = runner.post(chat, hub.api.handle, "*I press five coins into Mara's hand*").turn_id
+        hub.call("label", chat=str(chat), obstacle="hold")
+        hub.call("confirm", chat=str(chat))
+        effect = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        hub.call("endorse_effect", chat=str(chat), turn=turn, number=1, fingerprint=effect["fingerprint"])
+        assert hub.call("approve_effect", chat=str(chat), turn=turn, number=1)["done"]["effect"]["state"] == "accepted"
+
+        table = hub.call("knowledge", chat=str(chat))
+        (own,) = table["actors"]
+        assert own["actor"]["ref"] == str(anya)
+        assert [(item["channel"], item["content"]) for item in own["observations"]] == [
+            ("witnessed", "Anya pays Mara off.")]
+        assert table["table_events"] == []  # seen in the fiction; nothing was disclosed out of character
+        director = hub.call("knowledge", chat=str(chat), actor=str(mara), audience="director")
+        assert director["actors"][0]["observations"] == []
+        gone = hub.call("knowledge", chat=str(chat), actor=str(tamsin), audience="director")
+        assert gone["actors"][0]["observations"] == []
+        assert not any(p["code"] == "unbridged" for p in hub.call("hub", chat=str(chat))["problems"])
+
+
 def test_a_consent_names_the_frame_it_was_shown_and_only_the_acting_player_gives_it(cards):
     folder, chat = cards
     with Hub(folder, SNEAK) as hub:
@@ -239,6 +277,63 @@ def test_a_stale_or_wrong_key_changes_no_canon(cards):
         assert after == before and after["truth"]["events"] == []  # nothing was written
 
 
+def test_a_waiting_change_is_withdrawn_or_declined_and_the_turn_takes_another(cards):
+    folder, chat = cards
+    with Hub(folder, BRIBE) as hub:
+        turn, _, _ = acting(hub, chat)
+        hub.call("label", chat=str(chat), obstacle="hold")
+        hub.call("confirm", chat=str(chat))
+        first = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        hub.call("approve_effect", chat=str(chat), turn=turn, number=1)
+        hub.refused("invalid_field", "withdraw_effect", chat=str(chat), turn=turn, number="1")
+        hub.refused("invalid_field", "withdraw_effect", chat=str(chat), turn=turn, number=1, audience="everyone")
+        withdrawn = hub.call("withdraw_effect", chat=str(chat), turn=turn, number=1, audience="director")
+        assert (withdrawn["done"]["effect"]["state"], withdrawn["done"]["effect"]["reason"]) == ("refused", "withdrawn")
+        (shown,) = [effect for record in withdrawn["hub"]["turns"] for effect in record["effects"]]
+        assert (shown["state"], shown["reason"]) == ("refused", "withdrawn")
+        hub.refused("not_proposed", "approve_effect", chat=str(chat), turn=turn, number=1)
+        # the player's refusal names the effect as shown, as the endorsement does
+        second = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        assert second["number"] == 2 and second["fingerprint"] != first["fingerprint"]
+        hub.refused("invalid_field", "decline_effect", chat=str(chat), turn=turn, number=2)
+        hub.refused("fingerprint_mismatch", "decline_effect", chat=str(chat), turn=turn, number=2,
+                    fingerprint=first["fingerprint"])
+        declined = hub.call("decline_effect", chat=str(chat), turn=turn, number=2, fingerprint=second["fingerprint"])
+        table = declined["hub"]  # the table's view, which the call asked for
+        assert [(effect["number"], effect["state"], effect["reason"]) for record in table["turns"]
+                for effect in record["effects"]] == [(1, "refused", "withdrawn"), (2, "refused", "declined")]
+        # the table learns only whether the turn's post is its own (what a player's withdrawal turns on), no principal
+        assert [record["post"]["mine"] for record in table["turns"] if record["post"]] == [True]
+        assert not any("mine" in record["post"] or "submitted_by" in record["post"] for record in withdrawn["hub"]["turns"]
+                       if record["post"])
+        third = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        hub.call("endorse_effect", chat=str(chat), turn=turn, number=3, fingerprint=third["fingerprint"])
+        assert hub.call("approve_effect", chat=str(chat), turn=turn, number=3)["done"]["effect"]["state"] == "accepted"
+    with Hub(folder, labelling=False) as again:  # reopened: the ended effects read back as ended
+        director = again.call("hub", chat=str(chat), audience="director")
+        assert [(effect["state"], effect["reason"]) for record in director["turns"] for effect in record["effects"]] \
+            == [("refused", "withdrawn"), ("refused", "declined"), ("accepted", None)]
+        assert len(director["truth"]["events"]) == 1
+        again.refused("already_accepted", "withdraw_effect", chat=str(chat), turn=turn, number=3)
+
+
+def test_a_paused_chat_ends_no_change_and_says_so(cards):
+    folder, chat = cards
+    with Hub(folder, BRIBE) as hub:
+        turn, _, _ = acting(hub, chat)
+        hub.call("label", chat=str(chat), obstacle="hold")
+        hub.call("confirm", chat=str(chat))
+        effect = hub.call("propose_effect", chat=str(chat), turn=turn, summary="Anya pays Mara off.")["done"]["effect"]
+        hub.api.runner.request(chat, hub.api.handle, "pause")
+        actions = {item["op"]: item for item in hub.call("hub", chat=str(chat))["actions"]}
+        for op in ("withdraw_effect", "decline_effect"):
+            assert actions[op] == {"op": op, "available": False, "reason": "play is paused"}
+        hub.refused("paused", "withdraw_effect", chat=str(chat), turn=turn, number=1)
+        hub.refused("paused", "decline_effect", chat=str(chat), turn=turn, number=1, fingerprint=effect["fingerprint"])
+        (shown,) = [item for record in hub.call("hub", chat=str(chat))["turns"] for item in record["effects"]]
+        assert shown["state"] == "proposed"
+
+
 def test_only_the_librarys_owner_has_a_hub(cards):
     folder, chat = cards
     with Hub(folder, labelling=False) as hub:
@@ -268,6 +363,48 @@ def test_an_effect_no_character_of_the_players_acts_in_is_the_directors_alone(ca
         assert event["summary"] == "Mara and Tamsin meet in secret."
         codes = [problem["code"] for problem in director["problems"]]
         assert len(codes) == len(set(map(repr, director["problems"])))  # each problem once
+
+
+def test_a_director_only_effect_reaches_no_characters_knowledge(cards):
+    """Everyone at the hatch, and the director's own NPC act accepted: the table's turn view hides it, and so does
+    every perspective, the table's own character's included. Its summary is the director's words."""
+    folder, chat = cards
+    book = StageBook()
+    with Hub(folder, BRIBE, stages=book) as hub:
+        turn, anya, mara = acting(hub, chat)
+        tamsin = attach_tamsin(hub.at.store, hub.api.handle, chat)
+        hub.api.runner.seat(chat, OWNER)
+        book.put(chat, Stage(chat.campaign_id, chat.chat_id, 1, (Area("hatch"),), (), (anya, mara, tamsin),
+                             tuple(Placement(actor, area="hatch") for actor in (anya, mara, tamsin))))
+        hub.call("label", chat=str(chat), obstacle="hold")
+        hub.call("confirm", chat=str(chat))
+        secret = {"kind": "begin", "predicate": "knows", "subject": str(tamsin), "object": str(mara)}
+        waive = [{"change": f"cost.chit.{n}", "reason": "Mara forgives the debt."} for n in (1, 2)]
+        summary = "Tamsin, unseen, passes Mara the Duke's letter: Tamsin is the Duke's spy."
+        effect = hub.call("propose_effect", chat=str(chat), turn=turn, summary=summary, operations=[secret],
+                          waive=waive)["done"]["effect"]
+        assert effect["endorsers"] == []
+        assert hub.call("approve_effect", chat=str(chat), turn=turn, number=1)["done"]["effect"]["state"] == "accepted"
+        assert "Duke" not in repr(hub.call("knowledge", chat=str(chat)))
+        assert "Duke" not in repr(hub.call("hub", chat=str(chat)))
+        for actor in (anya, mara, tamsin):
+            seen = hub.call("knowledge", chat=str(chat), actor=str(actor), audience="director")
+            assert seen["actors"][0]["observations"] == []
+        director = hub.call("hub", chat=str(chat), audience="director")
+        assert [event["summary"] for event in director["truth"]["events"]] == [summary]  # world truth, in 020 too
+        assert hub.api.evidence.read(chat.campaign_id, requested_by=DIRECTOR).knowledge.events[0].summary == summary
+        assert not any(p["code"] == "unbridged" for p in director["problems"])
+
+        # knowledge left unwritten is reported to the director alone: even its count could hint at this effect
+        import grimoire.play.accept as accept
+        original = accept.unbridged_problems
+        accept.unbridged_problems = lambda runner, scene: [("unbridged", "1:ledger_damaged")]
+        try:
+            assert not any(p["code"] == "unbridged" for p in hub.call("hub", chat=str(chat))["problems"])
+            assert {"code": "unbridged", "detail": "1:ledger_damaged"} in \
+                hub.call("hub", chat=str(chat), audience="director")["problems"]
+        finally:
+            accept.unbridged_problems = original
 
 
 def test_the_table_sees_only_its_own_characters_party_standing(cards):

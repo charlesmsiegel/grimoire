@@ -49,6 +49,8 @@ There is **no app yet**. Chats are played headlessly by Sprint 035's runner, whi
 | `lorebook` | `lorebook` | no |
 | `actor` | any, matching the native instance's qualified source | no: explicitly reuses an existing instance of any kind |
 
+This table is `grimoire.chats.ROLES`, one `RoleRule` per role, and it is the only place a role's definition kind and actor mode are decided ([role rules, 071](#role-rules-one-owner-071)). Behavior particular to one role (a single persona, a scenario's implied lorebook) stays with that role's code.
+
 ### Launch
 
 `Launch(kind, ref | premise)` is immutable.
@@ -115,7 +117,7 @@ Each query returns `ChatRef`s, each chat at most once:
 | `by_source(ref, role=None, include_detached=False)` | chats whose launch or a binding is the same qualified entity (`entity_key`). A roster actor counts through its binding: only while that binding is active, or with `include_detached`. A detached character or replaced persona is therefore not found by default, although its actor stays on the roster. A roster entry without any binding (a hand edit) always counts. A pinned query also requires that revision. Names are never matched. Definition links (`alternate_portrayal`, `derived_variant`, `same_individual`) are never followed: equivalence filters belong to 022/065. The launch always counts as provenance. Detached bindings count only on request. |
 | `by_scope(id)`, `campaigns()`, `by_world(source)` | chats in a scope; the scopes the player named; chats in scopes with that world |
 
-**No index is persisted in this slice.** `ChatLibrary.navigation()` rebuilds it from `store.load()` on every call, so "deleting the cache" is equivalent to rebuilding. `to_json()` is the deterministic form any later persisted cache (065) must equal. The index is never built from an LLM call; neither package imports a provider.
+**No index is persisted.** `ChatLibrary.navigation()` rebuilds it from `store.load()` on every call. The text API's listings reuse one validated in-process basis built from such a rebuild ([Scene workspace browsing](#scene-workspace-browsing-065)); it equals a rebuild, and dropping it is the same as rebuilding. `to_json()` is the deterministic form any later persisted cache must equal. The index is never built from an LLM call; neither package imports a provider.
 
 ## Service (`grimoire.chatstore.ChatLibrary`)
 
@@ -194,7 +196,7 @@ Actor instances are written as `grimoire.record/1` with:
 | Card import | 037 |
 | World promotion and release pinning | 042 (first slice: a chat's actors proposed as a new world, and reviewed re-pinning of an actor and its bindings, [REBASE](REBASE.md)); release pins 056 |
 | Cross-device merge of chat metadata | [028](roadmap/sprints/app-managed-device-sync.md) |
-| A persisted navigation cache and the richer library browser | 065 |
+| A navigation cache persisted across app restarts; configurable layouts and synced workspace preferences | 065 later milestones |
 
 Binding a source creates no event, belief or evidence record and never makes anyone aware of its content.
 
@@ -207,6 +209,39 @@ Chat binding does not grant control, knowledge or party membership. The scene ru
 This is a headless roster interface for UI adapters: pass `actors` when starting and the exact `actor` when attaching/detaching. No new launch kind or persona-selection UI is added. QuickStart's source-only broken-binding repair reports generic actor bindings without a detach action; it cannot distinguish same-species instances. Use the exact-instance `ChatLibrary.detach_source` API until the UI repair protocol carries actor identity. Existing sovereignty assignments remain authoritative for any instance kind. This change does not expand species-backed voice generation or the separate character-only `controller_knowledge` projection, and does not change 047's claim extraction.
 
 The additive role uses the existing chat payload format. Older builds may report actor-role chats as undecodable; they must not rewrite them into character bindings. Existing chats need no migration.
+
+## Role rules: one owner (071)
+
+**Theory.** A chat role answers three questions: which definition kind it binds, whether its binding has a campaign actor, and how that actor is identified. The answers form a small closed vocabulary, `RoleRule(definition_kind, actor)`:
+
+- `NO_ACTOR`: no actor (`scenario`, `lorebook`).
+- `PER_SOURCE`: one actor per bound source, keyed by that source. The chat creates it as an instance of the **definition's own kind**, or reuses an instance of that kind derived from the source (`character`, `persona`).
+- `EXISTING`: an existing instance of any kind, keyed by the instance itself, never created or re-keyed here (`actor`, 033). Only this mode binds a source of any kind.
+
+`role_rule(role)` reads `ROLES` at call time and looks a role up by its text, so a `str` subclass equal to a role name finds that role, as the equality checks before 071 did; a stored binding or roster entry still needs an exact `str`. A launch kind with no rule is refused (`launch_kind`). `SourceBinding`, `RosterEntry`, `Launch`, `ChatRecord.detach`, and `ChatLibrary`'s checks before it plans a write (`_check_role`, `_prepare`, `_check_reuse`) all ask the rule. `ChatLibrary` stays the one writer of a chat and the actors it creates, in one commit. `ROLE_KINDS` and `ACTOR_ROLES` remain exported as views of the table as it was at import; nothing in the package reads them.
+
+**What was removed.** Before 071 the same decision was spread over six sites in two modules: the definition-kind map, a separate set of actor roles, two literal `"character"` instance-kind checks in the model (binding and roster), and a literal `"character"` in both the library's reuse check and its allocation of a new actor. The two tables looked authoritative and were not.
+
+**Change rehearsal (executed).** A hypothetical `companion` role binds `creature` definitions with one campaign creature per source, created or reused. The scenario tests in `test_chats_new_role.py` were run against temporary copies of the code from before and after 071:
+
+| | Before 071 | After 071 |
+|---|---|---|
+| Edits to make the scenario pass | 6 sites in 2 modules | 1 table entry |
+| After only the obvious edits (the two tables) | Silently wrote a **`character`** instance for a creature companion, and accepted a character instance as one | Not applicable: the table is the whole change |
+| Existing chat tests plus the rehearsal scenario | 118 passed | 118 passed |
+
+`companion` is **not shipped**. The committed test registers it with `monkeypatch` and also shows that a build without it refuses such a chat (`role_kind`) rather than reinterpreting the binding. The counts measure edited decision sites and tested outcomes, not developer time.
+
+**Equivalence.** A differential dump of 1,152 outcomes was identical before and after, error text included, with two exceptions. It covered each role (including unknown roles, non-text roles, `str` enum members equal to a role name and an unhashable list) against each definition kind and actor shape, for bindings, roster entries, launches, detaches, `attach_source` and `start_chat` with reuse. The exceptions, both still refusals:
+
+- 16 roster entries invalid twice over (a role that has no actor, an unknown role or a role that is not an exact `str`, together with an actor that is not a character) now fail on the role (`role_kind`) rather than the actor kind (`invalid_field`), the order a binding already used. Only a hand-edited chat file can hold such an entry.
+- 35 `attach_source` calls with an unhashable role, which raised `TypeError`, now raise `InvalidBinding` (`role_kind`).
+
+**Existing campaigns.** `fixtures/chats_071/library` is a synthetic library written by the pre-071 code: a character launch with a persona, a lorebook, a second character and a detached scenario; a second chat reusing that campaign's Mara; and two goblins under `actor`, one detached by instance. `test_chats_compat_071.py` reads each chat back without a broken binding, re-encodes it to the stored payload exactly, composes it, and makes new edits under the same rules, without rewriting a chat nobody edited. It passes on the code from before and after 071.
+
+**Runtime.** The V2 backend's only runtime dependency is `pyluach`; it does not import Pydantic at all, so the Pydantic 1/2 constraint holds trivially. The new tests and the chat suites pass on CPython 3.11 (the supported minimum) in a virtual environment holding only `pyluach` and `pytest`. They have not been run on an Android device or emulator; Termux runs the same stdlib-only code, and [MOBILE](MOBILE.md) has its setup.
+
+**Limits.** This covers chat roles only. The app adapters (`CAST_ROLES`, `START_KINDS`, `PICKER_KINDS`), `quickstart`, `textapi` filters and 020's character-only `controller_knowledge` keep their own role or kind lists, so a shipped new role still needs UI and knowledge work there. World lookup is unchanged.
 ## Scene workspace browsing (065)
 
 Chats uses the additive read-only `chats.workspace` operation. It searches and filters the complete
@@ -227,13 +262,39 @@ it does not infer semantic equivalence or provide a second source editor.
 `source`, `match` (`exact`/`derived`), `q`, `sort` (`recent`/`name`), `campaign`, `world`, and an explicit
 `pins` list for the local shelf selection. `limit` is 1–50 (default 50). `offset`, `source_offset`, and
 `comparison_offset` independently page the three result lists; nonzero offsets require the previous
-`snapshot`. `source_q` searches the source chooser across the snapshot. The response contains `chats`,
-`total`, `next`, `snapshot`, `sources`/`source_total`/`source_next`,
-`comparisons`/`comparison_total`/`comparison_next`, and up to 50 source `diagnostics`.
+`snapshot`. `source_q` searches the source chooser across the snapshot; `scope_q` narrows the campaign and
+world choosers by ID or title. The response contains `chats`, `total`, `next`, `snapshot`,
+`sources`/`source_total`/`source_next`, `comparisons`/`comparison_total`/`comparison_next`, up to 50
+`campaigns` (`campaign`, `title`, `world`, `chats`) with `campaign_total`, up to 50 `worlds` (`world`,
+`campaigns`, `chats`) with `world_total`, and up to 50 source `diagnostics`. Campaigns and worlds are filled
+only under the `campaign` and `world` filters (empty otherwise). The choosers list only scopes some chat
+stands in; a deep-linked campaign or world that is not listed stays selected by its ID.
 Continuation refuses with `changed` if canonical navigation, source names, manifests, definition bytes
-or ancestry changed; the page offers an explicit restart. The current implementation loads the full
-file-backed library once per request and scans navigation. Bounded replies do not imply constant-time
-index lookup. Legacy `chats` requests retain unpinned behavior; additive `match=exact` preserves pins.
+or ancestry changed; the page offers an explicit restart. Legacy `chats` requests retain unpinned
+behavior; additive `match=exact` preserves pins.
+
+**Large libraries.** `chats.workspace`, the legacy `chats` listing and the campaign list/hub
+(`TextApi.listed_chats`) share one *navigation basis*: the index, source names, validated composition
+paths, the continuation fingerprint and every chat's listing row and search text, built from one
+`store.load()` (`grimoire.textapi.navcache`). It is reused while the library's *stamp* is unchanged: the
+store's in-process commit generation plus a metadata-only walk of the store tree (each entry's path, type,
+size, `mtime_ns`, `ctime_ns` and inode; links are recorded, never followed). Nothing is read or parsed, so
+paging, searching and choosing a source in a large library no longer reparse it. A commit in this process,
+or any write from outside it (another app, a sync folder, a hand edit), changes the stamp and the next request
+rebuilds. A hit still runs the store's readability check, so a closed store, a swapped root or a pending
+recovery refuses exactly as a load would. The stamp is taken before the load, so a racing write can only make
+the held basis newer than its stamp, never let a stale one look current. A load that met any problem (an unreadable or undecodable file, a folder it could not list) may have met a transient read failure that leaves file metadata unchanged, so its basis is reused only for a two-second burst; after that the next request reloads, so a library with a lasting problem browses at the uncached cost. Limits: a rewrite that keeps size,
+both timestamps and inode is not detected. On POSIX a rewrite moves `ctime` even when a tool restores
+`mtime`; on Windows `st_ctime` is the creation time, so an in-place, same-size rewrite whose tool restores
+`mtime` (`rsync --inplace -t`, a time-preserving copy) is missed there, as are same-size rewrites inside one
+tick on coarse-timestamp filesystems (FAT/exFAT). Ordinary saves, the store's own atomic replacements and sync
+clients move `mtime`. The stamp walk is linear in file count, though far cheaper than a load; the basis is
+per process and not persisted, so the first request after a start pays one load.
+
+Campaigns list every chat of the library, not the most recent 1000, so a campaign whose chats are all old is
+still listed and its hub still finds them (`complete` is always true). The trade: the campaign list's reply
+(`campaign.chats` with no `campaign`) now grows with the library, one short row per chat; it is built from the
+held basis, so it costs no reload.
 
 Up to 20 named workspace filters can be saved, reapplied and deleted in device-local browser storage.
 Selections include query, source, match, grouping and sorting. They are explicitly unsynchronized;

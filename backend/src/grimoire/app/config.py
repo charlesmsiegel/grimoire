@@ -32,7 +32,7 @@ RUNTIME_PRINCIPAL = "app:runtime"
 EXTRACTOR_PRINCIPAL = "app:continuity-extractor"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 KEYS = frozenset({"provider_id", "base_url", "model", "key_env", "max_tokens_field", "max_output_tokens",
-                  "director", "critique", "decision", "agendas", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
+                  "director", "critique", "decision", "planning", "agendas", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
 #: The optional prices, per million tokens, of the configured ``model`` (not of its fallbacks): what one prompt
 #: token, one reply token and one cached prompt token cost. Decimal text, never a JSON number, so no price is
 #: ever a float; no currency is recorded (the number is in whatever currency the provider bills).
@@ -48,6 +48,9 @@ MAX_ATTEMPTS = 3
 #: call given more routes than attempts, so each fallback needs an attempt of its own.
 MAX_FALLBACKS = MAX_ATTEMPTS - 1
 MAX_OUTPUT_TOKENS = 32_768
+#: Optional decision (045) and presentation-planning (068) calls a configuration may allow per turn.
+MAX_DECISION_CALLS = 16
+MAX_PLANNING_CALLS = 16
 
 
 class ConfigError(ValueError):
@@ -70,6 +73,8 @@ class ModelConfig:
 
     decision_calls: int = 0
     agendas: tuple[Agenda, ...] = ()
+    #: 068: optional presentation suggestions per take, one before each speaking NPC's reply up to the cap.
+    planning_calls: int = 0
 
     @property
     def models(self) -> tuple[str, ...]:
@@ -130,8 +135,11 @@ def parse_model_config(raw: object) -> ModelConfig:
     attempts = raw.get("attempts", 1)
     decision = raw.get("decision", 0)
     critique = raw.get("critique", 0)
+    planning = raw.get("planning", 0)
     for name, value, low, high in (("max_output_tokens", tokens, 1, MAX_OUTPUT_TOKENS), ("director", director, 0, 1_000),
-                                   ("attempts", attempts, 1, MAX_ATTEMPTS), ("critique", critique, 0, 1), ("decision", decision, 0, 16)):
+                                   ("attempts", attempts, 1, MAX_ATTEMPTS), ("critique", critique, 0, 1),
+                                   ("decision", decision, 0, MAX_DECISION_CALLS),
+                                   ("planning", planning, 0, MAX_PLANNING_CALLS)):
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
             # a director reply is at most one per turn whatever the cap (004); 044 took any count
             raise ConfigError(f"{name} must be a whole number from {low} to {high}")
@@ -156,7 +164,7 @@ def parse_model_config(raw: object) -> ModelConfig:
     except ValueError as error:
         raise ConfigError(str(error)) from None
     return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts, *prices,
-                       critique_calls=critique, decision_calls=decision, agendas=agendas)
+                       critique_calls=critique, decision_calls=decision, agendas=agendas, planning_calls=planning)
 
 
 def config_json(config: ModelConfig) -> dict:
@@ -169,6 +177,8 @@ def config_json(config: ModelConfig) -> dict:
         raw["critique"] = config.critique_calls
     if config.decision_calls:
         raw["decision"] = config.decision_calls
+    if config.planning_calls:
+        raw["planning"] = config.planning_calls
     if config.agendas:
         raw["agendas"] = agendas_json(config.agendas)
     if config.key_env is not None:
@@ -187,6 +197,8 @@ def policy_for(config: ModelConfig) -> InferencePolicy:
         caps["critique"] = config.critique_calls
     if config.decision_calls:
         caps["decision"] = config.decision_calls
+    if config.planning_calls:
+        caps["planning"] = config.planning_calls
     return InferencePolicy(caps, max_attempts_per_call=config.attempts)
 
 

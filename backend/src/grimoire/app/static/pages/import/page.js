@@ -304,6 +304,7 @@ export async function mount(root, ctx) {
             rows("Flagged", r.flags), rows("Not carried over", r.losses)),
         }, async () => {
           const receipts = await ctx.api("imports.v1_receipts", { archive_id: found.archive_id });
+          out.append(...present(receiptReport(receipts)));
           ctx.notify("Import receipt: run " + receipts.runs + ", " + receipts.written + " files written so far.");
         }));
       }
@@ -318,8 +319,38 @@ export async function mount(root, ctx) {
         rows("Findings", found.findings), rows("Unresolved", found.unresolved), rows("Not carried over", found.losses),
         next("Nothing is written until you approve the preview.", "Preview import", preview)));
     }
+    // the newest applied run of an archive, from its receipt: what it did not carry over stays readable later
+    async function lastReport() {
+      const name = archive.value.trim();
+      if (!name) {
+        archive.setError("Name the archive whose last import you want to see.");
+        archive.input.focus();
+        return;
+      }
+      archive.setError("");
+      const receipts = await ctx.api("imports.v1_receipts", { archive_id: name });
+      show(receiptReport(receipts) || step("No import yet", el("p", { class: "g-muted" },
+        "Nothing has been imported from the archive " + name + " in this library.")));
+    }
     return [ui.card({ tag: "section", label: "V1 library" }, source.node, archive.node,
-      next("Every write is previewed first, file by file.", "Scan library", scanIt))];
+      next("Every write is previewed first, file by file.", "Scan library", scanIt),
+      el("div", { class: "import-next" }, el("span", { class: "g-muted" }, "What an earlier import did not carry over is kept with its receipt."),
+        ui.button("Show the last import report", () => ctx.act(lastReport))))];
+  }
+
+  // an applied V1 run's report, as its receipt keeps it: every warning of the preview, after the write
+  function receiptReport(receipts) {
+    const r = receipts && receipts.report;
+    if (!r) return null;
+    const warnings = present(rows("Not carried over", r.losses), rows("Not imported", r.not_imported),
+      rows("Unresolved", r.unresolved), rows("Unresolved in the V1 manifest", r.manifest_unresolved),
+      rows("Flagged", r.flags), rows("Skipped", r.skipped));
+    return step("Import report: " + receipts.archive_id + ", run " + r.run,
+      facts([["Applied", r.applied_at], ["Files written so far", receipts.written]]),
+      warnings.length ? warnings : el("p", { class: "g-muted" }, "This run reported nothing left behind."),
+      r.unreadable && r.unreadable.length
+        ? el("p", { class: "g-notice g-bad", role: "alert" }, "The receipt holds parts of this report in a form this app cannot read: "
+          + r.unreadable.join(", ") + ".") : null);
   }
 
   function changesetForm() {

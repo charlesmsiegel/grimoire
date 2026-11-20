@@ -37,7 +37,8 @@ function hub(audience, overrides = {}) {
     open_action: { turn: "t1.000001", expected: "review-etag", actor: { ref: ANYA, name: "Anya" },
       label: { label: "sneak", state: "confirmed", reason: null, factors: [], stakes: [], against: null }, framed: FRAMED, outcome: null },
     actions: [{ op: "label", available: false, reason: "no labelling model is configured for this app" },
-      ...["confirm", "decide", "propose_effect", "endorse_effect", "approve_effect", "recover_effects"].map((op) => ({ op, available: true }))],
+      ...["confirm", "decide", "propose_effect", "endorse_effect", "approve_effect", "withdraw_effect", "decline_effect", "recover_effects"]
+        .map((op) => ({ op, available: true }))],
     unavailable: [{ feature: "revoke_effect", blocker: "035", reason: "not offered yet" }],
     ...(audience === "director" ? { truth: { events: [], revoked: [], relations: [], claims: [], claims_complete: true }, goals: [] } : {}),
     ...overrides,
@@ -181,6 +182,120 @@ test("the director's view approves a waiting change and is never offered the pla
   assert.deepEqual(writes(calls), [["campaign.approve_effect", { chat: CHAT, audience: "director", turn: "t1.000001", number: 1 }]]);
 });
 
+// -- ending a waiting change ----------------------------------------------------------------------------------
+
+const WAITING = { number: 1, state: "proposed", reason: null, summary: "Anya pays Mara a coin.", proposed_by: "director",
+  sequence: 1, operations: [], holdings: null, waivers: [], endorsers: [{ contribution: "t1.000001", principal: "human:owner", given: false }],
+  approved_by: null, event: null, fingerprint: "e".repeat(64), accepted_on: null };
+const turnOf = (effect, post = null) => [{ turn: "t1.000001", number: 1, open: false, kept: true, passed: false, post, labels: [], effects: [effect], intentions: [] }];
+// the turn's post as the table sees it (`mine`: this player submitted it): a player proposes, and withdraws, an
+// effect only on their own post's turn
+const postBy = (mine) => ({ actor: { ref: ANYA, name: "Anya" }, kind: "action", withheld: false, channel: null, mine });
+
+test("the table declines a change its character acts in, naming it as shown, and is never offered the director's withdrawal", async () => {
+  let ended = false;
+  const before = hub("table", { turns: turnOf(WAITING), open_action: null });
+  const after = hub("table", { turns: turnOf({ ...WAITING, state: "refused", reason: "declined" }), open_action: null });
+  const { root, calls, notices } = await mounted("table", () => (ended ? after : before));
+  const block = section(root, "Changes waiting on approval");
+  assert.ok(!byText(root, "button", "Withdraw").length, "the director's proposal is the director's to withdraw");
+  const decline = byText(block, "button", "Decline")[0];
+  assert.equal(decline.getAttribute("aria-label"), "Decline effect 1 of turn 1", "its name says which change");
+  decline.click();
+  await tick();
+  const dialog = document.body.querySelector("dialog");
+  assert.ok(dialog.textContent.includes("Decline effect 1, exactly as shown: Anya pays Mara a coin."), dialog.textContent);
+  ended = true;
+  byText(dialog, "button", "Decline").at(-1).click();
+  await tick();
+  await tick();
+  assert.deepEqual(writes(calls), [["campaign.decline_effect", { chat: CHAT, audience: "table", turn: "t1.000001", number: 1,
+    fingerprint: WAITING.fingerprint }]]);
+  assert.ok(notices.includes("You declined effect 1."), notices.join());
+  const record = section(root, "Turns and effects").querySelector("div.campaign-effect");
+  assert.ok(byText(record, "strong", "Effect 1 (declined)").length, record.textContent);
+  assert.equal(document.activeElement, record, "focus moves to the change's record, which says how it ended");
+  assert.equal(section(root, "Changes waiting on approval").querySelector("div.campaign-effect"), null);
+});
+
+test("the director withdraws a waiting change after a confirmation, and a cancelled one writes nothing", async () => {
+  let ended = false;
+  const given = { ...WAITING, endorsers: [{ ...WAITING.endorsers[0], given: true }], approved_by: "human:owner", state: "approved" };
+  const before = hub("director", { turns: turnOf(given), open_action: null });
+  const after = hub("director", { turns: turnOf({ ...given, state: "refused", reason: "withdrawn" }), open_action: null });
+  const { root, calls, notices } = await mounted("director", () => (ended ? after : before));
+  const block = section(root, "Changes waiting on approval");
+  assert.ok(!byText(block, "button", "Decline").length, "the director's view gives no player's refusal");
+  const withdraw = byText(block, "button", "Withdraw")[0];
+  assert.equal(withdraw.getAttribute("aria-label"), "Withdraw effect 1 of turn 1");
+  withdraw.click();
+  await tick();
+  byText(document.body.querySelector("dialog"), "button", "Cancel")[0].click();
+  await tick();
+  assert.deepEqual(writes(calls), [], "cancelled: nothing is written");
+  byText(section(root, "Changes waiting on approval"), "button", "Withdraw")[0].click();
+  await tick();
+  const dialog = document.body.querySelector("dialog");
+  assert.ok(dialog.textContent.includes("any key given to it goes with it"), dialog.textContent);
+  ended = true;
+  byText(dialog, "button", "Withdraw").at(-1).click();
+  await tick();
+  await tick();
+  assert.deepEqual(writes(calls), [["campaign.withdraw_effect", { chat: CHAT, audience: "director", turn: "t1.000001", number: 1 }]]);
+  assert.ok(notices.includes("Effect 1 is withdrawn."), notices.join());
+  const record = section(root, "Turns and effects").querySelector("div.campaign-effect");
+  assert.ok(byText(record, "strong", "Effect 1 (withdrawn)").length, record.textContent);
+  assert.equal(document.activeElement, record);
+});
+
+test("a player withdraws only their own proposal, and ending is named as unavailable while play is paused", async () => {
+  const proposal = { ...WAITING, proposed_by: "player" };
+  const own = hub("table", { turns: turnOf(proposal, postBy(true)), open_action: null });
+  const mine = await mounted("table", own);
+  assert.ok(byText(section(mine.root, "Changes waiting on approval"), "button", "Withdraw").length);
+  // another player's proposal on their own post: this player holds a key on it, but the runner refuses them
+  const theirs = await mounted("table", hub("table", { turns: turnOf(proposal, postBy(false)), open_action: null }));
+  const block_ = section(theirs.root, "Changes waiting on approval");
+  assert.ok(!byText(block_, "button", "Withdraw").length && byText(block_, "button", "Decline").length, "a key holder declines; only the proposer withdraws");
+  const unposted = await mounted("table", hub("table", { turns: turnOf(proposal), open_action: null }));
+  assert.ok(!byText(unposted.root, "button", "Withdraw").length, "with no post to say whose turn it is, nothing is offered");
+  const held = hub("table", { turns: turnOf(proposal, postBy(true)), open_action: null,
+    actions: hub("table").actions.map((entry) => (["withdraw_effect", "decline_effect"].includes(entry.op)
+      ? { op: entry.op, available: false, reason: "play is paused" } : entry)) });
+  const paused = await mounted("table", held);
+  const block = section(paused.root, "Changes waiting on approval");
+  assert.ok(!byText(block, "button", "Withdraw").length && !byText(block, "button", "Decline").length);
+  assert.ok(byText(block, "strong", "Withdrawing this effect is not available yet").length);
+  assert.ok(byText(block, "strong", "Declining this effect is not available yet").length);
+  // a hub from before these ops offers neither, and names neither
+  const older = hub("table", { turns: turnOf(WAITING), open_action: null,
+    actions: hub("table").actions.filter((entry) => !["withdraw_effect", "decline_effect"].includes(entry.op)) });
+  const old = await mounted("table", older);
+  assert.ok(!byText(old.root, "button", "Decline").length && !old.root.textContent.includes("Declining this effect"));
+});
+
+test("who may end a waiting change, and how an ended one is said", () => {
+  const table = hub("table");
+  assert.ok(logic.mayDecline(table, WAITING, false) && !logic.mayDecline(table, WAITING, true));
+  assert.ok(logic.mayDecline(table, { ...WAITING, endorsers: [{ ...WAITING.endorsers[0], given: true }] }, false), "a key given can still be taken back");
+  assert.ok(!logic.mayDecline(table, { ...WAITING, endorsers: [{ contribution: "t1", principal: "human:other", given: false }] }, false));
+  const [mineTurn] = turnOf(WAITING, postBy(true)), [theirTurn] = turnOf(WAITING, postBy(false));
+  const [noPost] = turnOf(WAITING);
+  assert.ok(logic.mayWithdraw(table, WAITING, true, noPost), "the director withdraws any");
+  assert.ok(!logic.mayWithdraw(table, WAITING, false, mineTurn), "the director's proposal is not the table's to withdraw");
+  const players = { ...WAITING, proposed_by: "player" };
+  assert.ok(logic.mayWithdraw(table, players, false, mineTurn), "the proposing player, on their own post's turn");
+  assert.ok(!logic.mayWithdraw(table, players, false, theirTurn), "never another key holder");
+  assert.ok(!logic.mayWithdraw(table, players, false, noPost) && !logic.mayWithdraw(table, players, false, undefined));
+  for (const state of ["accepting", "accepted", "refused", "superseded", "revoked"]) {
+    const effect = { ...WAITING, state, reason: state === "refused" ? "withdrawn" : null };
+    assert.ok(!logic.mayWithdraw(table, effect, true) && !logic.mayDecline(table, effect, false), state);
+  }
+  assert.deepEqual([{ state: "refused", reason: "withdrawn" }, { state: "refused", reason: "declined" }, { state: "refused", reason: "stale_sequence" },
+    { state: "revoked", reason: "aborted" }, { state: "accepted", reason: null }].map(logic.effectState),
+  ["withdrawn", "declined", "refused: stale_sequence", "revoked: aborted", "accepted"]);
+});
+
 const scene = { turns: [{ turn: "t1.000001", number: 1, kept: { lines: [] }, post: { text: "I press a coin into Mara's hand" } },
   { turn: "t1.000002", number: 2, kept: null, post: { text: "I slip past the lantern" } }] };
 
@@ -228,6 +343,19 @@ test("a cut-short acceptance is the director's to settle, and the page says what
   await tick();
   assert.deepEqual(writes(calls), [["campaign.recover_effects", { chat: CHAT, audience: "director", abort: false, player_key: false, own: true }]]);
   assert.deepEqual(notices, ["Nothing was settled."]);
+});
+
+test("knowledge not written yet is the director's to write again, and the table is only told", async () => {
+  const problems = [{ code: "unbridged", detail: "1:ledger_damaged" }];
+  const table = await mounted("table", hub("table", { problems }));
+  const shown = section(table.root, "Knowledge not written yet");
+  assert.ok(shown && !byText(shown, "button", "Write it now").length, "the table is told, and offered nothing");
+  const { root, calls, notices } = await mounted("director", hub("director", { problems }));
+  byText(section(root, "Knowledge not written yet"), "button", "Write it now")[0].click();
+  await tick();
+  assert.deepEqual(writes(calls), [["campaign.recover_effects", { chat: CHAT, audience: "director", abort: false, player_key: false, own: false }]]);
+  assert.deepEqual(notices, ["Written where it could be."]);
+  assert.equal(section(root, "Acceptance cut short"), undefined);
 });
 
 test("a problem elsewhere in the campaign's continuity offers no recovery", async () => {

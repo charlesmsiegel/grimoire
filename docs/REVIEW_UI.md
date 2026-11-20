@@ -58,7 +58,7 @@ scanned card batches 2.
 | `history.preview` | `export`, `speakers {id: source ref}`, `lorebooks?`, `label?`, `name?` | 036's plan. The report counts the staged files by kind (`staged`) and lists any accepted event, wrap-up, played turn or actor knowledge among them (`accepted_events`, `turns`, `memories`): imported text is transcript only, so these are empty |
 | `v1.scan` | `source`, `archive_id` | 011's read-only inventory of a 0.2.1 library: worlds, campaigns, identities, art, losses, findings, and the proposed selection |
 | `v1.preview` | `scan`, `selection?` | 026's plan for that scan and selection (worlds and campaigns by V2 id, `skip`) |
-| `v1.receipts` | `archive_id` | the receipt of earlier imports of that archive |
+| `v1.receipts` | `archive_id` | the receipt of earlier imports of that archive: runs and files written, and `report`, the newest applied run's own report as its receipt keeps it (`losses`, `not_imported`, `unresolved`, `manifest_unresolved`, `flags`, `skipped`, each bounded like a preview, plus `run`, `applied_at` and `unreadable`, the parts the receipt holds in a shape this build cannot read); `null` before any run |
 | `changeset.review` | `changeset` (the 043 JSON document) | 043's review: diffs, conflicts, permissions. The owner applies it with their own grant, so it needs no per-file approval; rejecting it withdraws it through 043 |
 | `rebase.candidates` | `chat` | the chat's characters whose pinned source has a newer head |
 | `rebase.review` | `actor`, `target?` | 042's field-by-field review |
@@ -144,7 +144,7 @@ the app refuses is shown as what it is, with the app's reason, and offers no pre
 kind previews into the shared review: a summary, every file on the left with its action and size, the selected
 file's sha256 and its diff or text on the right, and a footer with the digest. "Approve and write N files" asks
 first, naming how many files, and sends the digest back; Reject discards the proposal. Once decided, the footer
-says the outcome and offers "Import another" and "Open the library". A batch is checked against the two limits before anything is sent,
+says the outcome and offers "Import another" and "Open the library". After a V1 library is written, the page reads its receipt back and shows that run's **Import report** under the review: everything the preview warned of (not carried over, not imported, unresolved, flagged, skipped). The V1 form's "Show the last import report" reads the same report for an archive by name at any later time, since the receipt keeps it; a run that wrote nothing writes no receipt, so the last applied run's report stays. A batch is checked against the two limits before anything is sent,
 then listed by `imports.card_batch_scan` as a table of every file: an include checkbox, the picture (a PNG card's
 own, from the dropped file) or the name's initial, the name, the file, its lorebooks, and the result in words
 (New, Updates r3 to r4, Updates the card you have, Already in your library, Same name as another card, or

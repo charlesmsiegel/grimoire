@@ -98,19 +98,27 @@ def effect_view(effect, names: Names) -> dict:  # type: ignore[no-untyped-def]
             "accepted_on": effect.accepted_on}
 
 
+def _post_view(post, names: Names) -> dict:  # type: ignore[no-untyped-def]
+    return {"actor": actor_ref(post.actor, names), "kind": post.kind, "withheld": post.withheld,
+            "channel": post.channel}
+
+
 def turn_view(record, names: Names, player: str | None = None) -> dict:  # type: ignore[no-untyped-def]
     """A turn's adjudication and effects only: its transcript is the chat page's (111). With ``player`` (the
     table's view), only the effects that player holds a key on: an effect is world truth once accepted, and one
     no character of theirs acts in is the director's alone."""
-    post = record.post
     effects = [effect for effect in record.effects
                if player is None or any(who == player for _, who in effect.endorsers)]
     found = {"turn": record.turn_id, "number": record.number, "open": record.open,
              "kept": record.kept is not None, "passed": record.passed_by is not None,
-             "post": None if post is None else {"actor": actor_ref(post.actor, names), "kind": post.kind,
-                                                "withheld": post.withheld, "channel": post.channel},
+             "post": None if record.post is None else _post_view(record.post, names),
+             "posts": [_post_view(post, names) for post in record.posts],  # a combined turn's every post (058)
              "labels": [label_view(label) for label in record.labels],
              "effects": [effect_view(effect, names) for effect in effects]}
+    # whether the turn's (first) post is this player's own (whose turn it is, and who may propose and withdraw a
+    # player's effect on it), naming no one
+    if record.post is not None and player is not None:
+        found["post"]["mine"] = record.post.submitted_by == player
     if player is None:  # 039's recorded intentions name actors and propositions by id: the director's alone
         found["intentions"] = [intention_view(item, names) for item in record.intentions]
     return found

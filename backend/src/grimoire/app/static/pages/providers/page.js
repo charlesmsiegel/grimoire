@@ -228,6 +228,7 @@ export async function mount(root, ctx) {
       max_output_tokens: number(form.tokens), attempts: number(form.attempts),
       director: form.director.checked ? 1 : 0,
       decision: number(form.decision),
+      planning: number(form.planning),
       agendas: (state.models && state.models.settings && state.models.settings.agendas) || [],
     };
     const key = text(form.key);
@@ -279,6 +280,10 @@ export async function mount(root, ctx) {
       decision: control("Optional decision calls per turn", { value: String(settings.decision || 0), name: "decision", type: "number",
         hint: "Off at 0. Billed optional choices for NPCs with tactics, capped per turn. Each speaking NPC still gets its own reply." },
         { min: 0, max: shown.bounds.decisions || 16 }),
+      planning: control("Optional planning calls per turn", { value: String(settings.planning || 0), name: "planning", type: "number",
+        hint: "Off at 0. A billed short presentation suggestion before an NPC's reply, capped per turn; a reroll plans again. "
+          + "It never chooses actions, is never saved, and is skipped for an NPC with a decided choice." },
+        { min: 0, max: shown.bounds.planning || 16 }),
       pricePrompt: control("Price per million prompt tokens", { value: settings.price_prompt || "", name: "price_prompt", placeholder: "e.g. 3" },
         { inputmode: "decimal", spellcheck: "false" }),
       priceReply: control("Price per million reply tokens", { value: settings.price_reply || "", name: "price_reply", placeholder: "e.g. 15" },
@@ -292,7 +297,7 @@ export async function mount(root, ctx) {
     };
     form.director.checked = settings.director > 0;
     form.key.input.classList.add("g-mono");
-    for (const name of ["provider", "name", "url", "key", "fallbacks", "tokens", "attempts", "decision", "pricePrompt", "priceReply", "priceCached"]) {
+    for (const name of ["provider", "name", "url", "key", "fallbacks", "tokens", "attempts", "decision", "planning", "pricePrompt", "priceReply", "priceCached"]) {
       form[name].input.setAttribute("data-focus-key", "providers:" + name);
     }
     form.presets = ui.segments("Preset", PRESET_LABELS, { onchange: (value) => {
@@ -312,7 +317,7 @@ export async function mount(root, ctx) {
       el("h2", { class: "g-heading" }, "Model"),
       el("div", {}, form.presets.node),
       el("div", { class: "providers-fields" }, form.provider.node, form.name.node, wide(form.url), wide(form.key),
-        wide(form.fallbacks), form.tokens.node, form.attempts.node, wide(form.decision),
+        wide(form.fallbacks), form.tokens.node, form.attempts.node, wide(form.decision), wide(form.planning),
         el("div", { class: "providers-prices providers-wide" }, form.pricePrompt.node, form.priceReply.node),
         wide(form.priceCached)),
       el("label", { class: "providers-toggle" }, form.director,

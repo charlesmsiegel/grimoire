@@ -258,7 +258,9 @@ class Origin:
     - ``perception``: ``record`` (the evidence id);
     - ``proposition``: ``record`` (the proposition id); ``evidence``, the ids of the reports the actor
       received or sent about it plus the evidence its current belief cites; ``belief``, that belief's id;
-    - ``lore``: ``source`` (the pinned binding revision) and ``name`` (the entry id).
+    - ``lore``: ``source`` (the pinned binding revision) and ``name`` (the entry id);
+    - ``summary``: 053's consolidated account; ``name`` (its topic), ``record`` (the summary's operation id)
+      and ``evidence`` (the evidence ids it cites).
     """
 
     kind: str

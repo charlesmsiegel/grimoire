@@ -9,8 +9,8 @@ keeps no record: its writes go through 035's runner to 029, 040 and 021. 029 and
 under the app's own adjudication key (``app:adjudicator``, never the owner's), which the hub's 029/040 libraries
 take from the library's authority as 035 requires; that key never writes anything but adjudication and obstacles.
 
-``chats`` lists the library's chats by campaign (from the core ``chats`` op, and nothing that op does not
-answer: each campaign's title and world, each chat's label, last activity and bound characters), so the page
+``chats`` lists the library's chats by campaign (every chat, as the core ``chats`` op lists it, and nothing that op
+does not answer: each campaign's title and world, each chat's label, last activity and bound characters), so the page
 can list the campaigns and reach a hub from a campaign id (the ``campaign`` route, ``/<campaign id>``).
 """
 
@@ -26,9 +26,7 @@ from grimoire.textapi import ApiRefused
 
 #: The hub's ops, served as ``campaign.<op>`` and passed on unchanged.
 HUB_OPS = ("hub", "knowledge", "label", "confirm", "decide", "propose_effect", "endorse_effect", "approve_effect",
-           "recover_effects")
-#: The most chats one ``chats`` answer lists (the core ``chats`` op's own largest page).
-MAX_CHATS = 1000
+           "withdraw_effect", "decline_effect", "recover_effects")
 #: The bindings of a chat that the list names as its cast.
 CAST_ROLES = ("character", "persona")
 
@@ -83,9 +81,10 @@ def _chats(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
             validate_segment(wanted, "campaign")
         except ValueError:
             raise ApiRefused("invalid_field", "campaign is not a valid campaign id") from None
-    listed = ctx.core("chats", {"filter": "recent", "limit": MAX_CHATS})
+    # the whole library, not its most recent page (065): a campaign whose chats are all old is still listed, and
+    # its hub still finds them
     campaigns: dict[str, dict] = {}
-    for chat in listed["chats"]:  # newest activity first, so a campaign's first chat is the one played last
+    for chat in ctx.api.listed_chats(wanted):  # newest activity first, so a campaign's first chat is the one played last
         try:
             campaign = ChatRef.parse(chat["chat"]).campaign_id
         except (ValueError, TypeError, KeyError):
@@ -101,8 +100,7 @@ def _chats(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                                "cast": [{"role": source["role"], "ref": source["ref"], "name": source.get("name")}
                                         for source in chat.get("sources") or ()
                                         if source.get("role") in CAST_ROLES]})
-    return {"campaigns": [campaigns[name] for name in sorted(campaigns)],
-            "complete": len(listed["chats"]) < MAX_CHATS}
+    return {"campaigns": [campaigns[name] for name in sorted(campaigns)], "complete": True}
 
 
 ADAPTER = Adapter("campaign", owner="113", ops={"chats": _chats, **{name: _op(name) for name in HUB_OPS}})

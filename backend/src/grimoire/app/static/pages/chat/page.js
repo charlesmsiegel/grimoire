@@ -5,6 +5,7 @@
 // only once posted. Everything shown from the library (card text, model output) is set as text, never as markup.
 
 import { makeReferenceIntent } from "./reference-intent.js";
+import { makeVoice } from "./voice.js";
 import { makeStaging } from "./staging.js";
 import { makeCompare } from "./compare.js";
 import { makeStory } from "./story.js";
@@ -81,7 +82,10 @@ export async function mount(root, ctx) {
   const backdrop = makeBackdrop(ctx, chat, { run, redraw: redrawPictures });
   const attach = makeAttach(ctx, chat, { field: composer.node, run, redraw: redrawPictures });
   const staging = makeStaging(ctx, chat, { log });
-  foot.prepend(makeReferenceIntent(ctx, chat, { composer }));
+  foot.prepend(makeReferenceIntent(ctx, chat, { composer, attach }));
+  // voice as an optional assist beside the composer (./voice.js, 067): shown only where the app serves it
+  const voice = makeVoice(ctx, { composer });
+  if (voice.node) foot.prepend(voice.node);
   const panelBody = el("div", { class: "chat-panel-body" });
   // The panel's tabs. Each has something to show for every chat; a tab that might have nothing is left out here.
   const PANEL_TABS = [
@@ -168,7 +172,7 @@ export async function mount(root, ctx) {
     const typed = composer.value;
     const text = typed.trim();
     if (!text || !page.scene) return;
-    const before = page.scene.turns.length;
+    const before = page.scene.turns.length, pressed = attach.held();
     const args = { text };
     if (posting === "play.post") args.mode = page.mode;
     const scene = await call(posting, args);
@@ -178,7 +182,7 @@ export async function mount(root, ctx) {
     else composer.value = composer.value.startsWith(typed) ? composer.value.slice(typed.length).trimStart() : composer.value;
     fit();
     render(scene, { bottom: true });
-    await attach.posted(scene, before);
+    await attach.posted(scene, before, pressed);
     // a typed table request ("Grimoire, pause") writes no new turn: nobody is asked to answer it
     const last = scene.turns[scene.turns.length - 1];
     const posted = scene.turns.length > before && last && last.post && last.open;
@@ -198,6 +202,7 @@ export async function mount(root, ctx) {
     bars.replaceChildren(...holds(scene));
     drawSceneBar(scene);
     rows.replaceChildren(...transcript(scene, reply));
+    if (voice.node) voice.setLatest(latestLine(scene));
     foundTurn.refresh(rows);
     drawComposer(scene, reply);
     drawPanel();
@@ -343,13 +348,15 @@ export async function mount(root, ctx) {
     }
     for (const turn of scene.turns) {
       const first = out.length;
-      if (turn.post) {
-        const to = turn.post.to && turn.post.to.length ? " to " + turn.post.to.join(", ") : "";
-        const mine = scene.persona && turn.post.actor === scene.persona.actor;
-        out.push(said(scene, { actor: turn.post.actor, speaker: turn.post.speaker, text: turn.post.text, kind: "chat-post", you: mine, to,
-          aside: turn.post.withheld ? "Only you know this." : turn.post.private ? "Private." : "" }));
-        attach.under(turn, out[out.length - 1]);  // the picture attached to this post, if any, under its text
-      }
+      // 058: a combined turn holds each player character's post, in order; an older view has only ``post``
+      const posts = turn.posts || (turn.post ? [turn.post] : []);
+      posts.forEach((post, index) => {
+        const to = post.to && post.to.length ? " to " + post.to.join(", ") : "";
+        const mine = scene.persona && post.actor === scene.persona.actor;
+        out.push(said(scene, { actor: post.actor, speaker: post.speaker, text: post.text, kind: "chat-post", you: mine, to,
+          aside: post.withheld ? (mine ? "Only you know this." : "Only its player knows this.") : post.private ? "Private." : "" }));
+        if (index === 0) attach.under(turn, out[out.length - 1]);  // the picture attached to this turn, under its first post
+      });
       if (turn.kept) {
         for (const item of turn.kept.lines) {
           out.push(said(scene, { actor: item.actor, speaker: speakerOf(item), text: item.text,
@@ -741,4 +748,13 @@ export async function mount(root, ctx) {
   foundTurn.start(rows);  // after restoring scroll, open the turn found by search just once
   loadEntry();
   return leave;
+}
+
+// What Read aloud reads: the latest kept reply's lines, as text.
+function latestLine(scene) {
+  for (let at = scene.turns.length - 1; at >= 0; at -= 1) {
+    const kept = scene.turns[at].kept;
+    if (kept && kept.lines.length) return kept.lines.map((line) => line.text).join("\n");
+  }
+  return "";
 }

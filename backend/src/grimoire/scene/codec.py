@@ -1,4 +1,4 @@
-"""Turn payloads (``grimoire.scene-turn/1``) to and from plain JSON-compatible data.
+"""Turn payloads (``grimoire.scene-turn/1``, and ``/2`` for a combined turn) to and from plain JSON-compatible data.
 
 The store's scope-record envelope owns the address (``TurnRef``) and the schema id. Unknown top-level
 payload keys survive a read/modify/write in ``extras``; inside a known structure an unknown or malformed
@@ -21,6 +21,10 @@ from .model import (_DEVICE, Against, CallRecord, Intention, IntentionOption, La
                     SetAside, Take, TurnEffect, TurnRecord, Waiver, turn_id)
 
 TURN_SCHEMA = "grimoire.scene-turn/1"
+#: A combined turn (058: two or more player characters' posts answered once) is written under its own schema, so a
+#: build that reads one post a turn refuses it (``unsupported_schema``) rather than show, answer or rewrite it with
+#: the other players' posts missing. Every other turn is still written as ``TURN_SCHEMA``.
+COMBINED_TURN_SCHEMA = "grimoire.scene-turn/2"
 _TURN_KEYS = frozenset({"chat", "number", "origin", "post", "takes", "paused", "paused_by", "passed_by"})
 #: Written on every turn. A turn written before turn ids carried a device tag has no ``device`` (read as
 #: untagged); one written before 028's turn merge has no ``follows`` (its place is inferred) or ``set_aside``.
@@ -71,6 +75,11 @@ def _ref(ref: object) -> str | None:
     return None if ref is None else str(ref)
 
 
+def turn_schema(record: TurnRecord) -> str:
+    """The schema ``record`` is written under: ``COMBINED_TURN_SCHEMA`` exactly when it holds further posts."""
+    return COMBINED_TURN_SCHEMA if record.also else TURN_SCHEMA
+
+
 def turn_to_payload(record: TurnRecord) -> dict[str, object]:
     payload: dict[str, object] = dict(record.extras)
     payload.update({
@@ -88,6 +97,8 @@ def turn_to_payload(record: TurnRecord) -> dict[str, object]:
         payload["effects"] = [_effect(effect) for effect in record.effects]
     if record.intentions:
         payload["intentions"] = [_intention(intention) for intention in record.intentions]
+    if record.also:
+        payload["also"] = [_post(post) for post in record.also]
     return payload
 
 
@@ -218,9 +229,11 @@ def _int(value: object, label: str) -> int:
 
 def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRecord:
     """The turn at ``address``; refused (``SceneRefused``) when the payload is not one this version reads."""
-    if schema != TURN_SCHEMA:
+    if schema not in (TURN_SCHEMA, COMBINED_TURN_SCHEMA):
         raise SceneRefused("unsupported_schema", f"not a {TURN_SCHEMA} payload")
     data = _mapping(payload, "turn", _TURN_KEYS, open_keys=True)
+    if ("also" in data) != (schema == COMBINED_TURN_SCHEMA):  # a combined turn says so in its schema, and only it
+        raise _invalid(f"a combined turn's further posts are written under {COMBINED_TURN_SCHEMA}, and only there")
     if _IDENTITY_KEYS & set(data):
         raise SceneRefused("identity_in_payload", "the envelope owns a turn's identity")
     try:
@@ -233,7 +246,7 @@ def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRec
         raise _invalid("device must be a device tag or null")
     if turn_id(chat, number, device) != address.turn_id:  # type: ignore[arg-type]
         raise SceneRefused("address_mismatch", "a turn's chat, number and device must spell its address")
-    extras = {key: value for key, value in data.items() if key not in _TURN_KEYS | _OPTIONAL_TURN_KEYS}
+    extras = {key: value for key, value in data.items() if key not in _TURN_KEYS | _OPTIONAL_TURN_KEYS | {"also"}}
     follows = data.get("follows")
     if follows is not None and type(follows) is not str:
         raise _invalid("follows must be a turn id or null")
@@ -248,6 +261,7 @@ def turn_from_payload(address: TurnRef, schema: str, payload: object) -> TurnRec
                           tuple(_decode_label(item, address) for item in _list(data.get("labels", []), "labels")),
                           tuple(_decode_effect(item, address) for item in _list(data.get("effects", []), "effects")),
                           tuple(_decode_intention(item) for item in _list(data.get("intentions", []), "intentions")),
+                          tuple(_decode_post(item) for item in _list(data.get("also", []), "also")),
                           extras=extras)
     except SceneRefused:
         raise
@@ -412,4 +426,4 @@ def _decode_call(value: object, campaign_id: str, plan_turn: str) -> CallRecord:
                       tuple(attempts))
 
 
-__all__ = ["TURN_SCHEMA", "turn_from_payload", "turn_to_payload"]
+__all__ = ["COMBINED_TURN_SCHEMA", "TURN_SCHEMA", "turn_from_payload", "turn_schema", "turn_to_payload"]

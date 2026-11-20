@@ -14,18 +14,28 @@ The commit order is fixed, so a crash anywhere leaves something open-time recove
    written ``accepting``, with its keys, the allocated event id and the sovereignty ledger position whose
    control it was authorized under, by compare-and-swap;
 4. 021's commit (one store transaction);
-5. the effect is written ``accepted``.
+5. the effect is written ``accepted``;
+6. best effort, never a refusal: its 012 bridge event and its witnesses' perceptions are appended to 020, once,
+   with any earlier one still pending, oldest first (``play/witness.py``).
 
 A crash after 3 leaves an ``accepting`` effect: ``open`` reports it (``effect_unsettled``) with the shape it
 finds, and the owner's ``recover_effects`` settles it with 030's ``complete`` or ``adopt`` (or aborts it with
 021's ``revoke(partial=True)``), before any other effect is accepted. ``adopt`` replays the control recorded with
-``accepting`` from the sovereignty ledger, so a character changing hands since never strands it.
+``accepting`` from the sovereignty ledger, so a character changing hands since never strands it. A crash after 5
+(or a 020 append that cannot be made now) leaves an ``accepted`` effect whose 020 event is missing: the next
+``open``, acceptance or ``recover_effects`` anywhere in the campaign writes it, and ``open`` counts what stays
+(``unbridged``). 021's acceptance never waits for 020.
 
 An endorsement given with a player's own trusted handle is also recorded by the library's durable authority (a
 ``propose`` decision of that handle at ``endorsement_address``, in the ``security`` ledger, which only the
 authority writes and sync never carries). A recorded endorsement is presented to 021 again, on a handle minted
 for that player, only when that decision is in the authority's audit: an endorsement written into a turn file
 by hand or by a peer is refused ``invalid_endorsement``. See docs/TOOL_AUTHORITY.md.
+
+A live effect can also be ended without being accepted: withdrawn (by the director, or by the player who proposed
+it) or declined (by a player whose key it waits on). It is written ``refused`` with that reason (``withdrawn``,
+``declined``), so no new state is stored, and the authority records the ending first: an ended effect set live
+again in its turn file is refused at acceptance with the same reason.
 """
 
 from __future__ import annotations
@@ -37,14 +47,16 @@ from grimoire.core import DIRECTOR
 from grimoire.core.authority import AuthorityError, PlayerContribution
 from grimoire.core.identity import AcceptedRef, ChatRef, TurnRef
 from grimoire.core.knowledge import Moment
-from grimoire.core.model import ControlAssignment
 from grimoire.effects import (
     EffectError, EffectHoldings, EffectProposal, EndorsementRecord, authorize, revocation_fingerprint,
 )
 from grimoire.effectstore import Endorsement, InvalidEffect
 from grimoire.play.adjudicate import _029, _UNAVAILABLE, outcome_of
 from grimoire.play.obstacles import applied, due_changes, holds_due
-from grimoire.play.scene import NOW, WRITE_RETRIES, _readable, _refuse
+from grimoire.play.scene import NOW, WRITE_RETRIES, _readable, _refuse, post_contributions
+from grimoire.play.witness import controls_at as _controls_at
+from grimoire.play.witness import settle
+from grimoire.play.witness import problems as unbridged_problems
 from grimoire.scene import MAX_EFFECTS, SceneRefused, TurnEffect, TurnRecord, Waiver, turn_from_payload
 from grimoire.scenestore import StoredTurn
 from grimoire.security import Permission, is_human
@@ -53,6 +65,9 @@ from grimoire.store.layout import address_parts
 
 #: What an aborted acceptance's revocation records as its reason.
 ABORTED = "035 recovery: aborted by the director"
+#: Why a live effect was ended without being accepted: it is written ``refused`` with one of these reasons.
+WITHDRAWN, DECLINED = "withdrawn", "declined"
+ENDINGS = (WITHDRAWN, DECLINED)
 #: The shapes ``open`` names for an ``accepting`` effect (030): what landed of its acceptance.
 SHAPES = ("landed", "complete", "revoked", "adopt", "unpublished", "unreadable")
 
@@ -105,12 +120,8 @@ def _sequence(moment: object) -> int:
 # -- reading --------------------------------------------------------------------------------------
 
 def contributions_of(record: TurnRecord) -> tuple[PlayerContribution, ...]:
-    """The player's own 003 contribution a turn's post is (its id is the turn id), as 021 checks it."""
-    post, chat = record.post, record.chat
-    if post is None:
-        return ()
-    return (PlayerContribution(chat.campaign_id, record.turn_id, chat.chat_id, record.turn_id,
-                               post.actor.instance_id, post.submitted_by, post.kind, post.text),)
+    """The players' own 003 contributions a turn's posts are (the first's id is the turn id), as 021 checks them."""
+    return post_contributions(record)
 
 
 def _turn(scene, turn: object) -> StoredTurn:
@@ -169,6 +180,8 @@ def propose_effect(runner, chat: ChatRef, by, turn: str, summary: str, operation
     record = stored.record
     if record.post is not None and record.post.kind == "action" and record.post.private:
         raise _refuse("private_action", "a withheld action takes no effect: the table never saw it")
+    if record.also:  # 058's first slice: whose key a combined turn's one effect would need is not settled yet
+        raise _refuse("combined_turn", "a turn of several player characters' posts takes no effect in this slice")
     if record.kept is None:  # a kept turn, or a decided action (whose narration may still be open)
         if record.framed is None:
             raise _refuse("not_kept", "an effect is proposed for a kept turn or a decided action")
@@ -292,6 +305,103 @@ def endorse_effect(runner, chat: ChatRef, by, turn: str, number: int, fingerprin
         return _accept(runner, scene, stored, endorsed, {principal: by})
     runner._write(stored.record.with_effect(endorsed), stored, unpaused=True)
     return endorsed
+
+
+# -- ending a live effect without accepting it -------------------------------------------------------
+
+def withdraw_effect(runner, chat: ChatRef, by, turn: str, number: int) -> TurnEffect:
+    """See ``SceneRunner.withdraw_effect``."""
+    def may(scene, stored: StoredTurn, effect: TurnEffect, principal: str) -> None:
+        if not _may_end(runner, stored.record, effect, principal, WITHDRAWN):
+            raise _refuse("not_proposer", "only the director, or the player who proposed it, withdraws an effect")
+    return _end(runner, chat, by, turn, number, WITHDRAWN, may)
+
+
+def decline_effect(runner, chat: ChatRef, by, turn: str, number: int, fingerprint: str) -> TurnEffect:
+    """See ``SceneRunner.decline_effect``."""
+    def may(scene, stored: StoredTurn, effect: TurnEffect, principal: str) -> None:
+        if fingerprint != effect.fingerprint:  # the effect as shown, as an endorsement names it
+            raise _refuse("fingerprint_mismatch", "decline the effect as it was shown: its fingerprint differs")
+        if not _may_end(runner, stored.record, effect, principal, DECLINED):
+            raise _refuse("not_endorser", "only a player whose character acts in this effect declines it")
+        try:
+            now = authorize(effect.proposal, scene.controls, contributions_of(stored.record)).endorsers
+        except (EffectError, AuthorityError):
+            now = None
+        if now is None or tuple(sorted(now.items())) != effect.endorsers:
+            raise _refuse("control_changed", "who plays a character of this effect changed since it was proposed")
+    return _end(runner, chat, by, turn, number, DECLINED, may)
+
+
+def _may_end(runner, record: TurnRecord, effect: TurnEffect, principal: str, reason: str) -> bool:
+    """Whether ``principal`` may end ``effect`` with ``reason``: a withdrawal is the director's (the library owner)
+    or, for a player's own proposal, that player's (whose post the turn is); a decline is a named endorser's."""
+    if reason == WITHDRAWN:
+        return principal in runner.authority.owners or (
+            effect.proposal.proposed_by == "player" and record.post is not None
+            and record.post.submitted_by == principal)
+    return reason == DECLINED and any(endorser == principal for _, endorser in effect.endorsers)
+
+
+def _end(runner, chat: ChatRef, by, turn: str, number: int, reason: str, may) -> TurnEffect:
+    """End a live effect (``proposed`` or ``approved``) as ``refused`` with ``reason``, without accepting it.
+
+    The checks are a key's (play not paused, the turn on the line, no fork or sync conflict, the effect still
+    collecting keys), then ``may``'s. The turn is written by compare-and-swap, so another key, a pause or a fork
+    landing since it was read is ``turn_changed`` and ends nothing. Only once the turn write has committed (still
+    under the store lock) does the authority record the ending, as a decision of the asker's own handle (as an
+    endorsement is recorded): a write that never landed (another process's write, a disk error, a crash) records
+    nothing, so the effect stays live and takes its keys. That record is what an acceptance checks, so an ended
+    effect set live again in its turn file (by hand or by a peer) is refused at acceptance with the same reason.
+    A crash between the commit and the record leaves the turn's ``refused`` mark alone, which still ends it; only
+    the check against a revival is then lost. The record reaches the authority's ledger with its next flush.
+
+    A control change touches no turn file, so the compare-and-swap cannot see one: under the store lock, just
+    before the commit, control must still be what the call read (as acceptance checks it), or the call is
+    ``control_changed`` and ends nothing. A decline turns on who plays the effect's characters, and a player's
+    withdrawal on their seat at the table; only the director's withdrawal does not depend on control."""
+    scene, principal, _ = _playing(runner, chat, by)
+    stored = _turn(scene, turn)
+    effect = _effect(stored, number)
+    _collecting(effect)
+    may(scene, stored, effect, principal)
+    ended = replace(effect, state="refused", reason=reason)
+    directs = reason == WITHDRAWN and principal in runner.authority.owners
+    runner._write(stored.record.with_effect(ended), stored, unpaused=True,
+                  before_commit=None if directs else lambda: _same_control(runner, scene),
+                  on_commit=lambda: _record_end(by, stored.record.ref, number, reason, effect.fingerprint))
+    return ended
+
+
+def _same_control(runner, scene) -> None:
+    """Under the store lock: who plays each character is still what ``scene`` read (as ``_settled_play`` checks)."""
+    if set(runner.sovereignty.load(scene.chat.campaign_id).controls) != set(scene.controls):
+        raise _refuse("control_changed", "who plays a character changed meanwhile; read the effect again")
+
+
+def end_address(ref: TurnRef, number: int, reason: str, fingerprint: str) -> str:
+    """The logical address the authority records an ending at: the turn, the effect's number, why, and the
+    fingerprint it was shown with (its proposal's, with any waivers)."""
+    return "/".join((*address_parts(ref), "ended", str(number), reason, fingerprint.removeprefix("sha256:")))
+
+
+def _record_end(handle, ref: TurnRef, number: int, reason: str, fingerprint: str) -> None:
+    """Have the authority record that ``handle`` ended effect ``number`` (as an endorsement is recorded: the
+    decision's outcome does not matter, only its audit record, which that trusted handle alone could make). It
+    never refuses: without the record, only the check against an ended effect set live again would be lost."""
+    handle.authorize(Permission.PROPOSE, end_address(ref, number, reason, fingerprint), fingerprint.encode("utf-8"))
+
+
+def _ended(runner, record: TurnRecord, effect: TurnEffect) -> str | None:
+    """Why the authority's audit says ``effect`` was ended (``withdrawn`` or ``declined``), by a principal who
+    may end it so, or ``None``: an effect ended once is never accepted, whatever its turn file says since."""
+    wanted = {end_address(record.ref, effect.number, reason, effect.fingerprint): reason for reason in ENDINGS}
+    for item in reversed(runner.authority.audit()):
+        reason = wanted.get(item.resource) if type(item.resource) is str else None
+        if reason is not None and item.trusted is True and item.permission is Permission.PROPOSE and _may_end(
+                runner, record, effect, item.principal, reason):
+            return reason
+    return None
 
 
 def endorsement_address(ref: TurnRef, contribution_id: str, fingerprint: str) -> str:
@@ -463,6 +573,9 @@ def _accepting(runner, scene, stored: StoredTurn, effect: TurnEffect, live: Mapp
         raise _refuse("no_adjudication", "every acceptance is checked by 029 first")
     proposal = effect.proposal
     try:
+        ended = _ended(runner, record, effect)  # withdrawn or declined once: never accepted, whatever the file says
+        if ended is not None:
+            raise _refuse(ended, "this effect was ended without being accepted; propose it again")
         _029(runner.adjudication.check_effect, proposal)
         # 040: an effect of a turn whose obstacle attempt made something due still holds it (a turn file edited
         # since, by hand or by a peer, could have dropped it). A waiver counts only with the authority's record
@@ -505,6 +618,7 @@ def _accepting(runner, scene, stored: StoredTurn, effect: TurnEffect, live: Mapp
     accepted = replace(landed, state="accepted", event_id=event_id)
     if _rewrite(runner, chat, record.ref, landed, accepted) is None:
         raise _refuse("effect_unsettled", "the effect is accepted, but its turn could not be marked; recover it")
+    settle(runner, scene)  # never refuses: what stays pending, ``open`` counts and the next try writes
     return accepted
 
 
@@ -518,19 +632,6 @@ def _settled_play(runner, scene) -> int:
     if set(state.controls) != set(scene.controls):
         raise _refuse("control_changed", "who plays a character changed meanwhile; give the key again")
     return max((event.seq for event in state.control_history), default=0)
-
-
-def _controls_at(runner, campaign_id: str, position: int) -> tuple[ControlAssignment, ...]:
-    """The campaign's control as the sovereignty ledger stood at ``position`` (replayed from its history)."""
-    controllers: dict[str, str] = {}
-    for event in runner.sovereignty.load(campaign_id).control_history:
-        if event.seq > position:
-            break
-        if event.controller_id is None:
-            controllers.pop(event.actor_id, None)
-        else:
-            controllers[event.actor_id] = event.controller_id
-    return tuple(ControlAssignment(campaign_id, actor, controller) for actor, controller in sorted(controllers.items()))
 
 
 def _commit(change, effect: TurnEffect) -> None:
@@ -620,6 +721,7 @@ def effect_problems(runner, scene) -> list[tuple[str, str]]:
     except SceneRefused as error:
         return [("effects", f"unreadable:{error.reason}")]
     found = [("effects", f"{problem.code}:{problem.event_id or ''}") for problem in continuity.problems]
+    found += unbridged_problems(runner, scene)
     for stored in (*scene.turns.turns, *scene.turns.set_aside):  # one set aside since it was cut short too
         for effect in stored.record.effects:
             if effect.state != "accepting":
@@ -647,22 +749,25 @@ def recover_effects(runner, chat: ChatRef, by, *, abort: bool = False, endorsers
     mine = runner.scenes.device()  # a damaged identity settles nothing: whose each acceptance is cannot be told
     settled, theirs, untagged = [], [], []
     with runner.store.lock:  # never while an acceptance of this process is between its steps
-        turns = runner.scenes.turns(chat)
-        # oldest first, set-aside turns after the line; the first that cannot be settled stops
-        for stored in (*turns.turns, *turns.set_aside):
-            for effect in stored.record.effects:
-                if effect.state != "accepting":
-                    continue
-                whose = _whose(effect, mine, lambda: _shape(runner, effect))
-                named = f"{stored.record.turn_id}:{effect.event_id}"
-                if whose == "elsewhere":  # its 021 files are on that device: read here, it looks unpublished
-                    theirs.append(f"device {effect.accepted_on} ({named})")
-                    continue
-                if whose == "untagged" and not own:  # never put back or dropped on a guess
-                    untagged.append(named)
-                    continue
-                _recoverable(runner.scenes.turns(chat))  # again under the lock, before each 021 write
-                settled.append(_recover(runner, scene, stored.record, effect, abort, live))
+        try:
+            turns = runner.scenes.turns(chat)
+            # oldest first, set-aside turns after the line; the first that cannot be settled stops
+            for stored in (*turns.turns, *turns.set_aside):
+                for effect in stored.record.effects:
+                    if effect.state != "accepting":
+                        continue
+                    whose = _whose(effect, mine, lambda: _shape(runner, effect))
+                    named = f"{stored.record.turn_id}:{effect.event_id}"
+                    if whose == "elsewhere":  # its 021 files are on that device: read here, it looks unpublished
+                        theirs.append(f"device {effect.accepted_on} ({named})")
+                        continue
+                    if whose == "untagged" and not own:  # never put back or dropped on a guess
+                        untagged.append(named)
+                        continue
+                    _recoverable(runner.scenes.turns(chat))  # again under the lock, before each 021 write
+                    settled.append(_recover(runner, scene, stored.record, effect, abort, live))
+        finally:  # 020, whatever stopped above: every pending bridge it can take now (never a refusal)
+            settle(runner, scene)
     # this device's own were settled above; the rest never are here (untagged ones, not without the owner's word)
     if untagged:
         raise _refuse("untagged_acceptance", f"{len(settled)} settled here; nothing of {_listed(untagged)} is in this "
@@ -765,5 +870,6 @@ def _021(call: Callable, *args, **kwargs):
         raise _refuse("effects_unavailable", type(error).__name__) from None
 
 
-__all__ = ["ABORTED", "SHAPES", "approve_effect", "blockers", "contributions_of", "effect_problems",
-           "endorse_effect", "endorsement_address", "next_sequence", "propose_effect", "recover_effects", "shape_of"]
+__all__ = ["ABORTED", "DECLINED", "ENDINGS", "SHAPES", "WITHDRAWN", "approve_effect", "blockers", "contributions_of",
+           "decline_effect", "effect_problems", "end_address", "endorse_effect", "endorsement_address",
+           "next_sequence", "propose_effect", "recover_effects", "shape_of", "withdraw_effect"]

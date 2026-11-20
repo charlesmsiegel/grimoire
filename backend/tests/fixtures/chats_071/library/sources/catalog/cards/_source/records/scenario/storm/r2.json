@@ -1,0 +1,9 @@
+{
+  "address": "catalog:cards/scenario/storm@r2",
+  "format": "grimoire.record/1",
+  "name": "Storm",
+  "payload": {
+    "opening": "thunder"
+  },
+  "previous": null
+}

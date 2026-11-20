@@ -154,7 +154,8 @@ export function when(stamp, now = new Date()) {
 export function hubSections(hub, audience) {
   const director = isDirector(hub, audience);
   const codes = new Set((hub.problems || []).map((problem) => problem.code));
-  const cut = codes.has("effect_unsettled") || codes.has("effect_untagged") || codes.has("effect_elsewhere");
+  const cut = codes.has("effect_unsettled") || codes.has("effect_untagged") || codes.has("effect_elsewhere")
+    || codes.has("unbridged");
   return ["action", ...(cut ? ["recover"] : []), "cast", "holdings", "changes", ...(hub.obstacles && hub.obstacles.length ? ["obstacles"] : []),
     ...(director ? ["truth", "goals"] : []), "knowledge", ...(director ? ["propose"] : []), "turns", "sources", "unavailable"];
 }
@@ -180,3 +181,29 @@ export function leaning(bearing) {
 }
 
 export function count(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
+
+// -- ending a waiting change --------------------------------------------------------------------------------
+
+const live = (effect) => effect.state === "proposed" || effect.state === "approved";
+
+// Who may end a change still waiting on a key, without accepting it, as the runner allows it. The director
+// withdraws any; at the table, a player withdraws only a change they proposed themselves: a player's proposal
+// (`proposed_by: player`) on the turn of their own post (the table's view marks the post `mine`), never another
+// key holder. A player declines a change their own character acts in, key given or not; the director's view
+// gives no player's refusal, as it gives no player's key. The hub refuses anything else.
+export function mayWithdraw(hub, effect, director, turn) {
+  if (!live(effect)) return false;
+  if (director) return true;
+  return effect.proposed_by === "player" && Boolean(turn && turn.post && turn.post.mine === true);
+}
+
+export function mayDecline(hub, effect, director) {
+  return live(effect) && !director && effect.endorsers.some((key) => key.principal === hub.player);
+}
+
+// How an effect's state is said: an ended one by how it ended, a refused one with the reason it was refused.
+export function effectState(effect) {
+  if (effect.state === "refused" && effect.reason === "withdrawn") return "withdrawn";
+  if (effect.state === "refused" && effect.reason === "declined") return "declined";
+  return effect.state + (effect.reason ? ": " + effect.reason : "");
+}

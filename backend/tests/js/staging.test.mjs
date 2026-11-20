@@ -58,43 +58,32 @@ test("resolved shown outfits and portrait fallback exclude unauthorized assets",
   assert.deepEqual(actorArt(null), []);
 });
 test("storage errors and malformed metadata are observable; bounds enforced", () => {
-  let raw = "{";
+  const data = { ["grimoire.vn.cue:c\u001ft"]: "{" };
   const storage = {
-    getItem: () => raw,
-    setItem: (k, v) => {
-      raw = v;
-    },
+    get length() { return Object.keys(data).length; },
+    key: (i) => Object.keys(data)[i] ?? null,
+    getItem: (k) => data[k] ?? null,
+    setItem: (k, v) => { data[k] = v; },
+    removeItem: (k) => { delete data[k]; },
   };
-  const s = cueStore("c", storage);
+  const s = cueStore("c", storage, null);
   assert.match(s.warning, /malformed/i);
-  assert.equal(s.save({}), true);
+  const cue = (note) => ({ note, actors: {}, focus: "", background: "", transition: "none" });
+  assert.equal(s.put("t", cue("over it")), false, "a malformed stored cue is not overwritten");
+  assert.equal(s.reset(), true);
   assert.equal(s.warning, "");
-  assert.equal(s.save({ t: { note: "x".repeat(1001) } }), false);
-  assert.equal(
-    s.save(Object.fromEntries(Array.from({ length: 101 }, (_, i) => [i, {}]))),
-    false,
-  );
+  assert.equal(s.put("t", cue("x".repeat(1001))), false);
+  for (let i = 0; i < 100; i += 1) assert.equal(s.put("t" + i, cue("")), true);
+  assert.equal(s.put("t100", cue("")), false, "at most 100 cues");
   const fail = cueStore("c", {
-    getItem() {
-      throw Error();
-    },
-    setItem() {
-      throw Error();
-    },
-  });
+    get length() { throw Error(); },
+    key() { throw Error(); },
+    getItem() { throw Error(); },
+    setItem() { throw Error(); },
+    removeItem() { throw Error(); },
+  }, null);
   assert.match(fail.warning, /not saved/i);
-  assert.equal(
-    fail.save({
-      t: {
-        note: "ok",
-        actors: {},
-        focus: "",
-        background: "",
-        transition: "none",
-      },
-    }),
-    false,
-  );
+  assert.equal(fail.put("t", cue("ok")), "unsaved");
   assert.equal(fail.cues.t.note, "ok");
 });
 test("mode switching leaves transcript nodes intact, preserves privacy and stale turns", () => {

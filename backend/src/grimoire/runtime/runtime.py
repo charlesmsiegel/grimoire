@@ -22,6 +22,9 @@ from grimoire.generation import (
     DirectorBrief, GenerationError, HeardLine, NpcBrief, checked_controls, controller, director_messages,
     decision_messages, decision_options, npc_messages, read_pick, require_director, screen_reply,
 )
+from grimoire.generation.presentation import (
+    MAX_SUGGESTION_CHARS, PLANNING_MAX_OUTPUT_TOKENS, planning_messages, with_suggestion,
+)
 from grimoire.generation.delivery import ContributionMode
 from grimoire.goals import Choice
 from grimoire.providers.adapter import Approvals, CallResult, ProviderAdapter
@@ -152,6 +155,7 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
         by_actor[brief.actor.instance_id] = brief
     pairs: list[tuple[PlannedCall, NpcBrief | DirectorBrief]] = []
     used: set[str] = set()
+    planners: set[str] = set()
     directed = False
     picks: dict[str, DecisionOutcome] = {}
     for call in plan.calls:
@@ -164,9 +168,23 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
                 raise GenerationError("decision_not_run", f"{call.call_id} must be decided before the turn runs")
             picks[call.actor_id] = outcome  # type: ignore[index]
             continue
+        if call.stage is InferenceStage.PLANNING and call.actor_id is not None:
+            # 068: an optional presentation suggestion, issued in plan order before its NPC's own reply.
+            if meter.status(call.call_id) is not None:
+                raise GenerationError("call_already_run", f"{call.call_id} already ran on this meter")
+            if call.actor_id in planners:
+                raise GenerationError("duplicate_planning", f"two planning calls are planned about {call.actor_id}")
+            if call.actor_id in used or directed:
+                raise GenerationError("planning_not_first", f"{call.call_id} is planned after a reply it would shape")
+            brief = by_actor.get(call.actor_id)  # type: ignore[arg-type]
+            if brief is None:
+                raise GenerationError("missing_brief", f"{call.call_id} has no brief")
+            planners.add(call.actor_id)  # type: ignore[arg-type]
+            pairs.append((call, brief))
+            continue
         if call.stage not in _SUPPORTED:
             raise GenerationError("unsupported_stage", f"{call.call_id} is a {call.stage} call; this "
-                                  "runtime issues only npc_generation and director_generation")
+                                  "runtime issues only npc_generation, director_generation and planning")
         if meter.status(call.call_id) is not None:
             raise GenerationError("call_already_run", f"{call.call_id} already ran on this meter")
         if call.stage is InferenceStage.DIRECTOR_GENERATION:
@@ -202,6 +220,9 @@ def _assign(meter: TurnMeter, briefs: tuple[NpcBrief, ...], director: DirectorBr
         if decided is not None and (selection != decided.pick or not _same_ground(brief.intention, decided.basis)):
             raise GenerationError("decision_ignored", f"the brief for {brief.actor} does not carry what a "
                                   "decision call on this meter picked")
+    if planners - used:
+        # A suggestion only ever shapes the planner's own reply in the same turn.
+        raise GenerationError("planner_not_speaking", f"planning for actors with no reply: {sorted(planners - used)}")
     extra = sorted(set(by_actor) - used)
     if extra:
         raise GenerationError("extra_brief", f"briefs for actors with no planned call: {extra}")
@@ -329,6 +350,41 @@ class GenerationRuntime:
         finally:
             unwatch()
 
+    def _plan(self, meter: TurnMeter, call: PlannedCall, brief: NpcBrief, cancel: CancelToken,
+              voices: tuple[ResolvedVoice, ...], outcomes: list[CallOutcome],
+              suggestions: dict[InstanceRef, str]) -> CallStatusLabel | Literal["error"]:
+        """Issue one optional ``planning`` call (068) and record its outcome; never halts the turn.
+
+        The call sees only the NPC's own brief (no line of this turn). An NPC whose brief carries a
+        choice (039/045) gets no call: a suggestion may never compete with a decided intention, so the
+        call is forgone (``not_issued``, ``has_choice``) and nothing is billed. A refused, failed,
+        incomplete or screened-out suggestion is recorded and the NPC speaks without one, exactly as
+        it would with the stage off. A cancellation stops the turn, and so does an exception from the
+        adapter (an approvals callback or adapter bug), as it does for a reply: ``failed`` is returned.
+        """
+        if brief.intention is not None:
+            meter.forgo(call)
+            outcomes.append(CallOutcome(call.call_id, "not_issued", "has_choice"))
+            return "not_issued"
+        request = self._request(planning_messages(brief), min(self._max_output_tokens, PLANNING_MAX_OUTPUT_TOKENS))
+        try:
+            result = self._adapter.execute(meter, call, request, self._routes, self._handle,
+                                           approvals=self._approvals, cancel=cancel)
+        except Exception as error:  # a bug, not a provider answer: halt as a reply's call does
+            outcomes.append(CallOutcome(call.call_id, "failed", type(error).__name__))
+            return "error"
+        if result.status != "accepted":
+            outcomes.append(CallOutcome(call.call_id, result.status, _reason(result)))
+            return result.status
+        text = (result.reply or "").strip()
+        rejected = ("too_long" if len(text) > MAX_SUGGESTION_CHARS
+                    else screen_reply(brief, text, voices=voices))
+        outcomes.append(CallOutcome(call.call_id, "rejected" if rejected else "accepted", rejected))
+        if rejected is None:
+            suggestions[brief.actor] = text
+            return "accepted"
+        return "rejected"
+
     def run_turn(self, meter: TurnMeter, briefs: Iterable[NpcBrief], *, controls: Iterable[ControlAssignment],
                  director: DirectorBrief | None = None, token: FenceToken | None = None,
                  cancel: CancelToken | None = None, scene_voices: Iterable[ResolvedVoice] = (),
@@ -377,6 +433,7 @@ class GenerationRuntime:
         unwatch = cancel_when_stale(token, cancel)
         outcomes: list[CallOutcome] = []
         lines: list[GeneratedLine] = []
+        suggestions: dict[InstanceRef, str] = {}  # 068: each planner's own screened suggestion, never stored
 
         def ended(status: TurnStatus) -> TurnOutcome:
             issued = {outcome.call_id for outcome in outcomes}
@@ -392,11 +449,20 @@ class GenerationRuntime:
                     return ended("stale")
                 if cancel.cancelled:
                     return ended("cancelled")
+                if call.stage is InferenceStage.PLANNING:
+                    status = self._plan(meter, call, brief, cancel, voices, outcomes, suggestions)  # type: ignore[arg-type]
+                    if status == "cancelled":
+                        return ended("cancelled")
+                    if status == "error":
+                        return ended("halted")
+                    continue
                 listener = brief.actor if isinstance(brief, NpcBrief) else None
                 spoken = tuple(HeardLine(line.speaker, line.text, line.actor) for line in lines
                                if hears is None or hears(listener, line.actor) is True)
                 if isinstance(brief, NpcBrief):
                     messages = npc_messages(brief, spoken, mode=modes.get(brief.actor))
+                    if brief.actor in suggestions:
+                        messages = with_suggestion(messages, suggestions[brief.actor])
                 else:
                     messages = director_messages(brief, spoken)
                 # No on_delta: nothing is shown before acceptance, and a consumer would block retries.
