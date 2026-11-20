@@ -1,4 +1,4 @@
-"""Played chat turns (035): one player post, the takes generated for it, and what the table kept.
+"""Played chat turns (035): the players' posts, the takes generated for them, and what the table kept.
 
 A turn is transcript, never world state: nothing here is an event, a belief, an effect or a ruling. A
 kept line is what the table chose to show; it changes no fiction a later rule could read as canon.
@@ -768,6 +768,9 @@ class Intention:
 class TurnRecord:
     """One turn of one chat: ``post`` (or none), its takes, and whether the table closed it.
 
+    ``also`` (058) holds the further player characters' posts of a combined turn, in the order they were
+    submitted, each by its own controller: the cast answers all of them once. ``posts`` is every post in order.
+
     Open while no take is kept and nobody passed it. While the last turn is ``paused`` no new turn is
     posted, begun or generated; who paused is kept for ``resume`` only and never shown. ``device`` is the
     tag of the device that created it (028), or ``None`` for a turn created on a library with no identity;
@@ -790,6 +793,7 @@ class TurnRecord:
     labels: tuple[Label, ...] = ()
     effects: tuple[TurnEffect, ...] = ()
     intentions: tuple[Intention, ...] = ()
+    also: tuple[Post, ...] = ()
     extras: dict[str, object] = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
@@ -800,7 +804,12 @@ class TurnRecord:
             raise _fail("invalid_field", f"a turn's origin is one of {ORIGINS}")
         if (self.post is not None) != (self.origin == "post"):
             raise _fail("invalid_field", "a post turn has a post; no other turn does")
-        if self.post is not None and self.post.actor.campaign_id != self.chat.campaign_id:
+        object.__setattr__(self, "also", tuple(self.also))
+        if any(type(post) is not Post for post in self.also) or (self.also and self.post is None):
+            raise _fail("invalid_field", "a combined turn's further posts are Post values after its first post")
+        if len({post.actor for post in self.posts}) != len(self.posts):
+            raise _fail("invalid_field", "a combined turn holds one post per player character")
+        if any(post.actor.campaign_id != self.chat.campaign_id for post in self.posts):
             raise _fail("invalid_field", "a post's actor belongs to the turn's campaign")
         object.__setattr__(self, "takes", tuple(self.takes))
         if not all(type(take) is Take for take in self.takes):
@@ -828,8 +837,8 @@ class TurnRecord:
         object.__setattr__(self, "labels", tuple(self.labels))
         if not all(type(label) is Label for label in self.labels):
             raise _fail("invalid_field", "a turn's labellings are Label values")
-        if self.labels and (self.post is None or self.post.kind != "action"):
-            raise _fail("invalid_field", "only a turn whose post is an action is labelled")
+        if self.labels and (self.post is None or self.post.kind != "action" or self.also):
+            raise _fail("invalid_field", "only a turn whose one post is an action is labelled")
         if [label.label for label in self.labels] != list(range(1, len(self.labels) + 1)):
             raise _fail("invalid_field", "labellings are numbered 1, 2, ... in order")
         for state in ("running", "framed"):
@@ -856,7 +865,7 @@ class TurnRecord:
                 raise _fail("invalid_field", "a turn's effect is proposed for that turn of its chat")
         prefix = self.turn_id + "."
         campaign = self.chat.campaign_id
-        if self.post is not None and any(actor.campaign_id != campaign for actor in self.post.audience):
+        if any(actor.campaign_id != campaign for post in self.posts for actor in post.audience):
             raise _fail("invalid_field", "a post's audience belongs to the turn's campaign")
         for take in self.takes:
             if any(actor.campaign_id != campaign for actor in take.cast) or any(
@@ -886,6 +895,14 @@ class TurnRecord:
     @property
     def turn_id(self) -> str:
         return turn_id(self.chat, self.number, self.device)
+
+    @property
+    def posts(self) -> tuple[Post, ...]:
+        return () if self.post is None else (self.post, *self.also)
+
+    def post_id(self, index: int) -> str:
+        """The 003 contribution id of the turn's ``index``-th post (from 1): the turn id for the first."""
+        return self.turn_id if index == 1 else f"{self.turn_id}.p{index}"
 
     @property
     def ref(self) -> TurnRef:

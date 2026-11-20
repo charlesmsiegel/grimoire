@@ -12,11 +12,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 
-from grimoire.core.authority import NarrationContext, PlayerContribution
+from grimoire.core.authority import NarrationContext
 from grimoire.holdingstore import HoldingsLibrary
 from grimoire.possessionstore import PossessionLibrary
 from grimoire.referee import Authority, Facts
-from grimoire.play.scene import _no_clock, _refuse
+from grimoire.play.scene import _no_clock, _refuse, post_contributions
 
 
 def digest(value: object) -> str:
@@ -86,11 +86,5 @@ def snapshot(runner, context, *, choices=()) -> Snapshot:
 
 
 def authority_for(record, scene) -> Authority:
-    contributions = ()
-    if record.post is not None:
-        post = record.post
-        contributions = (PlayerContribution(record.chat.campaign_id, record.turn_id, record.chat.chat_id,
-                                             record.turn_id, post.actor.instance_id, post.submitted_by,
-                                             post.kind, post.text),)
     return Authority(NarrationContext(record.chat.campaign_id, record.chat.chat_id, record.turn_id),
-                     scene.controls, contributions=contributions)
+                     scene.controls, contributions=post_contributions(record))

@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote, urlsplit
 from playwright.sync_api import expect
 
 from card_fixtures import PORTRAIT_2, card
+from conftest import PHONE
 from grimoire.testing.fileops import snapshot
 from test_app_release_proof import same_chat, speakers, voiced_apart
 from journeys import (
@@ -19,6 +20,7 @@ from journeys import (
     navigate,
     import_card,
     post_keep,
+    press,
     setup,
     start_chat,
 )
@@ -31,9 +33,10 @@ def chat_ref(url):
 def open_chat(page, ref):
     """Follow the canonical chat's actual list link, not a fabricated record."""
     navigate(page, "chats")
-    link = page.locator('a[href="#/chat/' + quote(ref, safe="") + '"]').first
+    # The chats list's own link: on a phone the menu's recent-chat links are hidden until the menu opens.
+    link = page.get_by_role("main").locator('a[href="#/chat/' + quote(ref, safe="") + '"]').first
     expect(link).to_be_visible()
-    link.click()
+    press(link)
     expect(page.get_by_role("region", name="Transcript", exact=True)).to_be_visible()
     expect(page.get_by_role("textbox", name=re.compile(r"^Playing "))).to_be_visible()
 
@@ -41,7 +44,7 @@ def open_chat(page, ref):
 def take_seat(page):
     button = page.get_by_role("button", name="Take your seat", exact=True)
     expect(button).to_be_visible()
-    button.click()
+    press(button)
     expect(button).to_have_count(0)
 
 
@@ -100,11 +103,11 @@ def test_migrated_world_review_play_and_process_resume(session):
 
 def pair(page, peer, *, key="", address=""):
     navigate(page, "sync")
-    page.get_by_role("button", name="Pair a device", exact=True).click()
+    press(page.get_by_role("button", name="Pair a device", exact=True))
     page.get_by_label("Other device's name", exact=True).fill(peer)
     page.get_by_label("Pairing key (optional)", exact=True).fill(key)
     page.get_by_label("Its address, if this device dials it (optional)", exact=True).fill(address)
-    page.get_by_role("button", name="Pair", exact=True).click()
+    press(page.get_by_role("button", name="Pair", exact=True))
     expect(page.get_by_text("Paired with " + peer + ".", exact=True)).to_be_visible()
     if not key:
         card = page.get_by_role("region", name="Pairing key", exact=True)
@@ -116,7 +119,7 @@ def pair(page, peer, *, key="", address=""):
 
 def sync(page, peer):
     navigate(page, "sync")
-    page.get_by_role("region", name=peer, exact=True).get_by_role("button", name="Sync now", exact=True).click()
+    press(page.get_by_role("region", name=peer, exact=True).get_by_role("button", name="Sync now", exact=True))
     expect(page.get_by_role("status").filter(has_text="Synced with " + peer + " just now.")).to_be_visible()
 
 
@@ -130,7 +133,9 @@ def test_image_sync_and_offline_fork_preserves_both_candidates(session):
     expect(session.page.get_by_role("textbox", name="Playing Winifred", exact=True)).to_be_visible()
     chat = chat_ref(url)
     post_keep(session, "The tide is turning.")
-    with session.new_client("phone") as phone:
+    # The second client is an emulated touch phone (conftest.PHONE): its setup, pairing, sync, seat and play
+    # are taps, not clicks. Chromium emulation, not a physical phone (docs/ACCEPTANCE.md).
+    with session.new_client("phone", session.devices[PHONE]) as phone:
         setup(phone)
         configure_model(phone)
         phone.restart()
@@ -155,7 +160,10 @@ def test_image_sync_and_offline_fork_preserves_both_candidates(session):
         twin = next(row for row in there["cast"] if row["name"] == "Mara")
         received = next(row for row in twin["art"]["slots"] if row["slot"] == "avatar")
         assert phone.app.picture(received["image"]) == PORTRAIT_2
+        # A phone-width chat keeps its cast in a panel over the story, opened from the scene bar.
+        press(phone.page.get_by_role("button", name="Cast and details", exact=True))
         expect(phone.page.get_by_role("button", name="Change picture for Mara", exact=True)).to_be_visible()
+        press(phone.page.get_by_role("button", name="Close panel", exact=True))
         # Independently play without syncing, then choose one branch visibly.
         open_chat(session.page, chat)
         post_keep(session, "I keep the lamp here.")

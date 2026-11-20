@@ -23,9 +23,13 @@ media_type, data = api.image(scene["cast"][0]["art"]["slots"][0]["image"])
 
 ## Who plays
 
-This slice is for one person and one library: the owner plays at the table. `player` other than the owner is
-refused (`ValueError`), because a different player would read the table unfiltered and could choose forks. Their
-own view comes with 053 and 102. Every handle is issued by the library's durable authority, trusted.
+The owner plays at the table. `player` other than the owner is refused (`ValueError`), because a different player
+would read the table unfiltered and could choose forks. Their own view comes with 053 and 102. Every handle is
+issued by the library's durable authority, trusted.
+
+**A local table (058).** `local_players` names other people playing at this device beside the owner. The owner
+hands them characters (`seat`), each drafts for their own (`draft`, `drop_draft`), and `submit` posts every draft
+as one turn the cast answers once. They read the owner's screen. See [LOCAL_MULTI_PC](LOCAL_MULTI_PC.md#the-text-apis-local-table).
 
 **Control is per device.** Who controls each actor is 003's sovereignty ledger. It lives under `authority/`, which
 does not sync ([SYNC](SYNC.md)). A chat that arrived from another device shows `state.seated: false` until
@@ -48,6 +52,7 @@ client hands it back unchanged.
 | `generate` | `chat`, `speakers` (optional actor refs), `director` (bool) | the scene, with the new take proposed |
 | `keep` | `chat`, `turn` (the open turn the take was read on), `take`, `acknowledge_unscreened` (bool) | the scene; another turn is refused `turn_changed` |
 | `pass` | `chat`, `turn` (the open turn meant) | the scene; another turn is refused `turn_changed` |
+| `seat`, `draft`, `drop_draft`, `submit` | see [LOCAL_MULTI_PC](LOCAL_MULTI_PC.md#the-text-apis-local-table) | the scene |
 | `pause`, `resume` | `chat` | the scene |
 | `choose` | `chat`, `turn` (a fork branch's first turn) | the scene: the owner's fork choice (028) |
 | `add_art` | `chat`, `actor` (one of the cast), `slot` (default `avatar`; `portrait` or a gallery slot; expression slots are not in this slice), `media` (base64, at most 32 MiB decoded), `expected` (the slot's `etag` as `open` gave it, to replace a picture the campaign already placed) | the scene |
@@ -62,7 +67,8 @@ client hands it back unchanged.
 
 - `chat`, `label`, `scope`, `launch` (`kind`, `ref`, `premise`)
 - `persona`: `actor`, `name`
-- `cast`: each `actor`, `name`, `role` (`player`, `npc` or `unseated`), `persona`, and `art`. `art` holds `slots`,
+- `cast`: each `actor`, `name`, `role` (`player`, `npc` or `unseated`), `persona`, a player character's
+  `controller`, and `art`. `art` holds `slots`,
   each with `state`:
   - `shown`: with `image`, `media_type`, `size`, `layer`, `crop` and `focus`
   - `hidden`
@@ -71,8 +77,14 @@ client hands it back unchanged.
 
   Every slot carries its campaign-layer placement `etag` (`null`: none yet). `art` also carries `problems`.
 - `history`: an imported V1 scene's posts as the table heard them, or `null`
-- `turns`: each `turn`, `number`, `origin`, `device`, `post`, `kept` (the kept take's shown lines), `offered` (the
-  takes still on offer while the turn is open), `open`, `passed`, `paused`, `set_aside`
+- `turns`: each `turn`, `number`, `origin`, `device`, `posts` (each `speaker`, `actor`, `by`, `kind`, `channel`,
+  `text`, `private`, `withheld`, `to`), `post` (the first of them), `kept` (the kept take's shown lines), `offered`
+  (the takes still on offer while the turn is open), `open`, `passed`, `paused`, `set_aside`. Each take also carries
+  `present` (072): who the table can place in the scene for it, each `actor` and `name` (`null` for an actor no
+  longer in the cast). A take written with no stage gives its whole cast; on a 041 stage (`staged` is true) only
+  the player characters as of the take and the speakers of the lines the table heard, each while on stage, so an
+  NPC missing there may still be present unheard. A staged take that recorded no players gives no one.
+- `drafts`: this device's drafts for the chat's next combined turn (058), each `actor`, `name`, `by`, `text`, `mode`
 - `set_aside`: turns a fork choice set aside, by `turn`, `number` and `device` only. Nobody heard them (035).
 - `fork`: the open fork, by `number`, `after`, `state` and `branches`, or `null`
 - `state`:
@@ -124,7 +136,8 @@ returns `incomplete` with code `unreachable`, and the phone plays on offline.
 
 ## Limits of this slice
 
-- **Single user.** Owner only. Seating is per device (above).
+- **One screen.** The owner's view; local players read it too, and their drafts live in memory (058). Seating is
+  per device (above).
 - **Pictures.** Pictures are added as campaign placements on the chat's own actors, never on a source.
   Expression slots, crops and focus are not set here.
 - **Loopback only.** 028's transport is loopback and unencrypted. The phone reaches the desktop through a

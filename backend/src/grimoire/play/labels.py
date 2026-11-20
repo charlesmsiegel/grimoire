@@ -65,6 +65,8 @@ def label_action(runner, chat: ChatRef, by, obstacle: str | None = None) -> Labe
     post = record.post if record is not None else None
     if post is None or post.kind != "action":
         raise _refuse("not_an_action", "only the open turn's action post is labelled")
+    if record.also:  # 058: several characters' posts are no one action to adjudicate
+        raise _refuse("combined_turn", "a turn of several player characters' posts is not labelled")
     if post.private:
         raise _refuse("private_action", "an action that may carry a private message is not adjudicated at the table")
     controller = scene.controller(post.actor)

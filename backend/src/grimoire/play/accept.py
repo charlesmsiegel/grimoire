@@ -44,7 +44,7 @@ from grimoire.effects import (
 from grimoire.effectstore import Endorsement, InvalidEffect
 from grimoire.play.adjudicate import _029, _UNAVAILABLE, outcome_of
 from grimoire.play.obstacles import applied, due_changes, holds_due
-from grimoire.play.scene import NOW, WRITE_RETRIES, _readable, _refuse
+from grimoire.play.scene import NOW, WRITE_RETRIES, _readable, _refuse, post_contributions
 from grimoire.scene import MAX_EFFECTS, SceneRefused, TurnEffect, TurnRecord, Waiver, turn_from_payload
 from grimoire.scenestore import StoredTurn
 from grimoire.security import Permission, is_human
@@ -105,12 +105,8 @@ def _sequence(moment: object) -> int:
 # -- reading --------------------------------------------------------------------------------------
 
 def contributions_of(record: TurnRecord) -> tuple[PlayerContribution, ...]:
-    """The player's own 003 contribution a turn's post is (its id is the turn id), as 021 checks it."""
-    post, chat = record.post, record.chat
-    if post is None:
-        return ()
-    return (PlayerContribution(chat.campaign_id, record.turn_id, chat.chat_id, record.turn_id,
-                               post.actor.instance_id, post.submitted_by, post.kind, post.text),)
+    """The players' own 003 contributions a turn's posts are (the first's id is the turn id), as 021 checks them."""
+    return post_contributions(record)
 
 
 def _turn(scene, turn: object) -> StoredTurn:
@@ -169,6 +165,8 @@ def propose_effect(runner, chat: ChatRef, by, turn: str, summary: str, operation
     record = stored.record
     if record.post is not None and record.post.kind == "action" and record.post.private:
         raise _refuse("private_action", "a withheld action takes no effect: the table never saw it")
+    if record.also:  # 058's first slice: whose key a combined turn's one effect would need is not settled yet
+        raise _refuse("combined_turn", "a turn of several player characters' posts takes no effect in this slice")
     if record.kept is None:  # a kept turn, or a decided action (whose narration may still be open)
         if record.framed is None:
             raise _refuse("not_kept", "an effect is proposed for a kept turn or a decided action")
