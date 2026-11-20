@@ -13,6 +13,7 @@ import { makeStory } from "./story.js";
 import { makeTray } from "./tray.js";
 import { makeBackdrop } from "./backdrop.js";
 import { makeAttach } from "./attach.js";
+import { makeTable } from "./table.js";
 import { trackTurn, wantedTurn } from "./find.js";
 import { composerState, isCorrectable, isStopped, replyState, shownTake, stepTake, takeKey, takeLabel } from "./turn.js";
 
@@ -91,6 +92,13 @@ export async function mount(root, ctx) {
   // voice as an optional assist beside the composer (./voice.js, 067): shown only where the app serves it
   const voice = makeVoice(ctx, { composer });
   if (voice.node) foot.prepend(voice.node);
+  // 058's shared turn (./table.js, 115): each player at this screen drafts their own character's part, posted once
+  const table = makeTable(ctx, chat, { run, redraw: (scene) => render(scene),
+    posted: async (scene) => {
+      render(scene, { bottom: true });
+      if (generates() && !scene.state.waiting.length) await answer();
+    } });
+  if (table.node) foot.prepend(table.node);
   const panelBody = el("div", { class: "chat-panel-body" });
   // The panel's tabs. Each has something to show for every chat; a tab that might have nothing is left out here.
   const PANEL_TABS = [
@@ -204,6 +212,7 @@ export async function mount(root, ctx) {
     story.update(scene);
     staging.update(scene);
     imagine.update(scene);
+    table.update(scene);
     drawHeader(scene);
     bars.replaceChildren(...holds(scene));
     drawSceneBar(scene);
@@ -649,7 +658,20 @@ export async function mount(root, ctx) {
       ui.button(paused ? "Resume" : "Pause", () => run(() => act(paused ? "resume" : "pause", {})), { size: "small" }),
       ctx.has("sync") ? ui.button("Sync", () => run(sync), { size: "small" }) : null,
       scope && scope.title && ctx.registered("campaign") ? ui.buttonLink("Campaign hub", "campaign", [scope.campaign], undefined, { size: "small" }) : null);
-    return [el("section", { class: "chat-section" }, facts, actions), boundSection(), mending(scene), notesSection(scene)];
+    return [el("section", { class: "chat-section" }, facts, actions), directorSection(), boundSection(), mending(scene), notesSection(scene)];
+  }
+
+  // The director's screens for this chat (115): several NPCs answering at once (051) and the campaign's companions
+  // (050). Each opens in the director's view, on its own page, away from the screen the table reads.
+  function directorSection() {
+    const campaign = chat.startsWith("campaign:") && chat.includes("#") ? chat.slice("campaign:".length, chat.indexOf("#")) : null;
+    const links = [
+      ctx.registered("ensemble") ? ui.buttonLink("Several NPCs answering", "ensemble", [chat], { audience: "director" }, { size: "small" }) : null,
+      campaign && ctx.registered("companions") ? ui.buttonLink("Companions", "companions", [campaign], { chat, audience: "director" }, { size: "small" }) : null,
+    ].filter(Boolean);
+    if (!links.length) return null;
+    return el("section", { class: "chat-section" }, ui.eyebrow("The director's"),
+      el("p", { class: "g-muted chat-plain" }, "Each opens in the director's view, for this chat."), el("div", { class: "chat-detail-actions" }, ...links));
   }
 
   // The name of a bound source, from the chat's entry in the chat list (the scene itself carries refs only).
@@ -749,6 +771,8 @@ export async function mount(root, ctx) {
     catch (error) { if (error.reason === "left") throw error; }
   }
   drawModes();
+  // who plays at this device and the parts held, read once before the chat is drawn; without it no shared turn
+  try { await table.load(); } catch (error) { if (error.reason === "left") throw error; }
   render(await call("open", {}), { bottom: true });
   if (scrolls.has(chat)) log.scrollTop = scrolls.get(chat);  // back where the person left it
   foundTurn.start(rows);  // after restoring scroll, open the turn found by search just once

@@ -21,4 +21,9 @@ from . import chronicle  # noqa: E402 -- 115's campaign clock and sourced memory
 
 ADAPTERS = tuple(sorted((*ADAPTERS, chronicle.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import companions, ensemble, table  # noqa: E402 -- 115's play at the table: 058, 051, 050 (docs/TABLE.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, companions.ADAPTER, ensemble.ADAPTER, table.ADAPTER),
+                        key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]
