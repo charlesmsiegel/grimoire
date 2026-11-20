@@ -28,6 +28,7 @@ MAX_PRECONDITIONS = 64
 ID_MAX = 128
 TEXT_MAX = 2000
 RATIONALE_MAX = 20000
+SCHEMA_MAX = 128  # the envelope's own limit on a schema id (STORAGE)
 MAX_EVIDENCE = 16
 
 _ID = re.compile(r"[a-z0-9][a-z0-9._-]*")
@@ -91,6 +92,10 @@ class RecordChange:
     ``payload`` and ``name`` are the proposed content, exactly. A revision carries its base's
     ``owner`` and unknown envelope keys forward unchanged; a created entity's owner is the
     change set's author. ``evidence`` is attribution text ("session 12 notes"), never authority.
+
+    ``schema`` (creates only) is the payload schema id a created envelope declares as its preserved
+    top-level ``"schema"`` key, as 107's actors and 109's editor write ``grimoire.entity/0``, so a
+    created entity is read by the families that dispatch on it (087). A revise keeps its base's.
     """
 
     kind: str
@@ -101,6 +106,7 @@ class RecordChange:
     base: str | None = None
     base_etag: str | None = None
     evidence: tuple[str, ...] = ()
+    schema: str | None = None
 
     def __post_init__(self) -> None:
         _segment(self.kind, "kind")
@@ -122,6 +128,10 @@ class RecordChange:
             if self.base == self.revision:
                 raise ChangeSetError("invalid_field", "a revise writes a new revision, not its base")
         object.__setattr__(self, "evidence", _evidence(self.evidence, "evidence"))
+        if self.schema is not None:
+            _text(self.schema, "schema", SCHEMA_MAX)
+            if self.base is not None:
+                raise ChangeSetError("invalid_field", "a revise keeps its base's schema; only a create names one")
 
     @property
     def action(self) -> str:

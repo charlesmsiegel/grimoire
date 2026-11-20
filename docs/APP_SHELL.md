@@ -176,6 +176,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `world` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` (the director's; the table's view says only that) |
 | `art` | 114 | `?scope=<scope>&subject=<subject>&limit=<n>` |
 | `sync` | 114 | |
+| `story` | 081 | `/<ChatRef>?audience=director&q=<words>&actor=<InstanceRef>&thread=<proposition id>` (one chat's story threads; see [STORY.md](STORY.md)) |
 
 A sprint may register other routes of its own (prefix them with its area, such as `source-history`).
 

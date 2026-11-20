@@ -18,7 +18,7 @@ SCHEMA = "grimoire.changeset/0"
 
 _TOP = frozenset({"schema", "changeset_id", "source", "title", "author", "rationale", "changes", "preconditions"})
 _TOP_REQUIRED = frozenset({"schema", "changeset_id", "source", "title", "author", "changes"})
-_CHANGE = frozenset({"kind", "entity_id", "revision", "payload", "name", "base", "base_etag", "evidence"})
+_CHANGE = frozenset({"kind", "entity_id", "revision", "payload", "name", "base", "base_etag", "evidence", "schema"})
 _CHANGE_REQUIRED = frozenset({"kind", "entity_id", "revision", "payload"})
 _PRECONDITION = frozenset({"kind", "entity_id", "revision", "etag"})
 
@@ -53,6 +53,8 @@ def encode(changeset: ChangeSet) -> dict[str, object]:
         if change.base is not None:
             item["base"] = change.base
             item["base_etag"] = change.base_etag
+        if change.schema is not None:
+            item["schema"] = change.schema
         changes.append(item)
     return {
         "schema": SCHEMA, "changeset_id": changeset.changeset_id, "source": changeset.source,
@@ -77,7 +79,8 @@ def decode(data: object) -> ChangeSet:
         changes.append(RecordChange(
             kind=item["kind"], entity_id=item["entity_id"], revision=item["revision"], payload=item["payload"],
             name=item.get("name"), base=item.get("base"), base_etag=item.get("base_etag"),
-            evidence=tuple(_list(item.get("evidence", []), f"changes[{index}].evidence"))))
+            evidence=tuple(_list(item.get("evidence", []), f"changes[{index}].evidence")),
+            schema=item.get("schema")))
     preconditions = []
     for index, raw in enumerate(_list(top.get("preconditions", []), "preconditions")):
         item = _object(raw, f"preconditions[{index}]", _PRECONDITION, _PRECONDITION)
