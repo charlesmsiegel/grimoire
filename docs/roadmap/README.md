@@ -275,7 +275,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 ### Wave 8 — Reliable long-term use and independent enhancements
 
-- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (10/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
+- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (11/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
@@ -293,7 +293,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 061 | [☐](IMPLEMENTATION_AUDIT.md#slice-061) | [Private And Local Voice](sprints/private-and-local-voice.md) | **P1** | [Turn Costs And Feature Flags](sprints/turn-costs-and-feature-flags.md) | voice / local private providers | Support explicit private voice provider selection without model leakage |
 | 062 | [☑](IMPLEMENTATION_AUDIT.md#slice-062) | [Ruleset Action Contracts](sprints/ruleset-action-contracts.md) | **P1** | [Entity Facets And Instance Model](sprints/entity-facets-and-instance-model.md) | mechanics / family contracts | Define separate D20, WoD, PbtA and Ars interfaces |
 | 063 | [☐](IMPLEMENTATION_AUDIT.md#slice-063) | [Rumors And Information Flow](sprints/rumors-and-information-flow.md) | **P1** | [Diegetic Communication](sprints/diegetic-communication.md), [Knowledge And Perspective](sprints/knowledge-and-perspective.md) | society / rumors | Spread one delayed and distorted report |
-| 064 | [☐](IMPLEMENTATION_AUDIT.md#slice-064) | [Scenario Preparation](sprints/scenario-preparation.md) | **P1** | [Obstacles And Agency](sprints/obstacles-and-agency.md) | narrative / scene prep | Draft a grounded situation without canonicalizing it |
+| 064 | [☑](IMPLEMENTATION_AUDIT.md#slice-064) | [Scenario Preparation](sprints/scenario-preparation.md) | **P1** | [Obstacles And Agency](sprints/obstacles-and-agency.md) | narrative / scene prep | Draft a grounded situation without canonicalizing it |
 | 065 | [☐](IMPLEMENTATION_AUDIT.md#slice-065) | [Scene Workspace](sprints/scene-workspace.md) | **P1** | [Minimal Text Scene Runner](sprints/minimal-text-scene-runner.md), [V2 Mobile Client](sprints/v2-mobile-client.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md), [Instant Campaign Creation](sprints/instant-campaign-creation.md), [UI Shell, Onboarding and Navigation](sprints/ui-shell-onboarding-navigation.md), [UI Library, Facets and Portrayals](sprints/ui-library-facets-portrayals.md), [UI Chat Launch and Scene Play](sprints/ui-chat-launch-play.md) | frontend / scene reader | Navigate Chats, Characters, Scenarios, Campaigns and Worlds to the same thread without losing drafts |
 | 066 | [☑](IMPLEMENTATION_AUDIT.md#slice-066) | [Type And API Boundaries](sprints/type-and-api-boundaries.md) | **P1** | [Testing And Failure Injection](sprints/testing-and-failure-injection.md) | API / isolated error contract | Improve one frozen API boundary outside other wave owners |
 | 067 | [☐](IMPLEMENTATION_AUDIT.md#slice-067) | [Voice Accessibility And Testing](sprints/voice-accessibility-and-testing.md) | **P1** | [Spoken Command And Intent](sprints/spoken-command-and-intent.md) | evals / speech safety | Run false-command/noise tests without assuming always-on microphone |
