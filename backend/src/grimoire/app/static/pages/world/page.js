@@ -559,7 +559,9 @@ async function minds(ctx, body, chat, cast) {
           : ui.button("Remove", () => { hypotheses = hypotheses.filter((other) => other.id !== item.id); save(); drawList(); }, { size: "small" }))))
         : ui.empty("No hypothesis is written yet."));
       const ids = hypotheses.map((item) => ({ value: item.id, label: item.id + ": " + item.claim.slice(0, 50) }));
-      replaces = ui.choice("It replaces", [{ value: "", label: "Nothing: a new hypothesis" }, ...ids], { value: "" });
+      // only a hypothesis nothing replaces yet can be replaced: 060 keeps one chain, each link replaced once
+      const open = ids.filter((item) => !replacedBy(hypotheses, item.value).length);
+      replaces = ui.choice("It replaces", [{ value: "", label: "Nothing: a new hypothesis" }, ...open], { value: "" });
       supersedes.replaceChildren(replaces.node);
       tacticChoice = ids.length ? ui.choice("Tactic rests on", ids, { value: ids[ids.length - 1].value }) : null;
       tacticFor.replaceChildren(tacticChoice ? tacticChoice.node : ui.empty("Write a hypothesis to choose a tactic from it."));
@@ -572,6 +574,11 @@ async function minds(ctx, body, chat, cast) {
       formError.hidden = cited.length > 0;
       formError.textContent = cited.length ? "" : "Pick the evidence it rests on.";
       if (!claim.value.trim() || sure === null || !cited.length || !about.value) return;
+      if (replaces.value && (!hypotheses.some((item) => item.id === replaces.value) || replacedBy(hypotheses, replaces.value).length)) {
+        formError.hidden = false;
+        formError.textContent = replaces.value + " is already replaced: pick one nothing replaces yet.";
+        return;
+      }
       const whom = [about.value, ...(alsoAbout.value && alsoAbout.value !== about.value ? [alsoAbout.value] : [])];
       hypotheses = [...hypotheses, { id: nextHypothesisId(hypotheses), about: whom, claim: claim.value.trim(), confidence: sure,
         evidence: cited, at: heldAt(cited, mind.evidence, hypotheses.find((item) => item.id === replaces.value)),

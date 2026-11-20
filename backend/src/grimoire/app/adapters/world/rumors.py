@@ -146,7 +146,7 @@ def _admission(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore
     campaign = common.present(ctx, common.campaign(args))
     names = _names(ctx, args, campaign)
     rid = common.segment(args, "rumor")
-    operation_id = common.segment(args, "operation_id")
+    operation_id = common.segment(args, "operation_id", maximum=common.OPERATION_MAX)
     stance = args.get("stance")
     if stance not in STANCES:
         raise ApiRefused("invalid_field", "stance must be " + ", ".join(STANCES))

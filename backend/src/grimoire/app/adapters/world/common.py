@@ -104,7 +104,12 @@ def present(ctx: AdapterContext, campaign_id: str) -> str:
     return campaign_id
 
 
-def segment(args: Mapping[str, object], key: str) -> str:
+# An operation id this adapter makes ids from ("admit-<op>" and the like) is kept short enough that what is made
+# from it is still a segment; an id the domain already holds (a road, a rumor) keeps the domain's own limit.
+OPERATION_MAX = 80
+
+
+def segment(args: Mapping[str, object], key: str, *, maximum: int | None = None) -> str:
     value = args.get(key)
     if type(value) is not str:
         raise ApiRefused("invalid_field", f"{key} must be an id")
@@ -112,8 +117,8 @@ def segment(args: Mapping[str, object], key: str) -> str:
         validate_segment(value, key)
     except ValueError:
         raise ApiRefused("invalid_field", f"{key} is not a valid id") from None
-    if len(value) > 80:
-        raise ApiRefused("invalid_field", f"{key} is at most 80 characters")
+    if maximum is not None and len(value) > maximum:
+        raise ApiRefused("invalid_field", f"{key} is at most {maximum} characters")
     return value
 
 

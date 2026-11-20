@@ -154,7 +154,7 @@ def _change(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no
     if type(blocked) is not bool:
         raise ApiRefused("invalid_field", "blocked must be true or false")
     path_id = common.segment(args, "path")
-    operation_id = common.segment(args, "operation_id")
+    operation_id = common.segment(args, "operation_id", maximum=common.OPERATION_MAX)
     graph_etag, _, overlay = common.expected(args).partition("|")
     if graph_etag != view.graph_etag:  # the source graph itself was replaced since the review
         raise ApiRefused("changed", "the topology changed since it was reviewed; read it again")

@@ -601,6 +601,8 @@ test("a hypothesis another one replaces can't be removed before it, so the chain
   const first = rows.find((node) => node.textContent.startsWith("h1:"));
   assert.ok(first.textContent.includes("Replaced by h2"), first.textContent);
   assert.ok(!first.querySelectorAll("button").some((node) => node.textContent === "Remove"), "h1 offers no Remove while h2 replaces it");
+  const offered = field(minds(root), "It replaces").querySelectorAll("option").map((node) => node.getAttribute("value"));
+  assert.deepEqual(offered, ["", "h2"], "h1 is replaced already, so only h2 can be replaced next");
   rows.find((node) => node.textContent.startsWith("h2:")).querySelectorAll("button").find((node) => node.textContent === "Remove").click();
   const again = minds(root).querySelectorAll("li").find((node) => node.textContent.startsWith("h1:"));
   assert.ok(again.querySelectorAll("button").some((node) => node.textContent === "Remove"), "once h2 is gone, h1 can be removed");

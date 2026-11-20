@@ -360,6 +360,11 @@ def test_topology_requests_the_domain_would_not_take_are_refused_with_its_reason
         assert refused(app, "world.path_plan", **{**base, "operation_id": "Not An Id"}, path="road").reason \
             == "invalid_field"
         assert refused(app, "world.path_plan", **{**base, "blocked": "yes"}, path="road").reason == "invalid_field"
+        # a road id keeps the domain's own limit (128); only the operation id this adapter builds ids from is shorter
+        assert refused(app, "world.path_plan", **base, path="r" * 100).reason == "no_path"
+        assert refused(app, "world.path_plan", **base, path="r" * 129).reason == "invalid_field"
+        assert refused(app, "world.path_plan", **{**base, "operation_id": "o" * 81}, path="road").reason \
+            == "invalid_field"
         assert refused(app, "world.path_plan", **{**base, "expected": "elsewhere|"}, path="road").reason == "changed"
 
 
