@@ -52,7 +52,27 @@ function elements(root) {
   return found;
 }
 
-const text = (node) => (node.textContent || "").replace(/\s+/g, " ").trim();
+// text a person hears: aria-hidden and hidden descendants are left out
+function heard(node) {
+  if (!node.tagName) return node.textContent || "";
+  if (node.getAttribute("aria-hidden") === "true" || node.hasAttribute("hidden") || node.tagName === "TEMPLATE") return "";
+  return (node.childNodes || []).map(heard).join("");
+}
+const text = (node) => heard(node).replace(/\s+/g, " ").trim();
+
+// every id under root, hidden subtrees included: an aria reference to a hidden element is valid ARIA
+function allIds(root) {
+  const ids = new Set();
+  const walk = (node) => {
+    for (const child of node.childNodes || []) {
+      if (!child.tagName) continue;
+      if (child.getAttribute("id") !== null) ids.add(child.getAttribute("id"));
+      walk(child);
+    }
+  };
+  walk(root);
+  return ids;
+}
 
 function byId(all, id) { return all.find(({ node }) => node.getAttribute("id") === id); }
 
@@ -77,11 +97,12 @@ export function nameOf(node, all) {
   if (CONTROLS.has(node.tagName)) {
     const id = node.getAttribute("id");
     if (id) {
-      const labels = all.filter(({ node: n }) => n.tagName === "LABEL" && n.getAttribute("for") === id);
+      const labels = all.filter(({ node: n, ariaHidden }) => !ariaHidden && n.tagName === "LABEL" && n.getAttribute("for") === id);
       const named = labels.map(({ node: n }) => text(n)).filter(Boolean);
       if (named.length) return named.join(" ");
     }
     for (let at = node.parentNode; at && at.tagName; at = at.parentNode) {
+      if (at.getAttribute("aria-hidden") === "true") break;
       if (at.tagName === "LABEL") { const own = text(at); if (own) return own; }
     }
     if (node.tagName === "INPUT" && ["button", "submit", "reset"].includes(node.getAttribute("type"))) {
@@ -107,6 +128,7 @@ export function nameOf(node, all) {
 
 export function audit(root, { page = true } = {}) {
   const all = elements(root);
+  const known = allIds(root);
   const out = [];
   const flag = (rule, node, detail = "") => out.push({ rule, node, detail });
 
@@ -135,7 +157,7 @@ export function audit(root, { page = true } = {}) {
     for (const attribute of ID_REFS) {
       const value = node.getAttribute(attribute);
       if (value === null) continue;
-      for (const id of value.split(/\s+/).filter(Boolean)) if (!byId(all, id)) flag("aria-valid-ref", node, attribute + " → " + id);
+      for (const id of value.split(/\s+/).filter(Boolean)) if (!known.has(id)) flag("aria-valid-ref", node, attribute + " → " + id);
     }
     const tabindex = node.getAttribute("tabindex");
     if (tabindex !== null && Number(tabindex) > 0) flag("tabindex", node, tabindex);
@@ -160,12 +182,13 @@ export function audit(root, { page = true } = {}) {
     if ((tag === "SECTION" || role === "region") && node.hasAttribute("aria-labelledby") && !nameOf(node, all)) flag("region-name", node);
     if (role && WIDGET_ROLES.has(role) && !INTERACTIVE.has(tag) && !nameOf(node, all)) flag("aria-command-name", node, role);
     // something clickable must be reachable and announced as what it is
-    // (a listener on a container that holds controls is delegation, or a dialog's backdrop, not a control itself;
+    // (a listener on a landmark, a dialog, or the frame around the page's main is delegation or a backdrop's
+    // light dismiss, not a control itself; any other clickable container, like a row holding a Delete button, is;
     // an option of a listbox is reached by aria-activedescendant from its focused combobox, not by Tab)
     const clicks = node.listeners && (node.listeners.get("click") || []).length;
-    const holdsControls = () => node.querySelectorAll("a,button,input,select,textarea,summary,main,nav").length > 0
-      || node.querySelectorAll("[role]").some((inner) => WIDGET_ROLES.has(inner.getAttribute("role")));
-    if (clicks && !INTERACTIVE.has(tag) && !(role && WIDGET_ROLES.has(role)) && tag !== "DIALOG" && !holdsControls()) {
+    const delegates = () => ["DIALOG", "NAV", "MAIN"].includes(tag) || ["dialog", "alertdialog", "navigation", "main"].includes(role)
+      || node.querySelectorAll("main,nav,dialog").length > 0;
+    if (clicks && !INTERACTIVE.has(tag) && !(role && WIDGET_ROLES.has(role)) && !delegates()) {
       flag("click-events-have-key-events", node, tag.toLowerCase() + (node.className ? "." + node.className.split(/\s+/).join(".") : ""));
     } else if (clicks && role && WIDGET_ROLES.has(role) && role !== "option" && !INTERACTIVE.has(tag) && !focusable(node)) {
       flag("focusable-widget", node, role);
@@ -173,7 +196,7 @@ export function audit(root, { page = true } = {}) {
     if (INTERACTIVE.has(tag) && tag !== "DETAILS") {
       for (let at = node.parentNode; at && at.tagName; at = at.parentNode) {
         if (at === root) break;
-        if (["A", "BUTTON"].includes(at.tagName) && !(tag === "SUMMARY")) { flag("nested-interactive", node, at.tagName.toLowerCase()); break; }
+        if (["A", "BUTTON"].includes(at.tagName) || (at.tagName === "SUMMARY" && tag !== "SUMMARY")) { flag("nested-interactive", node, at.tagName.toLowerCase()); break; }
       }
     }
   }
