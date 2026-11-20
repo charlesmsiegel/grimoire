@@ -117,7 +117,8 @@ function testLine(result) {
 }
 
 /** The ops this page calls: ``chats`` is the text API's, the rest Sprint 112's adapter's (``providers.<op>``). */
-const OWN = new Set(["models", "check_models", "save_models", "usage", "diagnostics", "test_call", "context", "save_agenda"]);
+const OWN = new Set(["models", "check_models", "save_models", "usage", "diagnostics", "test_call", "context", "save_agenda",
+  "preview_context"]);
 
 /** The shell's page entry (docs/APP_SHELL.md): ``ctx.api(op, args)`` posts one op and rejects with
  * ``error.reason``; once the page is left it rejects with ``left`` and nothing more is drawn. */

@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
+| [9](#wave-9) | 1/16 | ☐ | 085 is complete at its bounded first-proof boundary. Other domain slices and UI exit 116 remain incomplete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-Scheduled domain slices and UI exit 116 are not complete.
+085 is complete at its bounded first-proof boundary. Other domain slices and UI exit 116 remain incomplete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -763,9 +763,9 @@ Scheduled domain slices and UI exit 116 are not complete.
 <a id="slice-085"></a>
 ### 085 — Live Context Preview
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/live-context-preview.md)).
-- Evidence: [`app/inference.py`](../../backend/src/grimoire/app/inference.py) offers current saved actor context after the 112 follow-up; unsaved-draft retrieval is not offered. [`test_app_inference_context.py`](../../backend/tests/test_app_inference_context.py) proves the saved-state inspection boundary.
-- Scope / gap: No on-demand unsaved-draft retrieval/context preview. The 112 saved-state inspector does not implement that draft input.
+- [x] Scheduled first-useful slice ([requirements](sprints/live-context-preview.md)).
+- Evidence: [`backend/src/grimoire/play/preview.py`](../../backend/src/grimoire/play/preview.py)::preview_context; [`backend/src/grimoire/play/context_view.py`](../../backend/src/grimoire/play/context_view.py)::context_view; [`backend/src/grimoire/app/inference.py`](../../backend/src/grimoire/app/inference.py) (`providers.preview_context`); [`backend/src/grimoire/app/static/pages/providers/context.js`](../../backend/src/grimoire/app/static/pages/providers/context.js); [`backend/tests/test_context_preview.py`](../../backend/tests/test_context_preview.py)::test_a_draft_previews_the_recalled_promise_and_triggered_lore_without_any_write; [`backend/tests/test_context_preview.py`](../../backend/tests/test_context_preview.py)::test_a_recalled_memory_the_budget_sheds_is_a_warning_with_its_line; [`backend/tests/test_context_preview.py`](../../backend/tests/test_context_preview.py)::test_an_npc_that_would_not_hear_the_draft_keeps_its_saved_context.
+- Scope / gap: Milestone 1 at its bounded first-proof boundary: an explicit, owner-only, read-only preview of one NPC's context with an unsent draft read as `post` reads it, triggered lore (exact) and memories sharing the draft's words (an estimate, English stoplist), shed recalls flagged; the posted turn's context equals the preview. Inspecting the final prompt later is the saved-state inspector's rebuild; no snapshot of a submitted prompt is retained. No director or player-character preview, no phrasing deltas (milestone 2), no incremental previews (milestone 3), no chat-composer entry point (116).
 
 <a id="slice-086"></a>
 ### 086 — Mechanics Module Authoring
