@@ -359,3 +359,17 @@ test('a short text-only action inside other words is still offered', async () =>
   assert.equal(p.composer.input.value, 'Attack the guard? No, wait.\n\nAttack');
   byText(p.root, 'button', 'Clear')[0].click();
 });
+
+test('words already in the draft are the ones the sketch goes with: replacing them takes it off', async () => {
+  canvases();
+  const p = page({draft: 'I hide here (Reference: doorway)'});
+  await sketch(p);
+  p.type('action', 'I hide here'); p.type('region-label', 'doorway');
+  await p.use();
+  assert.equal(p.attach.staged.length, 1);
+  assert.equal(p.composer.input.value, 'I hide here (Reference: doorway)', 'nothing appended twice');
+  p.composer.input.value = 'I run away instead';
+  p.composer.input.dispatchEvent({type: 'input'});
+  assert.deepEqual(p.attach.unstaged, [1]);
+  byText(p.root, 'button', 'Clear')[0].click();
+});

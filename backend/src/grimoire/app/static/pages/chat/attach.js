@@ -4,11 +4,13 @@
 // like a bookmark: the turn is never changed for it, and no model is sent it. A post whose turn was set aside
 // or is gone keeps its picture in the campaign's art (the Art page lists it); it is not shown here.
 //
-// makeAttach(ctx, chat, { field, run, redraw }) -> { writes, under(turn, row), posted(scene, before), stage(file, carry), unstage(token) }
+// makeAttach(ctx, chat, { field, run, redraw }) -> { writes, under(turn, row), held(), posted(scene, before, pressed), stage(file, carry), unstage(token), waits() }
 //   writes                whether a picture can be attached to a post in this chat at all
 //   field                 the composer's field node: the button and the waiting thumbnail are added to it
 //   under(turn, row)      the post's row, with the picture on its turn (if any) under its text
-//   posted(scene, before) call after a post was written: attaches the waiting file to the turn it made
+//   held()                read when Post is pressed: what is waiting then
+//   posted(scene, before, pressed)  call after a post was written: attaches the waiting file to the turn it made,
+//                         only if it is still what was waiting when Post was pressed
 //   stage(file, carry)    070: another part of the page (the reference-intent panel) puts its own file in the
 //                         waiting place, with the `note`, `origin` and `label` it is uploaded and shown with and
 //                         `sent(turn)`/`removed()` callbacks. Returns a token, or { refused } when this chat keeps
@@ -25,7 +27,7 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
   const { ui } = ctx;
   const { el } = ui;
   const pictures = chatPictures(ctx, chat, redraw);
-  if (!pictures.served) return { writes: false, under: (_turn, row) => row, posted: () => {}, stage: () => ({ refused: "unsupported" }), unstage: () => false, waits: () => null };
+  if (!pictures.served) return { writes: false, under: (_turn, row) => row, held: () => null, posted: () => {}, stage: () => ({ refused: "unsupported" }), unstage: () => false, waits: () => null };
 
   // { file, url, turn: the post it failed to reach (set after a refused upload), problem, carry: 070's staged
   // reference ({ token, note, origin, label, sent, removed }) or null for the person's own chosen image }
@@ -116,9 +118,12 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
 
   // After a post: the turn it made is the last one, and holds the post. A typed table request makes no turn, so
   // the image waits for the next post.
-  function posted(scene, before) {
+  // What was waiting when Post was pressed: only that goes with the post. An image attached, or a marked sketch
+  // staged, while the post was on its way waits for the next post instead of joining one made without it.
+  function held() { return waiting; }
+  function posted(scene, before, pressed) {
     const last = scene.turns[scene.turns.length - 1];
-    if (!waiting || waiting.turn || scene.turns.length <= before || !last || !last.post) return undefined;
+    if (!waiting || waiting !== pressed || waiting.turn || scene.turns.length <= before || !last || !last.post) return undefined;
     return send(last.turn);
   }
 
@@ -158,5 +163,5 @@ export function makeAttach(ctx, chat, { field, run, redraw }) {
   }
 
   const waits = () => (!waiting ? null : waiting.turn ? "retry" : waiting.carry ? "staged" : "own");
-  return { writes: pictures.writes, under, posted, stage, unstage, waits };
+  return { writes: pictures.writes, under, held, posted, stage, unstage, waits };
 }

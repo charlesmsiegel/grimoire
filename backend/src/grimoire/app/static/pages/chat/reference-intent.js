@@ -349,7 +349,8 @@ export function makeReferenceIntent(ctx, chat, {composer, attach = null}) {
           ? 'Your last post\'s picture is not attached yet. Try again or Remove it in the tray first.'
           : 'Your next post already has an image attached. Remove it first: a post carries one picture.');
         if (refused) { token = previous; state.carried = null; }
-        else state.carried = carried;
+        // the words this sketch goes with, whether appended now or already in the draft: removing them takes it off
+        else { state.carried = carried; state.used = text; }
       }
       const fresh = needs();
       if (fresh) {

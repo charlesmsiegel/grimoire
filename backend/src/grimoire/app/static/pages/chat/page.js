@@ -168,7 +168,7 @@ export async function mount(root, ctx) {
     const typed = composer.value;
     const text = typed.trim();
     if (!text || !page.scene) return;
-    const before = page.scene.turns.length;
+    const before = page.scene.turns.length, pressed = attach.held();
     const args = { text };
     if (posting === "play.post") args.mode = page.mode;
     const scene = await call(posting, args);
@@ -178,7 +178,7 @@ export async function mount(root, ctx) {
     else composer.value = composer.value.startsWith(typed) ? composer.value.slice(typed.length).trimStart() : composer.value;
     fit();
     render(scene, { bottom: true });
-    await attach.posted(scene, before);
+    await attach.posted(scene, before, pressed);
     // a typed table request ("Grimoire, pause") writes no new turn: nobody is asked to answer it
     const last = scene.turns[scene.turns.length - 1];
     const posted = scene.turns.length > before && last && last.post && last.open;

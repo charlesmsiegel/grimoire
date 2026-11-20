@@ -1,6 +1,7 @@
 // 070's proving scenario through the real chat page in fakedom against a real app server over a synthetic
 // library: import a sketch, circle the doorway, say "I hide here", take the offered draft action, and post it. The
 // post carries the marked sketch as the player's uncommitted intent; the turn and the scene gain nothing else.
+// Then a post already on its way when a second marked sketch is staged: the sketch waits for its own post.
 // Run by test_reference_intent_page.py, which seats this device at GRIMOIRE_CHAT, passes it, GRIMOIRE_APP and
 // GRIMOIRE_TOKEN, and checks
 // afterwards what the library on disk gained.
@@ -134,4 +135,55 @@ test("a circled doorway on a sketch is offered as a draft action and carried wit
   // the bytes kept are the marked sketch, not the imported one, which is kept nowhere
   assert.equal(carried.sha256, createHash("sha256").update(png("marked 300,110,20,70")).digest("hex"));
   assert.ok(!images.some((item) => item.sha256 === createHash("sha256").update(sketch).digest("hex")));
+
+  // a post already on its way when a new marked sketch is staged never takes it: the sketch waits, with its
+  // words, for the post they go with
+  let release = null, finish = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (release === null && /\/api\/(play\.)?post$/.test(String(url))) await new Promise((resolve) => { release = resolve; });
+    return realFetch(url, options);
+  };
+  const save = globalThis.OffscreenCanvas.prototype.convertToBlob;
+  globalThis.OffscreenCanvas.prototype.convertToBlob = function (options) {
+    return new Promise((resolve) => { finish = () => resolve(save.call(this, options)); });
+  };
+  preview.dispatchEvent({ type: "pointerdown", pointerId: 8, button: 0, clientX: 40, clientY: 40 });
+  preview.dispatchEvent({ type: "pointerup", pointerId: 8, clientX: 120, clientY: 160 });
+  // with no model nobody answers: the player passes the turn before posting again
+  const pass = async () => {
+    (await until(() => byText(main, "button", "Pass the turn")[0], 15000, "Pass the turn")).click();
+    await until(() => !post.disabled, 15000, "Post after passing");
+  };
+  await pass();
+  type(composer().querySelector("textarea"), "I listen at the wall");
+  byText(panel, "button", "Use as draft")[0].click();
+  await until(() => finish, 15000, "the second sketch being drawn");
+  await until(() => !post.disabled, 15000, "Post");
+  post.click();
+  await until(() => release, 15000, "the post on its way");
+  finish();
+  await until(() => !tray().hidden, 15000, "the second marked sketch in the tray");
+  release();
+  const listened = await until(() => main.querySelectorAll("div.chat-post").find((node) => node.textContent.includes("I listen at the wall")),
+    30000, "the post that was on its way");
+  await until(() => composer().querySelector("textarea").value === "I hide here (Reference: doorway)", 15000, "the reference's words kept for the next post");
+  assert.ok(!listened.querySelector("img.chat-attached-img"), "the post made without the sketch does not get it");
+  assert.ok(tray().textContent.includes("Attached to your next post: your marked sketch"));
+  assert.equal((await call("media.chat", { chat: CHAT })).posts.length, 1);
+
+  await pass();
+  post.click();
+  await until(() => (main.querySelectorAll("div.chat-post").at(-1) || { textContent: "" }).textContent.includes("I hide here (Reference: doorway)")
+    && main.querySelectorAll("img.chat-attached-img").length === 2, 30000, "the second sketch under its own post");
+  const last = await call("open", { chat: CHAT });
+  const [listen, hide] = last.turns.filter((item) => item.post).slice(-2);
+  assert.equal(listen.post.text, "I listen at the wall");
+  assert.equal(hide.post.text, "I hide here (Reference: doorway)");
+  const both = await call("media.chat", { chat: CHAT });
+  assert.deepEqual(both.posts.map((item) => item.turn).sort(), [posted.turn, hide.turn].sort());
+  const second = (await call("media.gallery", { scope })).images.find((item) => item.image === both.posts.find((item) => item.turn === hide.turn).image);
+  assert.equal(second.sha256, createHash("sha256").update(png("marked 80,100,40,60")).digest("hex"));
+  assert.equal(second.provenance.note, "Player reference intent, not a world fact: doorway; ellipse at x 0.1, y 0.2, width 0.2, height 0.6 of the sketch.");
+  globalThis.fetch = realFetch;
 });

@@ -55,12 +55,14 @@ def test_a_circled_doorway_is_carried_with_the_post_as_uncommitted_intent(tmp_pa
     added = sorted(set(after) - set(before))
     ledger = [name for name in added if name.startswith("authority/security/")]
     written = [name for name in added if name not in ledger]
-    # one post turn, one picture (its blob and its record) and the post's own picture slot: no map, actor,
-    # scene, campaign or chat record, and no second picture (the imported sketch itself is kept nowhere)
+    # three post turns; for the two that carry a marked sketch, a picture (its blob and its record) and the post's
+    # own picture slot: no map, actor, scene, campaign or chat record, and no other picture (the imported sketch
+    # itself is kept nowhere, and the post made without the sketch has none)
     kinds = sorted(name.split("/")[0] if name.startswith("assets/") else name.split("/")[2] for name in written)
-    assert kinds == ["assets", "images", "scope-art", "turns"], written
-    (turn,) = [Path(name).stem for name in written if "/turns/" in name]
-    assert [Path(name).name for name in written if "/scope-art/" in name] == [f"post.{turn}.json"]
+    assert kinds == ["assets"] * 2 + ["images"] * 2 + ["scope-art"] * 2 + ["turns"] * 3, written
+    turns = {Path(name).stem for name in written if "/turns/" in name}
+    slots = {Path(name).name for name in written if "/scope-art/" in name}
+    assert len(slots) == 2 and slots <= {f"post.{turn}.json" for turn in turns}, slots
     # the security ledger only records the owner's writes of exactly those files
     decided = {entry["decision"]["resource"] for name in ledger
                for entry in json.loads(after[name])["entries"] if entry.get("kind") == "decision"}
