@@ -118,7 +118,7 @@ def test_missing_or_inconsistent_answers_are_unknown(text, reason):
 
 def test_covered_answers_are_verdicts_even_in_a_fence():
     assert jp.parse_defect('```json\n' + answer() + '\n```', CASE, 'tok', 'c.py.txt') == {
-        'state': 'defect', 'lines': [2], 'reason': None}
+        'state': 'defect', 'lines': [2], 'reason': None, 'text_outside_json': False, 'ambiguous': False}
     assert jp.parse_defect(answer('no_defect'), CASE, 'tok', 'c.py.txt')['state'] == 'clear'
 
 
@@ -130,18 +130,110 @@ def test_judges_never_see_corpus_ids_or_file_names():
         assert jp.alias('salt', case['id']) in text and jp.alias('other', case['id']) not in text
 
 
-def test_theory_citations_must_point_into_the_listing():
+def theory_answer(verdict, unit='f', token='tok'):
+    return json.dumps({**verdict, 'unit': unit, 'files': [{'file': 'f.py', 'canary': token}]})
+
+
+def test_a_citation_of_an_unlisted_line_is_dropped_and_a_lowered_step_must_keep_a_real_one():
     case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\nb = 2\n'}
     verdict = jp.perfect_uncovered_verdict('u')
-    for evidence, state in ((['f.py:2'], 'verdict'), (['f.py:3'], 'unknown'), (['other.py:1'], 'unknown'),
-                            (['f.py'], 'unknown'), ([7], 'unknown')):
-        verdict['dimensions']['absorption']['evidence'] = evidence
-        text = json.dumps({**verdict, 'unit': 'f', 'files': [{'file': 'f.py', 'canary': 'tok'}]})
-        assert jp.parse_theory(text, case, 'tok', 'f.py')['state'] == state
-    verdict['dimensions']['absorption']['evidence'] = []
+    absorption = verdict['dimensions']['absorption']
+    # A step of 1.0 needs no evidence, so a bad citation on it is dropped and the verdict stands.
+    for evidence, kept in ((['f.py:2'], ['f.py:2']), (['f.py:3'], []), (['other.py:1'], []), (['f.py'], []),
+                           ([7], []), (['f.py:0', 'f.py:1'], ['f.py:1'])):
+        absorption['evidence'] = evidence
+        result = jp.parse_theory(theory_answer(verdict), case, 'tok', 'f.py')
+        assert result['state'] == 'verdict', evidence
+        assert result['verdict']['dimensions']['absorption']['evidence'] == kept
+        assert result['citations_dropped'] == len(evidence) - len(kept)
+    # A lowered step stands only on a line the listing has.
+    absorption['step'] = 0.25
+    for evidence, state in ((['f.py:3', 'f.py:1'], 'verdict'), (['f.py:3'], 'unknown'),
+                            (['f.py:9', 'g.py:1'], 'unknown')):
+        absorption['evidence'] = evidence
+        result = jp.parse_theory(theory_answer(verdict), case, 'tok', 'f.py')
+        assert result['state'] == state, evidence
+        if state == 'unknown':
+            assert result['reason'] == 'citation'
+    # Evidence that is not a list of citations at all is not repaired.
+    absorption['evidence'] = 'f.py:1'
+    assert jp.parse_theory(theory_answer(verdict), case, 'tok', 'f.py')['reason'] == 'citation'
+    absorption['evidence'] = []
     for unit in ('u', None, 'g'):  # another unit's analysis is not this unit's
-        text = json.dumps({**verdict, 'unit': unit, 'files': [{'file': 'f.py', 'canary': 'tok'}]})
-        assert jp.parse_theory(text, case, 'tok', 'f.py')['reason'] == 'unit'
+        assert jp.parse_theory(theory_answer(verdict, unit), case, 'tok', 'f.py')['reason'] == 'unit'
+
+
+def test_an_uncited_lowered_step_is_left_for_the_pinned_rubric_to_refuse():
+    case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\n'}
+    verdict = jp.perfect_uncovered_verdict('u')
+    verdict['dimensions']['absorption'].update(step=0.5, evidence=[])
+    result = jp.parse_theory(theory_answer(verdict), case, 'tok', 'f.py')
+    assert result['state'] == 'verdict' and result['citations_dropped'] == 0  # nothing invented or dropped
+
+
+PROSE = 'Line 2 assigns the wrong name, so the caller reads a stale value.\n\n'
+
+
+@pytest.mark.parametrize('wrap', [
+    lambda body: PROSE + body,                                   # prose, then the bare object
+    lambda body: PROSE + '```json\n' + body + '\n```\n',         # prose, then a fenced object
+    lambda body: 'Example: {"line": 1}. ' + body,                # a stray object without the schema
+    lambda body: PROSE + '{not json} ' + body,                   # a brace that never parses
+])
+def test_prose_before_one_tagged_object_is_read_and_reported(wrap):
+    result = jp.parse_defect(wrap(answer()), CASE, 'tok', 'c.py.txt')
+    assert result == {'state': 'defect', 'lines': [2], 'reason': None, 'text_outside_json': True,
+                      'ambiguous': False}
+
+
+@pytest.mark.parametrize('text,reason', [
+    (PROSE + answer() + '\nOn reflection:\n' + answer('no_defect'), 'ambiguous'),  # it changed its mind
+    (PROSE + answer() + answer(), 'ambiguous'),                                      # even the same answer
+    (answer() + '\n\nWait, line 2 is correct. There is no defect.', 'ambiguous'),     # text after can retract
+    (PROSE + answer() + '\nCorrected:\n' + answer('no_defect')[:-1] + ',}', 'ambiguous'),  # a broken second try
+    (PROSE + answer('no_defect')[:-1] + ',}\nCorrected:\n' + answer(), 'ambiguous'),     # a broken first try
+    ('Answer: {"result": ' + answer() + ', }', 'ambiguous'),                          # inside a broken wrapper
+    ('Example: {"example": ' + answer('no_defect'), 'ambiguous'),                     # inside an unclosed wrapper
+    ('[\n  ' + answer(), 'ambiguous'),                                                # inside an unclosed list
+    ('Per the set {a, b we have: ' + answer(), 'ambiguous'),                          # a bracket left open
+    (PROSE + answer()[:-1] + ',}', 'malformed'),                                     # one object, not JSON
+    (PROSE + json.dumps({'answer': json.loads(answer())}), 'ambiguous'),             # only nested inside another
+    (json.dumps([json.loads(answer())]), 'ambiguous'),                                # inside a list too
+    (PROSE + answer(schema='other'), 'malformed'),
+    ('The code is correct; no defect.', 'malformed'),                               # a verdict in prose only
+    (PROSE + answer(token='wrong'), 'coverage'),                                     # the canary still decides
+])
+def test_text_around_an_answer_never_supplies_or_repairs_it(text, reason):
+    result = jp.parse_defect(text, CASE, 'tok', 'c.py.txt')
+    assert result['state'] == 'unknown' and result['reason'] == reason
+
+
+def test_the_report_counts_answers_read_out_of_prose_and_ambiguous_ones_even_after_drift():
+    cases = [{'judges': {'a': [{'text_outside_json': True, 'ambiguous': False},
+                               {'reason': 'model_drift', 'ambiguous': True, 'citations_dropped': 2}]}}]
+    assert jp.parsing(cases) == {'a': {'answers': 2, 'text_outside_json': 1, 'ambiguous': 1,
+                                       'citations_dropped': 2}}
+
+
+def test_a_superscript_line_number_is_a_dropped_citation_not_a_crash():
+    case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\nb = 2\n'}
+    verdict = jp.perfect_uncovered_verdict('u')
+    verdict['dimensions']['absorption']['evidence'] = ['f.py:\u00b2']
+    assert jp.parse_theory(theory_answer(verdict), case, 'tok', 'f.py')['citations_dropped'] == 1
+
+
+def test_a_voided_verdict_still_reports_the_citations_it_lost():
+    case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\nb = 2\n'}
+    verdict = jp.perfect_uncovered_verdict('u')
+    verdict['dimensions']['absorption'].update(step=0.5, evidence=['f.py:9'])
+    result = jp.parse_theory(theory_answer(verdict), case, 'tok', 'f.py')
+    assert result['reason'] == 'citation' and result['citations_dropped'] == 1
+
+
+def test_theory_answers_with_prose_before_them_are_read_too():
+    case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\n'}
+    result = jp.parse_theory(PROSE + theory_answer(jp.perfect_uncovered_verdict('u')), case, 'tok', 'f.py')
+    assert result['state'] == 'verdict' and result['text_outside_json'] is True
 
 
 def test_listing_keeps_line_numbers_and_hides_one_canary():
@@ -239,6 +331,34 @@ def test_accurate_panel_meets_the_scenario_but_synthetic_answers_establish_nothi
     assert proof['defect_panel_complete']
     assert not proof['provider_reported_only'] and not proof['established']
     assert result['blocking'] is False and result['confirmed_defects'] == []
+
+
+class LikeTheLiveRun(Scripted):
+    """The shapes the 2026-11-20 capture showed: judge ``b`` puts prose before every defect answer,
+    and judge ``c`` cites a line past the end of the cohesive unit, beside a real one, in two trials."""
+
+    def respond(self, pin, case, trial, messages):
+        record = super().respond(pin, case, trial, messages)
+        if pin.judge_id == 'b' and case['task'] == 'defect':
+            record['reply'] = 'The listing reads correctly from the top.\n\n```json\n' + record['reply'] + '\n```'
+        if pin.judge_id == 'c' and case['id'] == 'ledger_cohesive' and trial < 2:
+            reply = json.loads(record['reply'])
+            name, count = jp.alias('salt', case['id']), len(case['source'].splitlines())
+            reply['dimensions']['honest_limits'].update(step=0.5, evidence=[f'{name}:{count + 3}', f'{name}:1'])
+            record['reply'] = json.dumps(reply)
+        return record
+
+
+def test_answers_shaped_like_the_live_run_now_complete_the_panel(tmp_path, stub_checkout):
+    pins, trials, _ = jp.load_panel(panel_file(tmp_path))
+    result = jp.run(CORPUS, pins, trials, LikeTheLiveRun(accurate), 'salt', stub_checkout)
+    assert result['parser_version'] == 2
+    assert result['parsing']['b']['text_outside_json'] == 10 * 3   # every defect answer, read and reported
+    assert result['parsing']['c']['citations_dropped'] == 2
+    assert result['defects']['judges']['b']['unknown'] == 0
+    proof = result['proof']
+    assert proof['defect_panel_complete'] and proof['theory_panel_scored_and_discriminates']
+    assert not proof['established']  # still synthetic
 
 
 def test_a_penalized_facade_is_a_false_positive(tmp_path):
@@ -490,6 +610,16 @@ def test_replay_reproduces_a_capture_and_refuses_a_stale_one(tmp_path, monkeypat
     replayed = jp.run(CORPUS, pins, trials, jp.ReplayJudge(capture), 'salt')
     assert replayed['defects']['panel']['confusion'] == {'tp': 5, 'fp': 0, 'fn': 0, 'tn': 5}
     assert not replayed['proof']['provider_reported_only']  # a scripted transport is synthetic
+    assert replayed['capture_parser_version'] == jp.PARSER_VERSION
+    assert replayed['proof']['captured_for_this_parser']
+    # A capture taken before the parser changed replays, but it shaped the change: it proves nothing.
+    manifest = json.loads((capture / 'capture.json').read_text())
+    for older in ({k: v for k, v in manifest.items() if k != 'parser_version'}, {**manifest, 'parser_version': 1}):
+        (capture / 'capture.json').write_text(json.dumps(older))
+        reread = jp.run(CORPUS, pins, trials, jp.ReplayJudge(capture), 'salt')
+        assert reread['defects'] == replayed['defects']
+        assert not reread['proof']['captured_for_this_parser'] and not reread['proof']['established']
+    (capture / 'capture.json').write_text(json.dumps(manifest))
     with pytest.raises(RuntimeError, match='ceiling'):
         live.respond(pins[0], cases[0], 0, jp.messages_for(cases[0], 'x', 'salt'))
 

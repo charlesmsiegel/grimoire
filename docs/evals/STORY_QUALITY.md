@@ -26,8 +26,8 @@ speaking NPC plus narration), not a measurement of V0.2.1. A pass against a synt
 baseline in `/2` (narration removed, since `/2` has no narration stage) is `baseline.v2.json`,
 and in `/3` (each narration call recorded as that turn's opt-in `director_generation` reply, with
 the same tokens) is `baseline.v3.json`.
-Measured V0.2.1 capture is [V0.2.1 baseline](V021_BASELINE.md) (sprint 015): its status is
-**baseline capture pending**. Ordinary CI never invokes a paid provider, and synthetic fixtures
+Measured V0.2.1 capture is [V0.2.1 baseline](V021_BASELINE.md) (sprint 015): one live capture was
+measured on 2026-11-20, with provider-reported token counts and no cost parity claimed. Ordinary CI never invokes a paid provider, and synthetic fixtures
 can never be relabeled measured.
 
 ## Divergence from the inference contract
