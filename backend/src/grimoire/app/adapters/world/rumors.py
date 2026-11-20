@@ -32,8 +32,7 @@ BELIEF_PREFIX = "admit-"
 
 
 def _knowledge(ctx: AdapterContext, campaign: str):  # type: ignore[no-untyped-def]
-    found = EvidenceLibrary(ctx.store).read(campaign, requested_by=DIRECTOR)
-    return found.knowledge
+    return common.knowledge(ctx, campaign)
 
 
 def _rows(ctx: AdapterContext, campaign: str) -> dict:

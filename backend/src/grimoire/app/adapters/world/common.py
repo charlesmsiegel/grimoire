@@ -10,7 +10,7 @@ from grimoire.calendars import CalendarError
 from grimoire.calendarstore import CalendarLibrary
 from grimoire.campaignapi import parse
 from grimoire.chats.codec import ChatCodecError
-from grimoire.core.authority import AuthorityError
+from grimoire.core.authority import DIRECTOR, AuthorityError
 from grimoire.core.identity import (
     ChatRef,
     InstanceRef,
@@ -20,7 +20,7 @@ from grimoire.core.identity import (
 )
 from grimoire.core.index import MissingDefinition
 from grimoire.core.knowledge import KnowledgeError
-from grimoire.evidencestore.library import EvidenceWriteError
+from grimoire.evidencestore.library import EvidenceLibrary, EvidenceWriteError
 from grimoire.graph.model import GraphError
 from grimoire.institutions import InstitutionError
 from grimoire.social_hypotheses import HypothesisError
@@ -64,6 +64,19 @@ def guarded(handler: Handler, default: str) -> Handler:
 
     run.__name__ = getattr(handler, "__name__", "world_op")
     return run
+
+
+def knowledge(ctx: AdapterContext, campaign: str):  # type: ignore[no-untyped-def]
+    """The campaign's evidence ledger as the director reads it, refused ``ledger_unreadable`` when 020 had to leave
+    any record out or found the ledger broken: what it read would show a quarantined belief or ruling as never
+    admitted, so the page shows none of it as the truth."""
+    found = EvidenceLibrary(ctx.store).read(campaign, requested_by=DIRECTOR)
+    broken = [problem for problem in found.problems if not problem.endswith(":absent")]
+    if found.quarantined or broken:
+        left = ", ".join(item.name for item in found.quarantined[:5]) or ", ".join(broken[:5])
+        raise ApiRefused("ledger_unreadable", f"the campaign's evidence ledger left records out ({left}); fix it in "
+                                              "Devices and sync before this page shows what anyone knows")
+    return found.knowledge
 
 
 def director(args: Mapping[str, object]) -> None:

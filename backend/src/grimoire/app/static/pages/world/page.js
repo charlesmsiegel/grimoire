@@ -313,11 +313,12 @@ async function showRumors(slot, ctx, campaign, chat) {
     ui.unavailable("Spreading a rumor through a faction or public media", "063 carries a rumor from one character to one other."));
   let shown = null;
   let review = null;
-  const stances = new Map();  // the stance picked for each rumor, kept across a review
+  // the stance picked for each rumor, kept as a draft across a review and across leaving the page
+  const stanceOf = (rumor) => ctx.draft("rumors:director:" + campaign + ":" + rumor + ":stance");
   const base = { campaign, chat: chat || undefined, ...D };
   const load = async () => { shown = await ctx.api("world.rumors", base); review = null; draw(); };
   const plan = (rumor) => ctx.act(async () => {
-    const args = { ...base, rumor: rumor.rumor, stance: stances.get(rumor.rumor) || "believed", operation_id: newOperationId(), expected: shown.etag };
+    const args = { ...base, rumor: rumor.rumor, stance: stanceOf(rumor.rumor).get() || "believed", operation_id: newOperationId(), expected: shown.etag };
     try {
       const answer = await ctx.api("world.belief_plan", args);
       review = { args, plan: answer.plan, rumor };
@@ -366,8 +367,8 @@ async function showRumors(slot, ctx, campaign, chat) {
     if (rumor.belief) {
       belief = el("p", {}, who(rumor.recipient) + "'s belief was admitted: " + rumor.belief.stance + ".");
     } else if (rumor.can_admit && !review) {
-      const stance = ui.choice("What " + who(rumor.recipient) + " makes of it", STANCES, { value: stances.get(rumor.rumor) || "believed",
-        onchange: (value) => stances.set(rumor.rumor, value) });
+      const stance = ui.choice("What " + who(rumor.recipient) + " makes of it", STANCES, { value: stanceOf(rumor.rumor).get() || "believed",
+        onchange: (value) => stanceOf(rumor.rumor).set(value) });
       belief = el("div", { class: "g-row world-admit" }, stance.node, ui.button("Review", () => plan(rumor)));
     } else if (rumor.can_admit) {
       belief = el("p", { class: "g-muted" }, "Not admitted yet.");
@@ -575,9 +576,13 @@ async function minds(ctx, body, chat, cast) {
       const cited = picked.values().filter((id) => held.has(id));
       claim.setError(claim.value.trim() ? "" : "Write what " + who + " thinks.");
       confidence.setError(sure === null ? "Give a number from 0 to 1, or a percentage." : "");
-      formError.hidden = cited.length > 0;
-      formError.textContent = cited.length ? "" : "Pick the evidence it rests on.";
-      if (!claim.value.trim() || sure === null || !cited.length || !about.value) return;
+      // 060 lets a hypothesis cite at most MAX_EVIDENCE: more is refused here, before the draft keeps it
+      const most = mind.max_evidence || 8;
+      const citeProblem = !cited.length ? "Pick the evidence it rests on."
+        : cited.length > most ? "A hypothesis rests on at most " + most + " pieces of evidence: untick " + (cited.length - most) + "." : "";
+      formError.hidden = !citeProblem;
+      formError.textContent = citeProblem;
+      if (!claim.value.trim() || sure === null || citeProblem || !about.value) return;
       const whom = [about.value, ...(alsoAbout.value && alsoAbout.value !== about.value ? [alsoAbout.value] : [])];
       const problem = replacementProblem(hypotheses, replaces.value, whom);
       if (problem) { formError.hidden = false; formError.textContent = problem; return; }

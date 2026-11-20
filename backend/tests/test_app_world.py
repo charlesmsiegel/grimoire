@@ -529,6 +529,22 @@ def test_an_unreadable_rumor_ledger_is_refused_never_a_server_error(desk):
                        operation_id="o", expected="x").reason == "ledger_unreadable"
 
 
+def test_a_quarantined_evidence_record_is_refused_never_shown_as_never_admitted(desk):
+    folder, chat = desk
+    with Device(folder, [say("Mara reads it.")]) as device:
+        refs = seed_world(device, chat)
+    doubts = [path for path in folder.rglob("mara-doubts.json")]
+    assert len(doubts) == 1
+    doubts[0].unlink()
+    with Device(folder) as device:
+        app = AppApi(device.api)
+        mind = refused(app, "world.mind", chat=str(chat), **D, owner=refs["mara"])
+        assert mind.reason == "ledger_unreadable" and "belief:mara-doubts" in str(mind)
+        assert refused(app, "world.mind_preview", chat=str(chat), **D, owner=refs["mara"],
+                       hypotheses=[]).reason == "ledger_unreadable"
+        assert refused(app, "world.rumors", campaign=refs["campaign"], chat=str(chat), **D).reason == "ledger_unreadable"
+
+
 # -- faction decisions (057) ---------------------------------------------------------------------------------
 def test_a_leaders_choice_keeps_the_members_dissent_and_nothing_is_saved(desk):
     folder, chat = desk

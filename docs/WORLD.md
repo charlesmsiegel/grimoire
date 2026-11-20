@@ -12,7 +12,9 @@ per slice over the existing domain services: `TopologyLibrary` (059), 063's veri
 `grimoire.rumorledger.replay` and 020's `EvidenceLibrary` for an admitted belief, 057's `decide` and 060's
 `admit`, `recall` and `choose_tactic`. It keeps no record of its own. Every op refuses `director_only` unless
 `audience` is `director`, and no domain error escapes as a server error: each keeps its reason (an unreadable
-ledger is `ledger_unreadable`, and a campaign the library does not hold `missing_campaign`).
+ledger is `ledger_unreadable`, and a campaign the library does not hold `missing_campaign`). An evidence ledger
+020 had to leave a record out of (a missing or damaged belief, ruling or perception) is `ledger_unreadable` too,
+naming what was left out, so a quarantined belief is never shown as one never admitted.
 
 The two changes the page makes are each reviewed first: the plan op writes nothing and answers the files the
 change would write; the commit op takes the same args (the same `operation_id`, and `expected`, the etag that was
@@ -87,7 +89,7 @@ as not available.
 
 | Op | Args | Answer |
 |---|---|---|
-| `world.mind` | `chat`, `owner` (an NPC of the cast) | `{owner, now, evidence[], truth: {rulings[], beliefs[]}}`: one ruling entry per proposition, `{proposition, text, standing, ruling, at, earlier[]}` |
+| `world.mind` | `chat`, `owner` (an NPC of the cast) | `{owner, now, evidence[], truth: {rulings[], beliefs[]}, max_evidence}`: one ruling entry per proposition, `{proposition, text, standing, ruling, at, earlier[]}` |
 | `world.mind_preview` | `chat`, `owner`, `hypotheses[]` (`{id, about[], claim, confidence, evidence[], at, supersedes}`), `tactic` (`{hypothesis, minimum, credited, fallback}`, optional) | `{saved: false, admitted, current[], tactic, truth, unchanged}` |
 
 The director writes each hypothesis in their own words, about what another character believes, or what one character thinks a second believes (060's
@@ -116,8 +118,9 @@ on its own: a section that is refused shows the reason in its own card with **Re
 working. A topology whose view is refused still leaves the others to choose from.
 
 What the director lays out is a draft kept across leaving the page, keyed per chat and character: what is typed,
-and what is picked or ticked too (a route's two ends, a faction's leader, its members and who is told, the
-characters a hypothesis is about and the evidence it rests on). A hypothesis being written is that NPC's own.
+and what is picked or ticked too (a route's two ends, a rumor's stance before it is reviewed, a faction's leader,
+its members and who is told, the characters a hypothesis is about and the evidence it rests on, at most 060's eight
+items). A hypothesis being written is that NPC's own.
 
 Only the newest answer is drawn: the NPC chosen last, the topology chosen last (a review of the one before is
 dropped), the last search and route. A review or a road change answers for the read it started from: once the

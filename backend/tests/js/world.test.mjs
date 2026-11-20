@@ -292,6 +292,48 @@ test("a rumor's review refused as stale reads the rumors again, and the next one
   assert.ok(reviewOf(card()));
 });
 
+test("the stance picked for a rumor is kept across leaving the page, and is the one reviewed", async () => {
+  const rumor = { rumor: "letter", sender: { actor: BEA, name: "Bea", role: "npc" }, recipient: { actor: MARA, name: "Mara", role: "npc" },
+    attributed_to: null, source: { evidence: "x", content: "seen" }, text: "the banner fell", channel: "letter", confidence: 80, distortion: "none",
+    faithful: true, provenance: "p", sent: null, due: null, route: { proximity: false, affiliation: false, channel: true, attention: true },
+    status: "delivered", report: "r", belief: null, can_admit: true };
+  const drafts = new Map();
+  const stances = [];
+  const answers = {
+    "world.rumors": () => ({ campaign: "c1", now: null, rumors: [rumor], etag: "rumors:1" }),
+    "world.belief_plan": (args) => { stances.push(args.stance); throw refused("not_delivered"); },
+  };
+  const first = await mounted({ drafts, answers });
+  await first.done;
+  const pick = field(section(first.root, "Rumors"), "What Mara makes of it");
+  pick.value = "rejected";
+  pick.dispatchEvent({ type: "change" });
+  const again = await mounted({ drafts, answers });
+  await again.done;
+  assert.equal(field(section(again.root, "Rumors"), "What Mara makes of it").value, "rejected", "the unsent stance is kept");
+  button(section(again.root, "Rumors"), "Review").click();
+  await settle();
+  assert.deepEqual(stances, ["rejected"]);
+});
+
+test("a hypothesis citing more evidence than 060 takes is refused on the page, not saved", async () => {
+  const evidence = Array.from({ length: 9 }, (_, i) => ({ evidence: "e" + i, kind: "perception", channel: "sight", content: "seen " + i, at: 2 }));
+  const { root, done } = await mounted({ answers: { "world.mind": (args) => ({ ...mind(args.owner, "x"), evidence, max_evidence: 8 }) } });
+  await done;
+  await settle();
+  typeInto(minds(root), "What Mara thinks they think", "Anya knows the letter");
+  for (const box of minds(root).querySelectorAll("input").filter((node) => /^e\d$/.test(node.getAttribute("value") || ""))) {
+    box.checked = true;
+    box.dispatchEvent({ type: "change" });
+  }
+  typeInto(minds(root), "How sure", "70%");
+  field(minds(root), "Whose belief").value = ANYA;
+  button(minds(root), "Add this hypothesis").click();
+  assert.ok(minds(root).textContent.includes("at most 8 pieces of evidence: untick 1"), "the page says why");
+  assert.ok(!minds(root).querySelectorAll("li").some((node) => node.textContent.startsWith("h1:")), "and nothing is saved");
+  assert.equal(field(minds(root), "What Mara thinks they think").value, "Anya knows the letter", "the claim is not cleared");
+});
+
 test("a route answered before a road was blocked is not left on screen as current", async () => {
   const { root, done } = await mounted({ answers: {
     "world.route": () => ({ found: true, conditions: [], route: { places: [{ place: TOWN }, { place: PORT }], paths: ["road"] } }),

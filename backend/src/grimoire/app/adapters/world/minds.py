@@ -18,8 +18,8 @@ from grimoire.app.adapter import AdapterContext
 from grimoire.core import DIRECTOR
 from grimoire.core.knowledge import Moment
 from grimoire.core.perspective import actor_knowledge, standing
-from grimoire.evidencestore import EvidenceLibrary
 from grimoire.social_hypotheses import (
+    MAX_EVIDENCE,
     MAX_RECORDS,
     Hypothesis,
     HypothesisLedger,
@@ -75,7 +75,7 @@ def _owner(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no-
     member = cast.get(owner)
     if member is None:
         raise ApiRefused("no_actor", f"{owner} is not in this chat's cast")
-    knowledge = EvidenceLibrary(ctx.store).read(chat.campaign_id, requested_by=DIRECTOR).knowledge
+    knowledge = common.knowledge(ctx, chat.campaign_id)
     return chat, cast, member, knowledge
 
 
@@ -87,7 +87,8 @@ def _mind(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
             "evidence": [{"evidence": item.evidence_id, "kind": item.kind, "channel": item.channel,
                           "content": item.content, "at": item.moment.sequence}
                          for item in sorted(held, key=lambda item: (-item.moment.sequence, item.evidence_id))],
-            "truth": _truth(knowledge, cast), "max": MAX_RECORDS}
+            "truth": _truth(knowledge, cast), "max": MAX_RECORDS,
+            "max_evidence": MAX_EVIDENCE}
 
 
 def _ledger_digest(ctx: AdapterContext, campaign: str) -> str:
@@ -144,7 +145,7 @@ def _preview(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                                fallback_tactic=common.text(asked.get("fallback"), "fallback"))
         tactic = {"hypothesis": chosen.hypothesis_id, "confidence": chosen.confidence, "tactic": chosen.tactic,
                   "credited": chosen.credited, "evidence": list(chosen.evidence_ids), "minimum": minimum}
-    after = EvidenceLibrary(ctx.store).read(campaign, requested_by=DIRECTOR).knowledge
+    after = common.knowledge(ctx, campaign)
     return {"saved": False, "owner": member.view(), "as_of": as_of,
             "admitted": [item.hypothesis_id for item in ledger.records],
             "current": [{"id": item.hypothesis_id, "about": [{"actor": str(ref), "name": cast.name(ref)}
