@@ -6,8 +6,9 @@ import pytest
 from scene_fixtures import ANA, Table, card_library, say
 from store_helpers import OWNER
 
-from grimoire.core import DIRECTOR, Event, Moment, Perception
+from grimoire.core import DIRECTOR, Event, Moment, Perception, Proposition, Report
 from grimoire.evidencestore import EvidenceLibrary
+from grimoire.goals import Agenda, Approach, Goal, Holds, Limit
 from grimoire.ledgers import ControlChange, SovereigntyLedger
 from grimoire.memory import PLAY_COLLECTION, MemoryCorrection, MemorySelection, MemorySummary
 from grimoire.memorystore import MemoryLibrary
@@ -109,6 +110,37 @@ def test_a_damaged_memory_ledger_refuses_rather_than_packing_without_it(played):
         with pytest.raises(SceneRefused) as error:
             api.runner.inspect_context(chat, actor)
         assert error.value.reason == 'memory_unreadable'
+
+
+def test_an_agenda_chooses_from_the_corrected_projection(tmp_path):
+    """A limit gated on a corrected report no longer binds, and the corrected text never returns via the agenda."""
+    folder, chat, _ = card_library(tmp_path)
+    with Table(folder, runtime=False) as table:
+        table.runner.seat(chat, ANA)
+        mara = next(a for a in table.runner.open(chat).npcs)
+    rule = 'Never move contraband while the harbour is watched'
+    plan = Agenda(chat.campaign_id, mara, goals=(Goal('cargo', 'Get the cargo past the harbour', 50, (
+        Approach('smuggle', 'Ask the pilot to run the cargo tonight', tags=frozenset({'smuggle'})),
+        Approach('wait', 'Tell the pilot the cargo can wait')),),),
+        limits=(Limit('lie-low', rule, forbids=frozenset({'smuggle'}), when=(Holds('watch', stances={'aware'}),)),))
+    with Table(folder, [say('Honest papers.'), say('North channel.')], agendas=[plan]) as table:
+        c = chat.campaign_id
+        EvidenceLibrary(table.store, table.owner, owner=OWNER).append(c, [
+            Proposition(c, 'watch', 'The quay is watched', Moment(1), 'director'),
+            Proposition(c, 'clear', 'The watch was a false alarm', Moment(1), 'director'),
+            Report(c, 'warned', mara, 'watch', 'told', Moment(2), 'scene:quay', confirmed=True),
+            Report(c, 'cleared', mara, 'clear', 'told', Moment(3), 'scene:quay', confirmed=True)]).commit()
+        table.runner.post(chat, table.player(), '"Is the cargo safe?"')
+        table.runner.generate(chat, table.player())  # no consolidated memory: the warning binds
+        memory = MemoryLibrary(table.store, table.authority, table.authority.handle_for('app:memory', trusted=True))
+        memory.correct(MemoryCorrection('false-alarm', mara, ('warned',), ('cleared',), Moment(3), 'no watch'),
+                       requested_by=DIRECTOR)
+        table.runner.memory = memory
+        table.runner.generate(chat, table.player())
+        record = table.runner.open(chat).pending
+        assert [(i.approach_id, i.refusals) for i in record.intentions] == [('wait', ('lie-low',)), ('smuggle', ())]
+        before, after = table.harness.prompts()
+        assert rule in before and rule not in after and 'The quay is watched' not in after
 
 
 def test_the_runner_takes_memory_only_on_a_trusted_issued_app_key(played):

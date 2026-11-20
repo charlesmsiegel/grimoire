@@ -5,11 +5,11 @@ import pytest
 
 import context_fixtures as f
 from context_fixtures import actor, knowledge, snapshot
-from grimoire.context import Budget, ContextError, pack_actor_context, pack_player_context
+from grimoire.context import Budget, ContextError, knowledge_digest, pack_actor_context, pack_player_context
 from grimoire.core import DIRECTOR, ControlAssignment
 from grimoire.core.knowledge import Moment
 from grimoire.core.perspective import actor_knowledge
-from grimoire.memory import MemoryCorrection, MemorySummary, consolidate_dossier
+from grimoire.memory import MemoryCorrection, MemorySummary, consolidate_dossier, corrected_knowledge
 
 MARA, ANYA = actor("mara"), actor("anya")
 #: Mara heard early that Anya and Tavi are cousins (v6), and later that Anya keeps the old charts (v3).
@@ -47,8 +47,10 @@ def test_standing_accounts_join_memory_and_corrected_evidence_leaves_it():
     assert any(CHARTS in line for line in lines)
     summary = next(item for item in pack.items if item.origin.kind == "summary")
     assert summary.origin.evidence == ("v3",) and summary.origin.name == "anya"
-    # the brief checks the pack against the actor's own projection, which consolidation does not change
-    assert pack.knowledge == without.knowledge
+    # the brief and an agenda's choice are made from the corrected projection the pack's digest names
+    held = actor_knowledge(knowledge(), MARA, as_of=9)
+    assert pack.knowledge == knowledge_digest(corrected_knowledge(held, dossier(one, two, stale, corrections=(fix,))))
+    assert pack.knowledge != without.knowledge == knowledge_digest(held)
 
 
 def test_a_dossier_for_another_actor_moment_or_controller_is_refused():

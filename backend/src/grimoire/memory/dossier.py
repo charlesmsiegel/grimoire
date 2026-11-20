@@ -15,6 +15,8 @@ every read each summary is resolved again against the actor's projection and the
 ``as_of`` is the campaign knowledge sequence, as for ``consolidate_view``. Nothing here reads files,
 writes or calls a model.
 """
+from dataclasses import replace
+
 from grimoire.core.identity import validate_segment
 from grimoire.core.perspective import ActorKnowledge
 from .model import (
@@ -165,3 +167,24 @@ def consolidate_dossier(knowledge, collection_id, selections, corrections, summa
                   for name, (current, history) in sorted(topics.items()))
     return MemoryDossier(knowledge.actor, collection_id, as_of, editor, view, built, tuple(sorted(links)),
                          len(facts) - len(kept))
+
+
+def corrected_knowledge(knowledge, memory):
+    """``knowledge`` without what ``memory``'s corrections made obsolete: that evidence, the reports sent
+    as it and the beliefs citing it. The one projection a pack, a brief and an agenda's choice all read,
+    so nothing reintroduces a corrected detail. ``memory`` must be the same actor's dossier as of the same
+    moment (``memory_mismatch``).
+    """
+    if (type(knowledge) is not ActorKnowledge or type(memory) is not MemoryDossier
+            or memory.actor != knowledge.actor or memory.as_of != knowledge.as_of):
+        raise ValueError('memory_mismatch')
+    obsolete = set(memory.suppressed)
+    if not obsolete:
+        return knowledge
+
+    def beliefs(items):
+        return None if items is None else tuple(b for b in items if obsolete.isdisjoint(b.evidence_ids))
+
+    return replace(knowledge, evidence=tuple(e for e in knowledge.evidence if e.evidence_id not in obsolete),
+                   sent=tuple(s for s in knowledge.sent if s.evidence_id not in obsolete),
+                   current=beliefs(knowledge.current), inherited=beliefs(knowledge.inherited))

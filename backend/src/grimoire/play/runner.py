@@ -45,7 +45,7 @@ from grimoire.intent import Command, RoutingContext, Utterance, route
 from grimoire.intent.text import wrapped
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
-from grimoire.memory import PLAY_COLLECTION
+from grimoire.memory import PLAY_COLLECTION, corrected_knowledge
 from grimoire.memorystore import MemoryLibrary
 from grimoire.obstaclestore import ObstacleLibrary
 from grimoire.partystore import PartyLibrary
@@ -823,10 +823,12 @@ class SceneRunner:
         heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
         seen = _perceived(scene, actor)
         knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
+        memory = self._dossier(actor, as_of, knowledge)
+        if memory is not None:  # the pack, the brief and the agenda's choice all read the corrected projection
+            knowledge = corrected_knowledge(knowledge, memory)
         with span("pack") as packed:
             built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
-                                  present=seen, scene_text=render(heard),
-                                  memory=self._dossier(actor, as_of, knowledge))
+                                  present=seen, scene_text=render(heard), memory=memory)
             packed.count(items=len(built.pack.items), omitted=len(built.pack.omitted))
         view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
         kwargs = dict(heard=heard, secrets=self.secrets, names=scene.names, context=built.pack, snapshot=snap)

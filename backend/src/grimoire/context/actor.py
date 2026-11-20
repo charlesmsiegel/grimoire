@@ -42,7 +42,7 @@ from grimoire.core.perspective import ActorKnowledge, actor_knowledge, controlle
 from grimoire.core.portrayal import PortrayalError
 from grimoire.core.snapshot import EffectiveSnapshot, Resolution
 from grimoire.graph import PREDICATES, ClaimSet
-from grimoire.memory import MemoryDossier
+from grimoire.memory import MemoryDossier, corrected_knowledge
 
 from .basis import knowledge_digest, selection_basis
 from .lore import LORE_ROLES, Unpack, check_readers, lore, lore_problems
@@ -237,11 +237,8 @@ def _consolidated(memory: MemoryDossier | None, held: ActorKnowledge, actor: Ins
     standing = memory.standing()
     if any(e.evidence_id not in known for summary in standing for e in summary.evidence):
         raise _fail("the consolidated memory cites evidence this projection does not hold", "memory_mismatch")
-    obsolete = set(memory.suppressed)
     # what rests on obsolete evidence goes with it: the percept, a report sent as it, and a belief citing it
-    kept = replace(held, evidence=tuple(item for item in held.evidence if item.evidence_id not in obsolete),
-                   sent=tuple(sent for sent in held.sent if sent.evidence_id not in obsolete),
-                   current=tuple(belief for belief in held.current if obsolete.isdisjoint(belief.evidence_ids)))
+    kept = corrected_knowledge(held, memory)
     found = []
     for summary in standing:
         lead = "You remember" if summary.status == "current" else "You remember conflicting accounts; one is"
@@ -301,8 +298,8 @@ def _build(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor: InstanceRef
     """The pack over ``held``: the one projection its memory shows, ranks and triggers lore from.
 
     With 053's ``memory``, obsolete evidence is left out of what is shown, ranked and triggered, and the
-    standing summaries join the memory lane; the ``knowledge`` digest stays that of ``held`` itself, the
-    projection 027's brief checks the pack against.
+    standing summaries join the memory lane; the ``knowledge`` digest is that of this corrected projection
+    (``corrected_knowledge``), which 027's brief and 039's intention are then made from and checked against.
     """
     candidates = _portrayal(snapshot, actor, excluded)
     nodes = tuple(dict.fromkeys((actor, *sorted(cast, key=str))))
@@ -320,7 +317,7 @@ def _build(snapshot: EffectiveSnapshot, knowledge: Knowledge, actor: InstanceRef
     return ContextPack(actor, as_of, budget, measurement, items, omitted,
                        tuple(sorted(untriggered, key=lambda pair: str(pair[0]))),
                        tuple(sorted(set(problems), key=lambda p: (str(p.source), p.code, p.detail or ""))),
-                       selection_basis(snapshot, actor.campaign_id, actor), knowledge_digest(held), notes,
+                       selection_basis(snapshot, actor.campaign_id, actor), knowledge_digest(shown), notes,
                        controller)
 
 
