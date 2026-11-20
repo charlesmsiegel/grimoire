@@ -116,10 +116,10 @@ character/lore references, a world-specific gear exclusion and creature addition
 pinned portrayal overrides, separate world-less chat actors, and unchanged actual
 context packs after adding 2,000 unrelated catalog members. Its bestiary scenario reuses one
 pinned shared creature as a campaign creature actor in two settings (one through a pinned specialization
-that inherits the rest), with a per-setting discovery exclusion. One campaign binds one character and one lorebook from a
-creator card set (its opt-in is those explicit chat bindings; no catalog opt-in is persisted). After the
-set grows by 2,000 lorebooks that the same scene text would trigger, both campaigns' bindings and actual
-context packs are unchanged. Context costs are the
+that inherits the rest), with a per-setting discovery exclusion. One campaign opts into a creator card set of 2,002 records and
+binds one character and one lorebook selected from it (the opt-in is those explicit chat bindings; no
+catalog opt-in is persisted). The selected lorebook reaches its pack; none of the 2,000 unselected
+lorebooks, which the same scene text would trigger if bound, reaches either campaign's pack. Context costs are the
 existing deterministic estimates, not provider-reported measurements. Catalog
 membership alone never enters the prompt. `test_catalogs.py` covers identity,
 exclusions, dependency failures and traversal limits. `test_catalog_store.py`
