@@ -62,6 +62,13 @@ one retained operation receipt. Gregorian, Hebrew and bounded portable custom ca
 fixed-day axis. Retries do not advance twice; unresolved scope sync conflicts refuse authority.
 Historical scene dates and actor knowledge stay untouched. See [CALENDARS.md](CALENDARS.md).
 
+### Downtime and long activities (headless first slice: `grimoire.downtime`, `grimoire.downtimestore`)
+
+An actor's bounded long activity (study, research, recovery, travel) records its effort
+requirement and progress beside the calendar in the same scope record. Each pursuit spends an exact
+span of campaign time as a 055 advance with its own operation id and credits effort in the same
+write, so a retry neither spends time nor adds progress twice. See [DOWNTIME.md](DOWNTIME.md).
+
 ### Library location and V1 isolation (implemented: `grimoire.library`)
 
 `resolve_library()` returns the V2 library and what selected it (`default` or `env`); `python -m grimoire.library` prints the same. Resolution is **read-only**: it creates nothing and never opens or lists a V1 directory.
