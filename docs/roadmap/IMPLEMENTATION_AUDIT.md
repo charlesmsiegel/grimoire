@@ -1,8 +1,22 @@
 # Roadmap implementation audit
 
-**Snapshot:** [`92144e17ccea819e5e760bccd77286d019b3fc9e`](https://github.com/charlesmsiegel/grimoire/commit/92144e17ccea819e5e760bccd77286d019b3fc9e), branch `v2`, audited 2026-11-13.
+**Snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-The 055 and 113 entries have since been updated with their implementation and executable first-proof evidence; the other entries retain the snapshot above.
+This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
+
+| Merged change | Audit decision |
+|---|---|
+| [#679](https://github.com/charlesmsiegel/grimoire/pull/679) | Retain 113 checked: configured production services and CLI/Chromium consequence proof. Wave 7 remains open. |
+| [#680](https://github.com/charlesmsiegel/grimoire/pull/680) | Retain 033 checked and reconcile Wave 4 to 10/10: native creature chat binding, reserve/control/memory proof. |
+| [#683](https://github.com/charlesmsiegel/grimoire/pull/683) | Check 062: four incompatible family proposals, validation, no-mechanics path and documented hook boundaries. |
+| [#686](https://github.com/charlesmsiegel/grimoire/pull/686) | Keep 015 and Wave 2 unchecked: prerequisite documentation supplies no measured provider baseline. |
+| [#688](https://github.com/charlesmsiegel/grimoire/pull/688) | Check 059: persistent qualified topology, campaign road block, same-name/missing-place refusals. |
+| [#689](https://github.com/charlesmsiegel/grimoire/pull/689) | Retain 055 checked: explicit 20-day advancement, deadline and retry proof. |
+| [#691](https://github.com/charlesmsiegel/grimoire/pull/691) | Check 051: three-voice coordination, interruption, silence and privacy. Keep 068 open: synthetic comparison is not billed live V0.2.1 evidence. |
+| [#681](https://github.com/charlesmsiegel/grimoire/pull/681) | Check 057/060: institutional dissent and mistaken second-order hypotheses with tactic revision. Persistence and UI remain deferred. |
+| [#693](https://github.com/charlesmsiegel/grimoire/pull/693) | Keep 053/063 open: durable correction and delayed rumor foundations exist, but complete proving scenarios remain unestablished. |
+
+Relative to #678: **+8 slices** (033, 051, 055, 057, 059, 060, 062, 113), **+1 wave** (4). At the refresh base, implementation PRs had already checked 033/055/113; this documentation diff adds 051/057/059/060/062 and reconciles stale summaries. Original scheduled scope and inherited first-proof obligations are unchanged.
 
 This is a code-and-test audit of the 119 scheduled **first-useful slices**, including inherited first-proof additions. Requirements were not narrowed to match the code. A check does not close later milestones, certify a live model, or prove physical-phone/browser accessibility. Unchecked entries distinguish missing implementation from a proof not yet established. The [ordered roadmap](README.md#implementation-checkmarks) carries the same checkmarks.
 
@@ -17,7 +31,7 @@ This is a code-and-test audit of the 119 scheduled **first-useful slices**, incl
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 5/6 | ☐ | 047 lacks the independent prose-claim extraction required by its inherited first-proof addition. Physical-phone validation also remains unverified. |
 | [7](#wave-7) | 6/7 | ☐ | 112 retains production UI integration gaps. 113 has a real CLI/Chromium follow-up proof. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it. |
-| [8](#wave-8) | 2/24 | ☐ | 055 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 7/24 | ☐ | 051, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -25,7 +39,24 @@ This is a code-and-test audit of the 119 scheduled **first-useful slices**, incl
 
 ## Verification
 
-Source and test bodies were inspected at the pinned commit. Targeted runs and the broader audit run are recorded below; no paid model calls, personal libraries, platform configuration changes or production-code edits were made.
+### Follow-up refresh verification (b54b2bd8, 2026-11-20)
+
+- New-claim selection: **206 passed** in 24.81 seconds on Linux/Python 3.12. It covers ensemble, actor inference and reporting, institutions, social hypotheses, memory core/store/recovery, rumors/store/recovery and continuity actor-ID reservation. All providers are synthetic.
+- The 051/057/060 checkmarks reflect complete bounded headless proofs. 053/063/068 retain the missing full-scenario evidence above; neither a partial API nor a passing unit selection closes those slices.
+- The initial 160-test focused selection (159 plus the separately rerun Chromium test below) exercises the previously changed claims and real application composition. Together with source/requirements review, count/link reconciliation and `git diff --check`, this is a targeted documentation-only local gate, not a substitute for required full cross-platform CI. The follow-up PR records fresh combined results for its exact head and the independently reviewed diff.
+
+### Initial refresh verification (1b4f247a, 2026-11-20)
+
+Affected source and test bodies were inspected at the initial refresh snapshot `1b4f247a`. Local refresh results are recorded separately from historical runs below. No paid provider or private library was used. Exact documentation-head CI and independent review results belong on the refresh PR; this document does not certify pending checks.
+
+- Focused Linux/Python 3.12 refresh run: **159 passed, 1 skipped** in 56.61 seconds. The selection covered rulesets, topology/index/store/chat/recovery, calendars/store/recovery/sync, native chat actors, party scenarios, campaign configuration/review/browser/page/inbox and V0.2.1 offline replay. These use synthetic inputs, never a paid provider.
+- The sole skip was the optional browser dependency. After installing Playwright, `PYTHONPATH=backend/src python -m pytest backend/tests/test_app_campaign_browser.py -q -rs` with system Chromium: **1 passed** in 10.63 seconds. This is an actual CLI/Chromium proof with a synthetic local provider, not a physical-phone or screen-reader acceptance claim.
+- One-off editorial verification found all 119 slice statuses identical between the audit and roadmap, all 12 per-wave totals consistent, and all local Markdown link targets present; `git diff --check` passed. No prose-parsing repository test or production change was added.
+- These are targeted refresh results, not a new full-suite or cross-platform green claim. Exact final documentation-head reruns and CI witnesses are reported on the refresh PR.
+
+### Historical verification (original 92144e17 audit)
+
+The following are historical results, not current-head green evidence:
 
 - Waves 1–4 focused/integration tests: **1,274 passed, 4 skipped** across 40 files.
 - Counted-holdings, inference and source-API tests: **105 passed**; an additional synthetic real-store smoke confirmed two-resource barter, atomic craft, replay idempotence and insufficient-resource refusal.
@@ -140,7 +171,7 @@ All eight scoped foundation contracts and their integration proof are present; t
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/v1-cost-and-voice-regression.md)).
 - Evidence: [`backend/src/grimoire/evals/v021.py`](../../backend/src/grimoire/evals/v021.py); [`docs/evals/V021_BASELINE.md`](../../docs/evals/V021_BASELINE.md); [`backend/tests/test_v021_replay.py`](../../backend/tests/test_v021_replay.py); Capture conversion and receipt verification plus deterministic replay exist.
-- Scope / gap: No live provider-reported V0.2.1 measurement exists; baseline capture pending, so actual measured baseline/voice regression proof is missing.
+- Scope / gap: [#686](https://github.com/charlesmsiegel/grimoire/pull/686) documents capture prerequisites only. No live provider-reported V0.2.1 measurement exists; baseline capture pending, so actual measured baseline/voice regression proof is missing.
 
 <a id="slice-016"></a>
 ### 016 — Session Zero Boundaries
@@ -158,7 +189,7 @@ All ten scheduled headless first slices are present. Later subject-validation an
 
 - [x] Scheduled first-useful slice ([requirements](sprints/world-optional-chat-scopes.md)).
 - Evidence: [`backend/src/grimoire/chatstore/library.py`](../../backend/src/grimoire/chatstore/library.py); [`backend/tests/test_chatstore_scenarios.py`](../../backend/tests/test_chatstore_scenarios.py); World-optional chats, source bindings, campaign-wide unique actor IDs and rebuilt navigation survive reopen.
-- Scope / gap: Non-character reuse is deferred to 033.
+- Scope / gap: Non-character reuse is owned by 033 and now implemented there; this earlier slice does not claim it independently.
 
 <a id="slice-017"></a>
 ### 017 — Typed Relationship Graph
@@ -281,7 +312,7 @@ All ten scheduled headless first slices are present. Later subject-validation an
 ### 033 — Party And Presence
 
 - [x] Scheduled first-useful slice ([requirements](sprints/party-and-presence.md)).
-- Follow-up evidence (2026-11-13, after the audit snapshot): `chatstore/library.py`, `chats/model.py` and `core/snapshot.py` support explicit native actors without changing their kind, including two same-species individuals in one chat. `backend/tests/test_chatstore_actors.py` proves public create/update/reopen, instance-targeted detach, qualified provenance, stale/unauthorized/paired-ID refusals and the real scene runner's boxed-speaker refusal. `test_partystore_scenarios.py` retains the membership/release proof.
+- Follow-up evidence ([#680](https://github.com/charlesmsiegel/grimoire/pull/680), rechecked 2026-11-20): [`chatstore/library.py`](../../backend/src/grimoire/chatstore/library.py), [`chats/model.py`](../../backend/src/grimoire/chats/model.py) and [`core/snapshot.py`](../../backend/src/grimoire/core/snapshot.py) support explicit native actors without changing their kind, including two same-species individuals in one chat. [`test_chatstore_actors.py`](../../backend/tests/test_chatstore_actors.py) proves public create/update/reopen, instance-targeted detach, qualified provenance, stale/unauthorized/paired-ID refusals and the real scene runner's boxed-speaker refusal. [`test_partystore_scenarios.py`](../../backend/tests/test_partystore_scenarios.py) retains the membership/release proof.
 - Scope / gap: Headless scheduled slice complete. No new UI adapter, species voice-generation contract or controller-knowledge projection; later milestones are not certified by this check.
 
 <a id="slice-034"></a>
@@ -442,7 +473,7 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="slice-113"></a>
 ### 113 — UI Campaign State and Canon Review
 
-- [x] Scheduled first-useful slice ([requirements](sprints/ui-campaign-state-canon.md)); follow-up to the audit snapshot above.
+- [x] Scheduled first-useful slice ([requirements](sprints/ui-campaign-state-canon.md)); rechecked at the refresh snapshot.
 - Evidence: [`app/campaign_config.py`](../../backend/src/grimoire/app/campaign_config.py) and [`app/campaign_services.py`](../../backend/src/grimoire/app/campaign_services.py) wire explicit startup stage/agenda and optional labeling configuration into CLI/chat/hub; [`test_app_campaign_config.py`](../../backend/tests/test_app_campaign_config.py) covers policy, authority, retries and usage; [`test_app_campaign_review.py`](../../backend/tests/test_app_campaign_review.py) covers stale turn and frame refusal; [`test_app_campaign_browser.py`](../../backend/tests/test_app_campaign_browser.py) runs actual CLI startup/restart and Chromium interactions over synthetic data.
 - Scope / limits: browser proof includes keyboard cancellation, failed-label retry, stale second-tab review, separate player/director effect keys, actor-private evidence, absent-NPC exclusion, configured NPC choice, narrow viewport and exactly-once consequence after restart. 039 agendas and 041 stages remain authored startup configuration, not later persisted simulation/editors. Labeling has an explicit independent paid route; no effect follows automatically from narration. Full Wave 7 screen-reader/physical-phone acceptance remains unverified; this closes 113's scheduled first-useful slice only.
 
@@ -456,7 +487,7 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="wave-8"></a>
 ## Wave 8
 
-055 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+051, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -475,16 +506,16 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="slice-051"></a>
 ### 051 — Ensemble Conversation
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/ensemble-conversation.md)).
-- Evidence: grimoire.runtime and grimoire.comms provide per-NPC generation and addressed channels.
-- Scope / gap: No ensemble floor/interruption/silence scheduler for three voices.
+- [x] Scheduled first-useful slice ([requirements](sprints/ensemble-conversation.md)).
+- Evidence: [`ensemble/plan.py`](../../backend/src/grimoire/ensemble/plan.py) and [`ensemble/run.py`](../../backend/src/grimoire/ensemble/run.py); [`test_ensemble.py`](../../backend/tests/test_ensemble.py) exercises a direct question, grounded interjection, meaningful silence, three separately voiced contributions, audience-safe private remarks, player floor protection, stale cast/control, cancellation and retry accounting.
+- Scope / gap: Headless scheduled exchange only: authored bids and private plan traces produce unaccepted proposals, not canonical dialogue. No app/UI (115), TTS or real-time overlap; marker screening is not semantic secrecy certification. See [contract](../ENSEMBLE.md).
 
 <a id="slice-053"></a>
 ### 053 — Memory Consolidation
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/memory-consolidation.md)).
-- Evidence: [`app/adapters/play_story.py`](../../backend/src/grimoire/app/adapters/play_story.py) derives last-time recap from the last four kept player-visible lines; [`campaignapi/api.py`](../../backend/src/grimoire/campaignapi/api.py) explicitly marks long-term ledger unavailable.
-- Scope / gap: No sourced consolidation across scenes and corrections.
+- Evidence: [`memory/view.py`](../../backend/src/grimoire/memory/view.py), [`memorystore/library.py`](../../backend/src/grimoire/memorystore/library.py), [`test_memory.py`](../../backend/tests/test_memory.py) and [`test_memory_store.py`](../../backend/tests/test_memory_store.py) provide durable actor-scoped selections, corrections, stale-selection suppression, evidence provenance and bounded historical views; [`test_memory_recovery.py`](../../backend/tests/test_memory_recovery.py) covers local recovery.
+- Scope / gap: Partial foundation, not the complete several-scene consolidation proof: exact evidence selection/correction does not yet produce attributable summaries/dossiers or establish the corrected-character-identity versus older recap scenario end to end. Context-pack, UI and sync adapters remain absent; see [contract](../MEMORY.md).
 
 <a id="slice-054"></a>
 ### 054 — Scenes Forks And Retcons
@@ -510,9 +541,9 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="slice-057"></a>
 ### 057 — Faction Decision Making
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/faction-decision-making.md)).
-- Evidence: [`goals/__init__.py`](../../backend/src/grimoire/goals/__init__.py) and [`goals/policy.py`](../../backend/src/grimoire/goals/policy.py) implement authored single-NPC agendas and deterministic choices; [`test_goals_policy.py`](../../backend/tests/test_goals_policy.py) exercises these.
-- Scope / gap: No institution decision model resolving internal dissent.
+- [x] Scheduled first-useful slice ([requirements](sprints/faction-decision-making.md)).
+- Evidence: [`institutions/policy.py`](../../backend/src/grimoire/institutions/policy.py) and [`test_institutions.py`](../../backend/tests/test_institutions.py) prove conflicting groups, explicit canonical membership, leader rejection with retained member dissent, separate accepted assistance and local evidence without teaching a distant chapter. Retry, current membership and NPC-control checks fail closed.
+- Scope / gap: Pure headless first slice: explicit leader choice, not autonomous political simulation. No persistent institution adapter, UI, resource/territory simulation, rumor delivery or strategic clock advancement. Acceptance and communication remain separate contracts; see [limits](../INSTITUTIONS.md).
 
 <a id="slice-058"></a>
 ### 058 — Local Multi PC
@@ -524,16 +555,16 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="slice-059"></a>
 ### 059 — Location Topology
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/location-topology.md)).
-- Evidence: [`graph/model.py`](../../backend/src/grimoire/graph/model.py) provides located_in; [`staging/model.py`](../../backend/src/grimoire/staging/model.py) and [`staging/senses.py`](../../backend/src/grimoire/staging/senses.py) provide scene-local areas/ways/reach, tested by test_staging_*.py.
-- Scope / gap: Scene staging explicitly is not stored world canon. No persistent location hierarchy/adjacency/travel topology over four stable world locations.
+- [x] Scheduled first-useful slice ([requirements](sprints/location-topology.md)).
+- Evidence: [`topology/index.py`](../../backend/src/grimoire/topology/index.py), [`topologystore/library.py`](../../backend/src/grimoire/topologystore/library.py); [`test_topology.py`](../../backend/tests/test_topology.py), [`test_topologystore.py`](../../backend/tests/test_topologystore.py), [`test_topology_chat.py`](../../backend/tests/test_topology_chat.py) and [`test_topologystore_recovery.py`](../../backend/tests/test_topologystore_recovery.py). Four-place save/reopen, containment, directed/conditional routes, isolated campaign block and same-named imported-town refusal are executable; stale dependencies, authorization, crash and retry are covered.
+- Scope / gap: Headless director-only topology, not actor knowledge or scene staging. Weighted routes/hazards, movement/travel consumers, maps (097), semantic merge and UI exit 115 remain open; see [contract](../TOPOLOGY.md).
 
 <a id="slice-060"></a>
 ### 060 — NPC Theory Of Mind
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/npc-theory-of-mind.md)).
-- Evidence: goals policy consumes ActorKnowledge for the actor itself.
-- Scope / gap: No hypotheses about another actor’s beliefs or mistaken-belief/second-order reasoning proof.
+- [x] Scheduled first-useful slice ([requirements](sprints/npc-theory-of-mind.md)).
+- Evidence: [`social_hypotheses/policy.py`](../../backend/src/grimoire/social_hypotheses/policy.py) and [`test_social_hypotheses.py`](../../backend/tests/test_social_hypotheses.py) prove an evidence-attributed mistaken second-order conjecture, bluff selection and confidence/tactic revision while director truth and the mayor’s actual belief remain unchanged. Exact-owner recall, depth/input bounds, evidence and authority refusals are covered.
+- Scope / gap: Authored, in-memory hypotheses and proposed tactics only; no semantic inference oracle, persistent ledger adapter, runtime/UI wiring or live social-quality measurement. No provider calls; deeper intrigue is later work. See [contract](../SOCIAL_HYPOTHESES.md).
 
 <a id="slice-061"></a>
 ### 061 — Private And Local Voice
@@ -545,16 +576,16 @@ All eight scheduled first slices are present, including both persistent text-pla
 <a id="slice-062"></a>
 ### 062 — Ruleset Action Contracts
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/ruleset-action-contracts.md)).
-- Evidence: [`grimoire.rulesets`](../../backend/src/grimoire/rulesets) and [`test_rulesets.py`](../../backend/tests/test_rulesets.py) provide separate D20/WoD/PbtA/Ars proposal contracts and synthetic examples; see [contract and limits](../RULESETS.md).
-- Scope / gap: Headless proposal validation only. No canonical resolution, executable hooks, combat or UI integration; these remain 075/090/115. Completion remains unchecked until full verification and independent gates finish.
+- [x] Scheduled first-useful slice ([requirements](sprints/ruleset-action-contracts.md)).
+- Evidence: [`rulesets/model.py`](../../backend/src/grimoire/rulesets/model.py), [`rulesets/families.py`](../../backend/src/grimoire/rulesets/families.py) and [`test_rulesets.py`](../../backend/tests/test_rulesets.py). Four concrete D20/WoD/PbtA/Ars action/result shapes validate through one pinned module envelope. Tests preserve the PbtA unresolved partial choice and Ars season/XP cap, reject mismatched families/editions, and prove no-mechanics emits no fake roll. [Research and deferred hooks](../RULESETS.md) distinguish opposed actions, clocks, seasonal conflicts and executable capabilities from universal fields.
+- Scope / gap: Complete research/prototype first slice, with narrow reference profiles only. Results remain noncanonical proposals: no dice execution, durable resolution (075), executable hooks, combat (090) or UI (115). Pure repeatability is not an exactly-once stored receipt.
 
 <a id="slice-063"></a>
 ### 063 — Rumors And Information Flow
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/rumors-and-information-flow.md)).
-- Evidence: comms and evidence support addressed communication and bounded actor knowledge.
-- Scope / gap: No delayed/distorted rumor propagation records or scheduler.
+- Evidence: [`rumorstore/library.py`](../../backend/src/grimoire/rumorstore/library.py), [`test_rumor_store.py`](../../backend/tests/test_rumor_store.py) and [`test_rumor_recovery.py`](../../backend/tests/test_rumor_recovery.py) prove delayed authored edges, false retelling, explicitly admitted belief, stable sender projection and local crash reconciliation without altering events/rulings.
+- Scope / gap: Partial: the required distant rival acting on the delayed misleading belief is not established by the delivery/belief tests. Runtime/context/campaign readers must adopt the safe rumor projection before app exposure; sync, UI and the calendar adapter remain pending. Explicit supplied ticks are not integrated campaign time. See [contract](../RUMORS.md).
 
 <a id="slice-064"></a>
 ### 064 — Scenario Preparation
@@ -588,8 +619,8 @@ All eight scheduled first slices are present, including both persistent text-pla
 ### 068 — Actor Specific Inference
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/actor-specific-inference.md)).
-- Evidence: [`evals/gate2.py`](../../backend/src/grimoire/evals/gate2.py) compares recorded optional-call captures; [`app/inference.py`](../../backend/src/grimoire/app/inference.py) explicitly marks planning/critique stages unimplemented; [`test_app_inference.py`](../../backend/tests/test_app_inference.py) asserts unavailability.
-- Scope / gap: No baseline-versus-extra-planner/critic implemented experiment and actual quality/cost comparison.
+- Evidence: [`actor_inference`](../../backend/src/grimoire/actor_inference), [`test_actor_inference.py`](../../backend/tests/test_actor_inference.py) and [`test_actor_inference_report.py`](../../backend/tests/test_actor_inference_report.py) provide opt-in actor-private planner/critic calls, baseline generation, conservative budget/cancellation, usage/latency reports and an injected synthetic comparison.
+- Scope / gap: Partial experiments only: actual billing remains unknown and matched measured V0.2.1 cost/voice evidence is absent (015). Synthetic lexical quality and estimated/priced token usage cannot close the proving scenario. UI/runtime adoption remains separate; see [measurement limits](../ACTOR_INFERENCE.md).
 
 <a id="slice-069"></a>
 ### 069 — Coding Skills Calibration
