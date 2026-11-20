@@ -5,6 +5,7 @@
 // only once posted. Everything shown from the library (card text, model output) is set as text, never as markup.
 
 import { makeReferenceIntent } from "./reference-intent.js";
+import { makeDictation } from "./dictate.js";
 import { makeVoice } from "./voice.js";
 import { makeStaging } from "./staging.js";
 import { makeCompare } from "./compare.js";
@@ -36,10 +37,12 @@ export async function mount(root, ctx) {
   root.classList.add("chat-page");
   // ctx.act turns the page's buttons back on when its work ends, so the chat is drawn again after every action,
   // or Post would come back on where it must stay off. While one runs, whatever is drawn is drawn off too.
+  let endDictation = () => {};
   const run = (work) => {
     if (page.busy || ctx.signal.aborted) return Promise.resolve(undefined);
     page.busy = true;
     page.failure = null;
+    endDictation();  // the action turns Stop dictating off too: a recording ends first, unsent (./dictate.js)
     return ctx.act(work).finally(() => { page.busy = false; if (page.scene && !ctx.signal.aborted) render(page.scene); });
   };
   const page = { busy: false, scene: null, mode: "auto", modes: null, pickable: null, repairs: null, entry: undefined,
@@ -91,6 +94,11 @@ export async function mount(root, ctx) {
   // voice as an optional assist beside the composer (./voice.js, 067): shown only where the app serves it
   const voice = makeVoice(ctx, { composer });
   if (voice.node) foot.prepend(voice.node);
+  // speech to draft (./dictate.js, 080): dictated words land in the composer as unsent text; only Post posts
+  const dictation = makeDictation(ctx, { composer, names: () => (page.scene
+    ? [...page.scene.cast.map((member) => member.name), page.scene.persona && page.scene.persona.name] : []) });
+  if (dictation.node) foot.prepend(dictation.node);
+  if (dictation.end) endDictation = dictation.end;
   const panelBody = el("div", { class: "chat-panel-body" });
   // The panel's tabs. Each has something to show for every chat; a tab that might have nothing is left out here.
   const PANEL_TABS = [

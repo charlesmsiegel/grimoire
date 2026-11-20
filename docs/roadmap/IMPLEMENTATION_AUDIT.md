@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the rows to **80/119**, and the 073, 074, 077, 078, 079, 081, 082, 083, 084, 085 and 086 proofs to **91/119**; with Wave 2 **5/12 scoped waves** (1, 2, 3, 4, 5) are complete. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the rows to **80/119**, and the 073, 074, 077, 078, 079, 080, 081, 082, 083, 084, 085 and 086 proofs to **92/119**; with Wave 2 **5/12 scoped waves** (1, 2, 3, 4, 5) are complete. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 13/16 | ☐ | 073, 074, 075, 076, 077, 078, 079, 081, 082, 083, 084, 085 and 086 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete. |
+| [9](#wave-9) | 14/16 | ☐ | 073, 074, 075, 076, 077, 078, 079, 080, 081, 082, 083, 084, 085 and 086 meet their bounded first slices (080 with a stand-in local recognizer); the other domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-073, 074, 075, 076, 077, 078, 079, 081, 082, 083, 084, 085 and 086 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 116 remain incomplete.
+073, 074, 075, 076, 077, 078, 079, 080, 081, 082, 083, 084, 085 and 086 are complete at their bounded first-proof boundaries (080 with a stand-in local recognizer). Other domain slices and UI exit 116 remain incomplete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -728,9 +728,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-080"></a>
 ### 080 — Speech To Draft
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/speech-to-draft.md)).
-- Evidence: intent can classify supplied speech-origin transcripts; drafts persist editable text.
-- Scope / gap: No STT provider/microphone transcription-to-editable-draft workflow; synthetic intent tests are insufficient.
+- [x] Scheduled first-useful slice ([requirements](sprints/speech-to-draft.md)).
+- Evidence: the chat page's **Dictate** ([`dictate.js`](../../backend/src/grimoire/app/static/pages/chat/dictate.js)) records through 061's on-device route (the `dictation.*` ops in [`adapters/dictation.py`](../../backend/src/grimoire/app/adapters/dictation.py) wrap `voice.*`'s session, capture token and recognizer) and puts what was heard in the composer as unsent text; only Post posts, and "post it" is answered, never acted on. [`speech/dictation.py`](../../backend/src/grimoire/speech/dictation.py) revises the draft with fidelity first: verbatim words always shown, a spoken correction ("no, I meant the west gate") replaces only the part of the last dictated passage it lines up with, "scratch that" removes it, each with the words-as-said reading one press away, Undo, and scene names only suggested ([`test_speech_dictation.py`](../../backend/tests/test_speech_dictation.py)). [`dictate.e2e.mjs`](../../backend/tests/js/dictate.e2e.mjs) runs the proving scenario on the real page against a real app server: an invented name dictated, corrected to the west gate, "post it" ignored, the name typed over, then Post; [`test_app_dictation.py`](../../backend/tests/test_app_dictation.py) checks the library on disk gained nothing until Post and then exactly the one turn, refusals and stale recordings, and the installed engine on synthetic speech. [`dictate.test.mjs`](../../backend/tests/js/dictate.test.mjs) covers Cancel/Esc/leaving, typing during recognition and stale offers. Docs: [SPEECH](../SPEECH.md#speech-to-draft-080).
+- Scope / gap: verified with a stand-in recognizer and synthetic Flite speech only; a real microphone, room and voice are untried. US English only (the bundled model); no streaming partials, spoken punctuation, per-word confidence, recognizer vocabulary for scene names or mixed speech/typing (milestones 2–3). Corrections line up by shared words or sound, an untuned heuristic; the words-as-said reading and Undo are the safety net.
 
 <a id="slice-081"></a>
 ### 081 — Story Graph And Navigation
