@@ -15,6 +15,7 @@ from chat_fixtures import Clock
 from scene_fixtures import ANA, BOB, POLICY, TAMSIN, Table, Tagged, attach_tamsin, card_library, say
 from store_helpers import OWNER
 
+from grimoire.app.adapters.play_story import said
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
 from grimoire.core import DIRECTOR
@@ -29,6 +30,7 @@ from grimoire.scene import (
 from grimoire.store import ScopeRecord
 from grimoire.textapi import TextApi
 from grimoire.textapi.errors import ApiRefused
+from grimoire.textapi.views import turn_view
 
 ANYA_ASKS = '"Is the lighthouse still dark?"'
 TAMSIN_ASKS = '"And who keeps its lamp now?"'
@@ -262,6 +264,22 @@ def test_a_combined_turn_is_not_adjudicated_or_given_an_effect_in_this_slice(car
         table.runner.generate(chat, table.player(ANA))
         table.runner.keep(chat, table.player(ANA), 1)
         refused("combined_turn", table.runner.propose_effect, chat, table.owner, turn.turn_id, "The door opens.")
+
+
+def test_the_last_time_recap_quotes_every_open_post_of_a_combined_turn(cards):
+    folder, chat, _ = cards
+    with Table(folder) as table:
+        anya, mara, tamsin = two_players(table, chat)
+        table.runner.post_together(chat, [
+            Contribution(table.player(ANA), anya, ANYA_ASKS),
+            Contribution(table.player(BOB), tamsin, 'I whisper to Mara Vell: "The lamp is out"', "action")])
+        table.runner.pass_turn(chat, table.player(ANA))
+        scene = table.runner.open(chat)
+        view = turn_view(scene.turns.turns[-1], scene.names)
+    assert [(line["speaker"], line["text"], line["you"]) for line in said([view], str(anya))] == [
+        ("Anya Rook", "Is the lighthouse still dark?", True)]  # the whisper is the table's to keep out
+    public = {**view, "posts": [view["posts"][0], {**view["posts"][1], "private": False}]}
+    assert [line["speaker"] for line in said([public], str(anya))] == ["Anya Rook", "Tamsin Hale"]
 
 
 # -- the turn file ---------------------------------------------------------------------------------

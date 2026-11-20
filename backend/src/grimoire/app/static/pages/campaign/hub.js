@@ -85,7 +85,7 @@ export async function showHub(root, ctx, campaign, asked, audience) {
     if (scene) {
       for (const turn of scene.turns) numbers.set(turn.turn, turn.number);
       turns = scene.turns.filter((turn) => turn.kept).map((turn) => ({ turn: turn.turn,
-        label: "Turn " + turn.number + (turn.post ? ": " + clip(turn.post.text) : "") }));
+        label: "Turn " + turn.number + (turn.post ? ": " + clip((turn.posts || [turn.post]).map((post) => post.text).join(" / ")) : "") }));
     }
     render(hub);
   };
