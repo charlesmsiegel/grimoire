@@ -92,7 +92,9 @@ as not available.
 
 The director writes each hypothesis in their own words, about what another character believes, or what one character thinks a second believes (060's
 outer-to-inner order), citing evidence the NPC
-holds; the page holds them from the newest evidence they cite. The preview admits them in order into a ledger that
+holds; the page holds them from the newest evidence they cite, and a replacement one moment after the hypothesis it
+replaces if that is later (060 refuses a revision no later than what it supersedes). A hypothesis another one replaces
+can't be removed before its replacement, so the chain sent stays one 060 admits. The preview admits them in order into a ledger that
 lives for that one answer, recalls what the NPC holds current, and proposes the credited tactic or the fallback.
 Each ruled proposition stands as 012's `standing` says (its latest ruling); the rulings before it are listed apart
 as `earlier`, so a proposition refuted and later established reads as established. The preview answers the

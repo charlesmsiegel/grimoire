@@ -12,7 +12,7 @@
 
 import { campaignName, count } from "../campaign/logic.js";
 import {
-  heldAt, latest, newOperationId, nextHypothesisId, parseConditions, parseConfidence, pathPlanText, pathText, percent,
+  heldAt, latest, replacedBy, newOperationId, nextHypothesisId, parseConditions, parseConfidence, pathPlanText, pathText, percent,
   placeLabels, readHypotheses, readList, routeText, rumorLine, rumorStatus, whose,
 } from "./logic.js";
 
@@ -208,7 +208,7 @@ async function showPlaces(slot, ctx, campaign) {
       if (review === reviewed) review = null;
       if (reading.current(since)) { replaced(answer.topology); draw(); }
       // read again meanwhile, perhaps before the change landed: read the topology chosen last once more
-      else if (current) await view(current);
+      else if (chosen.get() || current) await view(chosen.get() || current);
     } catch (error) {
       if (error && error.reason === "changed") { review = null; await view(chosen.get() || reviewed.args.topology); }
       throw error;
@@ -554,7 +554,9 @@ async function minds(ctx, body, chat, cast) {
       listed.replaceChildren(hypotheses.length ? el("ol", { class: "world-lines" }, hypotheses.map((item) => el("li", { class: "g-row" },
         el("span", { class: "g-grow" }, el("strong", {}, item.id + ": "), whose(item.about.map(nameOf)) + ", \"" + item.claim + "\", "
           + percent(item.confidence) + (item.supersedes ? ", replacing " + item.supersedes : "")),
-        ui.button("Remove", () => { hypotheses = hypotheses.filter((other) => other.id !== item.id); save(); drawList(); }, { size: "small" }))))
+        replacedBy(hypotheses, item.id).length
+          ? el("span", { class: "g-muted" }, "Replaced by " + replacedBy(hypotheses, item.id).join(", ") + ": remove that first")
+          : ui.button("Remove", () => { hypotheses = hypotheses.filter((other) => other.id !== item.id); save(); drawList(); }, { size: "small" }))))
         : ui.empty("No hypothesis is written yet."));
       const ids = hypotheses.map((item) => ({ value: item.id, label: item.id + ": " + item.claim.slice(0, 50) }));
       replaces = ui.choice("It replaces", [{ value: "", label: "Nothing: a new hypothesis" }, ...ids], { value: "" });

@@ -106,6 +106,11 @@ export function heldAt(evidenceIds, held, replaced) {
   return from === null ? replaced.at + 1 : Math.max(from, replaced.at + 1);
 }
 
+// The hypotheses that replace `id` (060 needs a replaced hypothesis kept before what replaces it).
+export function replacedBy(hypotheses, id) {
+  return hypotheses.filter((item) => item.supersedes === id).map((item) => item.id);
+}
+
 // The next unused hypothesis id ("h1", "h2", …).
 export function nextHypothesisId(hypotheses) {
   const used = new Set(hypotheses.map((item) => item.id));

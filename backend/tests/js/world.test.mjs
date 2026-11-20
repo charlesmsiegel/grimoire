@@ -552,6 +552,61 @@ test("a road change answered after its topology was left and chosen again reads 
   assert.ok(roadButton(placesCard(root), "Open road"), "and what is shown is that read, with the road blocked");
 });
 
+test("a road change answered while another topology is still being read keeps the one chosen", async () => {
+  let releaseCommit, releaseSea, roadsReads = 0;
+  const { root, done } = await mounted({ answers: {
+    "world.topologies": () => TWO,
+    "world.places": (args) => {
+      if (args.topology === SEA) return new Promise((resolve) => { releaseSea = () => resolve(places("s|", { topology: SEA, road: "ferry" })); });
+      roadsReads += 1;
+      return places("g|" + roadsReads, { topology: ROADS });
+    },
+    "world.path_plan": (args) => planOf(args, places(args.expected).topology),
+    "world.path_commit": () => new Promise((resolve) => { releaseCommit = () => resolve({ done: { already_applied: false }, topology: places("g|x", { blocked: true }).topology }); }),
+  } });
+  await done;
+  roadButton(placesCard(root), "Block road").click();
+  await settle();
+  button(reviewOf(placesCard(root)), "Make this change").click();
+  await settle(3);
+  choose(root, SEA);  // its read is still out when the change answers
+  await settle(3);
+  releaseCommit();
+  await settle();
+  releaseSea();
+  await settle();
+  assert.equal(roadsReads, 1, "the roads are not read again over the topology chosen since");
+  assert.equal(field(placesCard(root), "Topology").value, SEA, "the topology chosen stays chosen");
+  assert.ok(placesCard(root).querySelectorAll("button").some((node) => (node.getAttribute("aria-label") || "") === "Block ferry")
+    || placesCard(root).textContent.includes("ferry"), "and its roads are what is shown");
+});
+
+test("a hypothesis another one replaces can't be removed before it, so the chain stays one 060 admits", async () => {
+  const { root, done } = await mounted();
+  await done;
+  await settle();
+  const add = (claim) => {
+    typeInto(minds(root), "What Mara thinks they think", claim);
+    const box = minds(root).querySelectorAll("input").find((node) => node.getAttribute("value") === "e-Mara");
+    box.checked = true;
+    box.dispatchEvent({ type: "change" });
+    typeInto(minds(root), "How sure", "70%");
+    field(minds(root), "Whose belief").value = ANYA;
+    button(minds(root), "Add this hypothesis").click();
+  };
+  add("Anya knows the letter");
+  field(minds(root), "It replaces").value = "h1";
+  add("Anya only guesses");
+  const rows = minds(root).querySelectorAll("li");
+  const first = rows.find((node) => node.textContent.startsWith("h1:"));
+  assert.ok(first.textContent.includes("Replaced by h2"), first.textContent);
+  assert.ok(!first.querySelectorAll("button").some((node) => node.textContent === "Remove"), "h1 offers no Remove while h2 replaces it");
+  rows.find((node) => node.textContent.startsWith("h2:")).querySelectorAll("button").find((node) => node.textContent === "Remove").click();
+  const again = minds(root).querySelectorAll("li").find((node) => node.textContent.startsWith("h1:"));
+  assert.ok(again.querySelectorAll("button").some((node) => node.textContent === "Remove"), "once h2 is gone, h1 can be removed");
+  assert.deepEqual(logic.replacedBy([{ id: "h1" }, { id: "h2", supersedes: "h1" }, { id: "h3", supersedes: "h1" }], "h1"), ["h2", "h3"]);
+});
+
 test("a preview's truth replaces the one read with the NPC, and a ruling overtaken is shown as earlier", async () => {
   const refuted = { rulings: [{ proposition: "p1", text: "Anya knows", standing: "refuted", ruling: "r1", at: 2, earlier: [] }], beliefs: [] };
   const established = { rulings: [{ proposition: "p1", text: "Anya knows", standing: "established", ruling: "r2", at: 5,
