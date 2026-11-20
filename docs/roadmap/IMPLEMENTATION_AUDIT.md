@@ -686,9 +686,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-074"></a>
 ### 074 — Downtime And Long Activities
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/downtime-and-long-activities.md)).
-- Evidence: effectstore supports durable exactly-once accepted effects.
-- Scope / gap: No campaign clock or long-activity scheduling/completion; cannot prove 20-day study advances time once.
+- [x] Scheduled first-useful slice ([requirements](sprints/downtime-and-long-activities.md)).
+- Evidence: [`downtimestore/library.py`](../../backend/src/grimoire/downtimestore/library.py) and [`DOWNTIME.md`](../DOWNTIME.md); [`test_downtimestore.py`](../../backend/tests/test_downtimestore.py)::test_twenty_day_study_completes_and_advances_time_once_even_after_reopen proves a 20-day study completing with its outcome, one calendar advance and deadline flag, and a retry after reopen that adds neither time nor progress; partial effort during travel, replay tampering, offline conflicts and crash/I/O-error recovery are in `test_downtimestore.py`, `test_downtimestore_sync.py` and `test_downtimestore_recovery.py`.
+- Scope / gap: Headless milestone 1 only: compressed-narration activities with effort requirements, progress, completion and abandonment on the 055 calendar. No downtime UI (116), supplies or food checks, deadlines that interrupt a stretch, overlapping commitments, pauses, ruleset study tables (Ars Magica seasons), played-out interim scenes, or controller authority for the actor's choice.
 
 <a id="slice-075"></a>
 ### 075 — Mechanical Resolution
