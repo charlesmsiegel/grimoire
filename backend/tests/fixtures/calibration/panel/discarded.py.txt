@@ -1,0 +1,5 @@
+async def persist(events, value):
+    events.append(value)
+
+async def caller(events, value):
+    persist(events, value)

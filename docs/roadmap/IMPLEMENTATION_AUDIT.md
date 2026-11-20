@@ -40,7 +40,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 12/24 | ☐ | 049, 050, 051, 054, 055, 056, 057, 059, 060, 062, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 13/24 | ☐ | 049, 050, 051, 054, 055, 056, 057, 059, 060, 062, 063, 064 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -593,9 +593,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-063"></a>
 ### 063 — Rumors And Information Flow
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/rumors-and-information-flow.md)).
-- Evidence: [`rumorstore/library.py`](../../backend/src/grimoire/rumorstore/library.py), [`test_rumor_store.py`](../../backend/tests/test_rumor_store.py) and [`test_rumor_recovery.py`](../../backend/tests/test_rumor_recovery.py) prove delayed authored edges, false retelling, explicitly admitted belief, stable sender projection and local crash reconciliation without altering events/rulings.
-- Scope / gap: Partial: the required distant rival acting on the delayed misleading belief is not established by the delivery/belief tests. Runtime/context/campaign readers must adopt the safe rumor projection before app exposure; sync, UI and the calendar adapter remain pending. Explicit supplied ticks are not integrated campaign time. See [contract](../RUMORS.md).
+- [x] Scheduled first-useful slice ([requirements](sprints/rumors-and-information-flow.md)).
+- Evidence: [`test_rumor_scenarios.py`](../../backend/tests/test_rumor_scenarios.py) runs the proving scenario through the scene runner: a witness's faithful retelling, then a distorted letter to a distant director NPC timed 21 days on the campaign's 055 calendar and carried only by a courier route; once it arrives and her belief is admitted, her recorded intention changes from trading to the challenge her agenda gates on that proposition, her brief carries the letter's account and never the true insult, and the insult event, its witness's perception, rulings and the proposition's reported standing are unchanged. [`evidencestore/library.py`](../../backend/src/grimoire/evidencestore/library.py) and [`core/knowledge.py`](../../backend/src/grimoire/core/knowledge.py) give every library reader (scene runner, context packs, campaign API, memory) the queued sends as `Knowledge.dispatches`, so a sender's view never changes on delivery; [`test_rumor_store.py`](../../backend/tests/test_rumor_store.py), [`test_rumors.py`](../../backend/tests/test_rumors.py) and [`test_rumor_recovery.py`](../../backend/tests/test_rumor_recovery.py) prove calendar timing, the overlay's fail-closed cases (damaged or missing rumor ledger) and crash reconciliation.
+- Scope / gap: Complete bounded first-useful slice. Belief admission on receipt is the director's explicit act, and delivery conditions are supplied explicitly rather than inferred. The rumor ledger is not synced (a peer without it shows no sends), faction/public-media spread at scale (milestone 3) and UI (115) remain pending. See [contract](../RUMORS.md).
 
 <a id="slice-064"></a>
 ### 064 — Scenario Preparation
@@ -636,8 +636,8 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 ### 069 — Coding Skills Calibration
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/coding-skills-calibration.md)).
-- Evidence: [`grimoire.calibration`](../../backend/src/grimoire/calibration.py) runs a pinned external deterministic-specialist corpus with three repeat trials, unknown-analysis handling and structural confusion counts; [calibration report and limits](../CALIBRATION.md).
-- Scope / gap: Independent actionable-defect/theory model calibration, model pins, panel repeatability and defect false-positive rates remain unavailable. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
+- Evidence: [`grimoire.calibration`](../../backend/src/grimoire/calibration.py) runs a pinned external deterministic-specialist corpus with three repeat trials, unknown-analysis handling and structural confusion counts. [`grimoire.judgepanel`](../../backend/src/grimoire/judgepanel.py) runs three pinned judges × three trials over a behavior-confirmed labelled corpus, with per-call coverage canaries, served-model pin checks, defect false-positive/negative rates, repeatability and pinned-rubric theory scoring; it reproduces the pinned rubric awarding 100 to unread verdicts and refuses to score them ([calibration report and limits](../CALIBRATION.md)).
+- Scope / gap: No live, provider-reported judge capture has been run (billed; needs an approved spend cap), so independent defect/theory accuracy, repeatability and false-positive rates are not established. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
 
 <a id="slice-070"></a>
 ### 070 — Multimodal Player Input
@@ -651,7 +651,8 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/theory-driven-simplification.md)).
 - Evidence: [Opaque envelope schema policy](../STORAGE.md#opaque-record-schema-policy-071-bounded-slice) removes one repeated validation decision in a verified high-churn module; 51 behavior cases passed before/after, and an executed hypothetical NUL-policy rehearsal required three edits before versus one after with 45 passing cases per variant.
-- Scope / gap: This narrower schema-policy slice does not prove the actor/world change scenario or Android runtime; those broader obligations remain open.
+- Evidence (actor change): [Chat role rules](../CHATS.md#role-rules-one-owner-071) make `grimoire.chats.ROLES` the single owner of each role's definition kind and actor mode, removing six scattered decision sites. An executed rehearsal adding a hypothetical creature `companion` role took six edits in two modules before (the two obvious table edits silently wrote a character instance for a creature) and one table entry after; `test_chats_new_role.py` proves the new role's creature actors are created, reused and refused by the one chat writer in one commit, and that a build without the role refuses such chats. `test_chats_compat_071.py` reads, composes and edits a chat library written by the pre-071 code, passing before and after; a 1,152-outcome differential dump matched except doubly invalid hand-edited roster entries, which now report the role first, and unhashable roles, which now refuse instead of raising `TypeError`. V2 imports no Pydantic; the suites pass on CPython 3.11 with only `pyluach`.
+- Scope / gap: Not yet run on an Android device or emulator (Termux), so the Android runtime part of the proving scenario remains unverified. Chat roles only: app adapters, quickstart, text API filters and 020's character-only projection keep their own role lists, and world lookup is unchanged.
 
 <a id="slice-072"></a>
 ### 072 — VN Staging And Cues
