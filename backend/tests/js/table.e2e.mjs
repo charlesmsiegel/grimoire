@@ -140,4 +140,42 @@ test("two players draft one turn, switch chats without losing a draft, and resum
   await until(() => byText(shared(main), "button", "Review the turn").length, 15000, "the take kept");
   await postTurn(main, ["1. Anya Rook, by you"]);
   await until(() => byText(main, "div", "Rain on the shutters.").length, 30000, "the table's next answer");
+
+  // redraws keep the person's place: Enter on a keyboard segment leaves focus on it, and Bob typing while the chat
+  // redraws under him (the owner keeps the take) stays in his box
+  const toBob = segment(shared(main), "bob");
+  toBob.focus();
+  toBob.click();
+  await until(() => field(shared(main), TAMSIN), 15000, "Bob at the keyboard");
+  // (compared by identity: assert.equal would print two whole fakedom trees on failure)
+  assert.ok(document.activeElement === toBob, "the segment pressed keeps the focus");
+  assert.ok(shared(main).contains(toBob), "and is still the panel's own");
+  const bobBox = field(shared(main), TAMSIN);
+  bobBox.focus();
+  type(bobBox, "*I listen at the shutters*");
+  byText(main, "button", "Keep this take").at(-1).click();
+  await until(() => !byText(main, "button", "Keep this take").length, 15000, "the take kept");
+  await idle();
+  assert.ok(document.activeElement === bobBox, "Bob is still typing in his part after the redraw");
+  assert.ok(shared(main).contains(bobBox));
+
+  // Bob holds his part, then Tamsin goes back to the director: the part is no longer his, Bob is no longer at
+  // this keyboard, and whoever is takes it out of the turn for him, so the turn is not wedged
+  await hold(main, "Tamsin Hale's part");
+  await until(() => shared(main).textContent.includes("1. Tamsin Hale"), 15000, "Bob's part held");
+  shared(main).querySelectorAll("details").find((node) => node.classList.contains("chat-table-seating")).open = true;
+  const seat = field(shared(main), "Who plays Tamsin Hale");
+  seat.value = "director";
+  seat.dispatchEvent({ type: "change" });
+  byText(shared(main), "button", "Hand over").at(-1).click();
+  const dialog = await until(() => document.body.querySelector("dialog"), 15000, "the confirmation");
+  byText(dialog, "button", "Hand over").at(-1).click();
+  turn = await until(() => shared(main) && shared(main).textContent.includes("No longer theirs") && shared(main), 15000, "the part flagged");
+  assert.ok(!segment(turn, "bob"), "Bob plays no character here any more");
+  const out = turn.querySelectorAll("button").find((node) => node.getAttribute("aria-label") === "Take Tamsin Hale's part out of the turn");
+  assert.ok(out, "the flagged part can be taken out");
+  out.click();
+  await until(() => shared(main).textContent.includes("No part is held for this turn yet."), 15000, "the part taken out");
+  await idle();
+  assert.ok(!shared(main).textContent.includes("No longer theirs"));
 });

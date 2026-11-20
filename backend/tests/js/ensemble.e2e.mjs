@@ -80,10 +80,16 @@ test("the director previews how several NPCs answer, as a proposal that writes n
   const details = await until(() => exact(main, "button", "Details"), 15000, "the chat");
   details.click();
   const link = await until(() => byText(main, "a", "Several NPCs answering")[0], 15000, "the director's link");
-  assert.ok(link.getAttribute("href").startsWith("#/ensemble/") && link.getAttribute("href").includes("audience=director"));
+  // the link names no audience: on a screen the table reads, it lands on the table's view, never the director's
+  assert.equal(link.getAttribute("href"), "#/ensemble/" + encodeURIComponent(chat));
+  assert.ok(!link.getAttribute("href").includes("audience"));
+  const companions = byText(main, "a", "Companions").find((node) => node.getAttribute("href").startsWith("#/companions/"));
+  assert.ok(companions, "the companions link");
+  assert.equal(companions.getAttribute("href"), "#/companions/" + encodeURIComponent(chat.slice("campaign:".length, chat.indexOf("#")))
+    + "?chat=" + encodeURIComponent(chat));
 
   // the table's view shows nothing of how NPCs coordinate
-  window.location.hash = "#/ensemble/" + encodeURIComponent(chat);
+  window.location.hash = link.getAttribute("href");
   const tableView = await until(() => section(main, "The exchange"), 15000, "the table's view");
   assert.ok(tableView.textContent.includes("director's plan"));
   assert.equal(tableView.querySelectorAll("button").length, 0);

@@ -102,8 +102,13 @@ test("the director records a capture, reviewed first and made once", { skip: !en
   assert.ok(roster.includes("Nobody has captured a companion") && roster.includes("Snik · Goblin") && roster.includes("Grub · Goblin"));
   assert.ok(roster.includes("no NPC speaks for it, nobody's control of any character changes, and no character learns of it"));
 
+  // choosing a trainer redraws the devices offered, not the form: the person stays in the Trainer box
+  const trainerBox = control(form, "Trainer");
+  trainerBox.focus();
   pick(form, "Trainer", env.GRIMOIRE_TRAINER);
   const again = await until(() => section(main, "Record a capture"), 15000, "the form for Mara");
+  // (compared by identity: assert.equal would print two whole fakedom trees on failure)
+  assert.ok(document.activeElement === trainerBox && again.contains(trainerBox), "the Trainer box keeps the focus");
   pickText(again, "Creature", "Snik");
   pickText(again, "Device used", "ordinary-ball (3 held)");
   type(again, "How many the trainer's active party holds", "1");

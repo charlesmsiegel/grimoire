@@ -61,6 +61,22 @@ test("a turn is posted only once the last one is closed and play is not paused",
   assert.match(logic.postBlocker(scene({ state: { open_turn: null, waiting: ["paused"] } })), /paused/);
 });
 
+test("a review on show is dropped once the chat moves past it", () => {
+  const drafts = [{ actor: "a", by: OWNER, text: "x", mode: "auto" }];
+  const turns = [{ turn: "t1" }, { turn: "t2" }];
+  const now = scene({ drafts, turns });
+  const review = { drafts, head: "t2" };
+  assert.equal(logic.headOf(now), "t2");
+  assert.equal(logic.headOf(scene({ turns: [] })), null);
+  assert.equal(logic.reviewHolds(review, now), true);
+  assert.equal(logic.reviewHolds({ drafts: [], head: null }, scene()), true, "no turn yet: the head is null");
+  assert.equal(logic.reviewHolds(review, { ...now, drafts: [{ ...drafts[0], text: "y" }] }), false, "a part changed");
+  assert.equal(logic.reviewHolds(review, { ...now, turns: [...turns, { turn: "t3" }] }), false, "another turn was posted");
+  assert.equal(logic.reviewHolds(review, { ...now, state: { open_turn: "t2", waiting: [] } }), false, "a take is open");
+  assert.equal(logic.reviewHolds(review, { ...now, state: { open_turn: null, waiting: ["paused"] } }), false, "play is paused");
+  assert.equal(logic.reviewHolds(null, now), false);
+});
+
 test("a review carries exactly the drafts reviewed and says each part's character and player", () => {
   const review = { owner: OWNER, drafts: [
     { actor: "a", name: "Anya", by: OWNER, text: "x", mode: "auto", ready: true, controller: OWNER },

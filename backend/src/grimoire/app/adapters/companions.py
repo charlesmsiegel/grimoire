@@ -16,7 +16,10 @@ capture is an adjudicated decision, and the roster reads 017's relations, which 
 - ``capture_commit`` builds the same request again (the same attempt id, at the same campaign sequence the plan
   was reviewed at), and commits it only if the preview's basis is still the one reviewed (``changed`` otherwise).
   An exact retry finds 050's own receipt and writes nothing again (``already_applied``): the one device is spent
-  once however often the commit is retried. The same attempt id for another capture refuses ``attempt_conflict``.
+  once however often the commit is retried. The retry is compared with the saved request field by field and
+  answered from the receipt, without working out again whose post backs it, so a character handed on since the
+  capture was made changes nothing. The same attempt id for anything else refuses ``attempt_conflict``. A review
+  whose sequence another capture took meanwhile refuses ``changed``.
 - A character a person plays takes that person's own key: the capture rests on that character's post in the
   chosen turn, and the person gives the key knowingly in the request (``keys``); a player who is not at this
   device cannot (``not_at_this_table``).
@@ -242,9 +245,8 @@ def _sequence(hub, chat) -> int:  # type: ignore[no-untyped-def]
         return next_sequence(hub.runner, chat.campaign_id, hub.runner._knowledge(chat)[1])  # noqa: SLF001
 
 
-def _made_at(ctx: AdapterContext, campaign: str, attempt: str) -> int | None:
-    """The campaign sequence a capture with this attempt id was made at, or ``None`` when none was: a review of a
-    capture already made is reviewed where it was made, so it finds 050's receipt (or ``attempt_conflict``)."""
+def _saved(ctx: AdapterContext, campaign: str, attempt: str):  # type: ignore[no-untyped-def]
+    """050's receipt of the capture made with this attempt id (its saved preview), or ``None`` when none was."""
     scan = ctx.store.campaign_accepted(campaign)
     for ref, stored in scan.records.items():
         try:
@@ -252,8 +254,46 @@ def _made_at(ctx: AdapterContext, campaign: str, attempt: str) -> int | None:
         except ValueError:  # 050 itself refuses an unreadable acceptance when it previews
             continue
         if saved is not None and saved.request.attempt_id == attempt:
-            return saved.request.at.sequence
+            return saved
     return None
+
+
+def _as_requested(args: Mapping[str, object], saved: CaptureRequest, sequence: object) -> bool:
+    """Whether the arguments ask for exactly the capture ``saved`` records: the same chat, turn, sequence, trainer,
+    creature, outcome, device, capacity and placement asked for. Who backed it (a player's post and key) is not
+    asked again: it was settled when the capture was made, and a character handed on since changes nothing made."""
+    campaign = saved.chat.campaign_id
+    try:
+        trainer = parse.actor_of(args.get("trainer"), "trainer", campaign)
+        creature = parse.actor_of(args.get("creature"), "creature", campaign)
+    except ApiRefused:
+        return False
+    return (parse.chat_of(args) == saved.chat and args.get("turn") == saved.at.turn_id
+            and (sequence is None or sequence == saved.at.sequence)
+            and (trainer, creature) == (saved.trainer, saved.creature) and args.get("outcome") == saved.outcome
+            and args.get("device") == saved.device and args.get("capacity") == saved.capacity
+            and args.get("placement", "auto") == saved.placement)
+
+
+def _receipt(ctx: AdapterContext, args: Mapping[str, object], *, sequence: object = None):  # type: ignore[no-untyped-def]
+    """The capture this attempt already made, as (preview, change, names, sequence), or ``None`` when it made none.
+    A request for anything other than what was made refuses ``attempt_conflict``; the receipt is answered from the
+    saved request, so a later change of who plays the trainer or the creature does not turn a retry into one."""
+    chat, _, scene = _scene(ctx, args)
+    saved = _saved(ctx, chat.campaign_id, str(_segment(args, "attempt_id")))
+    if saved is None:
+        return None
+    if not _as_requested(args, saved.request, sequence):
+        raise ApiRefused("attempt_conflict", "a capture was already made with this attempt id, and this is not it")
+    record = next((item for item in scene.records if item.turn_id == saved.request.at.turn_id), None)
+    if record is None:
+        raise ApiRefused("unknown_turn", "this chat has no turn with that id")
+    library = _library(ctx)
+    preview = library.preview(saved.request)
+    change = library.accept(preview, controls=scene.controls, contributions=post_contributions(record))
+    if change.effect is None or change.effect.duplicate_of is None:
+        raise ApiRefused("attempt_conflict", "the capture made with this attempt id cannot be read back")
+    return preview, change, _Names(ctx.store, scene), saved.request.at.sequence
 
 
 def _built(ctx: AdapterContext, args: Mapping[str, object], sequence: int):  # type: ignore[no-untyped-def]
@@ -371,8 +411,12 @@ def _capture_plan(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     """What the capture would do, reviewed at the next campaign sequence; nothing is written. A player's key is
     not needed to review, only to make the capture."""
     chat, hub, _ = _scene(ctx, args)
-    made = _made_at(ctx, chat.campaign_id, _segment(args, "attempt_id"))
-    sequence = _sequence(hub, chat) if made is None else made
+    # a capture already made is reviewed as it was made: 050's receipt, at its own sequence
+    made = _receipt(ctx, args)
+    if made is not None:
+        preview, change, names, sequence = made
+        return {"plan": _plan_view(preview, change, {}, names, sequence)}
+    sequence = _sequence(hub, chat)
     request, contributions, needs, names, scene = _built(ctx, args, sequence)
     library = _library(ctx)
     preview = library.preview(request)
@@ -398,6 +442,12 @@ def _capture_commit(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     expected = args.get("expected")
     if type(sequence) is not int or type(expected) is not str:
         raise ApiRefused("review_required", "review the capture before making it")
+    # a retry of a capture already made (its answer lost) answers the receipt and writes nothing
+    made = _receipt(ctx, args, sequence=sequence)
+    if made is not None:
+        preview, change, names, at = made
+        change.commit()
+        return {"done": _plan_view(preview, change, {}, names, at), "roster": _roster(ctx, args)}
     try:
         preview, change, needs, given, names = _accepted(ctx, args, sequence)
     except InvalidEffect as error:

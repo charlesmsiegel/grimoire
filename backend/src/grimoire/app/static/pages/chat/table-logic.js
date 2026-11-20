@@ -41,6 +41,19 @@ export function postBlocker(scene) {
   return null;
 }
 
+// The id of the chat's last turn: the head a review is taken after (null before the first turn).
+export function headOf(scene) {
+  const turns = (scene && scene.turns) || [];
+  return turns.length ? turns[turns.length - 1].turn : null;
+}
+
+// Whether a review on show may still be posted from: its drafts are the ones held, no turn was posted since it was
+// taken, and nothing (an open take, a pause) stops a turn being posted now. A stale review is dropped, never posted.
+export function reviewHolds(review, scene) {
+  return Boolean(review && scene) && draftsKey(review.drafts) === draftsKey(scene.drafts)
+    && headOf(scene) === review.head && postBlocker(scene) === null;
+}
+
 // The reviewed drafts as table.submit carries them.
 export function reviewed(review) {
   return review.drafts.map((item) => ({ actor: item.actor, by: item.by, text: item.text, mode: item.mode }));

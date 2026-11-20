@@ -5,6 +5,14 @@
 const BOOLEAN = new Set(["hidden", "disabled", "required", "selected"]);
 const REFLECTED = ["id", "title", "href", "type", "placeholder", "name", "src", "alt", "rel"];
 
+// As in a browser, taking the focused element (or what holds it) out of the page moves focus to the body, even
+// when it is put straight back (replaceChildren with the same node): a redraw that rebuilds or re-inserts the
+// control a person is in loses their place, and a test sees that.
+function blurInside(node) {
+  const document = node.ownerDocument;
+  if (document && document.activeElement && node.contains(document.activeElement)) document.activeElement = document.body || null;
+}
+
 class Node {
   constructor(document) { this.ownerDocument = document; this.parentNode = null; this.childNodes = []; }
   get textContent() { return this.childNodes.map((child) => child.textContent).join(""); }
@@ -22,12 +30,13 @@ class Node {
   append(...nodes) { this.childNodes.push(...this._adopt(nodes)); }
   prepend(...nodes) { this.childNodes.unshift(...this._adopt(nodes)); }
   replaceChildren(...nodes) {
-    for (const child of this.childNodes) child.parentNode = null;
+    for (const child of this.childNodes) { blurInside(child); child.parentNode = null; }
     this.childNodes = [];
     this.append(...nodes);
   }
   remove() {
     if (!this.parentNode) return;
+    blurInside(this);
     const siblings = this.parentNode.childNodes;
     siblings.splice(siblings.indexOf(this), 1);
     this.parentNode = null;
@@ -35,6 +44,7 @@ class Node {
   replaceWith(node) {
     const parent = this.parentNode;
     if (!parent) return;
+    blurInside(this);
     const [child] = parent._adopt([node]);
     parent.childNodes.splice(parent.childNodes.indexOf(this), 1, child);
     this.parentNode = null;

@@ -94,9 +94,10 @@ export async function mount(root, ctx) {
   if (voice.node) foot.prepend(voice.node);
   // 058's shared turn (./table.js, 115): each player at this screen drafts their own character's part, posted once
   const table = makeTable(ctx, chat, { run, redraw: (scene) => render(scene),
-    posted: async (scene) => {
+    // `answer: false` when the turn already has a take (a retried submission found it answered): never asked twice
+    posted: async (scene, { answer: ask = true } = {}) => {
       render(scene, { bottom: true });
-      if (generates() && !scene.state.waiting.length) await answer();
+      if (ask && generates() && !scene.state.waiting.length) await answer();
     } });
   if (table.node) foot.prepend(table.node);
   const panelBody = el("div", { class: "chat-panel-body" });
@@ -662,16 +663,18 @@ export async function mount(root, ctx) {
   }
 
   // The director's screens for this chat (115): several NPCs answering at once (051) and the campaign's companions
-  // (050). Each opens in the director's view, on its own page, away from the screen the table reads.
+  // (050). Each opens on its own page in the Table view, as everything this screen links to does: the director
+  // switches to the director's view there. A link never opens the director's view by itself, on a shared screen.
   function directorSection() {
     const campaign = chat.startsWith("campaign:") && chat.includes("#") ? chat.slice("campaign:".length, chat.indexOf("#")) : null;
     const links = [
-      ctx.registered("ensemble") ? ui.buttonLink("Several NPCs answering", "ensemble", [chat], { audience: "director" }, { size: "small" }) : null,
-      campaign && ctx.registered("companions") ? ui.buttonLink("Companions", "companions", [campaign], { chat, audience: "director" }, { size: "small" }) : null,
+      ctx.registered("ensemble") ? ui.buttonLink("Several NPCs answering", "ensemble", [chat], undefined, { size: "small" }) : null,
+      campaign && ctx.registered("companions") ? ui.buttonLink("Companions", "companions", [campaign], { chat }, { size: "small" }) : null,
     ].filter(Boolean);
     if (!links.length) return null;
     return el("section", { class: "chat-section" }, ui.eyebrow("The director's"),
-      el("p", { class: "g-muted chat-plain" }, "Each opens in the director's view, for this chat."), el("div", { class: "chat-detail-actions" }, ...links));
+      el("p", { class: "g-muted chat-plain" }, "Each opens for this chat in the Table view; switch to the director's view there."),
+      el("div", { class: "chat-detail-actions" }, ...links));
   }
 
   // The name of a bound source, from the chat's entry in the chat list (the scene itself carries refs only).

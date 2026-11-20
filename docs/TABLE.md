@@ -7,8 +7,11 @@ domain service that slice already has. None keeps a store of its own, and none c
 | Slice | Adapter | Where | Whose |
 |---|---|---|---|
 | 058 | `table` (`grimoire.app.adapters.table`) | in a chat: **Shared turn**, above the composer | the table at this device |
-| 051 | `ensemble` (`grimoire.app.adapters.ensemble`) | `#/ensemble/<ChatRef>?audience=director`, from a chat's Details | the director |
-| 050 | `companions` (`grimoire.app.adapters.companions`) | `#/companions/<campaign id>?chat=<ChatRef>&audience=director`, from a campaign's hub or a chat's Details | the director |
+| 051 | `ensemble` (`grimoire.app.adapters.ensemble`) | `#/ensemble/<ChatRef>` (`?audience=director` for the director's view), from a chat's Details | the director |
+| 050 | `companions` (`grimoire.app.adapters.companions`) | `#/companions/<campaign id>?chat=<ChatRef>` (`&audience=director` for the director's view), from a campaign's hub or a chat's Details | the director |
+
+A chat's Details links to both pages without an audience: they open in the Table view, as everything the table's
+screen links to does, and the director switches to the director's view there.
 
 ## A shared turn (058)
 
@@ -24,10 +27,17 @@ has more than one character a person plays, or this device was started for more 
   app holds the parts in memory until the turn is posted, so restarting the app loses them (058's milestone 2).
   Words typed while the part was on its way are the next draft, never cleared by the answer.
 - **This turn, in order** lists the held parts, each with its character, its player and its mode. Another
-  player's words are not shown to whoever is at the keyboard. A player moves only their own part.
+  player's words are not shown to whoever is at the keyboard (see [What hides a player's words](#what-hides-a-players-words)).
+  A player moves only their own part. A part whose character was handed to someone else while it was held is
+  flagged "No longer theirs" and offers **Take it out of the turn** to whoever is at the keyboard (the core
+  `drop_draft` with the part's own `by`): its writer may no longer be seated here, and 058 refuses to post it.
 - **Review the turn** reads `table.review`; **Post this turn** posts exactly what was reviewed (`table.submit`).
   A turn is posted only when the last one is closed: while the table's answer is still a take, the panel says to
-  keep it or pass first, and offers no review. The table then answers the turn once.
+  keep it or pass first, and offers neither a review nor **Post this turn**. A review on show is dropped as soon
+  as the chat moves past it: other parts held, another turn posted, a take open or play paused. The table then
+  answers the turn once.
+- A redraw keeps the person's place: the boxes and the keyboard choice stay the same controls while the same
+  parts are shown, and a control that had to be rebuilt takes the focus back by its `data-focus-key`.
 - **Who plays whom** (the library owner) hands a character to someone at this device, or back to the director,
   with the core `seat` op, after saying exactly what changes.
 - A combined turn takes no label, framing or effect (058): nothing offers one.
@@ -35,13 +45,19 @@ has more than one character a person plays, or this device was started for more 
 | Op | Args | Answer |
 |---|---|---|
 | `table.review` | `chat` | `{chat, owner, players[], drafts[], etag, head, open_turn, kept_in: "memory", limits}`; each draft `{actor, by, text, mode, name, controller, ready}` |
-| `table.submit` | `chat`, `expected` (the review's etag), `reviewed[]` (`{actor, by, text, mode}` in order), `head` | `{done: {already_applied, posts}, scene, review}` |
+| `table.submit` | `chat`, `expected` (the review's etag), `reviewed[]` (`{actor, by, text, mode}` in order), `head` | `{done: {already_applied, posts, turn, answered}, scene, review}`: `turn` is the posted turn's id, `answered` whether it has a take yet |
 
 - Nothing reviewed refuses `review_required`; reviewed drafts that are not the ones at `expected` refuse
   `invalid_field`.
-- A part corrected, added, dropped or moved after the review refuses `changed`, and nothing is posted.
-- A submission retried after its answer was lost finds no drafts and the turn just after `head` holding the
-  reviewed characters' posts by the same players: `already_applied`, nothing posted twice.
+- The drafts are posted only while `head` is still the chat's last turn and they are exactly the ones reviewed.
+  Another turn posted since the review, or a part corrected, added, dropped or moved, refuses `changed`, and the
+  request posts nothing.
+- A submission retried after its answer was lost looks at the turn just after `head`, whatever was drafted or
+  played since: if its posts are exactly the ones 058 makes of the reviewed drafts (the same characters by the
+  same players, in order, each post's kind and words equal to its draft's as 008 routes it and 032 reads it,
+  never merely contained in them), the answer is `already_applied` with that turn's id, and nothing is posted
+  twice. A later turn holding the same words is not this review's. The page asks the table to answer the turn
+  only when `answered` is false, so a retried submission never asks for a second answer.
 - A draft whose character is no longer its writer's is flagged (`ready: false`); 058 refuses it when the turn is
   posted. 058's own refusals keep their reason.
 
@@ -89,8 +105,13 @@ has captured. A capture is reviewed first and made exactly as reviewed, once.
 - The commit builds 050's request again with the same attempt id at the reviewed campaign sequence. A party, a
   creature or a campaign that moved on since the review refuses `changed`, and nothing is written.
 - An exact retry finds 050's own receipt: `already_applied`, and the one device is spent once however often the
-  commit is retried (or the review is asked again with the same attempt id). The same attempt id for another
-  capture refuses `attempt_conflict`. The page uses a new attempt id for each review and keeps it with that review.
+  commit is retried (or the review is asked again with the same attempt id). The retry is compared with the
+  saved request field by field (chat, turn, sequence, trainer, creature, outcome, device, capacity, placement)
+  and answered from the receipt without working out again whose post backs it, so a character handed to someone
+  else since the capture was made does not turn the retry into a conflict. The same attempt id for anything else
+  refuses `attempt_conflict`. The page uses a new attempt id for each review and keeps it with that review.
+- Two captures reviewed at the same campaign sequence: the first made takes it, and the other's commit refuses
+  `changed` (its sequence is taken), writing nothing; reviewed again, it is made at the next sequence.
 - A character a person plays takes that person's own key: the capture rests on that character's post in the
   chosen turn (`no_backing` without one), and the person ticks their own box at this device (`player_key_required`
   otherwise; `not_at_this_table` for a player not at this device).
@@ -101,13 +122,34 @@ has captured. A capture is reviewed first and made exactly as reviewed, once.
 - **Nothing else follows from a capture, and the page says so:** no NPC speaks for the companion, nobody's
   control of any character changes, and no character learns of it ([COMPANIONS](COMPANIONS.md)).
 
+## What hides a player's words
+
+Per-seat privacy here is a property of the screen, not of the API. The panel shows the person at the keyboard
+only their own parts' words, but nothing on the server enforces that:
+
+- `by` on the core `draft` and `drop_draft` ops is asserted by the client. The text API checks that `by` is one
+  of the players this device was started for (and, for a part written, that it plays the character), not that
+  the person at the keyboard is that player. Anyone at the device can draft, move or take out a part as any
+  player the device was started for.
+- The core `open` op, and every scene the ops answer, returns every held draft with its text, whoever asks.
+  `table.review` does the same. The page hides other players' words; a person who reads the answers (the
+  browser's tools, or the app's text API directly) sees them all.
+
+That is enough for people sharing one screen who agree not to look, which is the situation 058 is for. A real
+per-seat rule would need from 058: an authenticated seat for each request (a per-player token or session, so the
+server knows who is asking rather than being told), drafts answered per seat (a player's own text, and only the
+character, writer and mode of anyone else's), and `by` taken from that seat instead of from the request. None of
+that is changed here: the domain is 058's.
+
 ## Tests
 
 `test_app_table.py`, `test_app_ensemble.py` and `test_app_companions.py` run each op through the app's adapter
 contract over a synthetic card chat: behavior, refusals, the director's privacy, stale reviews and retried
 commits. Each page runs end to end in fakedom against a real app server (`js/table.e2e.mjs`,
 `js/ensemble.e2e.mjs`, `js/companions.e2e.mjs`), including the sprint's proving scenario: two players draft one
-turn, switch chats without losing a draft, and resume play. The pages' logic has node unit tests
+turn, switch chats without losing a draft, and resume play; a part whose character was handed away is taken
+out; and the focus survives a redraw (fakedom, like a browser, moves the focus to the body when the focused
+control is taken out of the page, even if it is put straight back). The pages' logic has node unit tests
 (`js/table.test.mjs`, `js/ensemble.test.mjs`, `js/companions.test.mjs`).
 
 ## Not proved here

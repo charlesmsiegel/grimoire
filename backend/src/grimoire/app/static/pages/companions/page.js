@@ -92,10 +92,18 @@ export async function mount(root, ctx) {
   });
   const status = el("div", { class: "g-field-error", role: "alert", hidden: true });
 
+  // Draw, keeping the person's place: the control they were in is rebuilt, so focus goes to the control with
+  // the same data-focus-key (every control of the form has one).
   function draw() {
+    const active = document.activeElement;
+    const focusKey = active && root.contains(active) && active.getAttribute ? active.getAttribute("data-focus-key") : null;
     rosterNode.replaceChildren(rosterCard());
     formNode.replaceChildren(review ? reviewCard() : captureCard());
+    if (!focusKey || root.contains(document.activeElement)) return;
+    const next = [...root.querySelectorAll("[data-focus-key]")].find((item) => item.getAttribute("data-focus-key") === focusKey);
+    if (next && !next.disabled) next.focus({ preventScroll: true });
   }
+  const keyed = (control, key) => { control.setAttribute("data-focus-key", "companions:" + key); return control; };
 
   function nameOf(actor) {
     const all = [...roster.people, ...roster.creatures, ...roster.trainers.flatMap((item) => item.companions)];
@@ -143,15 +151,22 @@ export async function mount(root, ctx) {
     if (!people.some((item) => item.value === form.trainer)) form.trainer = "";
     if (!creatures.some((item) => item.value === form.creature)) form.creature = "";
     if (!turns.some((item) => item.turn === form.turn)) form.turn = turns[turns.length - 1].turn;
-    const devices = Object.entries(roster.holdings[form.trainer] || {}).filter(([, count]) => count > 0);
-    if (form.device && !devices.some(([item]) => item === form.device)) form.device = "";
-    const redraw = () => { changed(); formNode.replaceChildren(captureCard()); };
+    // the devices offered are the trainer's: a new trainer redraws that one choice in place, never the whole
+    // form, so the person stays in the Trainer box they just changed
+    const deviceSlot = el("div", {});
+    const drawDevice = () => {
+      const devices = Object.entries(roster.holdings[form.trainer] || {}).filter(([, count]) => count > 0);
+      if (form.device && !devices.some(([item]) => item === form.device)) form.device = "";
+      const device = ui.choice("Device used", [{ value: "", label: "None" }, ...devices.map(([item, count]) => ({ value: item, label: item + " (" + count + " held)" }))],
+        { value: form.device, onchange: (value) => { form.device = value; changed(); } });
+      keyed(device.select, "device");
+      deviceSlot.replaceChildren(device.node);
+    };
+    drawDevice();
 
-    const trainer = ui.choice("Trainer", [{ value: "", label: "Choose…" }, ...people], { value: form.trainer, onchange: (value) => { form.trainer = value; redraw(); } });
+    const trainer = ui.choice("Trainer", [{ value: "", label: "Choose…" }, ...people], { value: form.trainer, onchange: (value) => { form.trainer = value; changed(); drawDevice(); } });
     const creature = ui.choice("Creature", [{ value: "", label: "Choose…" }, ...creatures], { value: form.creature, onchange: (value) => { form.creature = value; changed(); } });
     const outcome = ui.choice("What happened", OUTCOMES, { value: form.outcome, onchange: (value) => { form.outcome = value; changed(); } });
-    const device = ui.choice("Device used", [{ value: "", label: "None" }, ...devices.map(([item, count]) => ({ value: item, label: item + " (" + count + " held)" }))],
-      { value: form.device, onchange: (value) => { form.device = value; changed(); } });
     const capacity = ui.field("How many the trainer's active party holds", { value: form.capacity, type: "text", hint: "A whole number from 0 to " + roster.max_capacity + ": the director's call." });
     capacity.input.setAttribute("inputmode", "numeric");
     capacity.input.setAttribute("data-focus-key", "companions:capacity");
@@ -160,10 +175,15 @@ export async function mount(root, ctx) {
     const turn = ui.choice("The turn it happened in", turns.map((item) => ({ value: item.turn,
       label: "Turn " + item.number + (item.open ? " (open)" : "") + (item.posts.length ? ": " + item.posts.map((post) => post.name || post.actor).join(", ") : "") })),
     { value: form.turn, onchange: (value) => { form.turn = value; changed(); } });
+    keyed(trainer.select, "trainer");
+    keyed(creature.select, "creature");
+    keyed(outcome.select, "outcome");
+    keyed(placement.select, "placement");
+    keyed(turn.select, "turn");
     return card(ui, "Record a capture",
       el("p", { class: "g-muted" }, "Reviewed first: nothing is written until you make the change. A character a person plays takes that person's own key, from a post they made in the turn."),
-      el("div", { class: "g-stack", role: "group", "aria-label": "The capture" }, trainer.node, creature.node, outcome.node, device.node, capacity.node, placement.node, turn.node),
-      status, ui.actions(ui.button("Review the capture", plan, { kind: "primary" })));
+      el("div", { class: "g-stack", role: "group", "aria-label": "The capture" }, trainer.node, creature.node, outcome.node, deviceSlot, capacity.node, placement.node, turn.node),
+      status, ui.actions(keyed(ui.button("Review the capture", plan, { kind: "primary" }), "review")));
   }
 
   function reviewCard() {
@@ -184,8 +204,8 @@ export async function mount(root, ctx) {
       parts.push(fieldset, el("p", { class: "g-muted" }, "Hand the keyboard to each player to tick their own box: a capture never speaks for a player's character without them."));
     }
     parts.push(el("p", {}, NOTHING_ELSE),
-      ui.actions(ui.button("Cancel", () => { review = null; asked += 1; draw(); }),
-        reviewed.plan.writes || reviewed.plan.already_applied ? ui.button("Make this change", commit, { kind: "primary" }) : null));
+      ui.actions(keyed(ui.button("Cancel", () => { review = null; asked += 1; draw(); }), "cancel"),
+        reviewed.plan.writes || reviewed.plan.already_applied ? keyed(ui.button("Make this change", commit, { kind: "primary" }), "make") : null));
     const box = ui.card({ kind: "accent", tag: "section", label: "Review this capture" }, el("h2", { class: "g-heading" }, "Review this capture"), ...parts);
     box.classList.add("companions-card", "companions-review");
     box.setAttribute("tabindex", "-1");

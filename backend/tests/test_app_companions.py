@@ -146,6 +146,60 @@ def test_a_players_character_takes_their_own_key_and_a_stale_review_is_refused(t
         assert retry["done"]["already_applied"] is True and balls(table, "Tamsin Hale") == 0
 
 
+def companions(answer: dict) -> list:
+    """Each trainer's companions in a commit's roster."""
+    return [item["companions"] for item in answer["roster"]["trainers"]]
+
+
+def test_a_retry_after_the_character_changed_hands_answers_the_receipt(tmp_path):
+    with played(tmp_path, creatures=True) as table:
+        chat, tamsin = str(table.chat), table.cast["Tamsin Hale"]
+        turn = shared_turn(table)
+        args = capture(table, "c-1", "Tamsin Hale", table.grub, turn)
+        plan = table("companions.capture_plan", **args)["plan"]
+        commit = reviewed(args, plan, keys=[BOB])
+        made = table("companions.capture_commit", **commit)  # its answer is lost
+        assert made["done"]["already_applied"] is False and balls(table, "Tamsin Hale") == 0
+        # Tamsin goes back to the director before the retry: who backed the capture was settled when it was made
+        table("pass", chat=chat, turn=turn)
+        table("seat", chat=chat, actor=tamsin, player="director")
+        again = table("companions.capture_commit", **commit)
+        assert again["done"]["already_applied"] is True and again["done"]["sequence"] == plan["sequence"]
+        assert companions(again) == companions(made) and balls(table, "Tamsin Hale") == 0
+        assert table("companions.capture_plan", **args)["plan"]["already_applied"] is True
+        # anything else asked under the same attempt id is still a conflict, and nothing is written
+        for change in ({"creature": str(table.snik)}, {"outcome": "failed"}, {"capacity": 2}, {"placement": "reserve"}):
+            assert refused(table, "companions.capture_commit", **{**commit, **change}).reason == "attempt_conflict", change
+        assert refused(table, "companions.capture_commit", **{**commit, "sequence": plan["sequence"] + 1}
+                       ).reason == "attempt_conflict"
+        assert balls(table, "Tamsin Hale") == 0
+
+
+def test_a_review_whose_sequence_another_capture_took_is_refused(tmp_path):
+    with played(tmp_path, creatures=True) as table:
+        chat, anya = str(table.chat), table.cast["Anya Rook"]
+        first = roster(table)["turns"][-1]["turn"]
+        table("draft", chat=chat, actor=anya, text='"Look, a goblin."')
+        second = table("submit", chat=chat)["turns"][-1]["turn"]
+        # A and B are reviewed one after the other, both at the next campaign sequence; B is made first
+        a = capture(table, "a-1", "Mara Vell", table.snik, first)
+        b = capture(table, "b-1", "Mara Vell", table.grub, second, outcome="failed")
+        plan_a = table("companions.capture_plan", **a)["plan"]
+        plan_b = table("companions.capture_plan", **b)["plan"]
+        assert plan_a["sequence"] == plan_b["sequence"]
+        table("companions.capture_commit", **reviewed(b, plan_b))
+        assert balls(table, "Mara Vell") == 2
+        # A's review is stale: its sequence is taken, so it is refused and nothing is written or spent
+        stale = refused(table, "companions.capture_commit", **reviewed(a, plan_a))
+        assert stale.reason == "changed" and "nothing was written" in str(stale)
+        assert balls(table, "Mara Vell") == 2 and roster(table)["trainers"] == []
+        # reviewed again, at the next sequence, it is made
+        fresh = table("companions.capture_plan", **a)["plan"]
+        assert fresh["sequence"] == plan_a["sequence"] + 1
+        assert table("companions.capture_commit", **reviewed(a, fresh))["done"]["already_applied"] is False
+        assert balls(table, "Mara Vell") == 1
+
+
 def test_an_outcome_with_nothing_to_write_writes_nothing(tmp_path):
     with played(tmp_path, creatures=True) as table:
         turn = roster(table)["turns"][-1]["turn"]
