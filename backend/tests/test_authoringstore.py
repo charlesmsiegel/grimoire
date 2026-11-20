@@ -458,3 +458,52 @@ def test_a_map_edited_in_place_while_drafting_refuses(store, monkeypatch):
     monkeypatch.setattr(ChangeSetLibrary, "revise", editing)
     with pytest.raises(AuthoringError, match="stale_review"):
         authoring.draft(review, accept("brinewick", "gullhaven"))
+
+
+def test_an_endpoint_edited_while_drafting_is_pinned_as_it_was_validated(store, monkeypatch):
+    authoring = lib(store)
+    review = authoring.review(towns())
+    create, edited = ChangeSetLibrary.create, []
+
+    def editing(self, *args, **kwargs):  # an outside editor turns the coast into a template mid-draft
+        if not edited:
+            edited.append(True)
+            path = store.root / record(COAST)
+            data = json.loads(path.read_bytes())
+            data["payload"]["nature"] = "template"
+            path.write_text(json.dumps(data, indent=2))
+        return create(self, *args, **kwargs)
+
+    monkeypatch.setattr(ChangeSetLibrary, "create", editing)
+    draft = authoring.draft(review, accept("brinewick", "gullhaven"))
+    before = snapshot(store.root)
+    with pytest.raises(ChangeSetConflict) as refused:
+        authoring.apply(draft)
+    assert [c.reason for c in refused.value.conflicts] == ["base_edited"]
+    assert written(before, snapshot(store.root)) == set()
+
+
+def test_a_manifest_edited_while_drafting_refuses(store, monkeypatch):
+    authoring = lib(store)
+    review = authoring.review(towns())
+    create, edited = ChangeSetLibrary.create, []
+
+    def editing(self, *args, **kwargs):  # an outside editor rewrites the manifest mid-draft
+        if not edited:
+            edited.append(True)
+            path = store.root / MANIFEST
+            path.write_text(path.read_text() + "\n")
+        return create(self, *args, **kwargs)
+
+    monkeypatch.setattr(ChangeSetLibrary, "create", editing)
+    with pytest.raises(AuthoringError, match="stale_review"):
+        authoring.draft(review, accept("brinewick", "gullhaven"))
+
+
+@pytest.mark.parametrize("title,expected", [("", None), ("   ", None), ("T" * 300, "T" * 256)])
+def test_context_adapts_a_blank_or_long_world_title(store, title, expected):
+    stored = store.read_source(REALM)
+    txn = store.transaction()
+    txn.put(SourceManifest(REALM, OWNER, title, dict(stored.manifest.heads)), stored.etag)
+    txn.commit(owner_handle())
+    assert lib(store).context(REALM, limit=0).title == expected

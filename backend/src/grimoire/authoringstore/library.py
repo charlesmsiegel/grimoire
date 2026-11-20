@@ -22,7 +22,7 @@ from grimoire.authoring import (
     WorldRecord, name_key, select,
 )
 from grimoire.authoring.model import NAME_MAX
-from grimoire.changesets import ChangeSet, ChangeSetError, RecordChange
+from grimoire.changesets import ChangeSet, ChangeSetError, Precondition, RecordChange
 from grimoire.changesetstore import AppliedChangeSet, ChangeSetLibrary, ChangeSetReview
 from grimoire.core.entity import EntityDefinition
 from grimoire.core.entity_codec import ENTITY_SCHEMA, CodecError, definition_from_payload, definition_to_payload
@@ -178,7 +178,9 @@ class AuthoringLibrary:
             key=lambda row: row[:4])
         # The limit applies first; a long name is cut to the bounded prompt form, never refused.
         records = tuple(WorldRecord(ref, kind, _bounded(name)) for _, kind, _, _, ref, name in named[:limit])
-        return AuthoringContext(source, view.sources[source].manifest.title, records, len(named) > limit, basis)
+        title = view.sources[source].manifest.title
+        title = _bounded(title) if title and title.strip() else None  # the prompt form; the manifest is untouched
+        return AuthoringContext(source, title, records, len(named) > limit, basis)
 
     # -- review ---------------------------------------------------------------------------------
     def review(self, proposal: Proposal) -> ProposalReview:
@@ -240,7 +242,7 @@ class AuthoringLibrary:
     def _draft(self, review: ProposalReview, decision: Decision, topology: str | None) -> AcceptanceDraft:
         proposal = review.proposal
         source = proposal.request.source
-        view, _, heads = self._world(source)
+        view, manifest_etag, heads = self._world(source)
         if self._judge(proposal, view, heads) != (review.duplicates, review.problems):
             raise AuthoringError("stale_review")
         selection = select(proposal, decision, review.duplicates, review.problems)
@@ -262,14 +264,20 @@ class AuthoringLibrary:
             change, topology_ref, pinned = self._topology(selection, records, proposal, heads, topology, taken,
                                                           evidence)
             changes.append(change)
-            preconditions = [self.changes.pin(source, ref.kind, ref.entity_id) for ref in pinned]
+            # Bound to the snapshot ``_judge`` validated, never a reread an outside edit could change.
+            preconditions = [Precondition(ref.kind, ref.entity_id, heads[(ref.kind, ref.entity_id)].ref.revision,  # type: ignore[attr-defined]
+                                          heads[(ref.kind, ref.entity_id)].etag)  # type: ignore[attr-defined]
+                             for ref in pinned]
         try:
             changeset = ChangeSet(f"authoring-{proposal.proposal_id}", source,
                                   f"Accept {len(selection.accepted)} suggested record(s)", decision.decided_by,
                                   tuple(changes), rationale=proposal.rationale, preconditions=tuple(preconditions))
         except ChangeSetError as error:
             raise AuthoringError(error.reason) from None
-        return AcceptanceDraft(review, decision, selection, records, topology_ref, self.changes.review(changeset))
+        reviewed = self.changes.review(changeset)
+        if reviewed.manifest_etag != manifest_etag:  # the manifest was edited after the world was read
+            raise AuthoringError("stale_review")
+        return AcceptanceDraft(review, decision, selection, records, topology_ref, reviewed)
 
     @staticmethod
     def _mapped(source: str, heads: Mapping[tuple[str, str], object]) -> set[str]:
