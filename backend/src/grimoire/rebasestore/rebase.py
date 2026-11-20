@@ -406,7 +406,10 @@ class SourceRebase:
             at = self._clock()
             repinned = NewBinding(upstream, chat.role, upstream.revision, review.actor,  # type: ignore[arg-type]
                                   CAMPAIGN_CONTINUITY)
-            record = chat.record.detach(chat.binding, chat.role, at).attach(repinned, at)
+            # 033: a species may bind several individuals in the same chat. Re-pin only
+            # the reviewed individual, retaining the other bindings and their revisions.
+            record = chat.record.detach(chat.binding, chat.role, at,
+                                        actor=review.actor if chat.role == "actor" else None).attach(repinned, at)
             puts.append((ScopeRecord(chat.ref, CHAT_SCHEMA, chat_to_payload(record), owner=chat.stored.owner,
                                      extra=chat.stored.extra), chat.etag))
         chain = {node.ref: node.etag for node in (*review.ancestor.chain, *review.upstream.chain)}

@@ -1,6 +1,6 @@
 # Party, Reserve and Scene Presence
 
-**Status:** first slice implemented: membership, moves and scene casts ([PARTY](../../PARTY.md)). Milestone 1 is met; a creature in a chat's roster comes before milestone 2.
+**Status:** first slice implemented: membership, moves and scene casts ([PARTY](../../PARTY.md)). The scheduled non-character chat roster gap is closed by explicit existing-actor bindings and a persistent same-species/reserve scene-runner proof. Later party-command and UI work is not implied.
 
 **Outcome:** Know which characters are controlled, accompanying, reserved, nearby, present in a scene or merely associated with a trainer.
 
@@ -20,7 +20,7 @@ A boxed monster is available in the campaign but never speaks as present in an u
 ## Independence and interfaces
 Can use generic actor links and existing scene cast today; does not depend on network multiplayer or mechanics.
 
-**Owned here: non-character actors in a cast.** An individualized creature keeps its own kind (for example `campaign:c1/creature/goblin-1`, see [Creature Individualization](creature-individualization.md)), but today only `character` instances can be reused as chat actors (CHATS.md, the 107 reuse check) and a chat's roles admit only character, scenario and lorebook sources. Before milestone 2, 033 must let a creature (or another non-character instance) join a chat or scene cast as an actor without a re-key, keep the one-id rule (`campaign_taken_ids`, IDENTITY.md), and prove the boxed monster above with a creature instance.
+**Owned here: non-character actors in a cast.** An individualized creature keeps its own kind (for example `campaign:c1/creature/goblin-1`, see [Creature Individualization](creature-individualization.md)), and the `actor` chat binding role reuses that instance without a re-key ([CHATS](../../CHATS.md#non-character-actors-033)). Two same-species individuals can share a chat; exact-instance detach preserves the other binding. The one-id rule (`campaign_taken_ids`, IDENTITY.md), boxed speech refusal, control and memory persistence are exercised through public chat and scene-runner APIs in `test_chatstore_actors.py`.
 
 ## Open questions
 - Which membership relations need persistence?

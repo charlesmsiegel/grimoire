@@ -221,8 +221,13 @@ class QuickStart:
         found = []
         for broken in view.broken:
             role = broken.field.split(".", 1)[1] if broken.field.startswith("bindings.") else None
-            if role is not None:
-                choices: tuple[str, ...] = ("detach",)
+            if role == "actor":
+                # 033: this source-only repair protocol cannot select one of several
+                # same-species actors. Report the break without offering a misleading
+                # action; callers with an exact instance use ChatLibrary.detach_source.
+                choices: tuple[str, ...] = ()
+            elif role is not None:
+                choices = ("detach",)
             elif broken.field == "world":
                 choices = ("detach",)
             else:

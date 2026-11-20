@@ -11,7 +11,7 @@ This is a code-and-test audit of the 119 scheduled **first-useful slices**, incl
 | [1](#wave-1) | 8/8 | ☑ | All eight scoped foundation contracts and their integration proof are present; this is not playable-product certification. |
 | [2](#wave-2) | 7/8 | ☐ | 015 has no live provider-reported V0.2.1 baseline capture. |
 | [3](#wave-3) | 10/10 | ☑ | All ten scheduled headless first slices are present. Later subject-validation and other milestones remain open. |
-| [4](#wave-4) | 9/10 | ☐ | 033 still rejects non-character actors in chat rosters, despite supporting creature scene casts. |
+| [4](#wave-4) | 10/10 | ☑ | 033 follow-up adds public non-character chat rosters and scene-runner reserve proof; see its dated evidence below. |
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 5/6 | ☐ | 047 lacks the independent prose-claim extraction required by its inherited first-proof addition. Physical-phone validation also remains unverified. |
 | [7](#wave-7) | 6/7 | ☐ | 112 retains production UI integration gaps. 113 has a real CLI/Chromium follow-up proof. The full keyboard/screen-reader/touch acceptance gate is also unverified; HTTP/API proofs alone do not close it. |
@@ -218,7 +218,7 @@ All ten scheduled headless first slices are present. Later subject-validation an
 <a id="wave-4"></a>
 ## Wave 4
 
-033 still rejects non-character actors in chat rosters, despite supporting creature scene casts.
+033 follow-up closes the non-character chat roster gap; the original snapshot lacked it.
 
 <a id="slice-026"></a>
 ### 026 — V1 To V2 Import Apply
@@ -278,9 +278,9 @@ All ten scheduled headless first slices are present. Later subject-validation an
 <a id="slice-033"></a>
 ### 033 — Party And Presence
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/party-and-presence.md)).
-- Evidence: [`backend/src/grimoire/partystore/library.py`](../../backend/src/grimoire/partystore/library.py); party; [`chatstore/library.py`](../../backend/src/grimoire/chatstore/library.py):785; [`backend/tests/test_partystore_scenarios.py`](../../backend/tests/test_partystore_scenarios.py); Party/reserve moves and scene casts preserve distinct creature references; boxed creatures cannot speak, release preserves memory.
-- Scope / gap: Missing explicitly scheduled non-character chat cast support: backend/src/grimoire/chatstore/library.py:785–786 rejects actor.kind != character. Party/reserve and creature scene casts are implemented, but do not fully satisfy scheduled row.
+- [x] Scheduled first-useful slice ([requirements](sprints/party-and-presence.md)).
+- Follow-up evidence (2026-11-13, after the audit snapshot): `chatstore/library.py`, `chats/model.py` and `core/snapshot.py` support explicit native actors without changing their kind, including two same-species individuals in one chat. `backend/tests/test_chatstore_actors.py` proves public create/update/reopen, instance-targeted detach, qualified provenance, stale/unauthorized/paired-ID refusals and the real scene runner's boxed-speaker refusal. `test_partystore_scenarios.py` retains the membership/release proof.
+- Scope / gap: Headless scheduled slice complete. No new UI adapter, species voice-generation contract or controller-knowledge projection; later milestones are not certified by this check.
 
 <a id="slice-034"></a>
 ### 034 — Unique Equipment

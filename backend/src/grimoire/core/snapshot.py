@@ -75,12 +75,14 @@ class SourceSelection:
         except TypeError:  # None, or one SelectedSource passed bare: malformed, like any other element
             raise _fail("sources must be a collection of SelectedSource values", "invalid_selection") from None
         object.__setattr__(self, "sources", sources)
-        keys: set[tuple[str, tuple[str, str, str]]] = set()
+        keys: set[tuple[object, ...]] = set()
         actors: set[InstanceRef] = set()
         for source in sources:
             if not isinstance(source, SelectedSource):
                 raise _fail("sources must be SelectedSource values", "invalid_selection")
             key = (source.role, source.ref.entity_key)
+            if source.role == "actor" and source.actor is not None:
+                key = (*key, source.actor)  # 033: distinct individuals of one species
             if key in keys:
                 raise _fail(f"{source.ref.unpinned()} is selected twice as {source.role}",
                             "conflicting_selection", source.ref)
