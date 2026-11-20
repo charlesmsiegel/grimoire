@@ -211,9 +211,13 @@ def prompt_sha256(messages: list[tuple[str, str]]) -> str:
     return _digest(messages)
 
 
-def _object(text: object) -> dict | None:
-    if not isinstance(text, str):
-        return None
+# Version 2 reads an answer's one schema-tagged object out of any text around it; version 1 needed the
+# whole answer (or a fence holding it) to be that object. The prompts did not change, so a capture
+# made under version 1 replays and is re-read under version 2.
+PARSER_VERSION = 2
+
+
+def _decoded(text: str) -> dict | None:
     body = text.strip()
     if body.startswith('```'):
         body = body.split('\n', 1)[1] if '\n' in body else ''
@@ -225,6 +229,52 @@ def _object(text: object) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def extract(text: object, schema: str) -> tuple[dict | None, str | None, bool]:
+    """The answer's one object tagged ``schema``: ``(object, reason it is unusable, prose before it)``.
+
+    Prose before the object is tolerated and reported, never read, so a verdict stated in prose is
+    never scored. Nothing but a closing fence may follow the object, because text after it can
+    retract it. Any other mention of the schema (a second object, even a broken one, or the object
+    inside another, even one left unclosed) means the judge may have changed its mind or is quoting
+    an example: ``ambiguous``. So does a bracket left open before it. No object: ``malformed``.
+    """
+    if not isinstance(text, str):
+        return None, 'malformed', False
+    whole = _decoded(text)
+    if whole is not None:
+        return (whole, None, False) if whole.get('schema') == schema else (None, 'malformed', False)
+    decoder, found, at = json.JSONDecoder(), [], text.find('{')
+    while at != -1:
+        try:
+            value, end = decoder.raw_decode(text, at)
+        except ValueError:
+            at = text.find('{', at + 1)
+            continue
+        if isinstance(value, dict) and value.get('schema') == schema:
+            found.append((value, at, end))
+        elif schema in text[at:end]:
+            return None, 'ambiguous', True  # the answer only nested inside another object
+        at = text.find('{', end)  # never inside an object already read
+    if not found:
+        return None, 'malformed', False
+    value, start, end = found[-1]
+    after, before = text[end:].strip(), text[:start]
+    if len(found) > 1 or after not in ('', '```') or schema in before or _opens(before):
+        return None, 'ambiguous', True
+    return value, None, True
+
+
+def _opens(text: str) -> bool:
+    """Whether ``text`` leaves a bracket open: the object after it may sit inside a broken wrapper."""
+    depth = 0
+    for char in text:
+        if char in '{[':
+            depth += 1
+        elif char in '}]' and depth:
+            depth -= 1
+    return depth > 0
+
+
 def covered(data: dict, name: str, token: str) -> bool:
     files = data.get('files')
     return (isinstance(files, list) and len(files) == 1 and isinstance(files[0], dict)
@@ -233,11 +283,13 @@ def covered(data: dict, name: str, token: str) -> bool:
 
 def parse_defect(text: object, case: dict, token: str, name: str) -> dict:
     """``defect``/``clear`` only for a covered, self-consistent answer; anything else is unknown."""
+    data, failure, outside = extract(text, DEFECT_SCHEMA)
+
     def unknown(reason: str) -> dict:
-        return {'state': 'unknown', 'lines': [], 'reason': reason}
-    data = _object(text)
-    if data is None or data.get('schema') != DEFECT_SCHEMA:
-        return unknown('malformed')
+        return {'state': 'unknown', 'lines': [], 'reason': reason, 'text_outside_json': outside,
+                'ambiguous': failure == 'ambiguous'}
+    if data is None:
+        return unknown(failure or 'malformed')
     if not covered(data, name, token):
         return unknown('coverage')
     verdict, findings = data.get('verdict'), data.get('findings')
@@ -254,39 +306,62 @@ def parse_defect(text: object, case: dict, token: str, name: str) -> dict:
     if (verdict == 'defect') != bool(findings):
         return unknown('contradiction')
     return {'state': 'defect' if findings else 'clear',
-            'lines': sorted({finding['line'] for finding in findings}), 'reason': None}
+            'lines': sorted({finding['line'] for finding in findings}), 'reason': None,
+            'text_outside_json': outside, 'ambiguous': False}
 
 
-def _cites(evidence: object, name: str, count: int) -> bool:
-    """Every citation is ``<file>:<line>`` on a line the listing has."""
-    if not isinstance(evidence, list):
-        return False
-    for cite in evidence:
-        file, _, line = cite.rpartition(':') if isinstance(cite, str) else ('', '', '')
-        if file != name or not line.isdigit() or not 1 <= int(line) <= count:
-            return False
-    return True
+def _listed(cite: object, name: str, count: int) -> bool:
+    """``<file>:<line>`` on a line the listing has."""
+    file, _, line = cite.rpartition(':') if isinstance(cite, str) else ('', '', '')
+    return file == name and line.isascii() and line.isdigit() and 1 <= int(line) <= count
+
+
+def _grounded(dimensions: dict, name: str, count: int) -> tuple[dict | None, int]:
+    """Each dimension with only its citations of listed lines, and how many were dropped.
+
+    A citation of a line the listing lacks supports nothing, so it is dropped, never repaired. The
+    judge's step is kept only if it still stands: a step below 1.0 must keep at least one listed
+    line, as the pinned rubric requires of any lowered step. The dimensions are ``None`` when one
+    does not; the count is kept either way, so the report shows what was dropped.
+    """
+    out: dict | None = {}
+    dropped = 0
+    for key, entry in dimensions.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get('evidence', []), list):
+            return None, dropped
+        evidence = entry.get('evidence', [])
+        kept = [cite for cite in evidence if _listed(cite, name, count)]
+        dropped += len(evidence) - len(kept)
+        if kept != evidence and not kept and entry.get('step') != 1.0:
+            out = None
+        elif out is not None:
+            out[key] = {**entry, 'evidence': kept} if 'evidence' in entry else dict(entry)
+    return out, dropped
 
 
 def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
     """The verdict without its coverage block. Upstream validation happens at scoring."""
-    data = _object(text)
-    if data is None or data.get('schema') != THEORY_SCHEMA:
-        return {'state': 'unknown', 'reason': 'malformed', 'verdict': None}
+    data, failure, outside = extract(text, THEORY_SCHEMA)
+
+    def result(state: str, reason: str | None, verdict: dict | None, dropped: int = 0) -> dict:
+        return {'state': state, 'reason': reason, 'verdict': verdict, 'text_outside_json': outside,
+                'ambiguous': failure == 'ambiguous', 'citations_dropped': dropped}
+    if data is None:
+        return result('unknown', failure or 'malformed', None)
     verdict = {key: value for key, value in data.items() if key != 'files'}
     if data.get('unit') != name[:-3]:
-        return {'state': 'unknown', 'reason': 'unit', 'verdict': None}
+        return result('unknown', 'unit', None)
     verdict['unit'] = case['id']
     count = len(case['source'].splitlines())
     dimensions = data.get('dimensions')
-    if not isinstance(dimensions, dict) or not all(
-            isinstance(entry, dict) and _cites(entry.get('evidence', []), name, count)
-            for entry in dimensions.values()):
-        return {'state': 'unknown', 'reason': 'citation', 'verdict': verdict}
+    grounded, dropped = _grounded(dimensions, name, count) if isinstance(dimensions, dict) else (None, 0)
+    if grounded is None:
+        return result('unknown', 'citation', verdict, dropped)
+    verdict['dimensions'] = grounded
     if not covered(data, name, token):
         # Kept, so the report can show what an uncovered verdict would have been awarded.
-        return {'state': 'unknown', 'reason': 'coverage', 'verdict': verdict}
-    return {'state': 'verdict', 'reason': None, 'verdict': verdict}
+        return result('unknown', 'coverage', verdict, dropped)
+    return result('verdict', None, verdict, dropped)
 
 
 # -- judges ------------------------------------------------------------------------------------
@@ -302,6 +377,10 @@ class ReplayJudge:
             raise ValueError('not a judge-panel capture')
         self.salt = manifest['salt']
         self.pins = manifest['pins']
+        # The parser the capture was taken to be read by. A capture taken before a parser change
+        # replays under the new one, but it shaped that change, so it can never establish the proof.
+        version = manifest.get('parser_version')
+        self.parser_version = version if type(version) is int else None
 
     def respond(self, pin: JudgePin, case: dict, trial: int, messages: list[tuple[str, str]]) -> dict | None:
         if self.pins.get(pin.judge_id) != pin.sha256:
@@ -326,12 +405,14 @@ class LiveJudge:
         from grimoire.app.config import build_access
 
         self.out, self.max_calls, self.calls = Path(out), max_calls, 0
+        self.parser_version = PARSER_VERSION
         self.configs = configs
         self.access = {pin.judge_id: build_access(configs[pin.judge_id], 'human:calibration-operator', environ=environ,
                                                   transport=(transports or {}).get(pin.judge_id))
                        for pin in pins}
         self.out.mkdir(parents=True, exist_ok=False)
         _write(self.out / 'capture.json', {'format': FORMAT, 'salt': salt, 'spend_cap': spend_cap,
+                                           'parser_version': PARSER_VERSION,
                                            'max_calls': max_calls,
                                            'pins': {pin.judge_id: pin.sha256 for pin in pins},
                                            'pin_records': [pin.record() for pin in pins]})
@@ -452,6 +533,21 @@ def void_drift(cases: list[dict]) -> dict:
                 for result in results:
                     result.update(state='unknown', lines=[], verdict=None, reason='model_drift')
     return {judge_id: sorted(models) for judge_id, models in served.items()}
+
+
+def parsing(cases: list[dict]) -> dict:
+    """Per judge, how many answers needed reading out of surrounding text, or lost citations."""
+    out: dict[str, dict] = {}
+    for case in cases:
+        for judge_id, results in case.get('judges', {}).items():
+            row = out.setdefault(judge_id, {'answers': 0, 'text_outside_json': 0, 'ambiguous': 0,
+                                              'citations_dropped': 0})
+            for result in results:
+                row['answers'] += 1
+                row['text_outside_json'] += bool(result.get('text_outside_json'))
+                row['ambiguous'] += bool(result.get('ambiguous'))  # kept apart: drift rewrites reason
+                row['citations_dropped'] += result.get('citations_dropped', 0)
+    return out
 
 
 def _settled(trials: list[dict], defect_lines: list[int]) -> dict:
@@ -614,8 +710,12 @@ def score_theory(cases: list[dict], trials: int, checkout: Path | None) -> dict:
     return {'units': units, 'missing_analysis_probe': _score_trial(probe, {'files': 1, 'loc': 40}, checkout)}
 
 
-def proof(cases: list[dict], defects: dict, theory: dict) -> dict:
-    """The sprint's proving scenario, read off the report; ``established`` also needs live evidence."""
+def proof(cases: list[dict], defects: dict, theory: dict, capture_parser_version: int | None = None) -> dict:
+    """The sprint's proving scenario, read off the report.
+
+    ``established`` also needs live evidence, read by the parser the capture was taken for: a capture
+    from before a parser change shaped that change, so re-reading it proves nothing.
+    """
     by_role = {c.get('role'): c for c in cases if c.get('role')}
     facade, planted = by_role.get('compatibility_facade'), by_role.get('planted_defect')
     facade_ok = bool(facade and facade.get('panel', {}).get('state') == 'clear')
@@ -631,10 +731,12 @@ def proof(cases: list[dict], defects: dict, theory: dict) -> dict:
     live = measured == {'provider_reported'}
     theory_ok = bool(theory['units']) and all(unit['scored'] for unit in theory['units'].values()) and all(
         unit['discriminates'] is True for unit in theory['units'].values() if 'discriminates' in unit)
+    current = capture_parser_version == PARSER_VERSION
     return {'compatibility_facade_not_penalized': facade_ok, 'planted_defect_found': planted_ok,
             'missing_analysis_not_perfect': missing_ok, 'defect_panel_complete': complete,
             'theory_panel_scored_and_discriminates': theory_ok, 'provider_reported_only': live,
-            'established': facade_ok and planted_ok and missing_ok and complete and theory_ok and live}
+            'captured_for_this_parser': current,
+            'established': facade_ok and planted_ok and missing_ok and complete and theory_ok and live and current}
 
 
 def run(corpus: Path, pins: list[JudgePin], trials: int, judge, salt: str,  # type: ignore[no-untyped-def]
@@ -643,6 +745,7 @@ def run(corpus: Path, pins: list[JudgePin], trials: int, judge, salt: str,  # ty
         checkout = Path(checkout).resolve()
         verify_checkout(checkout)
     cases = load_corpus(Path(corpus))
+    captured_for = getattr(judge, 'parser_version', None)
     collected = collect(cases, pins, trials, judge, salt)
     served = void_drift(collected)
     for entry, case in zip(collected, cases):
@@ -653,11 +756,13 @@ def run(corpus: Path, pins: list[JudgePin], trials: int, judge, salt: str,  # ty
         entry.pop('source_lines')
     if checkout is not None:
         verify_checkout(checkout)
-    return {'format': FORMAT, 'blocking': False, 'prompt_version': PROMPT_VERSION, 'trials': trials,
+    return {'format': FORMAT, 'blocking': False, 'prompt_version': PROMPT_VERSION,
+            'parser_version': PARSER_VERSION, 'capture_parser_version': captured_for,
+            'parsing': parsing(collected), 'trials': trials,
             'pins': [pin.record() for pin in pins], 'distinct_models': len({(p.provider_id, p.model) for p in pins}),
             'rubric_revision': None if checkout is None else RUBRIC_REVISION,
             'served_models': served, 'cases': collected, 'defects': defects, 'theory': theory,
-            'proof': proof(collected, defects, theory),
+            'proof': proof(collected, defects, theory, captured_for),
             'confirmed_defects': [], 'note': 'Panel defect verdicts are candidates; labels are confirmed '
                                              'only by the executed checks in the test suite.'}
 

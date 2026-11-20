@@ -79,3 +79,23 @@ only if the score report's `proof.established` is true. Then record in the audit
 line the panel's defect false-positive and false-negative rates, its repeatability, the
 theory score range, and whether the theory grade repeats. If it is false, name the proof
 keys that failed, keep 069 unchecked, and do not narrow the requirement.
+
+## Next capture
+
+Parser version 2 (see [CALIBRATION.md](../CALIBRATION.md#independent-judge-panel)) reads an
+answer out of prose before its JSON object and drops citations of lines the listing lacks.
+The prompts, the corpus and the panel did not change, so the plan is still 108 calls and the
+commands above are the same. A new capture needs:
+
+- CMS's fresh approval of a cap. The first run's token counts come to about 0.55 USD at list
+  prices, and the worst case is still about $9.
+- A new, empty `capture` folder. The 2026-11-20 capture is not reused for the proof.
+- The score report's `proof.captured_for_this_parser` to be true: a capture taken by this
+  code records parser version 2 in its manifest. Check `parsing` per judge too: a judge whose
+  answers mostly carry prose before the JSON, are `ambiguous`, or drop citations, is worth
+  naming in the audit.
+
+Optionally, re-score the 2026-11-20 capture first, if its folder still exists: `score` makes
+no calls. That shows what version 2 changes on real answers, but it is not the proof, and the
+report says so: its `established` stays false.
+
