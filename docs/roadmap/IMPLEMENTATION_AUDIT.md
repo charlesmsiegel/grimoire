@@ -40,7 +40,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 10/24 | ☐ | 049, 050, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 10/24 | ☐ | 049, 050, 051, 054, 055, 056, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -497,7 +497,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 050, 051, 054, 055, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 054, 055, 056, 057, 059, 060, 062 and 066 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -544,9 +544,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-056"></a>
 ### 056 — Catalog Composition
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/catalog-composition.md)).
-- Evidence: [`catalogs`](../../backend/src/grimoire/catalogs), [`test_catalog_scenarios.py`](../../backend/tests/test_catalog_scenarios.py) and [contract](../CATALOGS.md) prove shared pinned character/lore/gear in three worlds, gear exclusion, a setting-local creature, independent quick chats and stable context with 2,000 unselected records.
-- Missing proof: the shared pack has no pinned bestiary creature reused across two settings; the tested creature is local to one setting. The inherited bestiary proving scenario is not established, so the implementation remains partial despite the passing catalog scenarios. UI 115 remains separate.
+- [x] Scheduled first-useful slice ([requirements](sprints/catalog-composition.md)).
+- Evidence: [`catalogs`](../../backend/src/grimoire/catalogs), [`test_catalog_scenarios.py`](../../backend/tests/test_catalog_scenarios.py) and [contract](../CATALOGS.md) prove shared pinned character/lore/gear in three worlds, gear exclusion, a setting-local creature, independent quick chats and stable context with 2,000 unselected records. `test_one_shared_bestiary_supports_two_settings_without_importing_a_card_set` proves the inherited bestiary scenario: one pinned shared creature, read from its single canonical file, is bound as a campaign creature actor in two world-attached settings, one through a setting-specific specialization that inherits the rest of the shared card; one setting excludes another shared creature, only the other campaign opts into a creator card set, and both campaigns' actual context packs stay identical after that set grows by 2,000 unselected cards.
+- Scope / gap: Headless only. No catalog UI (115), package distribution (103), follow-head source upgrades (079) or automatic world catalog attachment; context costs are the existing deterministic estimates.
 
 <a id="slice-057"></a>
 ### 057 — Faction Decision Making

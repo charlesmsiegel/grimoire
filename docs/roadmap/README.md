@@ -275,7 +275,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 ### Wave 8 — Reliable long-term use and independent enhancements
 
-- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (10/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
+- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (11/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
@@ -285,7 +285,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 | 053 | [☐](IMPLEMENTATION_AUDIT.md#slice-053) | [Memory Consolidation](sprints/memory-consolidation.md) | **P0** | [Turn Effects And Wrap Up](sprints/turn-effects-and-wrap-up.md), [Knowledge And Perspective](sprints/knowledge-and-perspective.md) | memory / long-horizon ledger | Maintain sourced facts across corrected scenes |
 | 054 | [☑](IMPLEMENTATION_AUDIT.md#slice-054) | [Scenes Forks And Retcons](sprints/scenes-forks-and-retcons.md) | **P0** | [Turn Effects And Wrap Up](sprints/turn-effects-and-wrap-up.md), [Durable Action Recovery](sprints/durable-action-recovery.md) | scene / fork and revision | Preview a fork without duplicating effects |
 | 055 | [☑](IMPLEMENTATION_AUDIT.md#slice-055) | [Calendar And Clocks](sprints/calendar-and-clocks.md) | **P1** | [Native File Store And Revisions](sprints/native-file-store-and-revisions.md) | campaign / clocks | Advance an independent campaign-local clock |
-| 056 | [☐](IMPLEMENTATION_AUDIT.md#slice-056) | [Catalog Composition](sprints/catalog-composition.md) | **P1** | [Effective World Snapshots](sprints/effective-world-snapshots.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md), [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md) | world / catalog inclusion | Use standalone shared characters and lorebooks across worlds or quick chats without copying all content |
+| 056 | [☑](IMPLEMENTATION_AUDIT.md#slice-056) | [Catalog Composition](sprints/catalog-composition.md) | **P1** | [Effective World Snapshots](sprints/effective-world-snapshots.md), [World Optional Chat Scopes](sprints/world-optional-chat-scopes.md), [Source Rebase And Semantic Merge](sprints/source-rebase-and-semantic-merge.md) | world / catalog inclusion | Use standalone shared characters and lorebooks across worlds or quick chats without copying all content |
 | 057 | [☑](IMPLEMENTATION_AUDIT.md#slice-057) | [Faction Decision Making](sprints/faction-decision-making.md) | **P1** | [NPC Goals And Autonomy](sprints/npc-goals-and-autonomy.md), [Knowledge And Perspective](sprints/knowledge-and-perspective.md) | society / institutions | Choose an institution's action despite internal dissent |
 | 058 | [☐](IMPLEMENTATION_AUDIT.md#slice-058) | [Local Multi PC](sprints/local-multi-pc.md) | **P1** | [Minimal Text Scene Runner](sprints/minimal-text-scene-runner.md), [Player Sovereignty](sprints/player-sovereignty.md), [Safe Tool Execution](sprints/safe-tool-execution.md), [Spoken Command And Intent](sprints/spoken-command-and-intent.md) | gameplay / local controllers | Allow two PC contributions under explicit independent control |
 | 059 | [☑](IMPLEMENTATION_AUDIT.md#slice-059) | [Location Topology](sprints/location-topology.md) | **P1** | [Typed Relationship Graph](sprints/typed-relationship-graph.md) | world / spatial topology | Prove location containment and traversable adjacency |

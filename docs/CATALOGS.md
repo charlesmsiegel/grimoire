@@ -114,7 +114,10 @@ composition failures (`missing_catalog`, `missing_member`, `cycle`,
 `test_catalog_scenarios.py` exercises three synthetic world catalogs sharing
 character/lore references, a world-specific gear exclusion and creature addition,
 pinned portrayal overrides, separate world-less chat actors, and unchanged actual
-context packs after adding 2,000 unrelated catalog members. Context costs are the
+context packs after adding 2,000 unrelated catalog members. Its bestiary scenario reuses one
+pinned shared creature as a campaign creature actor in two settings (one through a pinned specialization
+that inherits the rest), with a per-setting exclusion and a creator card set that only one campaign
+opts into; both campaigns' packs are unchanged after that set grows by 2,000 unselected cards. Context costs are the
 existing deterministic estimates, not provider-reported measurements. Catalog
 membership alone never enters the prompt. `test_catalogs.py` covers identity,
 exclusions, dependency failures and traversal limits. `test_catalog_store.py`
