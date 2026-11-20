@@ -235,7 +235,8 @@ def extract(text: object, schema: str) -> tuple[dict | None, str | None, bool]:
     Prose before the object is tolerated and reported, never read, so a verdict stated in prose is
     never scored. Nothing but a closing fence may follow the object, because text after it can
     retract it. Any other mention of the schema (a second object, even a broken one, or the object
-    inside another) means the judge may have changed its mind: ``ambiguous``. No object: ``malformed``.
+    inside another, even one left unclosed) means the judge may have changed its mind or is quoting
+    an example: ``ambiguous``. So does a bracket left open before it. No object: ``malformed``.
     """
     if not isinstance(text, str):
         return None, 'malformed', False
@@ -258,9 +259,20 @@ def extract(text: object, schema: str) -> tuple[dict | None, str | None, bool]:
         return None, 'malformed', False
     value, start, end = found[-1]
     after, before = text[end:].strip(), text[:start]
-    if len(found) > 1 or after not in ('', '```') or schema in before:
+    if len(found) > 1 or after not in ('', '```') or schema in before or _opens(before):
         return None, 'ambiguous', True
     return value, None, True
+
+
+def _opens(text: str) -> bool:
+    """Whether ``text`` leaves a bracket open: the object after it may sit inside a broken wrapper."""
+    depth = 0
+    for char in text:
+        if char in '{[':
+            depth += 1
+        elif char in '}]' and depth:
+            depth -= 1
+    return depth > 0
 
 
 def covered(data: dict, name: str, token: str) -> bool:

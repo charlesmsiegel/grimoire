@@ -111,8 +111,10 @@ read through its middle; it does not prove the reasoning was sound.
 (`parsing.text_outside_json`; a fence alone is not counted), but never read: a verdict
 stated only in prose is `malformed`. Nothing but a closing fence may follow the object,
 because text after it can retract it. Any other mention of the schema, such as a second
-object (even a broken one) or the object inside another, means the judge may have changed
-its mind, so the answer is `ambiguous` (`parsing.ambiguous`), never the first or the last.
+object (even a broken one) or the object inside another (even one left unclosed), means the
+judge may have changed its mind or is quoting an example, so the answer is `ambiguous`
+(`parsing.ambiguous`), never the first or the last. So is an answer whose prose leaves a
+bracket open before the object.
 The prompts are unchanged, so a capture made under version 1 still replays.
 
 **Theory citations.** A citation that is not `<alias>:<line>` on a listed line supports

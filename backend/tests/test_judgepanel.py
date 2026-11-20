@@ -193,6 +193,9 @@ def test_prose_before_one_tagged_object_is_read_and_reported(wrap):
     (PROSE + answer() + '\nCorrected:\n' + answer('no_defect')[:-1] + ',}', 'ambiguous'),  # a broken second try
     (PROSE + answer('no_defect')[:-1] + ',}\nCorrected:\n' + answer(), 'ambiguous'),     # a broken first try
     ('Answer: {"result": ' + answer() + ', }', 'ambiguous'),                          # inside a broken wrapper
+    ('Example: {"example": ' + answer('no_defect'), 'ambiguous'),                     # inside an unclosed wrapper
+    ('[\n  ' + answer(), 'ambiguous'),                                                # inside an unclosed list
+    ('Per the set {a, b we have: ' + answer(), 'ambiguous'),                          # a bracket left open
     (PROSE + answer()[:-1] + ',}', 'malformed'),                                     # one object, not JSON
     (PROSE + json.dumps({'answer': json.loads(answer())}), 'ambiguous'),             # only nested inside another
     (json.dumps([json.loads(answer())]), 'ambiguous'),                                # inside a list too
