@@ -76,7 +76,7 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.ar
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       # Inference orchestration owns runtime/provider calls and replay locks.
                       "grimoire.actor_inference", "grimoire.ensemble",
-                      "grimoire.import_v1", "grimoire.judgepanel", "grimoire.ledgers", "grimoire.library", "grimoire.mediaapi", "grimoire.migrate_v1",
+                      "grimoire.import_v1", "grimoire.investigationstore", "grimoire.judgepanel", "grimoire.ledgers", "grimoire.library", "grimoire.mediaapi", "grimoire.migrate_v1",
                       "grimoire.memorystore", "grimoire.rollstore", "grimoire.rumorledger", "grimoire.rumorstore", "grimoire.narration_review", "grimoire.obstaclestore", "grimoire.offscreen", "grimoire.offscreenstore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
                       "grimoire.play", "grimoire.preparation", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
                       "grimoire.runtime", "grimoire.scenestore", "grimoire.shelfstore", "grimoire.sourceapi", "grimoire.speech",
@@ -234,6 +234,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.scene", ("grimoire.scene", "grimoire.core", "grimoire.core.inference",
                                    "grimoire.comms", "grimoire.generation", "grimoire.transcripts",
                                    "grimoire.adjudication", "grimoire.effects", "grimoire.goals")),
+    # Read-only investigation jobs (082): actions, evidence checks, the bounded job loop and the built-in auditor.
+    # The clock and cancellation are passed in, and its trace is 048's; the store toolbox is an adapter.
+    PurePackage("grimoire.investigations", ("grimoire.investigations", "grimoire.core", "grimoire.tracing")),
     # Operational tracing (048): spans, call samples and cost attribution; the clock and prices are passed in.
     PurePackage("grimoire.tracing", ("grimoire.tracing", "grimoire.core.inference")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);
