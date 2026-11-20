@@ -1,8 +1,10 @@
 # Judge panel live run (Slice 069)
 
-**Status:** approved and not yet run. CMS approved one live capture of **108 billed calls**
-under a **$10 USD** cap. No billed calls have been made, so no defect or theory judge
-accuracy is claimed. The harness and its offline proof are described in
+**Status:** run once on 2026-11-20, with `claude-opus-5-5` as the Opus judge; the proof was
+**not established**. CMS approved one live capture of **108 billed calls** under a
+**$10 USD** cap, and that capture has been used:
+[results](../CALIBRATION.md#live-capture-2026-11-20). Another capture needs a new approval.
+The harness and its offline proof are described in
 [CALIBRATION.md](../CALIBRATION.md#independent-judge-panel).
 
 ## Panel
@@ -60,11 +62,11 @@ python -m grimoire.judgepanel score   --corpus tests/fixtures/calibration/panel 
   ignored files either, or scoring refuses it.
 - `score` makes no calls; it replays the capture.
 
-## Unconfirmed
+## Provider path
 
 The 013 adapter sends to the OpenAI-compatible chat completions path,
-`https://api.anthropic.com/v1/chat/completions`. That this path streams usage and reports
-the served model has not been checked against a live call. If the first calls come back
+`https://api.anthropic.com/v1/chat/completions`. On the 2026-11-20 run this path streamed usage and reported
+the served model on all 108 calls; it reported no reasoning or cache token counts. If the first calls come back
 refused, or their answers are `unknown` with reason `model_mismatch`, stop the capture and
 report what the capture records show. Do not change the panel and run again without a
 new approval, because that is a second billed run.
