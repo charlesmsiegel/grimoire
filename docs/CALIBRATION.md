@@ -83,8 +83,8 @@ python -m grimoire.judgepanel score   --corpus ... --panel panel.json --capture 
 `panel.json` is `{"trials": 3, "judges": [{"judge_id", "temperature", "model_config"} × 3]}`,
 where `model_config` is the app's model configuration (`provider_id`, `base_url`,
 `model`, `key_env`, `max_output_tokens`, `attempts`) with no fallback models. Each
-judge's pin (provider, endpoint, model, temperature, output bound, attempts and the
-prompt version) is hashed into the capture; replay refuses a capture made for a
+judge's pin (provider, endpoint, model, temperature, output bound and its request field,
+attempts and the prompt version) is hashed into the capture; replay refuses a capture made for a
 different pin or prompt. An answer served by any model other than the pin or its dated
 snapshot is `unknown` (`model_mismatch`), and a judge served by more than one model
 during a capture (an alias moved to a new snapshot) loses every answer (`model_drift`);
@@ -99,7 +99,8 @@ a test checks that no corpus id or file name reaches a judge.
 coverage canary in its middle, new per judge, case and trial. An answer that does not
 echo it is `unknown` (`coverage`), however confident. So are malformed answers,
 `cannot_assess`, a `defect` without findings, findings on lines that do not exist,
-theory evidence citing anything but `<alias>:<line>` on a listed line, refused or
+a theory verdict naming another unit, theory evidence citing anything but
+`<alias>:<line>` on a listed line, refused or
 failed calls, and an unparseable source of either task (never sent). Unknown is never
 clean and never scored. The canary proves the listing reached the judge and was
 read through its middle; it does not prove the reasoning was sound.
@@ -151,4 +152,5 @@ The operator needs explicitly approved providers and exact models, credentials i
 named environment variables (never pasted anywhere), and an approved maximum spend
 backed by a provider-enforced limit. `--spend-cap` only records that approval and
 `--max-calls` only bounds calls; neither enforces money. A failed or partial capture
-can still be billed, and the capture directory keeps every call already made.
+can still be billed, and the capture directory keeps every call already made, including
+one interrupted mid-stream (`interrupted`, with its booked attempts).

@@ -136,8 +136,12 @@ def test_theory_citations_must_point_into_the_listing():
     for evidence, state in ((['f.py:2'], 'verdict'), (['f.py:3'], 'unknown'), (['other.py:1'], 'unknown'),
                             (['f.py'], 'unknown'), ([7], 'unknown')):
         verdict['dimensions']['absorption']['evidence'] = evidence
-        text = json.dumps({**verdict, 'files': [{'file': 'f.py', 'canary': 'tok'}]})
+        text = json.dumps({**verdict, 'unit': 'f', 'files': [{'file': 'f.py', 'canary': 'tok'}]})
         assert jp.parse_theory(text, case, 'tok', 'f.py')['state'] == state
+    verdict['dimensions']['absorption']['evidence'] = []
+    for unit in ('u', None, 'g'):  # another unit's analysis is not this unit's
+        text = json.dumps({**verdict, 'unit': unit, 'files': [{'file': 'f.py', 'canary': 'tok'}]})
+        assert jp.parse_theory(text, case, 'tok', 'f.py')['reason'] == 'unit'
 
 
 def test_listing_keeps_line_numbers_and_hides_one_canary():
@@ -193,7 +197,7 @@ class Scripted:
         name = jp.alias('salt', case['id'])
         files = [{'file': name, 'canary': token if covered else 'skipped'}]
         if case['task'] == 'theory':
-            reply = {**jp.perfect_uncovered_verdict(case['id']), 'files': files}
+            reply = {**jp.perfect_uncovered_verdict(name[:-3]), 'files': files}
             if verdict == 'weak':
                 for entry in reply['dimensions'].values():
                     entry.update(step=0.25, evidence=[name + ':1'])
@@ -298,6 +302,42 @@ def test_a_model_that_changes_mid_capture_voids_that_judge(tmp_path):
     assert result['defects']['judges']['a']['unknown'] == 10
     assert result['defects']['judges']['b']['unknown'] == 0
     assert result['defects']['panel']['confusion']['tp'] == 5  # b and c still agree
+
+
+def test_a_mismatched_model_once_voids_the_whole_judge(tmp_path):
+    judge = Scripted(accurate)
+    respond = judge.respond
+
+    def once(pin, case, trial, messages):
+        record = respond(pin, case, trial, messages)
+        if pin.judge_id == 'a' and case['id'] == 'facade' and trial == 1:
+            record['served_model'] = 'other-model'
+        return record
+    judge.respond = once
+    pins, trials, _ = jp.load_panel(panel_file(tmp_path))
+    result = jp.run(CORPUS, pins, trials, judge, 'salt')
+    assert result['served_models']['a'] == ['judge-model', 'other-model']
+    assert result['defects']['judges']['a']['unknown'] == 10
+
+
+def test_the_token_field_is_part_of_the_pin(tmp_path):
+    first = jp.load_panel(panel_file(tmp_path))[0][0]
+    second = jp.load_panel(panel_file(tmp_path, max_tokens_field='max_completion_tokens'))[0][0]
+    assert first.sha256 != second.sha256
+
+
+def test_an_interrupted_billed_call_is_still_recorded(tmp_path, monkeypatch):
+    from grimoire.testing.providers import Interrupt, ScriptedTransport
+
+    monkeypatch.setenv('SYNTHETIC_JUDGE_KEY', 'sk-synthetic')
+    pins, trials, configs = jp.load_panel(panel_file(tmp_path))
+    case = jp.load_corpus(CORPUS)[0]
+    transports = {pin.judge_id: ScriptedTransport([Interrupt(1)]) for pin in pins}
+    live = jp.LiveJudge(pins, configs, tmp_path / 'capture', 'salt', 1, spend_cap='0 USD', transports=transports)
+    with pytest.raises(KeyboardInterrupt):
+        live.respond(pins[0], case, 0, jp.messages_for(case, 'tok', 'salt'))
+    record = json.loads((tmp_path / 'capture/calls/a/facade/0.json').read_text())
+    assert record['status'] == 'interrupted' and record['attempts']
 
 
 def test_a_different_served_model_voids_every_answer(tmp_path):

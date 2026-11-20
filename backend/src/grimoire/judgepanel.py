@@ -90,12 +90,13 @@ class JudgePin:
     temperature: float | None
     max_output_tokens: int
     attempts: int
+    max_tokens_field: str = 'max_tokens'
 
     def record(self) -> dict:
         return {'judge_id': self.judge_id, 'provider_id': self.provider_id, 'base_url': self.base_url,
                 'model': self.model, 'temperature': self.temperature,
                 'max_output_tokens': self.max_output_tokens, 'attempts': self.attempts,
-                'prompt_version': PROMPT_VERSION}
+                'max_tokens_field': self.max_tokens_field, 'prompt_version': PROMPT_VERSION}
 
     @property
     def sha256(self) -> str:
@@ -142,7 +143,7 @@ def load_panel(path: Path) -> tuple[list[JudgePin], int, dict]:
         configs[judge_id] = config
         pins.append(JudgePin(judge_id, config.endpoint.provider_id, config.endpoint.base_url, config.model,
                              None if temperature is None else float(temperature),
-                             config.max_output_tokens, config.attempts))
+                             config.max_output_tokens, config.attempts, config.endpoint.max_tokens_field))
     return pins, trials, configs
 
 
@@ -273,6 +274,8 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
     if data is None or data.get('schema') != THEORY_SCHEMA:
         return {'state': 'unknown', 'reason': 'malformed', 'verdict': None}
     verdict = {key: value for key, value in data.items() if key != 'files'}
+    if data.get('unit') != name[:-3]:
+        return {'state': 'unknown', 'reason': 'unit', 'verdict': None}
     verdict['unit'] = case['id']
     count = len(case['source'].splitlines())
     dimensions = data.get('dimensions')
@@ -351,19 +354,22 @@ class LiveJudge:
         meter = TurnMeter(TurnUsageLedger(plan))
         request = ModelRequest(tuple(ChatMessage(role, content) for role, content in messages),
                                max_output_tokens=config.max_output_tokens, temperature=pin.temperature)
-        record: dict = {'prompt_sha256': prompt_sha256(messages), 'pin_sha256': pin.sha256}
+        record: dict = {'prompt_sha256': prompt_sha256(messages), 'pin_sha256': pin.sha256,
+                        'status': 'interrupted', 'reply': None, 'finish_reason': None, 'refusal_reason': None}
         try:
             result = access.adapter.execute(meter, call, request, access.routes, access.handle)
             record.update(status=result.status, reply=result.reply, finish_reason=result.finish_reason,
                           refusal_reason=result.refusal_reason)
         except CallRefused as error:
-            record.update(status='refused', reply=None, finish_reason=None, refusal_reason=error.reason)
-        reports = meter.reports(call.call_id)
-        record['served_model'] = next((r.served_model for r in reversed(reports) if r.served_model), None)
-        record['attempts'] = [{'outcome': r.outcome, 'measurement': r.measurement.value,
-                               'tokens': {name: getattr(r.usage, name) for name in TOKEN_FIELDS}}
-                              for r in reports]
-        _write(self.out / 'calls' / pin.judge_id / case['id'] / f'{trial}.json', record)
+            record.update(status='refused', refusal_reason=error.reason)
+        finally:
+            # Written even when an interrupt or crash escapes: a sent attempt may be billed.
+            reports = meter.reports(call.call_id)
+            record['served_model'] = next((r.served_model for r in reversed(reports) if r.served_model), None)
+            record['attempts'] = [{'outcome': r.outcome, 'measurement': r.measurement.value,
+                                   'tokens': {name: getattr(r.usage, name) for name in TOKEN_FIELDS}}
+                                  for r in reports]
+            _write(self.out / 'calls' / pin.judge_id / case['id'] / f'{trial}.json', record)
         return record
 
 
@@ -398,7 +404,9 @@ def trial_result(record: dict | None, pin: JudgePin, case: dict, token: str, nam
     if record.get('status') != 'accepted':
         return {**base, 'reason': f'call_{record.get("status")}', 'measurement': measured}
     if not pin.serves(record.get('served_model')):
-        return {**base, 'reason': 'model_mismatch', 'measurement': measured}
+        # Kept, so drift detection sees every model that answered for this judge.
+        return {**base, 'reason': 'model_mismatch', 'measurement': measured,
+                'served_model': record.get('served_model')}
     return {**base, **parse(record.get('reply'), case, token, name), 'measurement': measured,
             'served_model': record.get('served_model')}
 
