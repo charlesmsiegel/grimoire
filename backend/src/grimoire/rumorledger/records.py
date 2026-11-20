@@ -4,8 +4,17 @@ from grimoire.core.knowledge import Proposition, Report
 from grimoire.evidence import encode
 
 
+PREFIX = 'rumor-'
+
+
 def output_id(campaign, communication, phase):
-    return 'rumor-' + sha256(('\0'.join((campaign, communication, phase))).encode()).hexdigest()
+    return PREFIX + sha256(('\0'.join((campaign, communication, phase))).encode()).hexdigest()
+
+
+def is_rumor_output(record_id):
+    """Whether ``record_id`` has the shape of a rumor queue's output id (64 hex digits after the prefix)."""
+    tail = record_id[len(PREFIX):]
+    return record_id.startswith(PREFIX) and len(tail) == 64 and all(c in '0123456789abcdef' for c in tail)
 
 
 def output(r, phase, at, sent_at=None):
