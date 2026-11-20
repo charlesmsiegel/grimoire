@@ -342,15 +342,29 @@ def derive_profile(ref: SourceRef, name: str, texts: VoiceTexts) -> DerivedVoice
     return DerivedVoice(ref, profile, tuple(build.notes), texts)
 
 
+def native_voice_texts(definition: EntityDefinition) -> VoiceTexts | None:
+    """A complete native character's own text, without pretending it was imported.
+
+    Imported metadata, even malformed, belongs to its reader. Partial derived layers belong to
+    SnapshotVoices' pinned composition, never a second fallback that could resurrect cleared text.
+    No other section, campaign evidence or neighbouring definition supplies voice evidence.
+    """
+    if any(key in definition.extras for key in ("card", "v1", "derivation")):
+        return None
+    sections = _mapping(definition.extras.get("sections"))
+    return VoiceTexts(personality=text_of(sections.get("personality")), description=definition.description)
+
+
 def derive_voice(definition: EntityDefinition, readers: Iterable[VoiceReader] = ()) -> DerivedVoice | None:
-    """The voice of one imported character revision from its own text; ``None`` if it is not imported.
+    """The voice of one imported or complete native character revision from its own text.
 
     ``readers`` are tried in order before ``card_voice_texts``; the first that recognises the revision
-    supplies its texts (see ``derive_profile`` for what they become).
+    supplies its texts. Complete native characters then use their own description/personality only
+    (see ``derive_profile`` for what they become).
     """
     if not isinstance(definition, EntityDefinition) or definition.ref.kind != "character":
         return None
-    for reader in (*readers, card_voice_texts):
+    for reader in (*readers, card_voice_texts, native_voice_texts):
         texts = reader(definition)
         if texts is not None:
             return derive_profile(definition.ref, definition.name, texts)

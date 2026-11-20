@@ -22,6 +22,7 @@ from grimoire.core.identity import SourceRef
 from grimoire.ledgers import DurableAuthority
 from grimoire.sourceapi import UNAVAILABLE, SourceApi, next_revision
 from grimoire.store import LibraryStore
+from grimoire.store.jsonfmt import thaw
 from grimoire.testing.fileops import snapshot as files_of
 from grimoire.textapi import ApiRefused
 
@@ -52,7 +53,7 @@ def source(api, source_id, title):
 def two_maras(api):
     """Two characters both named Mara, one per source: (gothic mara, modern mara) as written."""
     gothic = api.call("sources.create", {"source": GOTHIC, "kind": "character", "expected": source(api, GOTHIC, "Gothic"),
-                                         "fields": {"name": "Mara", "description": "A lamplighter of the quay.",
+                                         "fields": {"name": "Mara", "traits": [], "description": "A lamplighter of the quay.",
                                                     "sections": {"personality": "Wry and patient."}}})
     modern = api.call("sources.create", {"source": MODERN, "kind": "character", "expected": source(api, MODERN, "Modern"),
                                          "fields": {"name": "Mara", "description": "A bicycle courier."}})
@@ -484,9 +485,9 @@ def test_an_attach_the_chat_refuses_is_a_refusal_with_its_reason(api):
     assert again.reason == "duplicate_binding"
 
 
-def test_a_character_made_here_is_said_to_need_a_voice_profile(api):
+def test_native_voice_text_is_supported_but_dedicated_profile_editing_is_not(api):
     gothic, _modern = two_maras(api)
-    assert "voice" in api.call("sources.read", {"ref": gothic["ref"]})["unavailable"]
+    assert "Native characters speak" in api.call("sources.read", {"ref": gothic["ref"]})["unavailable"]["voice"]
 
 
 def test_lore_the_reader_would_skip_is_refused_but_an_imported_quirk_stays_editable(api):
@@ -555,3 +556,30 @@ def test_nothing_is_offered_to_derive_from_a_revision_that_does_not_compose(api,
     read = api.call("sources.read", {"ref": derived["ref"]})
     assert read["composition_error"] is not None
     assert "does not compose" in read["actions"]["derive"]
+
+
+def test_new_character_template_defaults_only_omitted_traits(api):
+    source_id = "local:template"
+    etag = source(api, source_id, "Template")
+    for kind, fields, expected_traits in (
+        ("character", {"name": "Default"}, [{"facet": "agent"}, {"facet": "communicative", "speaks": ["speech"], "understands": ["speech"]}]),
+        ("character", {"name": "Empty", "traits": []}, []),
+        ("character", {"name": "Custom", "traits": [{"facet": "agent"}]}, [{"facet": "agent"}]),
+        ("item", {"name": "Stone"}, []),
+    ):
+        written = api.call("sources.create", {"source": source_id, "kind": kind, "fields": fields, "expected": etag})
+        etag = written["manifest_etag"]
+        ref = SourceRef.parse(written["ref"])
+        assert thaw(api.authoring.head(api.authoring.load(), ref).envelope.payload["traits"]) == expected_traits
+
+
+def test_default_character_facets_never_repair_existing_explicit_records(api):
+    gothic, modern = two_maras(api)  # explicitly empty Gothic traits are an old-style native record
+    saved = edit(api, gothic["ref"], "sources.save", fields={"description": "Speaks softly."})
+    ref = SourceRef.parse(saved["ref"])
+    assert not api.authoring.head(api.authoring.load(), ref).envelope.payload["traits"]
+    derived = api.call("sources.derive", {"base": saved["ref"], "source": MODERN,
+                                          "expected": modern["manifest_etag"], "id": "local"})
+    assert not api.authoring.head(api.authoring.load(), SourceRef.parse(derived["ref"])).envelope.payload.get("traits", ())
+    raw = edit(api, modern["ref"], "sources.save_raw", payload={"name": "Mara", "nature": "individual", "traits": []})
+    assert not api.authoring.head(api.authoring.load(), SourceRef.parse(raw["ref"])).envelope.payload["traits"]

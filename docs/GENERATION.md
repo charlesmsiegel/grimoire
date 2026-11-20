@@ -200,3 +200,13 @@ existing messages. The ensemble adapter validates current cast/control and
 actor-local grounding, filters new speech by audience, and prevents replay even
 for an entirely silent exchange. Ordinary app play is unchanged; 115 owns UI
 integration.
+
+## Native manually authored characters
+
+Complete native character definitions also derive bounded voice anchors from their own description and
+personality section, using the same deterministic extraction as imported text, without fake import metadata.
+No private sections or other actors supply voice. Empty text refuses; explicit profiles win. Imported metadata
+(even malformed) never falls through to native interpretation. Derived portrayals retain pinned inheritance,
+overrides and explicit clears. Profiles are rebuilt from immutable revisions, with no migration or model call.
+The Library character template supplies speaking-agent facets on creation only when traits are omitted.
+Existing non-agent records need explicit authoring and reviewed rebase, never a runtime authority shortcut.

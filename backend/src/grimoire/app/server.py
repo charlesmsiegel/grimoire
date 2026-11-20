@@ -38,8 +38,22 @@ from .pages import CONTRACT, SLOTS, load_pages
 
 #: The largest request body read: a 32 MiB picture is about 43 MiB as base64, plus its JSON.
 MAX_BODY = 48 * 1024 * 1024
-#: Connections handled at once; more are closed at once, so no number of clients can hold the process.
+#: Maximum handler threads; one accepted connection may also wait in the accept loop.
 MAX_CONNECTIONS = 8
+#: Brief bursts wait for a handler; this interval precedes the existing request deadlines.
+ADMISSION_TIMEOUT = 1.0
+#: Sustained overload gets a best-effort fixed refusal, never an unbounded socket write.
+OVERLOAD_WRITE_TIMEOUT = 0.1
+_OVERLOAD_BODY = b"Server busy. Try again.\n"
+_OVERLOAD_RESPONSE = (
+    "HTTP/1.0 503 Service Unavailable\r\n"
+    "Content-Type: text/plain; charset=utf-8\r\n"
+    f"Content-Length: {len(_OVERLOAD_BODY)}\r\n"
+    "Connection: close\r\nCache-Control: no-store\r\n"
+    "X-Content-Type-Options: nosniff\r\n"
+    "Content-Security-Policy: default-src 'none'; sandbox\r\n"
+    "X-Frame-Options: DENY\r\n\r\n"
+).encode("ascii") + _OVERLOAD_BODY
 #: Seconds a connection may sit idle mid-request before it is dropped.
 SOCKET_TIMEOUT = 30.0
 #: Seconds a request may take to send its line and headers, however it trickles them; then it is dropped.
@@ -107,8 +121,15 @@ class _Server(ThreadingHTTPServer):
         super().__init__(address, handler)
 
     def process_request(self, request, client_address) -> None:  # type: ignore[no-untyped-def]
-        if not self.slots.acquire(blocking=False):  # too many at once: drop this one, not the process
-            self.shutdown_request(request)
+        # Backpressure stays in the single accept loop: no extra queue or waiting threads.
+        if not self.slots.acquire(timeout=ADMISSION_TIMEOUT):
+            try:
+                request.settimeout(OVERLOAD_WRITE_TIMEOUT)
+                request.sendall(_OVERLOAD_RESPONSE)
+            except OSError:  # a disconnected or non-reading peer still cannot retain this socket
+                pass
+            finally:
+                self.shutdown_request(request)
             return
         try:
             super().process_request(request, client_address)
