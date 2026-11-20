@@ -102,6 +102,12 @@ test("conditions, confidences and hypothesis ids are read the way a person types
   assert.equal(logic.nextHypothesisId([{ id: "h2" }]), "h3");
   assert.equal(logic.heldFrom(["a", "b"], [{ evidence: "a", at: 2 }, { evidence: "b", at: 5 }, { evidence: "c", at: 9 }]), 5);
   assert.equal(logic.heldFrom([], []), null);
+  // a replacement is held strictly after what it replaces, even on the same evidence (060 refuses otherwise)
+  const seen = [{ evidence: "a", at: 2 }, { evidence: "b", at: 5 }];
+  assert.equal(logic.heldAt(["a"], seen, { id: "h1", at: 2 }), 3);
+  assert.equal(logic.heldAt(["b"], seen, { id: "h1", at: 2 }), 5);
+  assert.equal(logic.heldAt(["a"], seen, undefined), 2);
+  assert.equal(logic.heldAt(["a"], seen, { id: "h1", at: 7 }), 8);
   assert.deepEqual(logic.readHypotheses("not json"), []);
   assert.deepEqual(logic.readHypotheses('[{"id":"h1"},{"nope":1},3]'), [{ id: "h1" }]);
   assert.equal(logic.percent(0.25), "25%");

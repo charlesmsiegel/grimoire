@@ -12,7 +12,7 @@
 
 import { campaignName, count } from "../campaign/logic.js";
 import {
-  heldFrom, latest, newOperationId, nextHypothesisId, parseConditions, parseConfidence, pathPlanText, pathText, percent,
+  heldAt, latest, newOperationId, nextHypothesisId, parseConditions, parseConfidence, pathPlanText, pathText, percent,
   placeLabels, readHypotheses, readList, routeText, rumorLine, rumorStatus, whose,
 } from "./logic.js";
 
@@ -572,7 +572,8 @@ async function minds(ctx, body, chat, cast) {
       if (!claim.value.trim() || sure === null || !cited.length || !about.value) return;
       const whom = [about.value, ...(alsoAbout.value && alsoAbout.value !== about.value ? [alsoAbout.value] : [])];
       hypotheses = [...hypotheses, { id: nextHypothesisId(hypotheses), about: whom, claim: claim.value.trim(), confidence: sure,
-        evidence: cited, at: heldFrom(cited, mind.evidence), supersedes: replaces.value || null }];
+        evidence: cited, at: heldAt(cited, mind.evidence, hypotheses.find((item) => item.id === replaces.value)),
+        supersedes: replaces.value || null }];
       save();
       claim.clear();
       confidence.clear();

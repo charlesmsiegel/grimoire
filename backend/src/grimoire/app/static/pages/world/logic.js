@@ -98,6 +98,14 @@ export function heldFrom(evidenceIds, held) {
   return moments.length ? Math.max(...moments) : null;
 }
 
+// The moment a hypothesis is held at: from its newest cited evidence, and strictly after the hypothesis it replaces
+// (060's ledger refuses a revision that is not later than what it supersedes).
+export function heldAt(evidenceIds, held, replaced) {
+  const from = heldFrom(evidenceIds, held);
+  if (!replaced || replaced.at === null || replaced.at === undefined) return from;
+  return from === null ? replaced.at + 1 : Math.max(from, replaced.at + 1);
+}
+
 // The next unused hypothesis id ("h1", "h2", …).
 export function nextHypothesisId(hypotheses) {
   const used = new Set(hypotheses.map((item) => item.id));

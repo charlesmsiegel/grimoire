@@ -610,6 +610,10 @@ def test_an_npcs_mistaken_theory_proposes_a_tactic_and_its_revision_another_with
         assert refused(app, "world.mind_preview", **ask, hypotheses=[first, {**revised, "at": glance,
                                                                         "evidence": ["mara-glance"]}]).reason \
             == "nonmonotonic_revision"
+        # the page holds a same-evidence revision one moment after what it replaces, which 060 admits
+        same = app.call("world.mind_preview", {**ask, "hypotheses": [first, {**revised, "at": glance + 1,
+                                                                          "evidence": ["mara-glance"]}]})
+        assert [item["id"] for item in same["current"]] == ["h2"]
         assert refused(app, "world.mind_preview", **ask, hypotheses=[first, {**revised, "about": [refs["mara"]]}]) \
             .reason in ("different_chain", "unresolved_actor")
         assert refused(app, "world.mind_preview", **ask, hypotheses=[{**first, "confidence": 2}]).reason \
