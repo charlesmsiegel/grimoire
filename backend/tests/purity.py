@@ -195,6 +195,8 @@ PURE_PACKAGES = (
     # NPC goals (039): authored agendas and the deterministic policy that chooses from the NPC's own
     # knowledge. It calls no model, so it never touches the inference contracts.
     PurePackage("grimoire.goals", ("grimoire.goals", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # 081: a story thread is computed over a read of the 012/020 ledger; it reads nothing itself.
+    PurePackage("grimoire.story", ("grimoire.story", "grimoire.core"), never_import=("grimoire.core.inference",)),
     # Institutional decisions (057) consume canonical graph membership, never store or deliver knowledge.
     PurePackage("grimoire.institutions", ("grimoire.institutions", "grimoire.core", "grimoire.graph"),
                 never_import=("grimoire.core.inference",)),
