@@ -45,9 +45,14 @@ python -m grimoire.judgepanel score   --corpus tests/fixtures/calibration/panel 
 
 - `plan` must report 108 planned calls before `capture` runs.
 - `--spend-cap` is recorded in the capture, not enforced. What holds the run under $10 is
-  `--max-calls 108` (the harness refuses a 109th call) with each answer bounded at 8000
-  output tokens, which caps the worst case at about $9. CMS's key also stops when its
-  credits run out. Do not raise either bound.
+  `--max-calls 108` (the harness refuses a 109th call) with `attempts: 1` and each answer
+  bounded at 8000 output tokens, which caps the worst case at about $9. Do not raise either
+  bound. The provider-enforced limit that [CALIBRATION.md](../CALIBRATION.md#spending-approval)
+  requires is the key's prepaid credit: CMS said the key stops when its credits run out.
+  That limit may be above $10, so the call and token bounds are what keep this run within
+  the approval.
+- The $9 worst case assumes the Opus judge costs $4 input and $20 output per million
+  tokens. If the resolved `<OPUS_MODEL_ID>` is priced higher, stop and ask before capture.
 - The `capture` folder must not exist yet. Every call is written before the next starts,
   and an interrupted call is recorded too. Do not rerun a capture to get a better result.
 - `<checkout>` is a clone of `coding-skills` at commit
