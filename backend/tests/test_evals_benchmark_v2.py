@@ -11,7 +11,8 @@ from grimoire.evals.loader import benchmark_file, load_json
 from grimoire.evals.v021 import EVIDENCE_FORMAT
 
 ROOT = Path(__file__).resolve().parents[2]
-STATUS = "baseline capture pending"
+# The measured baseline reports tokens, not money: neither doc may claim cost parity.
+STATUS = "no cost parity"
 
 
 def shipped_v2():
