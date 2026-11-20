@@ -147,11 +147,13 @@ generation runtime rather than the experiment runner. Critique is not adopted: t
   untrusted and presentation-only (`with_suggestion`). It is never a line, never heard by anyone else
   and never stored.
 - A failed, refused, incomplete or screened-out suggestion is recorded with its status and the turn
-  goes on as with the stage off; cancellation stops the turn. An NPC whose brief carries a decided
+  goes on as with the stage off. Cancellation stops the turn, and an exception from the adapter (an
+  approvals callback or adapter bug, not a provider answer) halts it, as it does for a reply. An NPC whose brief carries a decided
   choice gets no planning call: it is forgone (`not_issued`, `has_choice`) and costs nothing, so no
   suggestion competes with the decided intention.
 - The app's `planning` setting (0–16) sets the cap ([INFERENCE_UI](INFERENCE_UI.md)); 035's
-  `SceneRunner` names every chosen speaker as a planner when the cap is set. Every planning attempt is
+  `SceneRunner` names every chosen speaker without an agenda as a planner when the cap is set (an
+  agenda NPC is briefed with its choice, so its call would only be forgone). Every planning attempt is
   metered and listed in usage like any other optional call, and each take (a reroll included) plans
   again. No schema or stored format changed.
 
@@ -180,7 +182,8 @@ findings and token usage, reported apart), then V2 with planning against plain V
 - `--live --confirm-billing --api-key-env VAR` is billed. It is refused against a dry-run capture,
   prints the request ceiling (planned calls times attempts: 18 for the scenario at three attempts, 54
   with planning) before sending, reads the key only from the named variable and writes nothing that
-  contains it. Running it needs CMS's own spending approval, separate from 015's.
+  contains it. If it fails or is stopped, nothing is written and it prints what was already sent, as
+  counts only. Running it needs CMS's own spending approval, separate from 015's.
 - V2 speaks only the OpenAI-compatible protocol. Against an `anthropic` capture it calls Anthropic's
   OpenAI-compatible endpoint, which offers no prompt caching and reports no cached-token counts,
   while 0.2.1 called the Messages API. The report says so, the cost comparison is `usage_incomplete`,
