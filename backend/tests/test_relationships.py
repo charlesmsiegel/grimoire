@@ -206,6 +206,7 @@ def test_a_change_supersedes_the_current_head_and_history_is_kept():
     assert [a.attitude_id for a in attitudes_of(second, ENVOY, as_of=9)] == ['t2']
     assert [a.attitude_id for a in attitudes_of(second, ENVOY, as_of=5)] == ['t1']
     assert [a.attitude_id for a in history_of(second, ENVOY, PC, 'trust', as_of=9)] == ['t1', 't2']
+    assert [a.attitude_id for a in history_of(second, ENVOY, PC, 'trust', as_of=5)] == ['t1']
     assert history_of(second, ENVOY, PC, 'fear', as_of=9) == ()
     for bad, reason in ((replace(later, supersedes=None), 'unsuperseded_conflict'),
                         (replace(later, supersedes='missing'), 'stale_supersession'),
