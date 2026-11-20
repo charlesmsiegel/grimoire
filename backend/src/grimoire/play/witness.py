@@ -28,18 +28,26 @@ added later: the event alone is final.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from grimoire.core.identity import AcceptedRef, ChatRef
 from grimoire.core import DIRECTOR
 from grimoire.core.knowledge import Event, Perception
 from grimoire.core.model import ControlAssignment
+from grimoire.devicetag import tag_of
 from grimoire.effects import AcceptedEvent, EffectCodecError, EffectError, accepted_from_payload, as_knowledge_event
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.play.scene import _latest, _refuse
 from grimoire.scene import SceneRefused, TurnEffect, TurnRecord, turn_from_payload
 from grimoire.staging import StagingRefused, perceptions, where
 from grimoire.store import StaleWrite, StoreError
+from grimoire.store.syncstate import sync_peers
+from grimoire.sync.documents import is_retired
+
+#: What a store read or write may raise besides its own errors: a raw ``OSError`` (a full disk, a permission
+#: denied) before a commit point, and a codec's ``ValueError``. None of it is ever let out of ``settle``.
+_FAILURES = (StoreError, OSError, ValueError)
 
 #: The channel of a witness's perception of an accepted effect (012's open vocabulary): it saw it happen.
 CHANNEL = "witnessed"
@@ -86,9 +94,38 @@ def _ledger(runner, campaign_id: str):
     try:
         ledger = EvidenceLibrary(runner.store, runner.handle, owner=runner.owner).read(campaign_id,
                                                                                       requested_by=DIRECTOR)
-    except (StoreError, ValueError) as error:
+    except _FAILURES as error:
         raise _refuse("knowledge_unavailable", getattr(error, "reason", type(error).__name__)) from None
     return ledger, _latest(ledger.knowledge)
+
+
+def _own_tags(runner) -> frozenset[str] | None:
+    """The device tags under which an acceptance in this library's 021 landed here: its tag now and every tag
+    it had before ``identify(..., replace=True)`` (the old ID is kept in each pair's retired archive, marker and
+    kept-version record);
+    ``None`` when the library has no paired device at all, so nothing in it ever arrived by sync and every
+    acceptance here landed here. A tag that cannot be read is simply not one (counted, never written: safe)."""
+    try:
+        mine = runner.scenes.device()
+    except SceneRefused:  # a damaged identity: only the former tags are known
+        mine = None
+    try:
+        peers = sync_peers(runner.store)
+    except _FAILURES:
+        peers = None
+    if peers == ():
+        return None
+    tags = {mine} if mine else set()
+    for peer in peers or ():
+        for kind in ("archive", "pending", "keeps"):
+            try:
+                data = runner.store.read_sync_state(f"peers/{peer}/{kind}.json")
+                device = json.loads(data).get("device") if data is not None and is_retired(data) else None
+            except (*_FAILURES, AttributeError):
+                continue
+            if isinstance(device, str):
+                tags.add(tag_of(device))
+    return frozenset(tags)
 
 
 def controls_at(runner, campaign_id: str, position: int) -> tuple[ControlAssignment, ...]:
@@ -104,34 +141,38 @@ def controls_at(runner, campaign_id: str, position: int) -> tuple[ControlAssignm
     return tuple(ControlAssignment(campaign_id, actor, controller) for actor, controller in sorted(controllers.items()))
 
 
-def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]:
+def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None, str | None]:
     """Every accepted effect of the campaign's turns whose 021 event is active in this library and whose bridge
-    020 does not hold, oldest first (by sequence, then event id); 020's high-water mark; and the earliest sequence
-    of an acceptance still cut short (``accepting``) anywhere in the campaign, or ``None``.
+    020 does not hold, oldest first (by sequence, then event id); 020's high-water mark; the earliest sequence
+    of an acceptance still cut short (``accepting``) anywhere in the campaign, or ``None``; and why the list may
+    be missing one (``turns_unreadable``, ``accepted_unreadable``), or ``None``.
 
-    Read raw: a turn or accepted file that cannot be read is skipped here (``open`` and acceptance already report
-    and refuse over it). Only this device's acceptances are this library's to bridge (tagged with this device, or
-    with none): 028 merges 021's accepted events and 020's knowledge alike, so another device's acceptance arrives
-    with the knowledge that device wrote, judged on the stage it was played on. A bridge 020 quarantined (a damaged
-    event file) counts as held: it is repaired, never written again.
+    A turn or accepted file that cannot be read could hold a pending effect of any sequence, so it is named: the
+    walk then writes nothing (a later bridge would leave that one behind for good) until it is repaired. Only this
+    library's acceptances are its to bridge: tagged with no device, or with one of its own tags (``_own_tags``:
+    a replaced identity keeps what landed under the old one). 028 merges 021's accepted events and 020's knowledge
+    alike, so another device's acceptance arrives with the knowledge that device wrote, judged on the stage it
+    was played on, and is only counted here (``elsewhere``). A bridge 020 quarantined (a damaged event file)
+    counts as held: it is repaired, never written again.
     """
     ledger, high = _ledger(runner, campaign_id)
-    try:
-        mine = runner.scenes.device()
-    except SceneRefused:  # a damaged identity: only untagged acceptances are known to be this library's
-        mine = None
+    own = _own_tags(runner)
     held = {event.event_id for event in ledger.knowledge.events}
     held |= {item.name.partition(":")[2] for item in ledger.quarantined if item.name.startswith("event:")}
     try:
-        accepted = runner.store.campaign_accepted(campaign_id).records
-        turns = runner.store.campaign_turns(campaign_id).records
-    except StoreError as error:
+        accepted_scan = runner.store.campaign_accepted(campaign_id)
+        turn_scan = runner.store.campaign_turns(campaign_id)
+    except _FAILURES as error:
         raise _refuse("effects_unavailable", type(error).__name__) from None
+    accepted, turns = accepted_scan.records, turn_scan.records
+    missing = ("turns_unreadable" if turn_scan.problems else
+               "accepted_unreadable" if accepted_scan.problems else None)
     found, unsettled = [], None
     for ref, stored in turns.items():
         try:
             record = turn_from_payload(ref, stored.record.schema, stored.record.payload)
         except SceneRefused:
+            missing = missing or "turns_unreadable"
             continue
         for effect in record.effects:
             if effect.state == "accepting":
@@ -139,7 +180,7 @@ def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]
                 unsettled = sequence if unsettled is None else min(unsettled, sequence)
             if effect.state != "accepted" or effect.event_id is None or effect.event_id in held:
                 continue
-            elsewhere = effect.accepted_on is not None and effect.accepted_on != mine  # that device writes it
+            elsewhere = effect.accepted_on is not None and own is not None and effect.accepted_on not in own
             address = AcceptedRef(campaign_id, effect.event_id)
             raw = accepted.get(address)
             if raw is None:
@@ -147,11 +188,12 @@ def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]
             try:
                 event = accepted_from_payload(address, raw.record.schema, raw.record.payload)
             except EffectCodecError:
+                missing = missing or "accepted_unreadable"
                 continue
             if event.active and event.chat == record.chat:
                 found.append(Pending(event, effect, record, event.moment.sequence < high, elsewhere))
     found.sort(key=lambda item: (item.event.moment.sequence, item.event.event_id))
-    return found, high, unsettled
+    return found, high, unsettled, missing
 
 
 def records(runner, scene, pending: Pending) -> tuple[Event | Perception, ...] | str:
@@ -169,7 +211,7 @@ def records(runner, scene, pending: Pending) -> tuple[Event | Perception, ...] |
     if pending.effect.controls_at is not None:
         try:
             then = controls_at(runner, scene.chat.campaign_id, pending.effect.controls_at)
-        except (StoreError, ValueError):  # control then cannot be told: nobody's perception
+        except _FAILURES:  # control then cannot be told: nobody's perception
             return (event,)
     return (event, *witnessed(scene, pending.record, pending.effect, event, then))
 
@@ -243,8 +285,8 @@ def _append(runner, pending: Pending, found: tuple) -> tuple[str | None, bool]:
         library.append(pending.chat.campaign_id, found, chat=pending.chat).commit()
     except StaleWrite:
         return "knowledge_changed", True
-    except StoreError as error:  # possibly published in part (020's own damage report says so on the next read)
-        return type(error).__name__, True
+    except (StoreError, OSError) as error:  # a raw OSError too (a full disk): possibly published in part, which
+        return type(error).__name__, True       # 020's own damage report says on the next read
     except ValueError as error:  # 020's EvidenceWriteError, 012's KnowledgeError: refused, nothing written
         reason = getattr(error, "reason", type(error).__name__)
         if reason == "duplicate_id" and name in getattr(error, "records", ()):
@@ -271,14 +313,16 @@ def _scene_of(runner, chat: ChatRef, opened: dict):
     if chat not in opened:
         try:
             opened[chat] = runner._context(chat).scene
-        except (SceneRefused, StoreError, ValueError):
+        except (SceneRefused, *_FAILURES):
             opened[chat] = None
     return opened[chat]
 
 
-def settle(runner, scene) -> list[Left] | str:
+def settle(runner, scene) -> tuple[list[Left], str | None] | str:
     """Write every pending bridge of ``scene``'s campaign, oldest first, under the store lock; what stays pending
-    and why, or why nothing could be listed. Never refuses: acceptance and recovery go on whatever 020 says.
+    and why, with why the list may be missing one (an unreadable turn or accepted file, which writes nothing
+    until repaired), or why nothing could be listed. Never refuses and never raises over storage (a full disk
+    included): acceptance, recovery and ``open`` go on whatever 020 says.
 
     020 never takes a backdated record, so bridges go in sequence order, campaign-wide, each with its own chat's
     stage (``scene`` for its own chat, the runner's ``open`` of another). Stopped at an acceptance still cut short
@@ -287,10 +331,12 @@ def settle(runner, scene) -> list[Left] | str:
     its own reason is passed: later ones go on, and it falls behind (``backdated``) rather than stall the rest."""
     with runner.store.lock:
         try:
-            pending, high, unsettled = unbridged(runner, scene.chat.campaign_id)
+            pending, high, unsettled, missing = unbridged(runner, scene.chat.campaign_id)
         except SceneRefused as error:
             return error.reason
-        left, stop, opened = [], None, {scene.chat: scene}
+        except _FAILURES as error:
+            return type(error).__name__
+        left, stop, opened = [], missing, {scene.chat: scene}
         for item in pending:
             sequence = item.event.moment.sequence
             if item.elsewhere:  # counted, never written here: its own device writes it, and it arrives by sync
@@ -304,27 +350,32 @@ def settle(runner, scene) -> list[Left] | str:
             if stop is not None:
                 left.append(Left(item, stop))
                 continue
-            reason, wide = write(runner, _scene_of(runner, item.chat, opened), item)
+            try:
+                reason, wide = write(runner, _scene_of(runner, item.chat, opened), item)
+            except (SceneRefused, *_FAILURES) as error:  # a read on the way (the stage, control): try again later
+                reason, wide = getattr(error, "reason", type(error).__name__), True
             if reason is None:
                 high = max(high, sequence)
                 continue
             left.append(Left(item, reason))
             if wide:
                 stop = reason
-        return left
+        return left, missing
 
 
 def problems(runner, scene) -> list[tuple[str, str]]:
     """``open``'s report, after a ``settle``: one row for this chat's accepted effects whose bridge 020 still
     does not hold, ``("unbridged", "<count>:<reason>")``, with the first reason that may still clear
-    (``backdated`` only when none may), or ``("unbridged", "unreadable:<reason>")``. It names no turn and no
-    event: the hub shows problems to the table, and a director-only effect's existence is the director's."""
-    left = settle(runner, scene)
-    if isinstance(left, str):
-        return [("unbridged", f"unreadable:{left}")]
+    (``backdated`` only when none may), or ``("unbridged", "unreadable:<reason>")`` when the pending list cannot
+    be read whole (an unreadable turn could hold one of this chat's). It names no turn and no event: a director-
+    only effect's existence is the director's, and the hub shows this row to the director alone."""
+    found = settle(runner, scene)
+    if isinstance(found, str):
+        return [("unbridged", f"unreadable:{found}")]
+    left, missing = found
     mine = [item for item in left if item.pending.chat == scene.chat]
     if not mine:
-        return []
+        return [("unbridged", f"unreadable:{missing}")] if missing else []
     clearing = [item.reason for item in mine if item.reason != "backdated"]
     return [("unbridged", f"{len(mine)}:{clearing[0] if clearing else 'backdated'}")]
 

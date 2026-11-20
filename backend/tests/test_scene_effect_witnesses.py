@@ -32,6 +32,8 @@ from grimoire.ledgers.codec import ControlChange
 from grimoire.play.stages import StageBook
 from grimoire.scene import SceneRefused
 from grimoire.staging import Absence, Area, Placement, Stage, Way
+from grimoire.sync import NoDeviceIdentity, device_of, identify
+from grimoire.sync.documents import render_keeps
 
 UNOPPOSED = json.dumps({"factors": [{"fact": "f1", "bearing": "favours"}], "stakes": []})
 MET = "Anya and Mara shake hands."
@@ -145,6 +147,25 @@ def raw_effect(at: Table, chat, turn: str):
 def bridge_of(at: Table, chat, event_id: str) -> Event:
     event, _ = at.effects.read(AcceptedRef(chat.campaign_id, event_id), requested_by=DIRECTOR)
     return as_knowledge_event(event)
+
+
+def paired(store, peer: str = "laptop") -> None:
+    """The library paired with another device (identified, if it was not), as a sync with no conflict leaves it:
+    that pair's kept-version record, holding nothing."""
+    try:
+        device = device_of(store)
+    except NoDeviceIdentity:
+        identify(store, device := "desk")
+    found = store.root / ".sync" / "peers" / peer
+    found.mkdir(parents=True, exist_ok=True)
+    (found / "keeps.json").write_bytes(render_keeps(tuple(sorted((device, peer))), {}))
+
+
+def full_disk(monkeypatch) -> None:
+    """020's append fails before its commit point with the raw error a full disk gives."""
+    def commit(change, approvals=None):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(KnowledgeChange, "commit", commit)
 
 
 def no_bridge_append(monkeypatch) -> None:
@@ -440,6 +461,7 @@ def test_another_devices_acceptance_whose_knowledge_never_arrived_is_counted_nev
         with pytest.raises(Crash):
             accepted(at, chat, anya, mara, turn)
         monkeypatch.undo()
+        paired(at.store)  # paired, so an acceptance under a tag never this library's arrived by sync
         (stored_turn,) = [each for each in at.runner.scenes.turns(chat).turns if each.record.turn_id == turn]
         theirs = replace(stored_turn.record.effect(1), accepted_on="0badcafe")
         at.runner.scenes.write(stored_turn.record.with_effect(theirs), stored_turn)
@@ -561,3 +583,79 @@ def test_another_chats_unwritten_knowledge_never_stalls_this_one(cards, monkeypa
         assert [event.summary for event in events] == [MET, "Anya offers Mara a seat."]  # in sequence order
         assert seen(at, chat, anya) == [("witnessed", "Anya offers Mara a seat.")]
         assert unbridged(at, chat) == [] and unbridged(at, other) == []
+
+
+# -- storage failures, a replaced identity, an unreadable turn ----------------------------------------------
+
+@pytest.mark.parametrize("last", ["approve", "endorse"])
+def test_a_full_disk_at_the_knowledge_append_refuses_nothing_and_is_written_later(cards, monkeypatch, last):
+    folder, chat = cards
+    book = StageBook()
+    with table(folder, book) as at:
+        anya, mara, tamsin = cast(at, chat)
+        book.put(chat, stage(chat, anya, mara, tamsin))
+        turn = decided(at, chat)
+        effect = at.runner.propose_effect(chat, at.player(), turn, MET, [Op("begin", "has_met", anya, mara, anya,
+                                                                              turn)])
+        full_disk(monkeypatch)
+        if last == "approve":
+            at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+            done = at.runner.approve_effect(chat, at.owner, turn, 1)
+        else:
+            at.runner.approve_effect(chat, at.owner, turn, 1)
+            done = at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
+        assert done.state == "accepted"  # 021 and the accepted mark stand; the disk refused only 020
+        assert unbridged(at, chat) == ["1:OSError"]  # open reads on, and counts it for the director
+        assert at.runner.recover_effects(chat, at.owner) == ()
+        monkeypatch.undo()  # space again
+        assert unbridged(at, chat) == [] and seen(at, chat, anya) == [("witnessed", MET)]
+
+
+@pytest.mark.parametrize("pairing", ["unpaired", "paired"])
+def test_an_acceptance_under_a_replaced_identity_is_still_this_librarys_to_write(cards, monkeypatch, pairing):
+    """A copied library given a new device ID (``identify(..., replace=True)``) keeps what landed under the old
+    one: never paired, nothing here arrived by sync; paired, the replace retires the pair's records, which keep
+    the old ID."""
+    folder, chat = cards
+    book = StageBook()
+    with table(folder, book) as at:
+        identify(at.store, "phone")
+        if pairing == "paired":
+            paired(at.store)
+        anya, mara, tamsin = cast(at, chat)
+        book.put(chat, stage(chat, anya, mara, tamsin))
+        turn = decided(at, chat)
+        no_bridge_append(monkeypatch)
+        with pytest.raises(Crash):
+            accepted(at, chat, anya, mara, turn)
+    monkeypatch.undo()
+    with restart(folder, book) as at:
+        identify(at.store, "tablet", replace=True)  # retires the pair's record, naming the old ID
+        assert raw_effect(at, chat, turn).accepted_on not in (None, at.runner.scenes.device())
+        assert at.runner.recover_effects(chat, at.owner) == ()
+        assert seen(at, chat, anya) == [("witnessed", MET)] and unbridged(at, chat) == []
+
+
+def test_an_unreadable_turn_holds_every_later_bridge_until_it_is_repaired(cards, monkeypatch):
+    """A turn that cannot be read could hold an earlier pending effect: writing a later bridge would leave that one
+    behind for good, so nothing is written (and play goes on) until it is repaired; then both are, in order."""
+    folder, chat = cards
+    book = StageBook()
+    with table(folder, book, replies=2) as at:
+        anya, mara, tamsin = cast(at, chat)
+        book.put(chat, stage(chat, anya, mara, tamsin))
+        full_disk(monkeypatch)
+        first = decided(at, chat)
+        assert accepted(at, chat, anya, mara, first).state == "accepted"
+        at.runner.pass_turn(chat, at.player())
+        second = decided(at, chat, "*I offer Mara a seat*")
+        assert accepted(at, chat, anya, mara, second, "Anya offers Mara a seat.", "allied_with").state == "accepted"
+        monkeypatch.undo()
+        path = folder / "campaigns" / chat.campaign_id / "turns" / f"{first}.json"
+        kept = path.read_bytes()
+        path.write_bytes(b"{not json")
+        assert unbridged(at, chat) == ["1:turns_unreadable"]  # the second waits; the first cannot be listed
+        assert stored(at, chat).knowledge.events == ()
+        path.write_bytes(kept)  # repaired
+        assert unbridged(at, chat) == []
+        assert [event.summary for event in stored(at, chat).knowledge.events] == [MET, "Anya offers Mara a seat."]
