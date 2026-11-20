@@ -1,8 +1,9 @@
 # V0.2.1 cost and voice baseline (Sprint 015, first slice)
 
 **Status:** baseline capture pending. The opt-in capture harness exists and has been proven end
-to end against the unmodified `0.2.1` app in **dry-run** mode, whose numbers are synthetic. No
-live, provider-reported capture has been run yet, so **no cost parity with V0.2.1 is claimed**.
+to end against the unmodified `0.2.1` app in **dry-run** mode, whose numbers are synthetic. One
+live capture was attempted and [failed](#live-attempt-2026-11-20), so there is no
+provider-reported baseline and **no cost parity with V0.2.1 is claimed**.
 
 ## What is measured
 
@@ -170,11 +171,32 @@ cannot verify the provider's own billing receipt. The report says both.
   invents a label.
 - **Rolls.** A 0.2.1 reply that pauses for a roll is a second call for one contribution, which
   fails the capture (`multi_call_contribution`).
-- **The live path has not been exercised.** It differs from the dry run only in the transport and
-  the key, but no live capture has been run (no key was available to this slice).
+- **No live capture has completed.** The one attempt failed; see
+  [Live attempt (2026-11-20)](#live-attempt-2026-11-20).
 - **Windows.** The real driver has been run on Linux only.
 - **Matched comparison.** A V2-vs-V0.2.1 comparison needs V2's provider adapter (013) and
   generation runtime (027); `/2` reserves a `v2-runtime` source for it.
+
+## Live attempt (2026-11-20)
+
+One live capture was attempted with `--provider anthropic --model claude-sonnet-5-5`, the
+operator's chosen stand-in for their usual play model. It failed in turn 1 and wrote nothing.
+
+- The first speaker's call succeeded: 3,367 input tokens, 484 output tokens, no cache tokens,
+  no reported cost. At list prices of 2026-11-03 that is about 0.01 USD (an estimate).
+- The second speaker's call failed on its only attempt with no usage reported.
+
+Cause: 0.2.1 sends a second speaker's request with the first speaker's reply as the last
+message, an assistant turn. Its Anthropic adapter sends that as given. Sonnet 5.5 rejects a
+conversation that ends in an assistant message with a 400 ("does not support assistant
+message prefill"). A dry run with the request roles logged shows the second call of every
+turn ending in `assistant`, and a direct request of that shape to the model returned the 400.
+
+So unmodified 0.2.1 cannot play this two-speaker scenario on the `anthropic` provider with a
+current Claude model, and the capture cannot succeed as configured. A baseline needs a
+different approved route: for example `openrouter`, or a model that still accepts a trailing
+assistant turn. Either is a new billed capture needing its own approval. 015, Wave 2 and the
+068 comparison stay open until one completes.
 
 ## Privacy
 
