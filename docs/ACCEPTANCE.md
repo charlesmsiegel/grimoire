@@ -54,6 +54,7 @@ phones. No screenshots, traces, tokens or generated libraries are committed.
 | Migration | Browser scan/preview/approval, art-loss warning, two-NPC play and process resume | Synthetic source snapshot must remain unchanged |
 | Media/sync | UI upload, pairing, manual transfer, image bytes, two offline branches and preserved alternative | Reachable loopback clients only |
 | Accessibility/responsiveness | Tab/Enter/Escape, focus return, alert text, 1280×900 and 390×844 layout, phone control geometry and cast panel | DOM/geometry evidence, not real screen-reader or physical-touch proof |
+| Structural accessibility audit | `backend/tests/test_app_a11y_js.py` (ordinary CI, Node, no browser): every route, each Import tab, a source page, each screen's disclosures opened, the command palette and a modal, against names, labels, id references, roles and states, landmarks, one main and a top heading, and keyboard reachability of anything clickable (`backend/tests/js/a11y.mjs`) | Document tree only: no contrast, focus visibility, reflow, target size, Tab order or announcements |
 
 The audit base `e551c709f7e38a13ce85009502539d31bd2c67b8` failed the
 manual-character journey: the library could not supply its required voice or
