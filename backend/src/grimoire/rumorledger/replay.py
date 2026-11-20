@@ -1,6 +1,6 @@
 """Rebuild and validate queue state from the append-only authority ledger."""
 from grimoire.ledgers.codec import exact
-from .codec import decode, moment
+from .codec import campaign_time, decode, moment
 from grimoire.store.errors import LedgerInvalid
 from grimoire.security.policy import is_valid_principal
 from .records import output, expected
@@ -10,7 +10,9 @@ from collections.abc import Mapping
 
 
 def replay(campaign, entries):
-    rows, clock, watermark = {}, None, -1
+    """``(rows, watermark)``: each communication's request, attempts and completions, and the newest campaign
+    time an ``advance`` delivered at (``None`` before the first)."""
+    rows, watermark = {}, None
     try:
         for entry in entries:
             kind = entry.get('kind')
@@ -32,9 +34,6 @@ def replay(campaign, entries):
                     contribution = PlayerContribution(**proof)
                     if (contribution.campaign_id, contribution.actor_id, contribution.submitted_by, contribution.kind, contribution.text, contribution.scene_id, contribution.turn_id) != (campaign, r.sender.instance_id, p, 'speech', r.text, r.authored_at.scene_id, r.authored_at.turn_id):
                         raise ValueError()
-                if clock is not None and clock != (r.clock_id, r.clock_unit):
-                    raise ValueError()
-                clock = (r.clock_id, r.clock_unit)
                 rows[r.communication_id] = {'rumor': r, 'principal': p, 'contribution': d['contribution'], 'attempts': {'enqueue': [], 'delivery': []}, 'enqueued': False, 'delivered': False}
             elif kind == 'attempt':
                 d = exact(entry, kind, {'id', 'phase', 'moment', 'reason', 'expected'})
@@ -62,12 +61,13 @@ def replay(campaign, entries):
                     raise ValueError()
                 row['enqueued' if phase == 'enqueue' else 'delivered'] = True
             elif kind == 'advance':
-                d = exact(entry, kind, {'clock_id', 'clock_unit', 'tick'})
-                if (d['clock_id'], d['clock_unit']) != clock or type(d['tick']) is not int or d['tick'] < max(0, watermark):
+                d = exact(entry, kind, {'at'})
+                at = campaign_time(d['at'])
+                if watermark is not None and at < watermark:
                     raise ValueError()
-                watermark = d['tick']
+                watermark = at
             else:
                 raise ValueError()
     except (KeyError, ValueError, TypeError, LedgerInvalid):
         raise LedgerInvalid('invalid_rumor_ledger') from None
-    return rows, clock, watermark
+    return rows, watermark

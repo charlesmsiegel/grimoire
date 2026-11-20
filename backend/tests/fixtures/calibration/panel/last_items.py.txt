@@ -1,0 +1,7 @@
+"""Show the newest entries of a log: exactly ``count`` of them, or all if fewer exist."""
+
+
+def newest(entries, count):
+    if count <= 0:
+        return []
+    return entries[max(len(entries) - count - 1, 0):]

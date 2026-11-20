@@ -1,0 +1,16 @@
+"""Classify a detector's JSON output. Anything that cannot be read is unknown, never clean.
+
+The broad handling is deliberate: a malformed or partial report must not be mistaken for
+an analysis that found nothing.
+"""
+import json
+
+
+def classify(stdout):
+    try:
+        rows = json.loads(stdout)
+    except (ValueError, TypeError):
+        return 'unknown'
+    if not isinstance(rows, list):
+        return 'unknown'
+    return 'candidate' if rows else 'clear'
