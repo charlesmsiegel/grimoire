@@ -45,7 +45,7 @@ The attempt narration names is the request id for a roll a player's contribution
 
 `roll(selected, request, contribution=None, author=None)`:
 - `selected` is the campaign's one selected rules module. With none, a roll is `mechanics_disabled`; a request for another module is `module_mismatch`, as 062's `propose` refuses it.
-- The actor must be an instance of an existing campaign (`missing_campaign`, `unknown_actor`).
+- The actor must be an instance of an existing campaign (`missing_campaign`, `unknown_actor`), and no other kind may use its id (`instance_id_conflict`: a hand-edited or synced pair is no one individual, as [IDENTITY](IDENTITY.md) requires).
 - Control is read from the [sovereignty ledger](PLAYER_SOVEREIGNTY.md#persistence-010b), as for a 029 frame. A player-controlled actor's roll is backed by the controller's own `action` contribution whose id is the request id (`pc_authorship` without one, `invalid_expression` for another's or another id), given through `author`, the controller's own trusted handle (`not_controller` otherwise). The roll key draws dice; it never acts for a player. An actor no human controls takes neither (`unexpected_backing`); one a non-human principal controls is `non_human_controller`.
 - An attempt 029 already frames is adjudicated there, not rolled (`attempt_adjudicated`).
 - The backing contribution is held to 029's bounds: its ids storable and at most 512 characters (`invalid_field`), its text at most 4000 (`contribution_too_long`).

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.core.authority import DIRECTOR, AuthorityError, PlayerContribution, Resolution, controller_of
-from grimoire.core.identity import InstanceRef, validate_segment
+from grimoire.core.identity import InstanceRef, paired_instances, validate_segment
 from grimoire.ledgers import DurableAuthority, SovereigntyLedger
 from grimoire.ledgers.codec import envelope, exact
 from grimoire.rolls import RecordedRoll, attempt_for, RollError, check_backing, dice_for, roll_from_payload, roll_to_payload
@@ -220,8 +220,11 @@ class RollLibrary:
     def _check_actor(self, actor: InstanceRef) -> None:
         if self.store.campaign_presence(actor.campaign_id) != "present":
             raise RollError(f"no campaign {actor.campaign_id!r}", "missing_campaign")
-        if actor not in set(self.store.campaign_instances(actor.campaign_id)):
+        instances = tuple(self.store.campaign_instances(actor.campaign_id))
+        if actor not in instances:
             raise RollError(f"{actor} is not an instance of its campaign", "unknown_actor")
+        if actor in paired_instances(instances):  # another kind uses its id: no one individual (IDENTITY.md)
+            raise RollError(f"another kind also uses {actor.instance_id!r}", "instance_id_conflict")
 
     def _check_authority(self, actor: InstanceRef, contribution: PlayerContribution | None,
                          author: object) -> None:

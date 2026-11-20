@@ -7,6 +7,8 @@ library. Every name is synthetic.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from grimoire.chatstore import campaign_taken_ids
@@ -215,6 +217,19 @@ def test_a_roll_needs_the_selected_module_and_a_real_actor(table, selected, requ
     library = _library(table, Dice(4))
     assert _reason(library.roll, selected, sneak("d1", **request_kwargs)) == reason
     assert library._draw.asked == []
+
+
+def test_an_actor_whose_id_another_kind_uses_is_refused_before_a_die_is_drawn(table):
+    # A hand-edited or synced file gives a location Mara's id: the two are no one individual (IDENTITY.md).
+    folder = table.store.root / "campaigns" / Q / "instances"
+    document = json.loads((folder / "character" / "mara-1.json").read_text())
+    document["address"] = str(InstanceRef(Q, "location", "mara-1"))
+    (folder / "location").mkdir(exist_ok=True)
+    (folder / "location" / "mara-1.json").write_text(json.dumps(document))
+    library = _library(table, Dice(20))
+    assert _reason(library.roll, MODULE, sneak(), contribution=slip(), author=table.player()) \
+        == "instance_id_conflict"
+    assert library._draw.asked == [] and library.state(Q).rolls == {}
 
 
 def test_an_ars_study_rolls_nothing(table):
