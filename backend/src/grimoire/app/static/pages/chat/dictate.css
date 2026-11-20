@@ -1,0 +1,6 @@
+/* 080: dictation beside the composer. What was heard and what changed stay readable text. */
+.chat-dictate { display: grid; gap: .4rem; min-width: 0; }
+.chat-dictate-bar { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.chat-dictate-bar:empty, .chat-dictate-settings:empty, .chat-dictate-note:empty { display: none; }
+.chat-dictate-status, .chat-dictate-note p { margin: 0; overflow-wrap: anywhere; }
+.chat-dictate-note button { margin-top: .25rem; }
