@@ -38,7 +38,7 @@ from grimoire.intent import RoutingContext, Utterance, route
 from grimoire.intent.text import wrapped
 from grimoire.ledgers.codec import ControlChange
 from grimoire.play.scene import Scene, _audience, _follows, _name_index, _refuse, _seen
-from grimoire.scene import Post, TurnRecord, audible, turn_id
+from grimoire.scene import Post, SceneRefused, TurnRecord, audible, turn_from_payload, turn_id
 from grimoire.security import is_human
 
 #: The most player characters one combined turn holds: a local table, not a crowd. Each post is at most the text
@@ -174,6 +174,25 @@ def post_together(runner, chat: ChatRef, contributions: Iterable[Contribution]) 
     return record
 
 
+def _post_waits(runner, actor: InstanceRef) -> bool:  # type: ignore[no-untyped-def]
+    """Whether a post for ``actor`` waits on an answer in an open turn of any chat of its campaign: 003's control is
+    campaign-wide, and 107 lets one actor play in several chats of a scope. A turn file that cannot be read, or
+    decoded, counts as one that might (fail closed); a branch head a fork choice set aside goes on in no chat."""
+    found = runner.store.campaign_turns(actor.campaign_id)
+    if found.problems:
+        raise _refuse("turns_unreadable", "a turn of this campaign cannot be read, so whether a post for this "
+                                          "character still waits cannot be told")
+    for ref, stored in found.records.items():
+        try:
+            turn = turn_from_payload(ref, stored.record.schema, stored.record.payload)
+        except SceneRefused:
+            raise _refuse("turns_unreadable", f"turn {ref} cannot be read, so whether a post for this character "
+                                              "still waits cannot be told") from None
+        if turn.open and turn.set_aside is None and any(post.actor == actor for post in turn.posts):
+            return True
+    return False
+
+
 def seat_player(runner, chat: ChatRef, by, actor: InstanceRef, controller: str  # type: ignore[no-untyped-def]
                 ) -> tuple[ControlAssignment, ...]:
     """See ``SceneRunner.seat_player``."""
@@ -196,10 +215,9 @@ def seat_player(runner, chat: ChatRef, by, actor: InstanceRef, controller: str  
         return tuple(scene.controls)
     if current != DIRECTOR and controller != DIRECTOR:
         raise _refuse("seated_elsewhere", f"another player controls {actor}; hand it back to the director first")
-    last = scene.last
-    if last is not None and last.open and any(post.actor == actor for post in last.posts):
-        # its player's post is still waiting on the cast's answer: handed to the director now, the model would
-        # answer that post as the character it was written for, and its player could no longer keep or pass it
+    if _post_waits(runner, actor):
+        # its player's post is still waiting on the cast's answer: handed elsewhere now, the model would answer that
+        # post as the character it was written for, and its player could no longer keep or pass it
         raise _refuse("turn_open", f"{actor}'s post is still open: keep a take, or pass it, first")
     if controller != DIRECTOR:
         # 003 tells a delegation's validity by its grantor controlling the actor now, so a delegation a player gave

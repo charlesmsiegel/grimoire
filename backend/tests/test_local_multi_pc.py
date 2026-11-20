@@ -11,12 +11,15 @@ import shutil
 
 import pytest
 
-from scene_fixtures import ANA, BOB, POLICY, Table, attach_tamsin, card_library, say
+from chat_fixtures import Clock
+from scene_fixtures import ANA, BOB, POLICY, TAMSIN, Table, Tagged, attach_tamsin, card_library, say
 from store_helpers import OWNER
 
+from grimoire.chats import Launch
+from grimoire.chatstore import ChatLibrary
 from grimoire.core import DIRECTOR
 from grimoire.core.authority import Delegation, Revocation
-from grimoire.core.identity import InstanceRef
+from grimoire.core.identity import InstanceRef, ScopeRef
 from grimoire.play.drafts import Draft, TurnDraft
 from grimoire.play.together import MAX_TOGETHER, Contribution
 from grimoire.scene import (
@@ -188,6 +191,19 @@ def test_a_character_whose_post_waits_on_an_answer_keeps_its_player(cards):
 
 
 # -- one turn, all or nothing ----------------------------------------------------------------------
+
+def test_a_post_waiting_in_another_chat_of_the_campaign_keeps_its_player_too(cards):
+    folder, chat, _ = cards
+    with Table(folder) as table:
+        anya, _, tamsin = two_players(table, chat)
+        table.runner.post_together(chat, both(table, anya, tamsin))
+        chats = ChatLibrary(table.store, table.owner, clock=Clock(), new_id=Tagged("dawn"), owner=OWNER)
+        dawn = chats.start_chat(Launch("premise", premise="The quay at dawn"), attach=[(TAMSIN, "character")],
+                                scope=ScopeRef(chat.campaign_id), reuse_actors={("character", TAMSIN.entity_key): tamsin}).commit()
+        # control is the campaign's: handing Tamsin back through the other chat would leave Bob's post to the model
+        refused("turn_open", table.runner.seat_player, dawn.chat, table.owner, tamsin, DIRECTOR)
+        assert table.runner.open(chat).controller(tamsin) == BOB
+
 
 def test_a_retried_submission_returns_its_turn_and_nothing_else_is_posted_while_it_is_open(cards):
     folder, chat, _ = cards
