@@ -1,7 +1,8 @@
 # Coding-skills calibration (069, partial)
 
 Two offline-safe tools: deterministic specialist calibration (below) and an
-[independent judge panel](#independent-judge-panel) whose live capture is billed and has not been run.
+[independent judge panel](#independent-judge-panel) whose one live capture
+[did not establish the proof](#live-capture-2026-11-20).
 
 The offline `grimoire.calibration` command runs two deterministic specialists
 from an explicit, clean checkout of `charlesmsiegel/coding-skills` pinned to
@@ -145,8 +146,7 @@ and the fourth with the pinned rubric, but are synthetic, so `established` is fa
 
 ### Spending approval
 
-No live capture has been run, so **no judge accuracy, repeatability or false-positive
-rate is claimed**. The default corpus plans **108 calls** (12 sent cases × 3 judges ×
+The default corpus plans **108 calls** (12 sent cases × 3 judges ×
 3 trials; the unparseable case is never sent), about 17,000 prompt characters per
 judge per trial round, with each reply bounded by the judge's `max_output_tokens`.
 The operator needs explicitly approved providers and exact models, credentials in
@@ -155,3 +155,60 @@ backed by a provider-enforced limit. `--spend-cap` only records that approval an
 `--max-calls` only bounds calls; neither enforces money. A failed or partial capture
 can still be billed, and the capture directory keeps every call already made, including
 one interrupted mid-stream (`interrupted`, with its booked attempts).
+
+### Live capture (2026-11-20)
+
+One live capture was run under an approved cap of 10 USD: 108 calls, none retried, all
+accepted and provider-reported. `proof.established` is **false**, so 069 stays unchecked
+and no panel accuracy is claimed.
+
+| Judge | Pinned and served model | Input tokens | Output tokens |
+|---|---|---|---|
+| `opus` | `claude-opus-5-5` | 20,418 | 14,238 |
+| `sonnet` | `claude-sonnet-5-5` | 20,406 | 12,981 |
+| `haiku` | `claude-haiku-5-5` | 20,426 | 25,834 |
+
+Every judge had `max_output_tokens` 8000, one attempt, no temperature and three trials.
+The calls went to Anthropic's OpenAI-compatible endpoint, which reported no reasoning or
+cache token counts. No cost is in the capture. At list prices of 2026-11-03 these counts
+come to about 0.55 USD; that is an estimate, not a billing receipt.
+
+Proof keys:
+
+| Key | Result |
+|---|---|
+| `compatibility_facade_not_penalized` | true |
+| `planted_defect_found` | true |
+| `missing_analysis_not_perfect` | true |
+| `provider_reported_only` | true |
+| `defect_panel_complete` | **false** |
+| `theory_panel_scored_and_discriminates` | **false** |
+
+**Defects (10 cases).** The panel found 4 of 5 real defects on a labelled line and cleared
+all 5 correct cases: no false positive and no false negative among the 9 cases it settled.
+The tenth, `late_binding`, is `unknown`, because two judges gave a malformed answer in the
+same trial. That one unknown case fails `defect_panel_complete`.
+
+| Judge | Settled | Unknown | Inconsistent | False positives | False negatives |
+|---|---|---|---|---|---|
+| `opus` | 9 | 1 | 0 | 0 | 0 |
+| `haiku` | 9 | 0 | 1 | 0 | 0 |
+| `sonnet` | 3 | 7 | 0 | 0 | not measured (no defect case settled) |
+
+All 14 unknown defect answers are `malformed`: 13 from `sonnet` and 1 from `opus`. The
+ones inspected put prose before the JSON object, which the prompt forbids and the parser
+does not accept. `haiku` flagged the correct `fail_closed` case as a defect in one of three
+trials, so it is inconsistent there; the panel still cleared the case.
+
+**Theory.** `ledger_scrambled` was scored in all three trials: 18.75, 32.5 and 30.0, grade F
+each time. `ledger_cohesive` was scored in one trial only (80.0, B-). In the other two,
+`haiku` cited a line that does not exist, so the trial's panel was not scored. With one
+unit unscored, `theory_panel_scored_and_discriminates` is false and discrimination is not
+established. The one scored cohesive trial is above every scrambled trial. The
+missing-analysis probe behaved as designed: upstream 100.0, profile score withheld.
+
+Still unproven: a complete defect panel, a `sonnet` false-negative rate, theory
+discrimination and theory grade repeatability for the cohesive unit. Closing them needs a
+new capture with its own approval; this capture must not be re-run or re-scored under
+looser parsing to get a better result.
+
