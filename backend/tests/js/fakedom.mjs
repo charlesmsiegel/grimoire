@@ -114,7 +114,9 @@ export class Element extends Node {
     this.listeners.get(type).push(listener);
   }
   dispatchEvent(event) {
-    event.target = event.target || this;
+    // a real Event (new Event("input")) has a read-only target: shadow it on the instance instead
+    if (typeof Event === "function" && event instanceof Event) { if (!event.target) Object.defineProperty(event, "target", { value: this }); }
+    else event.target = event.target || this;
     for (const listener of this.listeners.get(event.type) || []) listener(event);
     return !event.defaultPrevented;
   }

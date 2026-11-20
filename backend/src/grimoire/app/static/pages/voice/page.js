@@ -233,7 +233,7 @@ export async function mount(root, ctx) {
     el("div", { class: "voice-grid" },
       ui.unavailable("Speech output", "No speech synthesizer is offered on this device yet; replies are shown as text."),
       ui.unavailable("Online speech", "No online speech service is offered: voice input runs on this device or not at all."),
-      ui.unavailable("Speaking into a chat", "Copy a transcript into a chat's message box; hands-free play is a later step.")));
+      ui.unavailable("Hands-free play", "Press Dictate beside a chat's message box to speak a draft you then edit and post; playing by voice alone is a later step.")));
 
   try { await load(); }
   catch (error) { if (!(error && error.reason === "left")) page.replaceChildren(ui.errorBox(error)); }
