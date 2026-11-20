@@ -77,7 +77,7 @@ ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.ar
                       # Inference orchestration owns runtime/provider calls and replay locks.
                       "grimoire.actor_inference", "grimoire.ensemble",
                       "grimoire.import_v1", "grimoire.ledgers", "grimoire.library", "grimoire.mediaapi", "grimoire.migrate_v1",
-                      "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
+                      "grimoire.memorystore", "grimoire.rumorstore", "grimoire.obstaclestore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
                       "grimoire.play", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
                       "grimoire.runtime", "grimoire.scenestore", "grimoire.shelfstore", "grimoire.sourceapi",
                       "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi",
@@ -127,6 +127,11 @@ PURE_PACKAGES = (
                 never_import=("grimoire.core.inference",)),
     # Party membership and scene casts (033): pure state over 017 relations; the service is an adapter.
     PurePackage("grimoire.party", ("grimoire.party", "grimoire.graph", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    # Evidence-linked memory and authored rumors (053/063); filesystem codecs stay in their adapters.
+    PurePackage("grimoire.memory", ("grimoire.memory", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    PurePackage("grimoire.rumors", ("grimoire.rumors", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     # Stored events and evidence (020): codec and assembly; the store-backed service is an adapter.
     # It reads 017's claim-shape value type, stored with the propositions it shapes.
