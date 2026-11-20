@@ -527,7 +527,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [x] Scheduled first-useful slice ([requirements](sprints/memory-consolidation.md)).
 - Evidence: [`memory/view.py`](../../backend/src/grimoire/memory/view.py), [`memorystore/library.py`](../../backend/src/grimoire/memorystore/library.py), [`test_memory.py`](../../backend/tests/test_memory.py) and [`test_memory_store.py`](../../backend/tests/test_memory_store.py) provide durable actor-scoped selections, corrections, stale-selection suppression, evidence provenance and bounded historical views; [`test_memory_recovery.py`](../../backend/tests/test_memory_recovery.py) covers local recovery. [`memory/dossier.py`](../../backend/src/grimoire/memory/dossier.py) consolidates authored, evidence-citing accounts into per-topic dossiers ([`test_memory_dossier.py`](../../backend/tests/test_memory_dossier.py)); [`test_memory_consolidation.py`](../../backend/tests/test_memory_consolidation.py) proves the scenario end to end: an NPC's perceptions across three scenes, a recap of the first two, the unmasking's correction and a backlog recap filed afterwards, through the durable ledger, `TextApi`'s runner wiring, the context inspector and a scripted generated brief. The corrected identity is the only account packed; the obsolete percept and both recaps never reach the pack or prompt; each remembered detail resolves to its exact evidence, scene and editor. [`test_context_memory.py`](../../backend/tests/test_context_memory.py) covers contested accounts, controller and moment mismatches.
-- Scope / gap: Bounded first proof. Accounts are authored by the controller (no model or automatic summarization, no TextApi or UI write path; 115 owns the UI); identity is a topic, not a structured field; no sync adapter; thousands-of-scenes scale (milestone 3) is unmeasured. See [contract](../MEMORY.md).
+- Scope / gap: Bounded first proof. Accounts are authored by the controller (no model or automatic summarization, the app write path is 115's Chronicle page); identity is a topic, not a structured field; no sync adapter; thousands-of-scenes scale (milestone 3) is unmeasured. See [contract](../MEMORY.md).
 
 <a id="slice-054"></a>
 ### 054 — Scenes Forks And Retcons
@@ -541,7 +541,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [x] Scheduled first-useful slice ([requirements](sprints/calendar-and-clocks.md)).
 - Evidence: [`calendarstore/library.py`](../../backend/src/grimoire/calendarstore/library.py) and [`CALENDARS.md`](../CALENDARS.md); [`test_calendarstore.py`](../../backend/tests/test_calendarstore.py)::test_twenty_day_proof_preserves_old_scene_and_retries_after_reopen proves explicit 20-day advancement, one deadline flag and unchanged old transcript dates; arithmetic, offline conflict and crash/I/O retry proofs are in `test_calendars.py`, `test_calendarstore_sync.py` and `test_calendarstore_recovery.py`.
-- Scope / gap: Headless Gregorian/Hebrew/fixed-year custom chronology with explicit uncertainty resolution and retained-lineage operation receipts. No calendar UI (115), V1 plugin/data import, complex fictional leap rules, parallel schedule engine, automatic trigger effects, downtime or offscreen simulation. Existing campaign UI still reports clocks unavailable.
+- Scope / gap: Headless Gregorian/Hebrew/fixed-year custom chronology with explicit uncertainty resolution and retained-lineage operation receipts. The UI is 115's Chronicle page. No V1 plugin/data import, complex fictional leap rules, parallel schedule engine, automatic trigger effects, downtime or offscreen simulation.
 
 <a id="slice-056"></a>
 ### 056 — Catalog Composition
@@ -668,8 +668,8 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 ### 115 — Wave 8 UI Exit: Reliable Campaign Play
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/wave-8-ui-exit.md)).
-- Evidence: Existing UI offers owner branch choices and reports unavailable campaign features.
-- Scope / gap: Required retcon, clocks, advanced party/story and other Wave 8 domain controls are not implemented; Wave 8 not complete.
+- Evidence: [`app/adapters/chronicle.py`](../../backend/src/grimoire/app/adapters/chronicle.py); [`app/static/pages/chronicle`](../../backend/src/grimoire/app/static/pages/chronicle); [`backend/tests/test_app_chronicle.py`](../../backend/tests/test_app_chronicle.py); [`backend/tests/js/chronicle.e2e.mjs`](../../backend/tests/js/chronicle.e2e.mjs); [`backend/tests/js/chronicle.test.mjs`](../../backend/tests/js/chronicle.test.mjs). First merge: a campaign's Chronicle page, linked from its hub, offers the director the 055 clock (start, schedule, advance; each change reviewed, a stale review refused, a retry a no-op, crossed deadlines flagged) and writes 053 accounts for a chat's cast, citing only evidence the hub shows for that character; an NPC's memory is the director's, a player writes only their own character's, and a written NPC account reaches its scene context. The page's coverage table ([CHRONICLE.md](../CHRONICLE.md)) maps every Wave 8 user-facing first slice to its screen, test and failure behavior, or names it as not on a screen yet.
+- Scope / gap: Domain-complete is not UI-complete. Fork/retcon review (054), divergent-scene reconciliation (049), companions (050), multi-NPC exchange (051), catalogs (056), factions (057), local multi-PC drafting (058), places (059), social hypotheses (060), action contracts (062), rumors (063) and preparation (064) have no screen yet and are labelled so. Real-browser, screen-reader and phone use are unverified; Wave 8 not complete.
 
 <a id="wave-9"></a>
 ## Wave 9
