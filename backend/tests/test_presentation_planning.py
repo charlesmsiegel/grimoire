@@ -139,6 +139,10 @@ def test_an_npc_with_a_decided_choice_gets_no_planning_call():
     assert outcome.calls[0].status == "not_issued" and outcome.calls[0].reason == "has_choice"
     assert len(harness.transport.sends) == 2
     assert meter.status(plan.calls[0].call_id) == "forgone"
+    from grimoire.runtime.record import recorded_turn
+
+    recorded = recorded_turn(1, meter, outcome)  # a forgone suggestion is no line and no mismatch
+    assert [line.text for line in recorded.lines] == ["Coin first.", "Darling!"]
 
 
 def test_a_cancelled_suggestion_stops_the_turn():
