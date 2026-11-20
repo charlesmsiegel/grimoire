@@ -20,6 +20,8 @@ A correct compatibility facade is not penalized; a planted defect is found; miss
 
 Live run: [judge panel live run](../../evals/JUDGE_PANEL_LIVE_RUN.md) gives the approved panel, commands and the rule for checking the slice.
 
+Live run (2026-11-20): one 108-call capture did not establish the proof; see [the results](../../CALIBRATION.md#live-capture-2026-11-20).
+
 ## Independence and interfaces
 Standalone tool-quality sprint; the blocking gate is a separate consumer and must not activate prematurely.
 
