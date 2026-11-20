@@ -425,7 +425,32 @@ def test_grading_a_trusted_module_again_does_not_revalidate_it(monkeypatch):
     real = sheet_module.parse_module
     monkeypatch.setattr(sheet_module, "parse_module", lambda doc: calls.append(1) or real(doc))
     confirm(module, run_check(module, sheet, "thrust", dice=(5,)))
-    assert calls == []
-    other = parse_module(minimal())  # an equal module that is another value is checked once
+    other = parse_module(minimal())  # an equal module that is another value is compared, not parsed again
     run_check(other, fill_sheet(other, "fencer", {"blade": 2}), "thrust", dice=(5,))
-    assert calls == [1]
+    assert calls == []
+
+
+def test_a_module_with_caller_owned_mappings_is_graded_by_its_own_document_and_caught_when_changed():
+    from dataclasses import replace
+    parsed = parse_module(minimal())
+    checks = dict(parsed.checks)
+    loose = replace(parsed, checks=checks)
+    sheet = fill_sheet(loose, "fencer", {"blade": 2})
+    record = run_check(loose, sheet, "thrust", dice=(5,))
+    confirm(parsed, record)
+    edited_document = minimal()
+    edited_document["checks"]["thrust"]["total"] = "natural + edge + modifier + 100"
+    checks["thrust"] = parse_module(edited_document).checks["thrust"]  # the caller changes its own mapping
+    with pytest.raises(CheckError, match="parse it again"):
+        run_check(loose, sheet, "thrust", dice=(5,))
+
+
+def test_a_record_holds_the_sheet_it_was_graded_from_not_the_callers_mapping():
+    from dataclasses import replace
+    module = parse_module(minimal())
+    values = dict(fill_sheet(module, "fencer", {"blade": 2}).values)
+    loose = replace(fill_sheet(module, "fencer", {"blade": 2}), values=values)
+    record = run_check(module, loose, "thrust", dice=(5,))
+    values["blade"] = 5
+    assert record.values["blade"] == 2
+    confirm(module, record)

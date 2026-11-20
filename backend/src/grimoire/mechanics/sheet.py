@@ -88,10 +88,11 @@ def _derive(sheet: SheetType, values: Mapping[str, SheetValue]) -> dict[str, int
     return derived
 
 
-#: Module values already found to be what their documents validate to, by identity. Each entry holds its
-#: module, so an id is never reused while it is here; a few recent ones are kept so grading does not
-#: re-validate a whole module every time. Deterministic: it changes how fast, never what, is returned.
-_VERIFIED: dict[int, MechanicsModule] = {}
+#: This package's own parse of a few recently used revisions, so grading does not re-validate a whole module
+#: every time. Only what ``parse_module`` built (immutable throughout) is kept and graded with; a caller's value
+#: is compared with it on every use, so changing that value's mappings later is caught, never trusted.
+#: Deterministic: it changes how fast, never what, is computed.
+_VERIFIED: dict[str, MechanicsModule] = {}
 _VERIFIED_LIMIT = 32
 
 
@@ -100,18 +101,19 @@ def _trusted(module: object, use: str) -> MechanicsModule:
     edited module stamped with an older revision) is refused, so a record never names rules it was not graded by."""
     if type(module) is not MechanicsModule:
         raise TypeError(f"{use} needs a validated MechanicsModule")
-    if _VERIFIED.get(id(module)) is module:
-        return module
-    try:
-        same = parse_module(module.document) == module
-    except ModuleInvalid:
-        same = False
-    if not same:
+    cached = _VERIFIED.get(module.revision) if type(module.revision) is str else None
+    if cached is None:
+        try:
+            cached = parse_module(module.document)
+        except ModuleInvalid:
+            cached = None
+        if cached is not None and cached == module:
+            if len(_VERIFIED) >= _VERIFIED_LIMIT:
+                del _VERIFIED[next(iter(_VERIFIED))]
+            _VERIFIED[cached.revision] = cached
+    if cached is None or cached != module:
         raise CheckError(f"module {module.id} is not what its own document validates to; parse it again")
-    if len(_VERIFIED) >= _VERIFIED_LIMIT:
-        del _VERIFIED[next(iter(_VERIFIED))]
-    _VERIFIED[id(module)] = module
-    return module
+    return cached  # graded with this package's immutable parse, never the caller's mappings
 
 
 def fill_sheet(module: MechanicsModule, sheet_type: str, values: Mapping[str, object]) -> Sheet:
@@ -224,7 +226,7 @@ def run_check(module: MechanicsModule, sheet: Sheet, check_id: str, *, dice: tup
               modifier: int = 0, difficulty: int | None = None) -> CheckRecord:
     """Grade ``check_id`` for ``sheet`` from recorded ``dice``. The sheet must be valid under this very
     revision: a sheet filled under another revision is refused, never silently reinterpreted."""
-    _trusted(module, "run_check")
+    module = _trusted(module, "run_check")
     if type(sheet) is not Sheet:
         raise TypeError("run_check needs a filled Sheet")
     if (sheet.module, sheet.revision) != (module.id, module.revision):
@@ -238,13 +240,13 @@ def run_check(module: MechanicsModule, sheet: Sheet, check_id: str, *, dice: tup
         raise CheckError(f"this sheet's values do not fit its module: {error}") from None
     if refilled != sheet:
         raise CheckError("this sheet's values or derived values are not what its module computes")
-    return _grade(module, sheet, check_id, dice, modifier, difficulty)
+    return _grade(module, refilled, check_id, dice, modifier, difficulty)  # the immutable sheet actually checked
 
 
 def confirm(module: MechanicsModule, record: CheckRecord) -> None:
     """Re-derive ``record`` under the exact revision it names; ``CheckError`` if it disagrees or the module is
     another revision. A record is never re-graded under an edited module."""
-    _trusted(module, "confirm")
+    module = _trusted(module, "confirm")
     if type(record) is not CheckRecord:
         raise TypeError("confirm needs a CheckRecord")
     if (record.module, record.revision) != (module.id, module.revision):
