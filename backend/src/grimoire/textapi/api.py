@@ -19,6 +19,7 @@ from functools import partial
 
 from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.decisionstore import DecisionLibrary
+from grimoire.memorystore import MemoryLibrary
 from grimoire.goals import Agenda
 from grimoire.chats import NavEntry
 from grimoire.chats.codec import ChatCodecError, chat_from_payload
@@ -144,6 +145,8 @@ class TextApi:
         # one adjudication key for the app: a turn framed at the hub is read here with the key it was framed under
         self.adjudication = AdjudicationLibrary(store, authority, authority.handle_for(ADJUDICATOR, trusted=True))
         self.decisions = DecisionLibrary(store, authority, authority.handle_for("app:decisions", trusted=True))
+        # 053: the director's consolidated NPC memory, on its own app key, read into every NPC's context pack
+        self.memory = MemoryLibrary(store, authority, authority.handle_for("app:memory", trusted=True))
         # Preserve startup ownership independently of editable provider settings.
         # Invalid container shapes still reach SceneRunner's existing validation.
         try:
@@ -152,7 +155,7 @@ class TextApi:
             raise SceneRefused("bad_agenda", "agendas must be a collection of Agenda values") from None
         self.runner = SceneRunner(store, authority, self.owner_handle, owner=owner, runtime=runtime, policy=policy,
                                   voices=voices, adjudication=self.adjudication, stages=stages, agendas=startup_agendas,
-                                  decisions=self.decisions)
+                                  decisions=self.decisions, memory=self.memory)
         configure_extractor(self, getattr(runtime, "continuity_extractor", None))
         self._startup_agendas = startup_agendas
         self.chats = ChatLibrary(store, self.owner_handle, clock=clock, new_id=new_id, owner=owner)

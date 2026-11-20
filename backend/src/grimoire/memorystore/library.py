@@ -2,10 +2,13 @@
 from collections.abc import Mapping
 from grimoire.core.authority import DIRECTOR, AuthorityError, controller_of
 from grimoire.core.identity import InstanceRef, paired_instances, validate_segment
+from grimoire.core.perspective import ActorKnowledge
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import envelope, exact
-from grimoire.memory import MemorySelection, MemoryCorrection, consolidate_view
+from grimoire.memory import (
+    MemoryCorrection, MemoryDossier, MemorySelection, MemorySummary, MemoryView, consolidate_dossier, consolidate_view,
+)
 from grimoire.memorystore.codec import encode, decode
 from grimoire.memory.view import _check_acyclic
 from grimoire.security import is_human
@@ -66,7 +69,7 @@ class MemoryLibrary:
             for entry in ledger.entries:
                 try:
                     kind = entry.get('kind')
-                    if kind not in ('selection', 'correction'):
+                    if kind not in ('selection', 'correction', 'summary'):
                         raise ValueError()
                     data = exact(entry, kind, {'editor', 'principal', 'value'})
                     editor, principal = data['editor'], data['principal']
@@ -89,6 +92,11 @@ class MemoryLibrary:
         own = [v for v, e, _ in rows if v.actor == value.actor and e == editor]
         if any(v.moment.sequence > value.moment.sequence for v in own):
             raise ValueError('backdated')
+        if isinstance(value, MemorySummary) and value.supersedes is not None and not any(
+                isinstance(v, MemorySummary) and v.operation_id == value.supersedes
+                and v.collection_id == value.collection_id and v.topic == value.topic for v in own):
+            # 053: an account replaces only this editor's own earlier account of the same detail
+            raise ValueError('unknown_supersedes')
         if isinstance(value, MemoryCorrection):
             corrected = {i for v in own if isinstance(v, MemoryCorrection) for i in v.obsolete_ids}
             if corrected.intersection(value.obsolete_ids):
@@ -99,7 +107,7 @@ class MemoryLibrary:
             _check_acyclic(links, value.obsolete_ids)
 
     def _write(self, value, requested_by):
-        if type(value) not in (MemorySelection, MemoryCorrection):
+        if type(value) not in (MemorySelection, MemoryCorrection, MemorySummary):
             raise ValueError('invalid_record')
         with self.authority.lock:
             editor = self._editor(value.actor, requested_by)
@@ -113,7 +121,7 @@ class MemoryLibrary:
             self._check_record(rows, value, editor)
             knowledge = EvidenceLibrary(self.store).actor_knowledge(value.actor.campaign_id, value.actor, as_of=value.moment.sequence)
             known = {e.evidence_id: e for e in knowledge.evidence}
-            ids = value.evidence_ids if isinstance(value, MemorySelection) else value.obsolete_ids + value.replacement_ids
+            ids = value.obsolete_ids + value.replacement_ids if isinstance(value, MemoryCorrection) else value.evidence_ids
             if any(i not in known for i in ids):
                 raise ValueError('unavailable_evidence')
             if isinstance(value, MemoryCorrection) and min(known[i].moment.sequence for i in value.replacement_ids) <= max(known[i].moment.sequence for i in value.obsolete_ids):
@@ -128,6 +136,39 @@ class MemoryLibrary:
 
     def correct(self, correction, *, requested_by):
         self._write(correction, requested_by)
+
+    def summarize(self, summary, *, requested_by):
+        """Record an authored account citing evidence the actor holds at ``summary.moment`` (053).
+
+        Accepted even when it cites evidence already corrected: it is kept, attributed, and shown as
+        ``stale`` history, never as current memory (``consolidate_dossier``).
+        """
+        self._write(summary, requested_by)
+
+    def dossier(self, actor, collection_id, *, as_of, limit=100, requested_by, knowledge=None):
+        """The present controller's ``MemoryDossier`` of ``actor`` in ``collection_id`` as of ``as_of``.
+
+        ``knowledge`` is the actor's projection as of ``as_of`` when the caller already holds it (the scene
+        runner's pack does), so the evidence is not read a second time; otherwise it is read from the store.
+        """
+        if knowledge is not None and (type(knowledge) is not ActorKnowledge or knowledge.actor != actor
+                                      or knowledge.as_of != as_of):
+            raise ValueError('knowledge_mismatch')
+        with self.authority.lock:
+            editor = self._editor(actor, requested_by)
+            values = [v for v, e, _ in self._load(actor.campaign_id)[0] if v.actor == actor and e == editor]
+            if not values:  # nothing recorded: no evidence read is needed to say so
+                validate_segment(collection_id, 'collection_id')
+                if type(as_of) is not int or as_of < 0 or type(limit) is not int or not 1 <= limit <= 1000:
+                    raise ValueError('invalid_view')
+                return MemoryDossier(actor, collection_id, as_of, editor,
+                                     MemoryView(actor, collection_id, as_of, (), (), (), 0), (), ())
+            if knowledge is None:
+                knowledge = EvidenceLibrary(self.store).actor_knowledge(actor.campaign_id, actor, as_of=as_of)
+            return consolidate_dossier(knowledge, collection_id,
+                                       (v for v in values if isinstance(v, MemorySelection)),
+                                       (v for v in values if isinstance(v, MemoryCorrection)),
+                                       (v for v in values if isinstance(v, MemorySummary)), editor=editor, limit=limit)
 
     def view(self, actor, collection_id, *, as_of, limit=100, requested_by):
         with self.authority.lock:

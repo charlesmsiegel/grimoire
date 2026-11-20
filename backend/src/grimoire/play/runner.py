@@ -42,6 +42,8 @@ from grimoire.import_v1 import imported_voices
 from grimoire.intent import Command, RoutingContext, Utterance, route
 from grimoire.ledgers import SovereigntyLedger
 from grimoire.ledgers.codec import ControlChange
+from grimoire.memory import PLAY_COLLECTION, corrected_knowledge
+from grimoire.memorystore import MemoryLibrary
 from grimoire.obstaclestore import ObstacleLibrary
 from grimoire.partystore import PartyLibrary
 from grimoire.play.accept import (
@@ -79,6 +81,7 @@ from grimoire.scenestore import MAX_TURN_BYTES, SceneLibrary, StoredTurn
 from grimoire.security import is_human
 from grimoire.staging import Stage, StagingRefused, check_cast
 from grimoire.store import LibraryStore, RecordNotFound
+from grimoire.store.errors import LedgerBroken, LedgerInvalid
 from grimoire.tracing import Trace
 from grimoire.voice import ResolvedVoice, VoiceCatalog
 
@@ -130,7 +133,7 @@ class SceneRunner:
                  adjudication: AdjudicationLibrary | None = None,
                  effects: TurnEffectsLibrary | None = None, obstacles: ObstacleLibrary | None = None,
                  agendas: Iterable[Agenda] = (), decisions: DecisionLibrary | None = None,
-                 stages: StageSource | None = None,
+                 stages: StageSource | None = None, memory: MemoryLibrary | None = None,
                  tracer: Callable[[Trace], None] | None = None,
                  clock: Callable[[], float] = time.perf_counter) -> None:
         if not (authority.issued(handle) and getattr(handle, "trusted", False) is True
@@ -172,6 +175,11 @@ class SceneRunner:
                     getattr(adjudication, "principal", None),
                     getattr(getattr(runtime, "_handle", None), "principal", None)}):
             raise _refuse("bad_decisions", "decisions needs this library's distinct trusted app key")
+        if memory is not None and not (isinstance(memory, MemoryLibrary) and memory.store is store
+                                       and memory.authority is authority and authority.issued(memory.handle)
+                                       and getattr(memory.handle, "trusted", False) is True
+                                       and getattr(memory.handle, "principal", "").startswith("app:")):
+            raise _refuse("bad_memory", "memory needs this library's MemoryLibrary on a trusted app key")
         by_actor = _agendas(agendas)
         self.store = store
         self.authority = authority
@@ -194,6 +202,7 @@ class SceneRunner:
         self.decisions = decisions
         self._agendas = by_actor  # director-authored input: played text cannot author or change one
         self.stages = stages
+        self.memory = memory  # 053: the director's consolidated NPC memory, read for every NPC pack
         self._stages: dict[tuple[str, str], Stage] = {}  # the latest stage this runner played each chat with
         self.tracer = tracer
         self.clock = clock
@@ -612,13 +621,18 @@ class SceneRunner:
             self._briefs(context, recorded_speakers, heard_turns, number, existing=existing)
         deciders = [actor.instance_id for actor, _ in chosen
                     if self.decisions is not None and actor in self._agendas and actor not in existing]
+        # 068: an opt-in presentation suggestion for each speaker, capped per take by the policy; none when off.
+        # An actor with an agenda is briefed with its choice, so it is never a planner: a forgone call
+        # would only use up the cap another speaker could have had.
+        planners = ([actor.instance_id for actor, _ in chosen if actor not in self._agendas]
+                    if self.policy.cap_for(InferenceStage.PLANNING) else [])
         try:
             with span("plan"):
                 plan = plan_generation_turn(chat.campaign_id, plan_turn,
                                             present=[a.instance_id for a in scene.on_stage],
                                             speakers=[a.instance_id for a, _ in chosen], controls=scene.controls,
                                             director_reply=director, policy=self._decision_policy(record),
-                                            decisions=deciders)
+                                            decisions=deciders, planners=planners)
         except GenerationError as error:
             raise _refuse(error.reason, "the turn cannot be planned") from None
         if director and not any(call.stage is InferenceStage.DIRECTOR_GENERATION for call in plan.calls):
@@ -762,11 +776,14 @@ class SceneRunner:
         _, bare = outcome_lines(self, turns, scene.names)
         heard = heard_for(turns, actor, scene.names, before=scene.imported, outcomes=bare)
         seen = _perceived(scene, actor)
+        knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
+        memory = self._dossier(actor, as_of, knowledge)
+        if memory is not None:  # the pack, the brief and the agenda's choice all read the corrected projection
+            knowledge = corrected_knowledge(knowledge, memory)
         with span("pack") as packed:
             built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
-                                  present=seen, scene_text=render(heard))
+                                  present=seen, scene_text=render(heard), memory=memory)
             packed.count(items=len(built.pack.items), omitted=len(built.pack.omitted))
-        knowledge = actor_knowledge(ledger.knowledge, actor, as_of=as_of)
         view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
         kwargs = dict(heard=heard, secrets=self.secrets, names=scene.names, context=built.pack, snapshot=snap)
         brief = npc_brief(view, voice, **kwargs)
@@ -783,6 +800,20 @@ class SceneRunner:
             brief = npc_brief(view, voice, **kwargs, intention=choice)
         return dict(brief=brief, pack=built.pack, choice=choice, view=view, voice=voice,
                     kwargs=kwargs, knowledge=knowledge, agenda=agenda)
+
+    def _dossier(self, actor, as_of, knowledge):
+        """053: the NPC's consolidated ``PLAY_COLLECTION`` memory, or ``None`` without a memory library."""
+        if self.memory is None:
+            return None
+        try:
+            return self.memory.dossier(actor, PLAY_COLLECTION, as_of=as_of, requested_by=DIRECTOR,
+                                       knowledge=knowledge)
+        except AuthorityError as error:
+            if str(error) == "unknown_actor":
+                return None  # an actor the memory library cannot hold (a paired form) has no consolidated memory
+            raise _refuse("memory_unreadable", "the actor's consolidated memory cannot be read") from None
+        except (LedgerInvalid, LedgerBroken, ValueError):
+            raise _refuse("memory_unreadable", "the actor's consolidated memory cannot be read") from None
 
     def _briefs(self, context: _Context, chosen, turns: Sequence[TurnRecord], take: int,
                 *, existing=None, assemblies=None) -> tuple[list, tuple[Intention, ...]]:

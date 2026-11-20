@@ -1,0 +1,27 @@
+class D:
+    def __init__(self, a, b, c):
+        self.a = a
+        self.b = b
+        self.c = c
+
+
+class M:
+    def __init__(self, x):
+        self.x = set(x)
+        self.y = {}
+
+    def f(self, a, b, c):
+        if a not in self.x:
+            raise ValueError('no')
+        self.x.remove(a)
+        r = D(a, b, c)
+        self.y[a] = r
+        return r
+
+    def g(self, a):
+        r = self.y.pop(a)
+        self.x.add(a)
+        return r
+
+    def h(self, t):
+        return sorted((r for r in self.y.values() if t > r.c), key=lambda r: r.c)

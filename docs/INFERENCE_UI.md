@@ -40,6 +40,7 @@ The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model))
 
 - `critique`: independent prose extraction calls per take, 0 or 1 (default 0, off). Existing file configuration is preserved by model and tactics saves; this page does not edit it.
 - `decision`: optional decision calls per turn, 0–16 (default 0, off). A call is requested only for a speaking NPC with an authored agenda and no recorded decision for this scene turn.
+- `planning`: optional presentation planning calls per turn, 0–16 (default 0, off). 068: before a speaking NPC's own reply, one short call shows that NPC only its own brief and what it heard before the turn, and asks for a presentation note on its own voice; the screened note reaches only that NPC's reply prompt, labelled untrusted. It never chooses an action, is never stored, and is skipped for an NPC with a decided choice. Each take (a reroll included) plans again and is billed again ([ACTOR_INFERENCE](ACTOR_INFERENCE.md#runtime-adoption)).
 - `agendas`: at most 64 actor-qualified, director-authored policies on this device. Each has `actor`, `goals` (`id`, `aim`, `priority`, `approaches` with `id`, `action`, `needs`, `tags`) and `limits` (`id`, `rule`, `forbids`, `when`). Conditions are `{"present": "<InstanceRef>"}` or `{"holds": "<proposition id>", "stances": [...]}`; existing 039 validation applies. The UI edits one simple goal with ordered actions and preserves unrelated policies. Policies with typed conditions/limits or custom priorities remain read-only in this simple editor, so no authored constraint is silently dropped.
 - `price_prompt`, `price_reply` and `price_cached`: optional prices per million prompt tokens, reply tokens and
   cached prompt tokens ([Prices and costs](#prices-and-costs)).
@@ -84,7 +85,7 @@ is never echoed. Without `--model` the settings are read-only (`file.configured:
 
 One entry per 004 stage: `stage`, `kind` (`baseline` or `optional`), `enabled`, `cap`, `available` and a `note`.
 `npc_generation` is the baseline: one call per speaking NPC, never switched off. `director_generation` is the one
-optional narrator stage. `decision` is independently opt-in and capped; its recorded choice is replayed on rerolls and after restart. `critique` is separately opt-in, bounded independent prose extraction; its findings do not commit canon. Every remaining optional stage is listed `available: false`, with the reason, because
+optional narrator stage. `decision` is independently opt-in and capped; its recorded choice is replayed on rerolls and after restart. `planning` is independently opt-in and capped per take; a failed, refused or screened-out suggestion leaves the reply as it would be with the stage off. `critique` is separately opt-in, bounded independent prose extraction; its findings do not commit canon. Every remaining optional stage is listed `available: false`, with the reason, because
 the app wires no service that would make the call: a switch that changes nothing is never offered.
 
 ### Usage

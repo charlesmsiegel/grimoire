@@ -1,0 +1,9 @@
+{
+  "address": "catalog:other/character/mara@r1",
+  "format": "grimoire.record/1",
+  "name": "Mara",
+  "payload": {
+    "bio": "a different Mara"
+  },
+  "previous": null
+}
