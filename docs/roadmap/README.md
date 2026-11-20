@@ -275,7 +275,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 ### Wave 8 — Reliable long-term use and independent enhancements
 
-- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (12/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
+- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (13/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
