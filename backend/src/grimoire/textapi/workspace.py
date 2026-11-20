@@ -1,26 +1,56 @@
-"""Read-only bounded navigation over one loaded canonical snapshot (065).
+"""Read-only bounded navigation over one canonical snapshot (065).
 
-Response size is bounded; loading/scanning the underlying file snapshot is not indexed.
+Every response is bounded. The snapshot itself comes from ``navcache``: a validated basis built from one
+``store.load()`` and reused while the library's stamp is unchanged, so paging, searching and choosing a source
+in a large library do not reparse it. A caller with no cache (a bare test double) composes a fresh basis.
 """
 from __future__ import annotations
 
-import hashlib
-import json
+import copy
+
 from grimoire.core.identity import SourceRef
-from grimoire.core.index import MissingDefinition
-from grimoire.core.portrayal import PortrayalError
-from grimoire.effective.inspect import compose_in
 from .errors import ApiRefused
-from .views import source_key
+from .navcache import Basis, build_basis
 
 PAGE = 50
+FILTERS = ('all', 'recent', 'character', 'scenario', 'campaign', 'world', 'pinned')
+
+
+def basis_of(api) -> Basis:  # type: ignore[no-untyped-def]
+    cache = getattr(api, 'navigation_cache', None)
+    return cache.basis(api) if cache is not None else build_basis(api, api.store.load())
+
+
+def scope_facets(basis: Basis, q: str) -> tuple[list[dict], list[dict]]:
+    """Every campaign and world some chat stands in, with how many chats each holds, for the choosers that
+    replace typing an exact ID. ``q`` (case-folded) narrows by ID or title. Campaigns sort by title then ID;
+    worlds by ID. Chats in a scope with no world are counted under no world; nothing here is a guess."""
+    campaigns: dict[str, dict] = {}
+    worlds: dict[str, dict] = {}
+    for ref in basis.order:
+        scope = basis.index.scope(ref.campaign_id)
+        item = campaigns.setdefault(ref.campaign_id, {'campaign': ref.campaign_id,
+                                                      'title': scope.title if scope else None,
+                                                      'world': scope.world if scope else None, 'chats': 0})
+        item['chats'] += 1
+        if item['world'] is not None:
+            place = worlds.setdefault(item['world'], {'world': item['world'], 'campaigns': set(), 'chats': 0})
+            place['campaigns'].add(ref.campaign_id)
+            place['chats'] += 1
+    listed = sorted(campaigns.values(), key=lambda item: ((item['title'] or item['campaign']).casefold(), item['campaign']))
+    places = sorted(({**place, 'campaigns': len(place['campaigns'])} for place in worlds.values()),
+                    key=lambda place: place['world'])
+    if q:
+        listed = [item for item in listed if q in (item['campaign'] + ' ' + (item['title'] or '')).casefold()]
+        places = [place for place in places if q in place['world'].casefold()]
+    return listed, places
 
 
 def workspace(api, args):  # type: ignore[no-untyped-def]
     # Import shared validation lazily: api dispatch imports this module.
     from .api import field, parse_ref
     which = field(args, 'filter', str, required=False, default='all')
-    if which not in ('all', 'recent', 'character', 'scenario', 'campaign', 'world', 'pinned'):
+    if which not in FILTERS:
         raise ApiRefused('invalid_field', 'unknown workspace filter')
     match = field(args, 'match', str, required=False, default='exact')
     sort = field(args, 'sort', str, required=False, default='recent')
@@ -28,6 +58,7 @@ def workspace(api, args):  # type: ignore[no-untyped-def]
         raise ApiRefused('invalid_field', 'unknown match or sort')
     q = field(args, 'q', str, required=False, default='').casefold().strip()
     sq = field(args, 'source_q', str, required=False, default='').casefold().strip()
+    scope_q = field(args, 'scope_q', str, required=False, default='').casefold().strip()
     limit = field(args, 'limit', int, required=False, default=PAGE)
     offsets = [field(args, key, int, required=False, default=0) for key in ('offset', 'source_offset', 'comparison_offset')]
     if not 1 <= limit <= PAGE or any(n < 0 for n in offsets):
@@ -42,73 +73,60 @@ def workspace(api, args):  # type: ignore[no-untyped-def]
     pins = field(args, 'pins', list, required=False, default=[])
     if len(pins) > 10000 or any(type(ref) is not str for ref in pins):
         raise ApiRefused('invalid_field', 'pins must be chat references')
-    view = api.store.load()
-    index = api.chats.navigation(view=view)
-    entries = [index.entry(ref) for ref in index.all_chats()]
-    names = api._mention_names(view, entries)
-    candidates = sorted({SourceRef(*key, revision=rev) for entry in entries
-                         for role, key, rev, active in entry.mentions
-                         if active and role in ('character', 'scenario')}, key=str)
-    diagnostics, facts, sources, comparisons = [], [], [], []
-    accepted = set()
-    for ref in candidates:
-        path, problem = [], None
-        try:
-            effective = compose_in(view, ref)
-            path = [str(node.ref) for node in effective.chain]
-            facts.append([(str(node.ref), node.etag) for node in effective.chain])
-        except (MissingDefinition, PortrayalError, ValueError) as error:
-            problem = getattr(error, 'reason', type(error).__name__)
-            diagnostics.append({'ref': str(ref), 'code': str(problem)})
-            facts.append((str(ref), str(problem)))
-        item = {'ref': str(ref), 'role': ref.kind, 'name': names.get(str(ref.unpinned())),
-                'path': path, 'problem': problem}
-        sources.append(item)
-        exact = source is not None and ref.entity_key == source.entity_key and (not source.pinned or ref == source)
-        descendant = source is not None and match == 'derived' and any(
-            SourceRef.parse(node).entity_key == source.entity_key and (not source.pinned or node == str(source))
-            for node in path)
-        if exact or descendant:
-            accepted.add(ref)
-            comparisons.append(item)
-    fingerprint = hashlib.sha256(json.dumps([index.to_json(), names, facts,
-        sorted((key, value.etag) for key, value in view.sources.items()),
-        [(str(d.ref), d.name, getattr(d, "etag", None)) for d in view.index.definitions()],
-        [(p.path, p.code, p.detail) for p in view.problems]], sort_keys=True).encode()).hexdigest()
-    if snapshot is not None and snapshot != fingerprint:
+    basis = basis_of(api)
+    if snapshot is not None and snapshot != basis.fingerprint:
         raise ApiRefused('changed', 'Navigation changed. Restart from the first page.')
+    accepted, comparisons = set(), []
+    if source is not None:
+        for item in basis.sources:
+            ref = SourceRef.parse(item['ref'])
+            exact = ref.entity_key == source.entity_key and (not source.pinned or ref == source)
+            descendant = match == 'derived' and any(
+                SourceRef.parse(node).entity_key == source.entity_key and (not source.pinned or node == str(source))
+                for node in item['path'])
+            if exact or descendant:
+                accepted.add(ref)
+                comparisons.append(item)
+    pinned = set(pins)
     found = []
-    for entry in entries:
-        scope = index.scope(entry.ref.campaign_id)
+    for ref in basis.order:
+        entry = basis.index.entry(ref)
+        scope = basis.index.scope(ref.campaign_id)
         if which in ('character', 'scenario'):
             if not source or not any(active and role == which and SourceRef(*key, revision=rev) in accepted
                                      for role, key, rev, active in entry.mentions):
                 continue
-        if (which == 'campaign' or campaign) and entry.ref.campaign_id != campaign:
+        if (which == 'campaign' or campaign) and ref.campaign_id != campaign:
             continue
         if (which == 'world' or world) and (not world or scope is None or scope.world != world):
             continue
-        if which == 'pinned' and str(entry.ref) not in pins:
+        if which == 'pinned' and str(ref) not in pinned:
             continue
-        found.append(entry.ref)
-    rows = api._entries(view, index, found, names)
-    def title(row):
-        return row['label'] or (row['launch'] or {}).get('name') or row['chat']
-    if q:
-        rows = [row for row in rows if all(word in json.dumps(row, ensure_ascii=False).casefold() for word in q.split())]
+        if q and not all(word in basis.text[str(ref)] for word in q.split()):
+            continue
+        found.append(str(ref))
     if sort == 'name':
-        rows.sort(key=lambda row: (title(row).casefold(), row['chat']))
-    sources.sort(key=lambda item: ((item['name'] or '').casefold(), item['ref']))
+        def title(key):  # type: ignore[no-untyped-def]
+            row = basis.rows[key]
+            return row['label'] or (row['launch'] or {}).get('name') or row['chat']
+        found.sort(key=lambda key: (title(key).casefold(), key))
+    sources = sorted(basis.sources, key=lambda item: ((item['name'] or '').casefold(), item['ref']))
     if which in ('character', 'scenario'):
         sources = [item for item in sources if item['role'] == which]
     if sq:
         sources = [item for item in sources if sq in ((item['name'] or '') + ' ' + item['ref']).casefold()]
-    def next_at(at, values):
+    # the choosers are drawn only under Campaign and World: other filters skip the work and get none
+    campaigns, worlds = scope_facets(basis, scope_q) if which in ('campaign', 'world') else ([], [])
+
+    def next_at(at, values):  # type: ignore[no-untyped-def]
         return at + limit if at + limit < len(values) else None
-    return {'filter': which, 'chats': rows[offset:offset + limit], 'total': len(rows),
-            'next': next_at(offset, rows), 'snapshot': fingerprint,
-            'sources': sources[source_offset:source_offset + limit], 'source_total': len(sources),
+    # Rows and source items are shared by the cached basis: hand out copies, never the cached objects.
+    return {'filter': which, 'chats': copy.deepcopy([basis.rows[key] for key in found[offset:offset + limit]]),
+            'total': len(found), 'next': next_at(offset, found), 'snapshot': basis.fingerprint,
+            'sources': copy.deepcopy(sources[source_offset:source_offset + limit]), 'source_total': len(sources),
             'source_next': next_at(source_offset, sources),
-            'comparisons': comparisons[comparison_offset:comparison_offset + limit],
+            'comparisons': copy.deepcopy(comparisons[comparison_offset:comparison_offset + limit]),
             'comparison_total': len(comparisons), 'comparison_next': next_at(comparison_offset, comparisons),
-            'diagnostics': diagnostics[:PAGE]}
+            'campaigns': campaigns[:PAGE], 'campaign_total': len(campaigns),
+            'worlds': worlds[:PAGE], 'world_total': len(worlds),
+            'diagnostics': copy.deepcopy(list(basis.diagnostics[:PAGE]))}

@@ -45,7 +45,12 @@ export async function showHub(root, ctx, campaign, asked, audience) {
     if (item.chat === chat) chip.setAttribute("aria-current", "page");
     return chip;
   });
-  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }),
+  // the same threads in the Chats workspace (065): this campaign's chats, and every chat of its world
+  const browse = ctx.registered("chats") ? [
+    ui.buttonLink("Browse in Chats", "chats", [], { filter: "campaign", campaign }, { size: "small" }),
+    found && found.world ? ui.buttonLink("Chats in this world", "chats", [], { filter: "world", world: found.world }, { size: "small" }) : null,
+  ] : [];
+  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse,
     chats.length ? el("span", { class: "g-muted" }, count(chats.length, "chat") + " in this campaign") : null,
     el("nav", { class: "g-chips", "aria-label": "This campaign's chats" }, chips));
   root.append(el("div", { class: "g-stack campaign-top" }, cover, nav));
