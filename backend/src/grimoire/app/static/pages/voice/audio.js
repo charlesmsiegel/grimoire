@@ -81,13 +81,18 @@ export function canRecord(scope = globalThis) {
 // { stop(): Promise<wav bytes or null>, cancel() }: stop gives the recording (null when nothing was captured);
 // cancel drops it. Either closes the microphone, if it is still open.
 export async function record({ maxSeconds, onlimit, scope = globalThis } = {}) {
-  const stream = await scope.navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
   const Context = scope.AudioContext || scope.webkitAudioContext;
+  // Made and resumed while the press still counts as a gesture: after a slow permission prompt it would start
+  // suspended, and no samples would ever arrive.
+  const context = new Context();
+  try { const resumed = context.resume && context.resume(); if (resumed && resumed.catch) resumed.catch(() => {}); } catch (error) { /* resumed later or not needed */ }
+  let stream;
+  try { stream = await scope.navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } }); }
+  catch (error) { try { await context.close(); } catch (closing) { /* already closed */ } throw error; }
   const chunks = [];
   let frames = 0;
   let open = true;
   let timer = null;
-  let context = null;
   let source = null;
   let node = null;
   let closing = null;
@@ -98,7 +103,7 @@ export async function record({ maxSeconds, onlimit, scope = globalThis } = {}) {
     closing = (async () => {
       try { if (source) source.disconnect(); if (node) node.disconnect(); } catch (error) { /* already disconnected */ }
       for (const track of stream.getTracks()) track.stop();
-      try { if (context) await context.close(); } catch (error) { /* already closed */ }
+      try { await context.close(); } catch (error) { /* already closed */ }
     })();
     return closing;
   };
@@ -109,7 +114,6 @@ export async function record({ maxSeconds, onlimit, scope = globalThis } = {}) {
     if (onlimit) { const tell = onlimit; onlimit = null; tell(); }
   };
   try {
-    context = new Context();
     source = context.createMediaStreamSource(stream);
     // ScriptProcessor is old but present in every browser and web view; it needs no extra module.
     node = context.createScriptProcessor(4096, 1, 1);

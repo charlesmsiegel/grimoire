@@ -98,7 +98,15 @@ test("voice is chosen on this device only, records into a transcript, and keeps 
   assert.equal(microphone.opened, 1);
   await new Promise((resolve) => setTimeout(resolve, 300));
   byText(main, "button", "Stop")[0].click();
+  // while it is recognized, the page's switches are disabled, and a change to one is not shown as accepted
+  const busyKeep = main.querySelectorAll("input").find((node) => node.getAttribute("data-focus-key") === "voice:keep:provisional_transcript");
+  assert.ok(busyKeep.disabled, "the keep switch is disabled during recognition");
+  busyKeep.checked = false;
+  busyKeep.dispatchEvent({ type: "change" });
+  const shown = main.querySelectorAll("input").find((node) => node.getAttribute("data-focus-key") === "voice:keep:provisional_transcript");
+  assert.equal(shown.checked, true, "a dropped change is drawn back as it really is");
   await until(() => byText(main, "p", "is the cargo safe").length, 15000, "the transcript");
+  assert.equal(main.querySelectorAll("input").find((node) => node.getAttribute("data-focus-key") === "voice:keep:provisional_transcript").disabled, false);
   assert.equal(microphone.stopped, 1, "every track stopped");
   assert.equal(microphone.closed, microphone.contexts, "the audio context closed");
   assert.ok(main.textContent.includes("Nothing was posted"));

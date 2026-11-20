@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -37,9 +38,12 @@ class LocalStandIn:
         self.heard = heard
         self.max_seconds = 15
         self.unloaded = 0
+        self.delay = 0.0
 
     def transcribe(self, audio: bytes) -> Utterance:
         self.calls.append(audio)
+        if self.delay:
+            time.sleep(self.delay)  # a recognition that takes a while, for the page's busy state
         return Utterance(self.heard, origin="voice")
 
     def synthesize(self, text: str) -> bytes:
@@ -275,6 +279,7 @@ def test_the_voice_page_end_to_end(tmp_path, installed_engine):
     desk, _chat = desktop_library(tmp_path / "desk")
     with Device(desk) as opened:
         backend = LocalStandIn(available=installed_engine)
+        backend.delay = 1.5
         voice.configure(opened.api, (backend,))
         app = AppServer(opened.api)
         thread = threading.Thread(target=app.serve_forever, daemon=True)

@@ -63,7 +63,18 @@ export async function mount(root, ctx) {
   ctx.signal.addEventListener("abort", () => { attempt += 1; if (recorder) { recorder.cancel(); recorder = null; } });
 
   const load = async () => { status = await ctx.api("voice.status", {}); draw(); };
-  const choose = (change) => ctx.act(async () => {
+  // One action at a time, as ctx.act runs them; ctx.act disables only buttons, so this also disables the
+  // page's switches and choices while one runs (a privacy setting changed during a recognition would
+  // otherwise look accepted and be dropped), and draws the page again afterwards.
+  let working = false;
+  const settle = () => { if (!working) return; for (const kind of ["input", "select"]) for (const node of page.querySelectorAll(kind)) node.disabled = true; };
+  const act = async (work) => {
+    if (working) { if (status) draw(); return undefined; }
+    working = true;
+    settle();
+    try { return await ctx.act(work); } finally { working = false; if (status && !ctx.signal.aborted) draw(); }
+  };
+  const choose = (change) => act(async () => {
     await drop();
     status = await ctx.api("voice.configure", change);
     heard = null;
@@ -74,6 +85,7 @@ export async function mount(root, ctx) {
     const backend = status.backends.find((item) => item.id === "pocketsphinx") || status.backends.find((item) => item.features.includes("stt") && item.id !== "unsupported");
     page.replaceChildren(intro(), inputSection(backend), status.mode === "local_only" ? keptSection() : null,
       backend && backend.available ? costSection(backend) : null, status.stt.status === "ready" ? trySection() : null, notYet());
+    settle();
   };
 
   const intro = () => ui.card({ kind: "hero", label: "Voice stays on this device" },
@@ -120,7 +132,7 @@ export async function mount(root, ctx) {
       card.append(el("div", { class: "g-row voice-check" }, box, el("label", { for: id }, "Keep " + KEEP_LABELS[kind].toLowerCase())));
     }
     card.append(el("p", { class: "voice-kept" }, status.kept.length ? "Kept now: " + status.kept.map((kind) => KEEP_LABELS[kind].toLowerCase()).join(", ") + "." : "Kept now: nothing."),
-      ui.actions(ui.button("Delete voice data now", () => ctx.act(async () => {
+      ui.actions(ui.button("Delete voice data now", () => act(async () => {
         await drop();
         status = await ctx.api("voice.delete", {});
         heard = null;
@@ -143,7 +155,7 @@ export async function mount(root, ctx) {
         el("dt", {}, "Last recording"), el("dd", {}, measured.last_audio_seconds ? seconds(measured.last_audio_seconds) + " of speech in " + seconds(measured.last_seconds) : "none yet")),
       status.mode === "local_only" ? limit.node : null);
     if (measured.loaded) {
-      card.append(ui.actions(ui.button("Free the recognizer's memory", () => ctx.act(async () => {
+      card.append(ui.actions(ui.button("Free the recognizer's memory", () => act(async () => {
         await drop();
         status = await ctx.api("voice.unload", {});
         draw();
@@ -200,7 +212,7 @@ export async function mount(root, ctx) {
   };
   // Stop: send what was recorded, or nothing when nothing was captured. The page is drawn again whatever
   // happens, so Stop never stays on screen for a microphone that is closed.
-  const finish = () => ctx.act(async () => {
+  const finish = () => act(async () => {
     const active = recorder;
     if (!active) return;
     recorder = null;

@@ -69,16 +69,21 @@ test("every refusal reads as plain words", () => {
 });
 
 // A stand-in microphone scope: `feed(n)` delivers n samples at 48 kHz; it counts opened and closed parts.
-function scope({ failProcessor = false } = {}) {
-  const counts = { stopped: 0, closed: 0 };
+function scope({ failProcessor = false, refuse = false } = {}) {
+  const counts = { stopped: 0, closed: 0, contexts: 0, resumed: 0, contextBeforeAsk: null };
   let node = null;
   const track = { stop() { counts.stopped += 1; } };
   return {
     counts,
     feed(n) { node.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(n).fill(0.25) } }); },
-    navigator: { mediaDevices: { async getUserMedia() { return { getTracks: () => [track] }; } } },
+    navigator: { mediaDevices: { async getUserMedia() {
+      counts.contextBeforeAsk = counts.contexts > 0 && counts.resumed > 0;
+      if (refuse) throw new Error("permission refused");
+      return { getTracks: () => [track] };
+    } } },
     AudioContext: class {
-      constructor() { this.sampleRate = 48000; this.destination = {}; }
+      constructor() { this.sampleRate = 48000; this.destination = {}; counts.contexts += 1; }
+      async resume() { counts.resumed += 1; }
       createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
       createScriptProcessor() {
         if (failProcessor) throw new Error("no processor");
@@ -98,18 +103,22 @@ test("the limit closes the microphone by itself, and Stop still gives what was r
   place.feed(30000);  // past the 48 000-sample limit
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(told, 1);
-  assert.deepEqual(place.counts, { stopped: 1, closed: 1 }, "closed at the limit, before anyone pressed Stop");
+  assert.equal(place.counts.contextBeforeAsk, true, "the audio context was made and resumed before the permission prompt");
+  assert.deepEqual([place.counts.stopped, place.counts.closed], [1, 1], "closed at the limit, before anyone pressed Stop");
   const audio = await recorder.stop();
   assert.equal(audio.length, 44 + RATE * 2, "exactly the limit, at 16 kHz");
-  assert.deepEqual(place.counts, { stopped: 1, closed: 1 }, "closed once");
+  assert.deepEqual([place.counts.stopped, place.counts.closed], [1, 1], "closed once");
 });
 
 test("Stop before any sound gives nothing to send, and a failed setup closes the microphone", async () => {
   const place = scope();
   const recorder = await record({ maxSeconds: 5, scope: place });
   assert.equal(await recorder.stop(), null);
-  assert.deepEqual(place.counts, { stopped: 1, closed: 1 });
+  assert.deepEqual([place.counts.stopped, place.counts.closed], [1, 1]);
   const broken = scope({ failProcessor: true });
   await assert.rejects(record({ maxSeconds: 5, scope: broken }), /no processor/);
-  assert.deepEqual(broken.counts, { stopped: 1, closed: 1 });
+  assert.deepEqual([broken.counts.stopped, broken.counts.closed], [1, 1]);
+  const refused = scope({ refuse: true });
+  await assert.rejects(record({ maxSeconds: 5, scope: refused }), /permission refused/);
+  assert.deepEqual([refused.counts.stopped, refused.counts.closed], [0, 1], "a refused prompt closes the audio context");
 });
