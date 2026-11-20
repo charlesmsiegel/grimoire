@@ -37,6 +37,13 @@ Pinned catalog records compose qualified members and dependencies with local exc
 return bounded discovery and require explicit selections before chat/context use.
 See [CATALOGS.md](CATALOGS.md) for provenance, limits and integration dependencies.
 
+### Source upgrades and dependencies (headless first slice: `grimoire.sourceupgrades`)
+
+Read-only previews of removing or updating one source list every reference to it from other
+files, resolved by exact qualified id on both sides, never by name or a lookalike source id; a
+source may declare optional dependencies pinned to their manifest etag. See
+[SOURCE_UPGRADES.md](SOURCE_UPGRADES.md).
+
 ### Context packing (first slice implemented: `grimoire.context`, `grimoire.contextstore`)
 
 One actor's bounded context from its own card, its own knowledge and the triggered common lore of the chat's bound sources, deterministic and model-free, with provenance and omissions beside each line. See [CONTEXT.md](CONTEXT.md).
