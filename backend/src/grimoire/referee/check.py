@@ -13,8 +13,10 @@ The checks are deterministic and director-side:
   the actor's own custody.
 - **knowledge** (012): an actor reveals only a proposition it holds (a report received or sent, a belief of
   its own), as 027's ``known_ids`` reads it.
-- **outcome** (029, 040): narration agrees with a recorded resolution, and an obstacle is overcome only when
-  its derived state says so; an escalation that prevents the approach narrated is cited.
+- **outcome** (029, 040, 077): narration agrees with a recorded resolution, and an obstacle is overcome only
+  when its derived state says so; an escalation that prevents the approach narrated is cited. A commitment is
+  fulfilled only when its folded state says so, and by an actor who owes it: narration that completes a
+  mission the party refused, abandoned or let lapse contradicts the record.
 - **intention** (039): an NPC does not do a kind of act that a limit active for it this turn forbids, above
   all a refusal it was briefed on; a kind of act its agenda never names is unchecked.
 """
@@ -295,6 +297,34 @@ def _check_overcomes(claim: ContinuityClaim, facts: Facts):
     return _Problem("not_overcome", cited)
 
 
+_ENDED = frozenset({"refused", "abandoned", "lapsed", "voided", "unsupported"})
+
+
+def _check_fulfills(claim: ContinuityClaim, facts: Facts):
+    """077: narration completes a commitment only when the record has it fulfilled.
+
+    A commitment refused, abandoned, lapsed, withdrawn or resting on undone fiction cannot have been completed;
+    one still open has not been yet. A history that could not be fully checked (an event still syncing) makes
+    any answer uncertain. Completion by someone who does not owe it is uncertain too: a friend may well finish
+    a task for the party, which the record does not say either way.
+    """
+    state = facts.commitment(claim.commitment_id)
+    if state is None:
+        return _Unchecked("no_commitment")
+    cited = [Evidence("commitment", f"commitment:{claim.commitment_id}", f"status={state.status}")]
+    cited += [Evidence("commitment", f"operation:{step.operation.operation_id}", f"{step.outcome}:{step.support}")
+              for step in (state.offer, *state.steps)]
+    if state.status in _ENDED:
+        return _Problem("contradicts_commitment", cited, sure=state.certain)
+    if state.status != "fulfilled":
+        return _Problem("not_fulfilled", cited, sure=state.certain)
+    if not state.certain:
+        return _Problem("uncertain_commitment", cited, sure=False)
+    if claim.actor not in state.commitment.owed_by:
+        return _Problem("not_obligor", cited, sure=False)
+    return None
+
+
 # -- intentions ---------------------------------------------------------------------------------------------
 
 def _check_acts(claim: ContinuityClaim, facts: Facts):
@@ -321,7 +351,7 @@ _CHECKS = {
     "present": ("stage", _check_present), "reaches": ("stage", _check_staging), "sees": ("stage", _check_staging),
     "hears": ("stage", _check_staging), "spends": (None, _check_spends), "wields": (None, _check_wields),
     "knows": (None, _check_knows), "resolves": (None, _check_resolves), "overcomes": (None, _check_overcomes),
-    "acts": (None, _check_acts),
+    "acts": (None, _check_acts), "fulfills": (None, _check_fulfills),
 }
 
 
