@@ -168,7 +168,9 @@ PYTHONPATH=backend/src python -m grimoire.capture.v2 --scenario guild_betrayal \
 ```
 
 It verifies the capture's evidence, then takes its provider, served model, output budget and attempt
-limit, so V2 is recorded under the capture's own conditions. It plays the scenario's three turns on
+limit, so V2 is recorded under the capture's own conditions. The model V2 records is the one that
+answered: if the provider serves another model than the capture's (a resolved snapshot, say, or more
+than one model), that is recorded, and the gate reports the runs as incomparable. It plays the scenario's three turns on
 `GenerationRuntime`: each speaking NPC's brief has its card's description, personality and example
 turns (read with V2's own importer), what was said aloud before the call and the turn's player text,
 which is what the 0.2.1 side had. A scenario secret is screened only for an actor that has not learned

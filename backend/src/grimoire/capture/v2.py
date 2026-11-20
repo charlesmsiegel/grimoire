@@ -286,17 +286,17 @@ class _DryRunTransport:
     whole successful streams, one per planned call, in the order the runtime issues them.
     """
 
-    def __init__(self, replies: Sequence[tuple[str, Mapping]]) -> None:
-        self._replies = list(replies)
+    def __init__(self, replies: Sequence[tuple[str, Mapping]], model: str) -> None:
+        self._replies, self._model = list(replies), model
 
     def connect(self, url: str, timeouts: Timeouts, cancel: CancelToken) -> Connection:
         if not self._replies:
             raise CaptureFailed("the dry run asked for more calls than the scenario scripts")
         text, usage = self._replies.pop(0)
-        return _DryRunConnection(_sse(text, usage), cancel)
+        return _DryRunConnection(_sse(text, usage, self._model), cancel)
 
 
-def _sse(text: str, usage: Mapping, model: str = "dry-run-model") -> list[bytes]:
+def _sse(text: str, usage: Mapping, model: str) -> list[bytes]:
     def data(obj: object) -> bytes:
         return b"data: " + json.dumps(obj).encode() + b"\n"
     return [data({"model": model, "choices": [{"delta": {"content": text}, "finish_reason": None}]}),
@@ -349,7 +349,7 @@ def _runtime(options: CompareOptions, baseline: Baseline, setup: Mapping, scenar
         endpoint = ProviderEndpoint(baseline.provider, DRY_RUN_ENDPOINT)
         clock = _DryRunClock()
         adapter = ProviderAdapter(ProviderRegistry([endpoint]), StaticCredentials({baseline.provider: "dry-run"}),
-                                  authorizer, _DryRunTransport(_dry_steps(setup, scenario, planning)),
+                                  authorizer, _DryRunTransport(_dry_steps(setup, scenario, planning), baseline.model),
                                   clock=clock, wait=clock.wait)
     return GenerationRuntime(adapter, (RouteChoice(baseline.provider, baseline.model),), handle,
                              max_output_tokens=baseline.sent_max_tokens)
@@ -370,6 +370,20 @@ def spent(meters: Sequence[TurnMeter]) -> str:
             f"output tokens {sums['output_tokens']}")
 
 
+def served_model(meters: Sequence[TurnMeter], requested: str) -> str:
+    """The model that answered this run, as its recorded condition (the 0.2.1 capture's own rule).
+
+    The requested model unless a reply named another. A provider that resolved the request
+    to another snapshot, or answered from more than one model, is recorded as it served, so the gate
+    reports the model condition as differing from the baseline instead of comparing unlike runs.
+    """
+    served = {report.served_model for meter in meters for call in meter.ledger.plan.calls
+              for report in meter.reports(call.call_id) if report.served_model}
+    if not served:
+        return requested
+    return " + ".join(sorted(served))
+
+
 def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup: Mapping, *,
          planning: bool, meters: list[TurnMeter] | None = None) -> dict:
     """The V2 run, as a ``/2`` run dict with the baseline's conditions."""
@@ -381,6 +395,7 @@ def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup:
     player = InstanceRef(CAMPAIGN, "character", cast.player)
     heard: list[HeardLine] = []
     recorded = []
+    own: list[TurnMeter] = []
     for script in scenario.script:
         said = HeardLine(cast.names[player], player_text[script.turn], player)
         briefs = [_brief(cast, scenario, actor_id, script.turn, (*heard, said)) for actor_id in script.speakers]
@@ -388,6 +403,7 @@ def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup:
                                     controls=cast.controls, policy=policy,
                                     planners=script.speakers if planning else ())
         meter = TurnMeter(TurnUsageLedger(plan))
+        own.append(meter)
         if meters is not None:
             meters.append(meter)
         try:
@@ -404,7 +420,7 @@ def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup:
     document = record_runtime_run(
         scenario, recorded, run_id=f"v2-{options.mode.replace('_', '-')}-{name}",
         label=f"V2 runtime ({options.mode}, {baseline.provider}, {name})",
-        conditions=baseline.conditions, harness=HARNESS,
+        conditions={**baseline.conditions, "model": served_model(own, baseline.model)}, harness=HARNESS,
         route=f"{baseline.provider}:{baseline.model}",
         choice_outcomes={choice.choice_id: "unlabelled" for choice in scenario.choices})
     # No director reply is planned, so the /3 record is a /2 run: the format 0.2.1's capture is in.

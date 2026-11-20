@@ -173,3 +173,22 @@ def test_the_anthropic_protocol_gap_is_stated_on_a_live_run(tmp_path, monkeypatc
     assert v2.PROTOCOL_NOTES["anthropic"] in report
     assert "usage_incomplete (comparison)" in report
     assert all(json.loads(body)["max_tokens"] == 16000 for _, _, body in server.requests)
+
+
+def test_a_reply_from_another_model_is_recorded_as_served_and_never_compared_as_matched(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAPTURE_TEST_KEY", "sk-loopback-only-0002")
+
+    def reply(handler):  # the provider resolved the request to another model
+        stream(sse_lines(deltas=("Hm, a quiet evening at the hall.",), model="entirely-different-model",
+                         usage={"prompt_tokens": 100, "completion_tokens": 10,
+                                "prompt_tokens_details": {"cached_tokens": 0}}))(handler)
+
+    out = tmp_path / "out"
+    with sse_server(reply) as server:
+        monkeypatch.setitem(v2.ENDPOINTS, "openrouter", base_url(server))
+        assert run("--baseline", baseline(tmp_path, "openrouter", live=True), "--out", out, "--live",
+                   "--confirm-billing", "--api-key-env", "CAPTURE_TEST_KEY") == 0
+    files = outputs(out)
+    assert json.loads(files["v2-baseline.run.json"])["conditions"]["model"] == "entirely-different-model"
+    report = files["comparison-report.txt"]
+    assert "incomparable (comparison) model: recording condition differs from the baseline" in report

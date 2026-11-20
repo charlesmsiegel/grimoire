@@ -230,7 +230,7 @@ def test_an_adapter_exception_in_planning_halts_the_turn_as_it_does_for_a_reply(
     controls, voices = world()
     harness = Harness([say("Coin first."), say("Darling!")])
     plan = plan_generation_turn(CAMPAIGN, "t1", present=PRESENT, speakers=SPEAKERS, controls=controls,
-                                policy=PLAN_ONE, planners=SPEAKERS)
+                                policy=PLAN_TWO, planners=SPEAKERS)
     real = harness.adapter.execute
 
     def broken(meter, call, *args, **kwargs):
@@ -239,7 +239,14 @@ def test_an_adapter_exception_in_planning_halts_the_turn_as_it_does_for_a_reply(
         return real(meter, call, *args, **kwargs)
 
     harness.adapter.execute = broken
-    outcome = harness.runtime.run_turn(harness.meter(plan), [brief(ODA, "Oda", voices), brief(BELLAMY, "Bellamy", voices)],
+    meter = harness.meter(plan)
+    outcome = harness.runtime.run_turn(meter, [brief(ODA, "Oda", voices), brief(BELLAMY, "Bellamy", voices)],
                                        controls=controls)
     assert outcome.status == "halted" and outcome.lines == () and harness.transport.sends == []
     assert outcome.calls[0].status == "failed" and outcome.calls[0].reason == "RuntimeError"
+    assert [call.status for call in outcome.calls[1:]] == ["not_issued"] * 3
+    assert meter.status(plan.calls[1].call_id) is None  # never reached: not forgone
+    from grimoire.runtime.record import recorded_turn
+
+    recorded = recorded_turn(1, meter, outcome)  # an unreached planning call records like any other
+    assert recorded.lines == ()

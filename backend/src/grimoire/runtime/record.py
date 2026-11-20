@@ -59,7 +59,8 @@ def recorded_turn(turn: int, meter: TurnMeter, outcome: TurnOutcome, *,
     for call in outcome.calls:
         allowed = _METER_STATUS[call.status]
         if stages[call.call_id] is InferenceStage.PLANNING and call.status == "not_issued":
-            allowed = frozenset({"forgone"})  # 068: skipped for an NPC with a decided choice, booked as forgone
+            # 068: forgone when skipped for an NPC with a decided choice; unbooked when never reached
+            allowed = frozenset({"forgone", None})
         if meter.status(call.call_id) not in allowed:
             raise GenerationError("outcome_mismatch",
                                   f"{call.call_id} is {call.status} in the outcome but not on the meter")
