@@ -1,0 +1,157 @@
+"""Rendering a performance plan to speech (083): one synthesis call per voiced cue, with timings.
+
+``render_performance`` takes a ``Performance`` and the synthesizers this device has (one per engine) and gives,
+for a window of cues, one ``Segment`` each: the cue's audio (a WAV), when it starts and how long it lasts, laid
+end to end with a short gap, or no audio and why. Every cue's text is the plan's accepted text, untouched: a
+segment carries the cue's digest, never a second copy of the words, and audio is never turned back into text.
+
+A cue the plan left as text, a voice whose engine is missing or does not have that voice, a synthesis that fails
+and an answer that is not a readable WAV each leave that cue **text only**; the rest still render. Nothing falls
+back to another engine or another speaker's voice. A synthesizer's exception is not kept or retried (its message
+could hold the line), and with ``audio=False`` nothing is synthesized at all: the transcript is read as text.
+"""
+
+from __future__ import annotations
+
+import io
+import wave
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from typing import Protocol
+
+from .model import CastingError
+from .plan import TEXT_ONLY, VOICED, Performance
+
+#: One render call covers at most this many cues and this much script, so one request stays bounded.
+MAX_CUES = 32
+MAX_CHARS = 8000
+#: One cue's audio: a longer answer is refused, not kept.
+MAX_AUDIO = 4 * 1024 * 1024
+#: The pause between two spoken cues, in seconds.
+GAP = 0.3
+#: Why a segment has no audio beyond the cue's own reason.
+RENDER_REASONS = ("audio_off", "engine_unavailable", "voice_unavailable", "synthesis_failed", "invalid_audio")
+
+
+class Synthesizer(Protocol):
+    """A local speech engine. ``engine`` names it as a casting does; ``voices`` are the voices it has now."""
+
+    engine: str
+
+    def voices(self) -> tuple[str, ...]: ...
+
+    def synthesize(self, script: str, voice: str) -> bytes: ...
+
+
+@dataclass(frozen=True, slots=True)
+class Segment:
+    cue: int
+    digest: str
+    voice: str | None
+    status: str  # "audio" or "text_only"
+    reason: str | None
+    start: float
+    duration: float
+    audio: bytes | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Rendering:
+    segments: tuple[Segment, ...]
+    next: int | None  # the first cue not rendered, or ``None`` when the window reached the end
+
+    @property
+    def duration(self) -> float:
+        """How long the window's audio plays: the end of its last spoken segment (no trailing gap)."""
+        return max((segment.start + segment.duration for segment in self.segments if segment.audio is not None),
+                   default=0.0)
+
+
+def wav_seconds(data: object) -> float | None:
+    """How long a WAV lasts, or ``None`` when ``data`` is not a readable, nonempty, bounded WAV."""
+    if not isinstance(data, bytes) or not 44 <= len(data) <= MAX_AUDIO:
+        return None
+    try:
+        with wave.open(io.BytesIO(data), "rb") as reader:
+            frames, rate = reader.getnframes(), reader.getframerate()
+            if reader.getnchannels() < 1 or rate <= 0 or frames <= 0:
+                return None
+            # the header's count must be backed by samples: a truncated file is not a recording
+            if len(reader.readframes(frames)) < frames * reader.getsampwidth() * reader.getnchannels():
+                return None
+    except (wave.Error, EOFError, ValueError):
+        return None
+    return frames / rate
+
+
+def _engines(synthesizers: Mapping[str, Synthesizer] | Iterable[Synthesizer]) -> dict[str, Synthesizer]:
+    if isinstance(synthesizers, Mapping):
+        return dict(synthesizers)
+    found: dict[str, Synthesizer] = {}
+    for synthesizer in synthesizers:
+        if synthesizer.engine in found:
+            raise CastingError("duplicate_engine", f"two synthesizers for {synthesizer.engine}")
+        found[synthesizer.engine] = synthesizer
+    return found
+
+
+def render_performance(performance: Performance, synthesizers: Mapping[str, Synthesizer] | Iterable[Synthesizer],
+                       *, start: int = 0, count: int = MAX_CUES, audio: bool = True, gap: float = GAP,
+                       max_chars: int = MAX_CHARS) -> Rendering:
+    """Render cues ``start`` to ``start + count`` (at most ``MAX_CUES``, and no more script than ``max_chars``
+    unless one cue alone is longer). ``next`` is where the following call starts."""
+    if type(performance) is not Performance:
+        raise CastingError("invalid_performance", "render_performance renders a Performance")
+    if type(start) is not int or not 0 <= start <= len(performance.cues):
+        raise CastingError("invalid_window", "start is a cue index of the performance")
+    if type(count) is not int or not 1 <= count <= MAX_CUES:
+        raise CastingError("invalid_window", f"count is 1..{MAX_CUES}")
+    engines = _engines(synthesizers) if audio else {}
+    known: dict[str, tuple[str, ...] | None] = {}
+    segments: list[Segment] = []
+    at, spent = 0.0, 0
+    index = start
+    while index < len(performance.cues) and index < start + count:
+        cue = performance.cues[index]
+        if cue.status == VOICED and segments and spent + len(cue.script) > max_chars:
+            break
+        index += 1
+        if cue.status != VOICED or cue.chosen is None:
+            segments.append(Segment(cue.index, cue.digest, None, TEXT_ONLY, cue.reason, at, 0.0))
+            continue
+        voice = cue.chosen.voice
+        reason = None
+        data = None
+        if not audio:
+            reason = "audio_off"
+        else:
+            engine = engines.get(voice.engine)
+            if engine is not None and voice.engine not in known:
+                try:
+                    known[voice.engine] = tuple(engine.voices())
+                except Exception:  # an engine that cannot say what it has has none to use
+                    known[voice.engine] = None
+            if engine is None or known.get(voice.engine) is None:
+                reason = "engine_unavailable"
+            elif voice.voice not in known[voice.engine]:  # type: ignore[operator]
+                reason = "voice_unavailable"
+            else:
+                spent += len(cue.script)
+                try:
+                    data = engine.synthesize(cue.script, voice.voice)
+                except Exception:  # its message may quote the line: neither kept nor retried
+                    reason = "synthesis_failed"
+        seconds = None if data is None else wav_seconds(data)
+        if reason is None and seconds is None:
+            reason = "invalid_audio"
+        if reason is not None:
+            segments.append(Segment(cue.index, cue.digest, voice.key, TEXT_ONLY, reason, at, 0.0))
+            continue
+        assert seconds is not None and isinstance(data, bytes)
+        segments.append(Segment(cue.index, cue.digest, voice.key, "audio", None, at, seconds, data))
+        at += seconds + gap
+    return Rendering(tuple(segments), index if index < len(performance.cues) else None)
+
+
+__all__ = ["GAP", "MAX_AUDIO", "MAX_CHARS", "MAX_CUES", "RENDER_REASONS", "Rendering", "Segment", "Synthesizer",
+           "render_performance", "wav_seconds"]
