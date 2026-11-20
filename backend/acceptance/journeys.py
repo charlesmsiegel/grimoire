@@ -67,7 +67,7 @@ def start_chat(session, npc="Mara", persona="Winifred"):
 
 
 def composer(page):
-    return page.locator("textarea").first
+    return page.locator(".chat-composer textarea")
 
 
 def post_keep(session, text):
