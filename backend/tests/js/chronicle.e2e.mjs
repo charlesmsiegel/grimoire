@@ -144,7 +144,8 @@ test("a campaign's clock and memory, each change reviewed before it is made", { 
   // what Wave 8 has on other screens is linked; what has none yet is named, never offered
   const features = section(main, "Campaign features");
   assert.ok(byText(features, "a", "Private local voice").length);
-  assert.ok(byText(features, "strong", "Reviewing a fork or retcon is not available yet").length);
   const world = byText(features, "a", "What an NPC thinks others think").find((node) => node.getAttribute("href").startsWith("#/world/" + encodeURIComponent(campaign)));
   assert.ok(world && world.getAttribute("href").includes("chat="), "the World page is linked for this campaign and chat");
+  const story = byText(features, "a", "Reviewing a fork or retcon");
+  assert.ok(story.length && story[0].getAttribute("href").startsWith("#/story/" + encodeURIComponent(campaign)), "the story review is linked");
 });
