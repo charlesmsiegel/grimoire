@@ -67,6 +67,13 @@ def imported_cast(record) -> tuple[InstanceRef, ...]:
     return tuple(entry.actor for entry in record.roster if entry.introduced_seq == 0)
 
 
+def imported_voices(record, snapshot) -> tuple[dict[InstanceRef, str], str | None]:
+    """The names the runner reads a chat's imported posts by: its imported cast's (``imported_history``'s
+    ``names``) and its imported persona's (``player``). 084's copy names a post's speaker by them."""
+    names = _imported_names(snapshot, record)
+    return names, _imported_player(record, names)
+
+
 def _imported_names(snapshot, record) -> dict[InstanceRef, str]:
     """Names for the imported cast, present or not; an actor 022 cannot name keeps its post's own label."""
     names = {}

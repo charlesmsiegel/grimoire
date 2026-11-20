@@ -37,7 +37,7 @@ from grimoire.chatstore import ChatChange, ChatCommit, ChatLibrary, InvalidBindi
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, TranscriptRef
 from grimoire.core.index import name_key
 from grimoire.effective import chat_snapshot
-from grimoire.play.history import history_pages, imported_cast
+from grimoire.play.history import history_pages, imported_cast, imported_voices
 from grimoire.scenestore import SceneLibrary
 from grimoire.store import InvalidEnvelope, LibraryStore, RecordNotFound, ScopeRecord, StaleWrite, StoreError
 from grimoire.store.jsonfmt import render
@@ -248,7 +248,7 @@ class SceneTransfer:
         history = {"pages": len(pages), "page_posts": sum(len(page.posts) for page in pages),
                    "turns": len(turns.turns)}
         scan = TransferScan(origin, target, tuple(cast), sources, history, tuple(history_problems), tuple(notes))
-        return scan, record, names, pages, turns
+        return scan, record, names, pages, turns, imported_voices(record, snapshot)
 
     # -- planning --------------------------------------------------------------------------------
 
@@ -258,7 +258,7 @@ class SceneTransfer:
         entity (reused), ``NEW`` or ``LEAVE``. ``sources`` are the origin's scenario and lorebook bindings to copy
         (all of them by default, as the origin pins them). ``label`` names the new chat."""
         state = self._origin_state(origin)  # first: a change after it fails the commit's check
-        scan, record, names, pages_found, turns = self._scan(origin, target)
+        scan, record, names, pages_found, turns, voices = self._scan(origin, target)
         if scan.history_problems:
             raise TransferRefused("the origin's history cannot all be read now: "
                                   + "; ".join(f"{kind} {detail}" for kind, detail in scan.history_problems),
@@ -277,7 +277,7 @@ class SceneTransfer:
         change = _with_opt_outs(change, record, chosen, self._clock(), self._owner)
         planned = _planned_record(change)
         targets = self._mapped(scan, mapping, planned)
-        items = page_items(origin, pages_found, imported_cast(record))
+        items = page_items(origin, pages_found, imported_cast(record), *voices)
         played, left = turn_items(origin, turns.records(), names)
         carried = frozenset(actor for actor, decided in targets.items() if decided is not None)
         copy, omitted = _select((*items, *played), carried, left)
@@ -470,14 +470,20 @@ def _select(items: Iterable[HistoryItem], carried: frozenset[InstanceRef], left:
 def _remap(items: Sequence[HistoryItem], targets: Mapping[InstanceRef, InstanceRef | None]
            ) -> tuple[tuple[Post, ...], tuple[tuple[str, str], ...]]:
     """Each copied post with new ids in order (``p000001``...), its speaker's actor mapped (or named by its label
-    alone), and where in the origin it came from."""
+    alone), and where in the origin it came from.
+
+    A page post whose actor stays behind, or that had none, is labelled with who the origin heard it from
+    (``HistoryItem.voice``): the origin named it by an actor or persona the copy does not carry, and without it
+    the target would hear a ``**You:**`` post from "Player", or an unlabelled reply as narration that no
+    character hears."""
     posts, copied = [], []
     for number, item in enumerate(items, start=1):
         post = item.post
         speaker = post.speaker
         actor = targets.get(speaker.actor) if speaker.actor is not None else None
+        label = speaker.label if actor is not None or item.voice is None else item.voice
         post_id = f"p{number:06d}"
-        posts.append(dataclasses.replace(post, post_id=post_id, speaker=Speaker(speaker.role, actor, speaker.label)))
+        posts.append(dataclasses.replace(post, post_id=post_id, speaker=Speaker(speaker.role, actor, label)))
         copied.append((item.where, post_id))
     return tuple(posts), tuple(copied)
 

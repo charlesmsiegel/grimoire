@@ -272,6 +272,48 @@ def test_imported_pages_travel_whole_with_their_speakers_mapped(cards):
         assert [line.text for line in scene.imported.heard] == [LAMPS, TIDE]  # the hidden note is still nobody's
 
 
+YOU = "I light the lamp myself."
+REPLY = "Then we watch the water together."
+
+
+def unlabelled(folder, chat, mara: InstanceRef) -> None:
+    """Two posts appended to an imported page that name their speaker by no label, as V0.2.1's pages do: a
+    ``**You:**`` post (the persona's, by no actor) and a reply named only by its actor."""
+    (page,) = sorted(folder.glob(f"campaigns/{chat.campaign_id}/transcripts/{chat.chat_id}/*.json"))
+    envelope = json.loads(page.read_text(encoding="utf-8"))
+    posts = envelope["payload"]["posts"]
+    for speaker, text in (({"role": "user"}, YOU), ({"role": "assistant", "actor": str(mara)}, REPLY)):
+        posts.append({"id": f"p{len(posts) + 1:06d}", "speaker": speaker, "variants": [{"text": text}],
+                      "active": 0, "audience": "unknown"})
+    page.write_text(json.dumps(envelope), encoding="utf-8")
+
+
+def test_a_post_whose_speaker_stays_behind_is_still_heard_from_that_speaker(cards):
+    folder, _chat, storm = cards
+    with Table(folder) as at:
+        imported = import_st(at)
+        anya = persona(at, imported)
+        mara = next(member.actor for member in transfer(at).scan(imported, storm.scope).cast
+                    if member.role == "character")
+    unlabelled(folder, imported, mara)
+    with Table(folder) as at:
+        before = at.runner.open(imported).imported
+        assert before is not None
+        heard_from = [(line.speaker, line.text) for line in before.table[-2:]]
+        assert [text for _, text in heard_from] == [YOU, REPLY] and heard_from[0][0] != "Player"
+        plan = transfer(at).plan(imported, storm.scope, cast={anya: LEAVE, mara: LEAVE})
+        posts = {post.text: post for page in plan.pages for post in page.posts}
+        assert (posts[YOU].speaker.actor, posts[YOU].speaker.label) == (None, heard_from[0][0])
+        assert (posts[REPLY].speaker.actor, posts[REPLY].speaker.label) == (None, heard_from[1][0])
+        plan.commit()
+    with Table(folder) as at:
+        after = at.runner.open(plan.chat).imported
+        assert after is not None
+        # the same speakers as in the origin, and the reply is still speech, not the narrator's
+        assert [(line.speaker, line.text) for line in after.table[-2:]] == heard_from
+        assert [line.text for line in after.heard][-2:] == [YOU, REPLY]
+
+
 def test_a_late_joiner_carried_over_gets_no_post_it_never_heard(cards):
     folder, _chat, storm = cards
     with Table(folder) as at:

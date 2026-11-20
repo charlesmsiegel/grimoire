@@ -28,8 +28,8 @@ from dataclasses import dataclass, replace
 
 from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.scene import TurnRecord
-from grimoire.scene.transcript import NARRATOR, cast_heard
-from grimoire.transcripts import Post, Speaker, TranscriptPage, Variant
+from grimoire.scene.transcript import NARRATOR, imported_speaker
+from grimoire.transcripts import MAX_LABEL, Post, Speaker, TranscriptPage, Variant
 
 #: an item's ``heard_by`` when no actor heard it (narration, a notice, a hidden post): the table's only
 TABLE_ONLY: frozenset[InstanceRef] | None = None
@@ -42,11 +42,16 @@ class HistoryItem:
     ``where`` names it in the origin for a report: a page post (``page 1 p000003``), a turn's post
     (``<turn_id>``, ``<turn_id>.p2``) or a kept line (its line id). ``heard_by`` is the origin actors that heard
     it, or ``None`` when no actor did (the table's only); a copy gives it to a target listener only when every
-    origin actor the copy carries over heard it."""
+    origin actor the copy carries over heard it.
+
+    ``voice`` is who the origin's runner heard a page post from (``imported_speaker``), or ``None`` for one no
+    actor heard and for a turn's item, which names its speaker in its label already. A copy that drops the post's
+    actor writes it as the label, since the target cannot name the speaker by an actor or persona it never had."""
 
     where: str
     post: Post
     heard_by: frozenset[InstanceRef] | None
+    voice: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,19 +64,27 @@ class Left:
     detail: str | None = None
 
 
-def page_items(chat: ChatRef, pages: Sequence[TranscriptPage], imported_cast: Iterable[InstanceRef]
-               ) -> tuple[HistoryItem, ...]:
-    """Every post of the imported pages, in page and post order, with who heard it in the origin. Each keeps its
-    speaker, variants, flags and extras as written; its ``source`` records where it was copied from, with the
-    source's own provenance kept beneath."""
+def _label(name: str) -> str:
+    """A speaker's name as a page label, clipped to what a page holds (a name may be longer), as 027 clips."""
+    return name if len(name) <= MAX_LABEL else name[:MAX_LABEL - 1] + "…"
+
+
+def page_items(chat: ChatRef, pages: Sequence[TranscriptPage], imported_cast: Iterable[InstanceRef],
+               names: Mapping[InstanceRef, str], player: str | None) -> tuple[HistoryItem, ...]:
+    """Every post of the imported pages, in page and post order, with who heard it in the origin and from whom
+    (``names`` and ``player`` are the runner's, ``play.history.imported_voices``). Each keeps its speaker,
+    variants, flags and extras as written; its ``source`` records where it was copied from, with the source's own
+    provenance kept beneath."""
     cast = frozenset(imported_cast)
     found = []
     for page in sorted(pages, key=lambda each: each.ref.seq):
         for post in page.posts:
             copied = replace(post, source={"copied_from": {"chat": str(chat), "page": page.ref.seq,
                                                            "post": post.post_id}, "source": post.source})
+            voice = imported_speaker(post, names, player)
+            voice = None if voice is None else _label(voice)
             found.append(HistoryItem(f"page {page.ref.seq} {post.post_id}", copied,
-                                     cast if cast_heard(post) else TABLE_ONLY))
+                                     TABLE_ONLY if voice is None else cast, voice))
     return tuple(found)
 
 
@@ -96,7 +109,7 @@ def turn_items(chat: ChatRef, turns: Sequence[TurnRecord], names: Mapping[Instan
                 left.append(Left("private_post", where))
                 continue
             text = post.text if post.channel is not None else _action(post.text)
-            label = names.get(post.actor) or post.actor.instance_id
+            label = _label(names.get(post.actor) or post.actor.instance_id)
             copied = Post("p", Speaker("user", post.actor, label), (Variant(text),), 0,
                           source={"copied_from": {"chat": str(chat), "turn": turn.turn_id, "post": index}})
             items.append(HistoryItem(where, copied, frozenset(post.audience)))
@@ -109,7 +122,7 @@ def turn_items(chat: ChatRef, turns: Sequence[TurnRecord], names: Mapping[Instan
                     continue  # no player character of its take heard it: the table never saw it
                 narrated = line.actor is None
                 speaker = (Speaker("narrator", None, NARRATOR) if narrated
-                           else Speaker("character", line.actor, line.speaker))
+                           else Speaker("character", line.actor, _label(line.speaker)))
                 copied = Post("p", speaker, (Variant(line.text),), 0,
                               source={"copied_from": {"chat": str(chat), "turn": turn.turn_id, "line": line.line_id}})
                 items.append(HistoryItem(line.line_id, copied, TABLE_ONLY if narrated else frozenset(line.audience)))

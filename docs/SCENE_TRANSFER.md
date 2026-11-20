@@ -54,7 +54,7 @@ Nothing is matched by name. Refusals (`TransferRefused.reason`, with `.actor` fo
 
 The copy holds the origin's history as its table saw it, in order: its imported pages (036/026), then its played turns (035) on the chat's line.
 
-- **Page posts** travel whole: every variant (an unchosen swipe stays unchosen), `hidden`, the speaker's role and label, and `extras`. The speaker's actor is mapped, or dropped for `LEAVE`. `source` records where the post came from (`copied_from`: chat, page, post), with the source's own provenance kept beneath it.
+- **Page posts** travel whole: every variant (an unchosen swipe stays unchosen), `hidden`, the speaker's role and label, and `extras`. The speaker's actor is mapped, or dropped for `LEAVE`. A post whose actor stays behind, or that names its speaker by no actor (a V0.2.1 `**You:**` post, named by the origin's persona), is labelled with the name the origin's runner heard it from, so the target hears it from the same speaker and never takes an unlabelled reply for narration. `source` records where the post came from (`copied_from`: chat, page, post), with the source's own provenance kept beneath it.
 - **A turn's posts** become `user` posts labelled with their character's name, with an action in asterisks, as the runner shows it.
 - **A kept take's shown lines** become `character` posts with the line's speaker label, or `narrator` posts for narration. On a 041 stage, only a line a player character of its take heard is copied (`table_lines`' rule).
 
