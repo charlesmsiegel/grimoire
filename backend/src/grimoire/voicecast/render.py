@@ -84,11 +84,14 @@ def wav_seconds(data: object) -> float | None:
         return None
     if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
         return None
+    end = 8 + _u32(data, 4)  # the RIFF chunk's own extent: every chunk the file holds lies inside it
+    if not 12 <= end <= len(data):
+        return None
     at, fmt = 12, None
-    while at + 8 <= len(data):
+    while at + 8 <= end:
         kind, size = data[at:at + 4], _u32(data, at + 4)
         body = at + 8
-        if body + size > len(data):
+        if body + size > end:
             return None  # a chunk longer than the file: truncated
         if kind == b"fmt ":
             if size < 16:
@@ -138,11 +141,16 @@ def render_performance(performance: Performance, synthesizers: Mapping[str, Synt
     at, spent = 0.0, 0
     began = clock() if clock is not None and budget is not None else None
     index = start
+
+    def spent_time() -> bool:
+        """Whether the call's time is up: no new synthesis then, once a segment has been made."""
+        return bool(segments) and began is not None and clock() - began >= budget  # type: ignore[misc,operator]
+
     while index < len(performance.cues) and index < start + count:
         cue = performance.cues[index]
         if cue.status == VOICED and segments and spent + len(cue.script) > max_chars:
             break
-        if cue.status == VOICED and segments and began is not None and clock() - began >= budget:  # type: ignore[misc,operator]
+        if cue.status == VOICED and spent_time():
             break
         index += 1
         if cue.status != VOICED or cue.chosen is None:
@@ -162,6 +170,9 @@ def render_performance(performance: Performance, synthesizers: Mapping[str, Synt
                     known[voice.engine] = tuple(engine.voices())
                 except Exception:  # an engine that cannot say what it has has none to use
                     known[voice.engine] = None
+                if spent_time():  # asking for the voices used up the time: this cue starts the next window
+                    index -= 1
+                    break
             if engine is None or not known.get(voice.engine):  # an engine with no voices has none to speak
                 reason = "engine_unavailable"
             elif voice.voice not in known[voice.engine]:  # type: ignore[operator]

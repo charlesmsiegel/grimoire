@@ -256,6 +256,9 @@ def test_planning_changes_no_text_and_refuses_what_is_not_one_chat():
     assert script_of("*sighs\nFine. *smiles* Let's go.", narrator=False) == "Fine. Let's go."
     assert script_of("Hello *wave\nThen I say *hi* there", narrator=False) == "Hello Then I say there"
     assert script_of("I said 5*3 is 15.", narrator=False) == "I said 5 3 is 15."
+    # an asterisk inside a word never opens a direction, so no dialogue between two of them is lost
+    assert script_of("5*3 and 2*4 are products.", narrator=False) == "5 3 and 2 4 are products."
+    assert script_of("(*laughs*) Fine.", narrator=False) == "( ) Fine."
 
 
 # -- the casting -----------------------------------------------------------------------------------------------
@@ -357,6 +360,10 @@ def test_wav_seconds_refuses_what_is_not_a_whole_recording():
     assert wav_seconds(good[:60]) is None  # the header promises samples the file does not hold
     assert wav_seconds(b"RIFF" + b"\0" * 60) is None and wav_seconds("text") is None
     assert wav_seconds(tone_wav(0, 300)) is None
+    # every chunk lies inside the RIFF chunk's own extent: a RIFF size that ends before them is no recording
+    assert wav_seconds(good[:4] + (4).to_bytes(4, "little") + good[8:]) is None
+    assert wav_seconds(good[:4] + (len(good)).to_bytes(4, "little") + good[8:]) is None  # past the file's end
+    assert wav_seconds(good + b"\0\0") == 0.5  # trailing bytes past the RIFF chunk are not read
 
 
 def test_a_fingerprint_moves_when_the_scene_or_its_casting_does():
@@ -403,10 +410,37 @@ def test_an_engine_with_no_voices_and_a_cue_too_long_to_speak_stay_text_without_
 def test_a_render_that_runs_past_its_time_budget_ends_its_window_there():
     plan = plan_performance(scene(), CAST)
     ticks = iter(range(100))
-    rendering = render_performance(plan, [Tones()], clock=lambda: float(next(ticks)), budget=3.0)
-    # the clock reads 0 at the start and one more each time a voiced cue is about to start
+    rendering = render_performance(plan, [Tones()], clock=lambda: float(next(ticks)), budget=4.0)
+    # the clock reads 0 at the start and one more each time it is read: before each voiced cue, and once more
+    # after the engine first lists its voices
     assert [segment.status for segment in rendering.segments].count("audio") == 2
     assert rendering.next is not None and plan.cues[rendering.next].status == "voiced"
+
+
+def test_time_spent_asking_a_new_engine_for_its_voices_counts_against_the_budget():
+    now = [0.0]
+
+    class Slow(Tones):
+        engine = "slow"
+
+        def voices(self):  # a slow listing: the budget runs out while it answers
+            now[0] += 10.0
+            return super().voices()
+
+        def synthesize(self, script, name):
+            raise AssertionError("no synthesis starts once the time is up")
+
+    class Timed(Tones):
+        def synthesize(self, script, name):
+            now[0] += 15.0
+            return super().synthesize(script, name)
+
+    casting = Casting((CastEntry("narrator", voice("slt")),
+                       CastEntry("character", SpeechVoice("slow", "kal"), WREN_R1.unpinned())))
+    plan = plan_performance(scene(), casting)
+    rendering = render_performance(plan, [Timed(), Slow()], clock=lambda: now[0], budget=20.0)
+    assert [segment.status for segment in rendering.segments] == ["text_only", "audio"]  # the post, then l1
+    assert rendering.next is not None and SHORT.get(plan.cues[rendering.next].item) == "l2"
 
 
 def test_a_decided_outcome_is_read_by_the_narrator_and_an_opening_by_the_character_played():

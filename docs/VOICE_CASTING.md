@@ -51,7 +51,7 @@ and never reads. It works like the shelf (docs/SHELF.md):
 - A copy or backup of the library carries it. Device sync does not, because the voices it names are this device's
   engines.
 - Every write names the etag it read (`expected`, or `null` for no file). A stale write is refused `changed`
-  and writes nothing.
+  and writes nothing. The file is read again just before it is replaced or removed, so an edit made meanwhile wins.
 - A write is one temp file renamed over the target, and it never follows a link.
 - A file that is not exactly a casting is reported, as `problem` and as a `casting_<reason>` plan problem, and is
   never written over (`unreadable_record`). Mend or remove that file first.
@@ -79,9 +79,9 @@ The following are never cued:
 **The text is never changed.** A cue carries the accepted `text` and its `digest` (sha256). It also carries a
 derived `script`, which is what the voice says:
 
-- In a character's line, `*stage directions*` are left unspoken. A direction never pairs across lines, and one never
-  closed (an asterisk at the start of a line or after a space) runs to the end of its line. An asterisk inside a
-  word (`5*3`) is only dropped.
+- In a character's line, `*stage directions*` are left unspoken. A direction opens with an asterisk that starts a
+  word, never pairs across lines, and one never closed runs to the end of its line. An asterisk inside a word
+  (`5*3`) opens nothing and is only dropped.
 - Narration is read with its asterisks dropped.
 - An action post is text only (`action`), and so is a line that is all stage direction (`no_speech`).
 
@@ -135,7 +135,7 @@ the cast voice's engine is called once:
 - `next` is where the following window starts, or `null` at the end.
 
 A page plays one window while it asks for the next. One call covers at most 8000 characters of script, and starts
-no new synthesis after 20 seconds. One cue's synthesis may take up to 30 seconds more, and asking an engine for its
+no new synthesis after 20 seconds, counting the time spent asking an engine for its voices. One cue's synthesis may take up to 30 seconds more, and asking an engine for its
 voices up to 10, so a stuck engine holds the library about a minute at most.
 
 `plan` and `render` answer the performance's `fingerprint`. This covers each cue's item, text digest, status and
@@ -155,7 +155,7 @@ A cue stays text, and the rest of the window still renders, in each of these cas
 | `engine_unavailable` | this device has no such engine, or the engine has no voices now (an `ffmpeg` without Flite) |
 | `voice_unavailable` | the engine does not have that voice |
 | `synthesis_failed` | the engine failed; its message is not kept (it could quote the line) and the call is not retried |
-| `invalid_audio` | the engine's answer is not a whole, bounded WAV |
+| `invalid_audio` | the engine's answer is not a whole, bounded PCM WAV whose chunks all lie inside its RIFF extent |
 
 Rendering never falls back to another engine or voice, and nothing that was rendered is kept. No op here writes a
 turn or a source. Planning opens the chat as the play page does, so it may note 020's pending knowledge for an

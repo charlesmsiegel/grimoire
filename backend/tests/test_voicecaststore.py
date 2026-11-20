@@ -139,6 +139,24 @@ def test_the_open_librarys_guards_are_asked_before_every_read_and_write(tmp_path
     assert CastingStore(tmp_path).view().casting == Casting((NARRATOR,))
 
 
+def test_an_edit_made_before_the_last_uncast_removes_the_file_is_kept(tmp_path):
+    newer = json.dumps({"format": "grimoire.voice-casting/1", "cast": [
+        {"target": "narrator", "ref": None, "campaign": None, "engine": "flite", "voice": "kal", "rights": "engine",
+         "note": None}]}, sort_keys=True, indent=2).encode() + b"\n"
+    for meddled in (newer, b"{not json"):
+        root = tmp_path / str(len(meddled))
+        cast = CastingStore(root).write(_add(NARRATOR), None)
+        edits = [lambda: (root / PATH).write_bytes(meddled)]  # another editor writes as this write begins
+
+        def check_write() -> None:
+            if edits:
+                edits.pop()()
+
+        with pytest.raises(StaleWrite):
+            CastingStore(root, check_write=check_write).write(lambda casting: Casting(), cast.etag)
+        assert (root / PATH).read_bytes() == meddled
+
+
 def test_recover_sweeps_a_dead_writes_temp_file_and_nothing_else(tmp_path):
     store = CastingStore(tmp_path)
     cast = store.write(_add(NARRATOR), None)

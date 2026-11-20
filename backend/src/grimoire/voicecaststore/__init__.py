@@ -132,6 +132,8 @@ class CastingStore:
         self._check_write()
         target = self._folder / FILE
         if data is None:
+            self._check(self._bytes(), expected)  # an edit made meanwhile wins: it is not removed
+            self._check_write()
             self.ops.remove(target, durable=True)
             return CastingView(casting, None)
         self.ops.make_dirs(self._folder)

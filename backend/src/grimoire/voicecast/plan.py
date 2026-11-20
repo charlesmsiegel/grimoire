@@ -42,11 +42,10 @@ NARRATOR_LABEL = "Narrator"
 #: Cue statuses and the reasons a cue is text only.
 VOICED, TEXT_ONLY = "voiced", "text_only"
 REASONS = ("not_cast", "action", "no_speech")
-#: A stage direction runs from one asterisk to the next on its line; one never closed (an asterisk that opens a
-#: word, at the start of a line or after a space) runs to the end of its line. An asterisk inside a word ("5*3")
-#: opens nothing and is only dropped.
-_DIRECTION = re.compile(r"\*[^*\n]*\*")
-_UNCLOSED = re.compile(r"(?:^|(?<=\s))\*[^\n]*", re.MULTILINE)
+#: A stage direction opens with an asterisk that starts a word (not one inside a word, as in "5*3") and runs to the
+#: next asterisk on its line; one never closed runs to the end of its line. Any asterisk left is only dropped.
+_DIRECTION = re.compile(r"(?<!\w)\*[^*\n]*\*")
+_UNCLOSED = re.compile(r"(?<!\w)\*[^\n]*")
 _SPACE = re.compile(r"\s+")
 
 
