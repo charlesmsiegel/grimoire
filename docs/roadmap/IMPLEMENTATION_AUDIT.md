@@ -644,9 +644,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-070"></a>
 ### 070 — Multimodal Player Input
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/multimodal-player-input.md)).
-- Evidence: images/imagestore/mediaapi and UI media upload exist for stored media.
-- Scope / gap: No sketch-region annotations carried as uncommitted player intent.
+- [x] Scheduled first-useful slice ([requirements](sprints/multimodal-player-input.md)).
+- Evidence: the chat page's [reference panel](../../backend/src/grimoire/app/static/pages/chat/reference-intent.js) lets a player import a sketch, circle a region with a pointer drag (or type it), name the spot and take the offered draft action ("I hide here (Reference: doorway)") into the composer; nothing is posted until they post. With the post, [attach.js](../../backend/src/grimoire/app/static/pages/chat/attach.js) carries the sketch with the outline drawn on it as the post's picture, with provenance origin `player reference intent` and a note saying it is not a world fact. [reference.e2e.mjs](../../backend/tests/js/reference.e2e.mjs) runs the proving scenario on the real page against a real app server, and [test_reference_intent_page.py](../../backend/tests/test_reference_intent_page.py) checks the library on disk gains only the turn and the post's picture, with no map, actor, scene or campaign record written; [reference_carry.test.mjs](../../backend/tests/js/reference_carry.test.mjs) covers circling, refusals, races and retries. Docs: [SCENE_WORKSPACE](../SCENE_WORKSPACE.md#local-reference-intent-070).
+- Scope / gap: No image interpretation: the spot is the one the player circled and named, and no model reads the sketch. Inferred positions/objects needing confirmation (milestone 2), gesture and live multimodal participation (milestone 3), carrying private provenance/rights/corrections and sync of unposted annotations remain. Verified in fakedom only, not a real browser or device.
 
 <a id="slice-071"></a>
 ### 071 — Theory Driven Simplification
