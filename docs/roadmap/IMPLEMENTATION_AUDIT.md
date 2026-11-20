@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
+| [9](#wave-9) | 1/16 | ☐ | 076 is complete at its bounded headless first-proof boundary. Other domain slices and UI exit 116 remain incomplete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -700,9 +700,9 @@ Scheduled domain slices and UI exit 116 are not complete.
 <a id="slice-076"></a>
 ### 076 — Offscreen World Events
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/offscreen-world-events.md)).
-- Evidence: goals policy selects an actor’s current action.
-- Scope / gap: No offscreen clock-based faction plan scheduler or bounded absence advancement.
+- [x] Scheduled first-useful slice ([requirements](sprints/offscreen-world-events.md)).
+- Evidence: [`offscreen/schedule.py`](../../backend/src/grimoire/offscreen/schedule.py), [`offscreenstore/library.py`](../../backend/src/grimoire/offscreenstore/library.py) and [`OFFSCREEN.md`](../OFFSCREEN.md); [`test_offscreen.py`](../../backend/tests/test_offscreen.py)::test_rival_plan_progresses_during_twenty_days_of_travel advances a guild plan adopted under its 057 decision across a 20-day calendar advance (two steps flagged at their own due moments, one pending); [`test_offscreenstore.py`](../../backend/tests/test_offscreenstore.py) proves the native once-only skip, reopen retry, fail-closed replay and crash/I/O recovery. Budget deferral, deadline outcomes, ordering and the no-roster/no-model boundary are in `test_offscreen.py`.
+- Scope / gap: Headless first milestone: exact-duration plan steps only, director-facing developments that deliver no knowledge or accepted effect. No UI (116), model-backed or narrated developments, causal branching/hidden-consequence trees, multi-process cost measurement, plan withdrawal or persistent institutions.
 
 <a id="slice-077"></a>
 ### 077 — Quests And Commitments
