@@ -49,6 +49,8 @@ There is **no app yet**. Chats are played headlessly by Sprint 035's runner, whi
 | `lorebook` | `lorebook` | no |
 | `actor` | any, matching the native instance's qualified source | no: explicitly reuses an existing instance of any kind |
 
+This table is `grimoire.chats.ROLES`, one `RoleRule` per role, and it is the only place a role's definition kind and actor mode are decided ([role rules, 071](#role-rules-one-owner-071)). Behavior particular to one role (a single persona, a scenario's implied lorebook) stays with that role's code.
+
 ### Launch
 
 `Launch(kind, ref | premise)` is immutable.
@@ -207,6 +209,39 @@ Chat binding does not grant control, knowledge or party membership. The scene ru
 This is a headless roster interface for UI adapters: pass `actors` when starting and the exact `actor` when attaching/detaching. No new launch kind or persona-selection UI is added. QuickStart's source-only broken-binding repair reports generic actor bindings without a detach action; it cannot distinguish same-species instances. Use the exact-instance `ChatLibrary.detach_source` API until the UI repair protocol carries actor identity. Existing sovereignty assignments remain authoritative for any instance kind. This change does not expand species-backed voice generation or the separate character-only `controller_knowledge` projection, and does not change 047's claim extraction.
 
 The additive role uses the existing chat payload format. Older builds may report actor-role chats as undecodable; they must not rewrite them into character bindings. Existing chats need no migration.
+
+## Role rules: one owner (071)
+
+**Theory.** A chat role answers three questions: which definition kind it binds, whether its binding has a campaign actor, and how that actor is identified. The answers form a small closed vocabulary, `RoleRule(definition_kind, actor)`:
+
+- `NO_ACTOR`: no actor (`scenario`, `lorebook`).
+- `PER_SOURCE`: one actor per bound source, keyed by that source. The chat creates it as an instance of the **definition's own kind**, or reuses an instance of that kind derived from the source (`character`, `persona`).
+- `EXISTING`: an existing instance of any kind, keyed by the instance itself, never created or re-keyed here (`actor`, 033). Only this mode binds a source of any kind.
+
+`role_rule(role)` reads `ROLES` at call time and looks a role up by its text, so a `str` subclass equal to a role name finds that role, as the equality checks before 071 did; a stored binding or roster entry still needs an exact `str`. A launch kind with no rule is refused (`launch_kind`). `SourceBinding`, `RosterEntry`, `Launch`, `ChatRecord.detach`, and `ChatLibrary`'s checks before it plans a write (`_check_role`, `_prepare`, `_check_reuse`) all ask the rule. `ChatLibrary` stays the one writer of a chat and the actors it creates, in one commit. `ROLE_KINDS` and `ACTOR_ROLES` remain exported as views of the table as it was at import; nothing in the package reads them.
+
+**What was removed.** Before 071 the same decision was spread over six sites in two modules: the definition-kind map, a separate set of actor roles, two literal `"character"` instance-kind checks in the model (binding and roster), and a literal `"character"` in both the library's reuse check and its allocation of a new actor. The two tables looked authoritative and were not.
+
+**Change rehearsal (executed).** A hypothetical `companion` role binds `creature` definitions with one campaign creature per source, created or reused. The scenario tests in `test_chats_new_role.py` were run against temporary copies of the code from before and after 071:
+
+| | Before 071 | After 071 |
+|---|---|---|
+| Edits to make the scenario pass | 6 sites in 2 modules | 1 table entry |
+| After only the obvious edits (the two tables) | Silently wrote a **`character`** instance for a creature companion, and accepted a character instance as one | Not applicable: the table is the whole change |
+| Existing chat tests plus the rehearsal scenario | 118 passed | 118 passed |
+
+`companion` is **not shipped**. The committed test registers it with `monkeypatch` and also shows that a build without it refuses such a chat (`role_kind`) rather than reinterpreting the binding. The counts measure edited decision sites and tested outcomes, not developer time.
+
+**Equivalence.** A differential dump of 1,152 outcomes was identical before and after, error text included, with two exceptions. It covered each role (including unknown roles, non-text roles, `str` enum members equal to a role name and an unhashable list) against each definition kind and actor shape, for bindings, roster entries, launches, detaches, `attach_source` and `start_chat` with reuse. The exceptions, both still refusals:
+
+- 16 roster entries invalid twice over (a role that has no actor, an unknown role or a role that is not an exact `str`, together with an actor that is not a character) now fail on the role (`role_kind`) rather than the actor kind (`invalid_field`), the order a binding already used. Only a hand-edited chat file can hold such an entry.
+- 35 `attach_source` calls with an unhashable role, which raised `TypeError`, now raise `InvalidBinding` (`role_kind`).
+
+**Existing campaigns.** `fixtures/chats_071/library` is a synthetic library written by the pre-071 code: a character launch with a persona, a lorebook, a second character and a detached scenario; a second chat reusing that campaign's Mara; and two goblins under `actor`, one detached by instance. `test_chats_compat_071.py` reads each chat back without a broken binding, re-encodes it to the stored payload exactly, composes it, and makes new edits under the same rules, without rewriting a chat nobody edited. It passes on the code from before and after 071.
+
+**Runtime.** The V2 backend's only runtime dependency is `pyluach`; it does not import Pydantic at all, so the Pydantic 1/2 constraint holds trivially. The new tests and the chat suites pass on CPython 3.11 (the supported minimum) in a virtual environment holding only `pyluach` and `pytest`. They have not been run on an Android device or emulator; Termux runs the same stdlib-only code, and [MOBILE](MOBILE.md) has its setup.
+
+**Limits.** This covers chat roles only. The app adapters (`CAST_ROLES`, `START_KINDS`, `PICKER_KINDS`), `quickstart`, `textapi` filters and 020's character-only `controller_knowledge` keep their own role or kind lists, so a shipped new role still needs UI and knowledge work there. World lookup is unchanged.
 ## Scene workspace browsing (065)
 
 Chats uses the additive read-only `chats.workspace` operation. It searches and filters the complete

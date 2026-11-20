@@ -1,0 +1,5 @@
+"""Validate a stored line number. A bool is not a line number, though Python counts it as an int."""
+
+
+def valid_line(value):
+    return type(value) is int and value >= 1

@@ -1,0 +1,18 @@
+{
+  "address": "campaign:c/creature/goblin-2",
+  "format": "grimoire.record/1",
+  "owner": "human:owner",
+  "payload": {
+    "individuality": {
+      "decided_by": "director",
+      "decision_id": "d-grub",
+      "given_name": "Grub",
+      "scene_id": "s1",
+      "template": "world:emberfall/species/goblin@r1"
+    },
+    "local_name": "Grub",
+    "source": "world:emberfall/species/goblin"
+  },
+  "previous": null,
+  "schema": "grimoire.entity/0"
+}

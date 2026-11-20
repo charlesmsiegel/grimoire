@@ -1,0 +1,11 @@
+{
+  "format": "grimoire.source/1",
+  "heads": {
+    "species/goblin": "r1"
+  },
+  "links": [],
+  "owner": "human:owner",
+  "previous": null,
+  "source": "world:emberfall",
+  "title": "Emberfall"
+}

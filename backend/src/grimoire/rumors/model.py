@@ -1,7 +1,34 @@
-"""Authored communications; ticks are independent of knowledge order."""
+"""Authored communications, sent and due on the campaign's 055 calendar, independent of knowledge order."""
 from dataclasses import dataclass
 from grimoire.core.identity import InstanceRef, validate_segment
 from grimoire.core.knowledge import Moment
+
+MINUTES_PER_DAY = 1440
+#: 055's supported range: fixed day 1 is 0001-01-01 and 3652059 is 9999-12-31 on the Rata Die axis
+MAX_DAY = 3652059
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class CampaignTime:
+    """A point on the campaign's 055 calendar axis: its ``Moment``'s fixed day and minute.
+
+    Plain values here, so this package stays free of the calendar's date adapters; ``rumorstore`` reads the
+    campaign's calendar and compares its current time with these. Ordered by day, then minute.
+    """
+    fixed_day: int
+    minute: int = 0
+
+    def __post_init__(self):
+        if type(self.fixed_day) is not int or not 1 <= self.fixed_day <= MAX_DAY:
+            raise ValueError('invalid_time')
+        if type(self.minute) is not int or not 0 <= self.minute < MINUTES_PER_DAY:
+            raise ValueError('invalid_time')
+
+    def advance(self, minutes):
+        if type(minutes) is not int or minutes < 0:
+            raise ValueError('invalid_time')
+        days, minute = divmod(self.minute + minutes, MINUTES_PER_DAY)
+        return CampaignTime(self.fixed_day + days, minute)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,14 +59,13 @@ class Rumor:
     distortion: str
     provenance: str
     authored_at: Moment
-    clock_id: str
-    clock_unit: str
-    sent_tick: int
-    due_tick: int
+    #: campaign time (055) the message left the sender, and when it can first arrive
+    sent_on: CampaignTime
+    due_on: CampaignTime
     route: DeliveryConditions
 
     def __post_init__(self):
-        for f in ('communication_id', 'source_evidence_id', 'channel', 'clock_id', 'clock_unit'):
+        for f in ('communication_id', 'source_evidence_id', 'channel'):
             validate_segment(getattr(self, f), f)
         for f in ('text', 'distortion', 'provenance'):
             if type(getattr(self, f)) is not str or not getattr(self, f).strip():
@@ -52,8 +78,8 @@ class Rumor:
             raise ValueError('invalid_record')
         if type(self.confidence) is not int or not 0 <= self.confidence <= 100:
             raise ValueError('invalid_confidence')
-        if any(type(x) is not int or x < 0 for x in (self.sent_tick, self.due_tick)) or self.due_tick < self.sent_tick:
-            raise ValueError('invalid_tick')
+        if type(self.sent_on) is not CampaignTime or type(self.due_on) is not CampaignTime or self.due_on < self.sent_on:
+            raise ValueError('invalid_time')
 
 
 @dataclass(frozen=True, slots=True)
