@@ -148,4 +148,5 @@ test("a campaign's clock and memory, each change reviewed before it is made", { 
   assert.ok(world && world.getAttribute("href").includes("chat="), "the World page is linked for this campaign and chat");
   const story = byText(features, "a", "Reviewing a fork or retcon");
   assert.ok(story.length && story[0].getAttribute("href").startsWith("#/story/" + encodeURIComponent(campaign)), "the story review is linked");
+  assert.ok(byText(features, "strong", "Captured companions is not available yet").length, "a slice with no screen yet is named");
 });
