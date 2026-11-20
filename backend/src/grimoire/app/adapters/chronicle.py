@@ -288,6 +288,16 @@ def _dossier(ctx: AdapterContext, hub, chat, actor, whose, audience, name) -> di
             "citable": citable[:MAX_CITED], "citable_total": len(citable), "max_text": MAX_SUMMARY_TEXT}
 
 
+def _recorded_at(library: MemoryLibrary, requester: str, actor, operation_id: str) -> int | None:  # type: ignore[no-untyped-def]
+    """The moment the editor's own account ``operation_id`` of ``actor`` was recorded at, or None if it was not."""
+    dossier = library.dossier(actor, PLAY_COLLECTION, as_of=NOW, limit=1000, requested_by=requester)
+    for topic in dossier.topics:
+        for item in (*topic.current, *topic.history):
+            if item.operation_id == operation_id:
+                return int(item.moment.sequence)
+    return None
+
+
 def _memory(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     hub, chat, actor, whose, audience, name = _actor(ctx, args)
     return _dossier(ctx, hub, chat, actor, whose, audience, name)
@@ -314,9 +324,13 @@ def _remember(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     # Recorded as of the newest evidence the editor is shown for this actor, not as of the evidence it cites: 053
     # keeps an editor's records in order, and an account citing older evidence than the last one is still new.
     # Its basis (what it rests on) is worked out from the evidence it cites.
-    at = max((item["moment"] or {}).get("sequence", 0) for item in shown.values())
+    # A retry of an account already recorded keeps the moment it was recorded at, so newer evidence arriving in
+    # between does not turn the same request into a conflict (053 accepts a repeated id only as the same record).
     library, requester = _memories(ctx, whose)
     try:
+        recorded = _recorded_at(library, requester, actor, operation_id)
+        at = recorded if recorded is not None else max((item["moment"] or {}).get("sequence", 0)
+                                                       for item in shown.values())
         summary = MemorySummary(operation_id, actor, PLAY_COLLECTION, topic, text, tuple(cited), Moment(at),
                                 supersedes=supersedes)
         library.summarize(summary, requested_by=requester)

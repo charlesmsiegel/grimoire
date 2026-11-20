@@ -209,10 +209,19 @@ def test_an_npcs_memory_is_the_directors_and_play_packs_what_the_director_wrote(
         assert [(item["account"], item["status"]) for item in topic["history"]] == [("recap", "superseded")]
 
         # an account written later may rest on older evidence than the last one, on another detail
-        alias = app.call("chronicle.remember", {**ask, **DIRECTOR, "operation_id": "alias", "topic": "aldric",
-                                                "text": "Maren keeps a monk's habit for disguises.", "evidence": ["masked"]})
+        aliased = {**ask, **DIRECTOR, "operation_id": "alias", "topic": "aldric",
+                   "text": "Maren keeps a monk's habit for disguises.", "evidence": ["masked"]}
+        alias = app.call("chronicle.remember", aliased)
         assert {entry["topic"]: [item["status"] for item in entry["current"]] for entry in alias["memory"]["topics"]} \
             == {"aldric": ["current"], "visitor-identity": ["current"]}
+        # the same account sent again after newer evidence arrived (its answer lost) is still the one account
+        c = chat.campaign_id
+        EvidenceLibrary(device.table.store, device.table.owner, owner=OWNER).append(c, [
+            Event(c, "ev-later", "event 4", Moment(4, "quay", "t1"), "director"),
+            Perception(c, "later", InstanceRef.parse(mara), "ev-later", "sight", "Maren boards the ship.",
+                       Moment(4, "quay", "t1"), "director", confirmed=True)]).commit()
+        again = app.call("chronicle.remember", aliased)
+        assert again["memory"]["topics"] == alias["memory"]["topics"]
 
         lines = [item["line"] for item in device.api.runner.inspect_context(chat, InstanceRef.parse(mara))["items"]]
         assert "You remember: The visitor was Sister Maren in disguise." in lines
