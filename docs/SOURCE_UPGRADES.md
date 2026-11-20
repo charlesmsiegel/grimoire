@@ -29,8 +29,10 @@ reference is a string that is exactly:
 - a definition ref of the source (`<source>/<kind>/<id>[@<revision>]`): an actor's base, a chat
   binding, a portrayal's derivation, another source's link, a catalog member or dependency;
 - an image ref of the source (`<source>#image/<id>`);
-- the bare source id under a `source` key: a world attached to a play scope, or a dependency
-  declaration below.
+- the bare source id under a `source` key: a world attached to a play scope, or (in a top-level
+  `optional_dependencies` list) a dependency declaration below;
+- the pinned ref at a `resolved_revision` stored beside an unpinned ref of the source: a
+  head-following chat binding (107) records the revision it meant, and history replays it.
 
 The scan is raw, so a record shape this version does not know still counts. Prose that merely
 contains a reference does not, and neither does a source whose id only starts with, ends with or
@@ -38,13 +40,16 @@ is nested under the changed one's (`catalog:cast:extra` is not `catalog:cast`). 
 positions name an entity without reaching its content: an art pin's layer `entity` (beside the
 record's pinned base) and a catalog's `exclusions`. They are listed by existence only (`unchanged`
 while the entity has a head on both sides, otherwise `missing`, `still_missing` or `restored`) and
-never as `follows_head`. Every other unpinned ref is
-listed, so an actor whose `source` follows its head, or a binding detached and reattached with
+never as `follows_head`, and never in place of a content use of the same text in that file (an
+actor that follows its base's head keeps its `follows_head` row beside its art pin). A detached
+binding is provenance: its unpinned ref is not listed as following, only the revision it meant.
+Every other unpinned ref is listed, so an actor whose `source` follows its head, or a binding detached and reattached with
 `follow=True`, shows as `follows_head` even when the same file also holds an older pin.
 
 **How each reference fares.** Every reference is resolved by its exact qualified id on both
-sides: a pinned ref at that revision, an unpinned ref at the entity's head, an image or a whole
-source by its record's etag. Nothing is matched by display name, slug, list or key order, or a
+sides: a pinned ref at that revision, an unpinned ref at the entity's head, an image or an
+attached world by its record's etag, a dependency declaration by the dependency's `source_version`
+(below). Nothing resolves on a side where the source does not load, images included. Nothing is matched by display name, slug, list or key order, or a
 similarly named entity in another source, so reordering or renaming two catalogs never swaps what
 their references reach, and a removed source shows its references as missing, never resolved by
 a namesake. `Reference` holds the file `path`, the `record` kind, the `text` as written, `before`
@@ -55,7 +60,7 @@ and `after` (revision or etag), and a `status`:
 | `unchanged` | the same revision with the same bytes, or the same whole-source/image etag |
 | `follows_head` | an unpinned ref whose head moves: this record would reach other content without review |
 | `edited` | the same revision or image id with other bytes (pins protect against moving heads, not edits) |
-| `changed` | a whole-source ref (an attached world, a dependency) whose manifest changes |
+| `changed` | an attached world whose manifest changes, or a dependency whose `source_version` changes |
 | `missing` | resolves now and would not |
 | `still_missing` | resolves on neither side |
 | `restored` | broken now and would resolve |
@@ -69,7 +74,8 @@ The preview also lists `entities` of the source whose head revision or display n
 (`added`, `removed`, `moved`, with `renamed`), keyed by qualified id; `edited` revisions whose bytes
 differ between the two sides; and `problems`: blocked, unparsable or too deep files of the library
 outside the changed source (so `complete` is false and their references are not listed), and
-blocked paths and load problems of the changed source itself on either side (`before`/`after`).
+blocked paths and load problems of the changed source itself on either side (`before`/`after`),
+including a blocked folder above the candidate's `_source`.
 Entities are every entity the loaded index holds for the source, at the head it resolves, whether
 or not the manifest declares that head. An image ref whose id no file can hold resolves on
 neither side.
@@ -122,8 +128,11 @@ two catalogs' names and members keeps every reference, in either listing order, 
 (pinned ones `unchanged` with `newer_head`; the following chat and its actor `follows_head`; the
 exclusion not listed); that a lorebook detached and reattached to follow is reported as following;
 that bytes edited at a pinned revision and a dropped revision are flagged; that removing a world
-reports its scope attachment; that a stray unstorable image id, deep nesting and a damaged
-candidate manifest do not break a preview; and the dependency pin, mutual pins, drift from a moved
+reports its scope attachment; that a detached following binding reports the
+revision it meant, not a follow; that a dependency row drifts with the version digest (head bytes)
+and not with a title; that an art pin never hides its actor's follow; that a stray unstorable image
+id, deep nesting, a damaged candidate manifest (whose images then resolve nothing) and a candidate
+folder blocked above `_source` do not break a preview or pass silently; and the dependency pin, mutual pins, drift from a moved
 head or edited head bytes, re-pin, following and optional-absence behaviors and refusals. Previews leave every library file byte-identical.
 
 Not built: applying an update or removal, rollback of an applied update, a follow-live versus

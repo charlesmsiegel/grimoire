@@ -1,4 +1,5 @@
 """079 acceptance: preview removing or updating a source by qualified id only. Synthetic fixtures."""
+import json
 import shutil
 from dataclasses import replace
 
@@ -9,11 +10,13 @@ from portrayal_fixtures import (
     BASE, CAST, ELSEWHERE, MECHA, MODERN, MODERN_MARA, NAMESAKE, NOTES, VAMPIRE, base, envelope, manifest,
     seed_four_portrayals,
 )
+from image_fixtures import PNG, handle as image_handle
 from store_helpers import OWNER, owner_handle
 
 from grimoire.catalogs import Catalog, compose_catalogs, publish_catalog
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
+from grimoire.imagestore import ImageLibrary
 from grimoire.core.identity import SourceRef
 from grimoire.sourceupgrades import (
     DEPENDENCIES_KEY, SourceUpgradeError, dependency_report, pin_dependency, preview_source_removal,
@@ -339,6 +342,14 @@ def test_raw_scan_matches_exact_source_ids_only():
     exclusion = {'schema': 'grimoire.catalog/1', 'payload': {'exclusions': [f'{CAST}/character/mara']}}
     assert _references(exclusion, CAST)[0] == {('identity', f'{CAST}/character/mara')}
     assert _references({**exclusion, 'schema': 'other/1'}, CAST)[0] == {('definition', f'{CAST}/character/mara')}
+    following = f'{CAST}/lorebook/river-notes'
+    dependency = {'source': 'world:x', DEPENDENCIES_KEY: [{'source': CAST, 'version': None}]}
+    assert _references(dependency, CAST)[0] == {('dependency', CAST)}
+    binding = {'ref': following, 'role': 'lorebook', 'resolved_revision': 'r1'}
+    assert _references(binding, CAST)[0] == {('definition', following), ('definition', f'{following}@r1')}
+    assert _references({**binding, 'detached_seq': 3}, CAST)[0] == {('definition', f'{following}@r1')}
+    both = {'source': following, 'art_pin': {'layers': [{'entity': following}]}}
+    assert _references(both, CAST)[0] == {('definition', following)}  # content wins over identity
     assert _owner('sources/catalog/elderfen-cast/extra/_source/manifest.json') == LOOKALIKE
     assert _owner('sources/catalog/elderfen-cast/_source/records/x/y/r1.json') == CAST
     assert _owner('campaigns/q-1/scope.json') is None
@@ -368,3 +379,105 @@ def test_stray_strings_deep_nesting_and_a_damaged_candidate_do_not_break_a_previ
         assert any(problem.side == 'after' for problem in preview.problems)
         assert len(set(preview.problems)) == len(preview.problems)
         assert {row.status for row in preview.references} == {'missing', 'still_missing'}
+
+
+def move_notes_head(copy, drop_r1=False):
+    source = copy.read_source(CAST)
+    tx = copy.transaction()
+    tx.put(RecordEnvelope(NOTES.at('r2'), {'entries': ['the ferry is gone']}, name='River notes'), None)
+    tx.put(replace(source.manifest, heads={**source.manifest.heads, 'lorebook/river-notes': 'r2'}), source.etag)
+    tx.commit(owner_handle())
+    if drop_r1:
+        (copy.root / 'sources/catalog/elderfen-cast/_source/records/lorebook/river-notes/r1.json').unlink()
+
+
+def test_a_detached_following_binding_reports_the_revision_it_meant(tmp_path):
+    """Detached, a head-following binding is history at its resolved revision, not a follower."""
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        _, following = seed(store)
+        chats = ChatLibrary(store, owner_handle(), clock=Clock(), new_id=Ids(), owner=OWNER)
+        chats.attach_source(following.chat, NOTES.unpinned(), 'lorebook',
+                            expected=chats.read_chat(following.chat)[1], follow=True).commit()
+        chats.detach_source(following.chat, NOTES.unpinned(), 'lorebook',
+                            expected=chats.read_chat(following.chat)[1]).commit()
+        with candidate_of(store, tmp_path, lambda copy: move_notes_head(copy, drop_r1=True)) as candidate:
+            preview = preview_source_update(store, CAST, candidate)
+        chat_path = f'campaigns/{following.chat.campaign_id}/chats/{following.chat.chat_id}.json'
+        found = {(row.text, row.status) for row in preview.references if row.path == chat_path}
+        assert (str(NOTES), 'missing') in found
+        assert not any(text == str(NOTES.unpinned()) for text, _ in found)
+
+
+def test_dependency_rows_compare_the_version_digest(tmp_path):
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed(store)
+        pin_dependency(store, owner_handle(), MODERN, CAST, expected=store.read_source(MODERN).etag)
+        declaring = 'sources/world/elderfen-modern/_source/manifest.json'
+
+        def edit_head_bytes(copy):
+            path = copy.root / 'sources/catalog/elderfen-cast/_source/records/lorebook/river-notes/r1.json'
+            path.write_text(path.read_text().replace('the ferry runs at dusk', 'the ferry never runs'))
+
+        def retitle(copy):
+            source = copy.read_source(CAST)
+            tx = copy.transaction()
+            tx.put(replace(source.manifest, title='Renamed cast'), source.etag)
+            tx.commit(owner_handle())
+
+        for change, expected in ((edit_head_bytes, 'changed'), (retitle, 'unchanged')):
+            with candidate_of(store, tmp_path / change.__name__, change) as candidate:
+                preview = preview_source_update(store, CAST, candidate)
+                assert [s.status for s in dependency_report(candidate.load(), MODERN)] == \
+                    ['drifted' if expected == 'changed' else 'pinned']
+            [row] = [row for row in preview.references if row.path == declaring and row.text == CAST]
+            assert row.status == expected and row.before == source_version(store.load(), CAST)
+
+
+def test_an_identity_use_never_hides_a_follow_in_the_same_file(tmp_path):
+    """An actor whose source follows the head keeps its follow row beside its art pin's layer entity."""
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        pinned, _ = seed(store)
+        path = f'campaigns/{pinned.actors[0].campaign_id}/instances/character/{pinned.actors[0].instance_id}.json'
+        document = json.loads((store.root / path).read_text())
+        assert document['art_pin']['layers'][0]['entity'] == str(BASE.unpinned())
+        document['payload']['source'] = str(BASE.unpinned())  # the actor follows its base's head
+        (store.root / path).write_text(json.dumps(document))
+
+        def move_base(copy):
+            source = copy.read_source(CAST)
+            tx = copy.transaction()
+            tx.put(envelope(replace(base(), ref=BASE.at('r2'))), None)
+            tx.put(replace(source.manifest, heads={**source.manifest.heads, 'character/mara': 'r2'}), source.etag)
+            tx.commit(owner_handle())
+
+        with candidate_of(store, tmp_path, move_base) as candidate:
+            preview = preview_source_update(store, CAST, candidate)
+        [row] = [row for row in preview.references if row.path == path and row.text == str(BASE.unpinned())]
+        assert (row.status, row.before, row.after) == ('follows_head', 'r1', 'r2') and row.attention
+
+
+def test_unloadable_or_blocked_candidates_resolve_nothing_and_say_why(tmp_path):
+    with LibraryStore.create(tmp_path / 'lib') as store:
+        seed(store)
+        ImageLibrary(store, image_handle(), owner=OWNER).add_image(CAST, 'portrait', PNG).commit()
+        tx = store.transaction()
+        tx.put(RecordEnvelope(SourceRef(ELSEWHERE, 'lorebook', 'gallery', 'r1'), {'art': f'{CAST}#image/portrait'},
+                              name='Gallery'), None)
+        tx.commit(owner_handle())
+
+        def damage(copy):
+            (copy.root / 'sources/catalog/elderfen-cast/_source/manifest.json').write_text('{not json')
+
+        with candidate_of(store, tmp_path / 'damaged', damage) as candidate:
+            preview = preview_source_update(store, CAST, candidate)
+        assert by_text(preview)[f'{CAST}#image/portrait'][0].status == 'missing'
+
+        def link(copy):
+            folder = copy.root / 'sources/catalog/elderfen-cast'
+            shutil.move(folder, copy.root.parent / 'moved')
+            folder.symlink_to(copy.root.parent / 'moved', target_is_directory=True)
+
+        with candidate_of(store, tmp_path / 'linked', link) as candidate:
+            preview = preview_source_update(store, CAST, candidate)
+        assert any(problem.side == 'after' and problem.path == 'sources/catalog/elderfen-cast'
+                   for problem in preview.problems)

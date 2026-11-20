@@ -18,8 +18,9 @@ from grimoire.store.jsonfmt import MAX_DEPTH as JSON_MAX_DEPTH
 from grimoire.store.jsonfmt import JsonError, parse_strict
 from grimoire.store.layout import SOURCE_DIR, SOURCES, classify, image_parts
 
+from .dependencies import source_version
 from .heads import entity_heads
-from .model import EntityChange, Problem, Reference, SourceChangePreview, SourceUpgradeError
+from .model import DEPENDENCIES_KEY, EntityChange, Problem, Reference, SourceChangePreview, SourceUpgradeError
 
 #: nesting the scan follows: the deepest JSON the store accepts; deeper is reported, not searched
 MAX_DEPTH = JSON_MAX_DEPTH + 1
@@ -55,8 +56,18 @@ class _Side:
             return {}
         return {ref: (stored.ref.revision, stored.name) for ref, stored in entity_heads(self.view, self.source).items()}
 
+    @property
+    def loaded(self) -> bool:
+        return self.view is not None and self.source in self.view.sources
+
+    @property
+    def version(self) -> str | None:
+        """The source's ``source_version`` (what a dependency pin compares), ``None`` unless loaded."""
+        return source_version(self.view, self.source) if self.view is not None else None
+
     def file_etag(self, path: str) -> str | None:
-        data = self.files.get(path)
+        """A file of the source (an image) by etag; nothing resolves while the source is not loaded."""
+        data = self.files.get(path) if self.loaded else None
         return None if data is None else etag(data)
 
 
@@ -66,6 +77,12 @@ def _owner(path: str) -> str | None:
     if parts[0] != SOURCES or SOURCE_DIR not in parts:
         return None
     return ':'.join(parts[1:parts.index(SOURCE_DIR)])
+
+
+def _blocks(path: str, source: str) -> bool:
+    """Whether a blocked ``path`` hides some of ``source``: inside it, or a folder above its ``_source``."""
+    home = '/'.join((SOURCES, *source.split(':'), SOURCE_DIR))
+    return _owner(path) == source or home.startswith(path + '/')
 
 
 def _record(path: str) -> str:
@@ -82,11 +99,25 @@ EXCLUSIONS = ('payload', 'exclusions')
 CATALOG_SCHEMA = 'grimoire.catalog/1'
 
 
+def _unpinned(text: str, source: str) -> SourceRef | None:
+    try:
+        ref = SourceRef.parse(text)
+    except ValueError:
+        return None
+    return ref if ref.source == source and not ref.pinned else None
+
+
 def _references(payload: object, source: str) -> tuple[set[tuple[str, str]], bool]:
-    """``(kind, text)`` for every string naming ``source`` (``definition``, ``image``, ``source`` or
-    ``identity``), and whether a container past ``MAX_DEPTH`` went unsearched. An unpinned ref at an
-    identity-only key path (an art pin's layer entity beside its pinned base, a catalog's
-    exclusions) is kind ``identity``: it names the entity, reaches no content and follows nothing."""
+    """``(kind, text)`` for every string naming ``source`` (``definition``, ``image``, ``source``,
+    ``dependency`` or ``identity``), and whether a container past ``MAX_DEPTH`` went unsearched.
+
+    An unpinned ref at an identity-only key path (an art pin's layer entity beside its pinned base, a
+    catalog's exclusions) is kind ``identity``: it names the entity, reaches no content and follows
+    nothing; the same text used elsewhere in the file as content wins. An unpinned ref beside a
+    ``resolved_revision`` (a head-following chat binding, 107) also means that revision, so the pinned
+    ref at it is a reference too; once the binding is detached (``detached_seq``) it is provenance only
+    and no longer follows the head. A bare source id under ``source`` in a top-level
+    ``optional_dependencies`` list is a ``dependency`` declaration, not a world attachment."""
     found: set[tuple[str, str]] = set()
     deep = False
     identity = {ART_LAYER}
@@ -114,13 +145,24 @@ def _references(payload: object, source: str) -> tuple[set[tuple[str, str]], boo
             deep = True
         elif isinstance(value, Mapping):
             if value.get('source') == source:
-                found.add(('source', source))
+                found.add(('dependency' if keys == (DEPENDENCIES_KEY,) else 'source', source))
+            revision = value.get('resolved_revision')
+            detached = value.get('detached_seq') is not None
             for key, item in value.items():
                 stack.append((key, depth + 1, keys))
+                meant = _unpinned(item, source) if isinstance(revision, str) and isinstance(item, str) else None
+                if meant is not None:
+                    try:
+                        found.add(('definition', str(meant.at(revision))))
+                    except ValueError:  # a hand-edited revision no pin can name
+                        pass
+                    if detached:  # provenance: the detached binding no longer reaches its head
+                        continue
                 stack.append((item, depth + 1, (*keys, key) if isinstance(key, str) else keys))
         elif isinstance(value, (list, tuple)):
             stack.extend((item, depth + 1, keys) for item in value)
-    return found, deep
+    content = {text for kind, text in found if kind == 'definition'}
+    return {(kind, text) for kind, text in found if not (kind == 'identity' and text in content)}, deep
 
 
 def _status(before: str | None, after: str | None, before_etag: str | None, after_etag: str | None,
@@ -173,8 +215,8 @@ def _preview(store: LibraryStore, source: str, new: _Side, action: str) -> Sourc
                             for problem in side.view.problems if problem.source == source)
         if label == 'after' and side.scan is not None:
             problems.extend(Problem(path, reason, label) for path, reason in sorted(side.scan.blocked.items())
-                            if _owner(path) == source)
-    rows: dict[tuple[str, str], Reference] = {}
+                            if _blocks(path, source))
+    rows: dict[tuple[str, str, str], Reference] = {}
     for path, data in sorted(scan.files.items()):
         if _owner(path) == source:
             continue
@@ -202,9 +244,11 @@ def _preview(store: LibraryStore, source: str, new: _Side, action: str) -> Sourc
                     where = None
                 row = _etag_row(path, record, text, where and old.file_etag(where), where and new.file_etag(where),
                                 'edited')
+            elif kind == 'dependency':  # a pin compares the version digest, not the manifest's bytes
+                row = _etag_row(path, record, text, old.version, new.version, 'changed')
             else:
                 row = _etag_row(path, record, text, old.manifest_etag, new.manifest_etag, 'changed')
-            rows[(path, text)] = row
+            rows[(path, kind, text)] = row
     before, after = old.heads(), new.heads()
     entities = []
     for ref in sorted(before.keys() | after.keys(), key=str):
@@ -239,8 +283,7 @@ def preview_source_update(store: LibraryStore, source: str, candidate: LibrarySt
     except (ValueError, TypeError) as error:
         raise SourceUpgradeError('invalid_source', str(error)) from None
     side, scan = _scan_side(candidate, source)
-    home = '/'.join((SOURCES, *source.split(':'), SOURCE_DIR))
-    if not side.files and not any(_owner(path) == source or home.startswith(path + '/') for path in scan.blocked):
+    if not side.files and not any(_blocks(path, source) for path in scan.blocked):
         raise SourceUpgradeError('candidate_missing_source', source)
     # A candidate that holds the source but cannot load it (a malformed manifest) is previewed with
     # nothing resolving after, and its load problems are reported on the ``after`` side.

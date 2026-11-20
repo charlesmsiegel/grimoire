@@ -38,7 +38,8 @@ class Reference:
     ``text`` is the reference exactly as written (a definition ref, an image ref, or the bare
     source id under a ``source`` key, such as a world attachment or a dependency declaration).
     ``before`` and ``after`` name what it reaches: a revision for a definition ref, the record's
-    etag for an image or whole-source ref, ``None`` where nothing resolves. ``newer_head`` is the
+    etag for an image or an attached world, the dependency's ``source_version`` for a dependency
+    declaration, ``None`` where nothing resolves. ``newer_head`` is the
     head revision after the change when a pinned ref stays on an older one (an upgrade a human may
     take deliberately, for an actor through 042's reviewed rebase); it never moves the pin.
     """
