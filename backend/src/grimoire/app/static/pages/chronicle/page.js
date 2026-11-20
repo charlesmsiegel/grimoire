@@ -327,11 +327,15 @@ function recordForm(ctx, memory, done, { chat, audience }) {
     const request = { topic: name, text: text.value, evidence: [...picked].sort(), supersedes: supersedes.value || undefined };
     const key = JSON.stringify(request);
     if (!attempt || attempt.key !== key) attempt = { key, id: newOperationId() };
+    const sent = { topic: topic.value, text: text.value };
     ctx.act(async () => {
       const answer = await ctx.api("chronicle.remember", { chat, audience, actor: memory.actor, operation_id: attempt.id, ...request });
       attempt = null;
-      topic.clear();
-      text.clear();
+      // what was typed while the save was on its way is a new draft, kept; only what was sent is cleared
+      if (topic.value === sent.topic && text.value === sent.text) {
+        topic.clear();
+        text.clear();
+      }
       ctx.notify("Remembered.");
       done(answer);
       return true;

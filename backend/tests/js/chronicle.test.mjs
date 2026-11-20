@@ -1,6 +1,7 @@
 // Sprint 115's chronicle page without the app: its logic (the times a person types, the minutes an advance comes
 // to, a detail's name as an id, the sentence each clock change is reviewed in), and its memory card with canned
-// answers (a late answer never replaces the character chosen since; an unsent account is its editor's own).
+// answers (a late answer never replaces the character chosen since; an unsent account is its editor's own, and
+// what is typed while one is being saved is kept).
 // Run by test_app_shell_js.py.
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -28,8 +29,9 @@ function dossier(actor, editor, content) {
 }
 
 // The page mounted in the table's view of a chat whose cast is the player's own `cast`; `memory(args)` answers
-// chronicle.memory (and may return a promise the test settles). `drafts` is the shell's store, kept across mounts.
-async function mounted(cast, memory, drafts = new Map()) {
+// chronicle.memory (and may return a promise the test settles), `remember(args)` chronicle.remember. `drafts` is
+// the shell's store, kept across mounts.
+async function mounted(cast, memory, drafts = new Map(), remember = null) {
   const root = ui.el("div", {});
   const ctx = {
     ui, path: ["c1"], query: new URLSearchParams({ chat: CHAT }),
@@ -42,6 +44,7 @@ async function mounted(cast, memory, drafts = new Map()) {
       if (op === "chronicle.coverage") return { features: [] };
       if (op === "campaign.hub") return { player: "owner", cast: cast.map((actor) => ({ actor, name: actor, role: "player", controller: "owner" })) };
       if (op === "chronicle.memory") return memory(args);
+      if (op === "chronicle.remember" && remember) return remember(args);
       throw new Error("unexpected " + op);
     },
   };
@@ -122,4 +125,39 @@ test("an unsent account is its editor's: a character handed to another controlle
   const again = await mounted([ANYA], () => dossier(ANYA, "director", "seen"), drafts);
   await again.done;
   assert.equal(accountField(again.root).value, "The director's private note.", "it is still the director's");
+});
+
+test("what is typed while an account is being saved is kept as the next draft", async () => {
+  let release;
+  const drafts = new Map();
+  const { root, done } = await mounted([ANYA], () => dossier(ANYA, "you", "seen"), drafts, (args) =>
+    new Promise((resolve) => { release = () => resolve({ done: { account: args.operation_id }, memory: dossier(ANYA, "you", "seen") }); }));
+  await done;
+  const field = (name) => {
+    const label = pane(root).querySelectorAll("label").find((node) => node.textContent === name);
+    return pane(root).querySelectorAll("textarea,input").find((node) => node.getAttribute("id") === label.getAttribute("for"));
+  };
+  const typeInto = (name, value) => { const node = field(name); node.value = value; node.dispatchEvent({ type: "input" }); };
+  typeInto("What it is about", "Coin");
+  typeInto("The account", "Mara gave the coin back.");
+  const cite = () => {
+    const box = pane(root).querySelectorAll("input").find((node) => node.getAttribute("value") === "e-seen");
+    box.checked = true;
+    box.dispatchEvent({ type: "change" });
+  };
+  cite();
+  pane(root).querySelectorAll("button").find((node) => node.textContent === "Remember this").click();
+  await tick();
+  typeInto("The account", "Mara gave the coin back, then left.");  // typed while the save is on its way
+  release();
+  for (let n = 0; n < 20; n += 1) await tick();
+  assert.equal(field("The account").value, "Mara gave the coin back, then left.");
+
+  typeInto("The account", "Unchanged this time.");
+  cite();
+  pane(root).querySelectorAll("button").find((node) => node.textContent === "Remember this").click();
+  await tick();
+  release();
+  for (let n = 0; n < 20; n += 1) await tick();
+  assert.equal(field("The account").value, "", "what was sent, and only that, is cleared");
 });
