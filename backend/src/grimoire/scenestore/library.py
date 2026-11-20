@@ -24,7 +24,7 @@ from types import MappingProxyType
 
 from grimoire.core.identity import ChatRef, InstanceRef, TurnRef
 from grimoire.scene import (
-    TURN_SCHEMA, Fork, SceneRefused, SetAside, TurnRecord, arrange, parse_turn_id, turn_from_payload, turn_id,
+    Fork, SceneRefused, SetAside, TurnRecord, arrange, parse_turn_id, turn_from_payload, turn_id, turn_schema,
     turn_to_payload,
 )
 from grimoire.scene.branches import is_mine, tag_for
@@ -333,8 +333,8 @@ class SceneLibrary:
     def _envelope(self, record: TurnRecord, base: StoredTurn | None) -> ScopeRecord:
         payload = turn_to_payload(record)
         if base is None:
-            return ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=self.owner)
-        return ScopeRecord(record.ref, TURN_SCHEMA, payload, owner=base.owner, extra=base.extra)
+            return ScopeRecord(record.ref, turn_schema(record), payload, owner=self.owner)
+        return ScopeRecord(record.ref, turn_schema(record), payload, owner=base.owner, extra=base.extra)
 
     @staticmethod
     def _bytes(envelope: ScopeRecord, base: StoredTurn | None) -> int:
@@ -432,7 +432,7 @@ class SceneLibrary:
                 return now
             txn = self.store.transaction()
             for record, stored in changes:
-                txn.put(ScopeRecord(record.ref, TURN_SCHEMA, turn_to_payload(record), owner=stored.owner,
+                txn.put(ScopeRecord(record.ref, turn_schema(record), turn_to_payload(record), owner=stored.owner,
                                     extra=stored.extra), stored.etag)
             try:
                 txn.commit(self.handle)

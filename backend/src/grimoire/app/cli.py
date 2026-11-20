@@ -4,7 +4,7 @@
     identify LIBRARY --device NAME
     pair LIBRARY --peer NAME [--key HEX] [--owner human:owner]
     serve LIBRARY [--owner human:owner] [--port N] [--peer NAME=HOST:PORT ...] [--sync-port N] [--model FILE]
-          [--setup]
+          [--setup] [--local-player human:NAME ...]
 
 ``serve`` with no LIBRARY, where the V2 library location has no library yet, serves the first-run page, which
 makes or opens a library in the browser (108). A LIBRARY that is named and holds nothing is refused, unless
@@ -174,6 +174,9 @@ def serve(args: argparse.Namespace) -> None:
     there or elsewhere in the browser (108)."""
     path = _library(args.library)
     _check_owner(args.owner)
+    for player in args.local_player:
+        if not is_human(player) or player == args.owner:
+            raise CliError(f"--local-player must be a human principal other than the owner, not {player!r}")
     try:
         place = inspect(path)
     except SetupError as error:
@@ -186,7 +189,7 @@ def serve(args: argparse.Namespace) -> None:
         raise CliError(str(error)) from None
 
     def build(store: LibraryStore, authority: DurableAuthority) -> TextApi:
-        api = TextApi(store, authority, owner=args.owner, peers=peers,
+        api = TextApi(store, authority, owner=args.owner, local_players=args.local_player, peers=peers,
                       stages=campaign_config.stages, agendas=campaign_config.agendas)
         try:
             configure_campaign(api, campaign_config)
@@ -300,6 +303,8 @@ def parser() -> argparse.ArgumentParser:
     three.add_argument("--campaign-config", type=Path,
                        help="read-only authored stages, NPC agendas and optional labeling model (JSON)")
     three.add_argument("--model", type=Path, help="the model settings file (JSON): created by the app when missing")
+    three.add_argument("--local-player", action="append", default=[],
+                       help="a human principal who plays at this device beside the owner (058); repeat for more")
     three.add_argument("--setup", action="store_true",
                        help="where LIBRARY holds no library yet, serve the first-run page to make one")
     three.set_defaults(run=serve)

@@ -85,7 +85,7 @@ export async function showHub(root, ctx, campaign, asked, audience) {
     if (scene) {
       for (const turn of scene.turns) numbers.set(turn.turn, turn.number);
       turns = scene.turns.filter((turn) => turn.kept).map((turn) => ({ turn: turn.turn,
-        label: "Turn " + turn.number + (turn.post ? ": " + clip(turn.post.text) : "") }));
+        label: "Turn " + turn.number + (turn.post ? ": " + clip((turn.posts || [turn.post]).map((post) => post.text).join(" / ")) : "") }));
     }
     render(hub);
   };
@@ -354,7 +354,9 @@ function turnsCard(at) {
   const { el } = ui;
   const blocks = hub.turns.map((turn) => {
     const parts = [el("h3", { class: "campaign-sub" }, "Turn " + turn.number + (turn.open ? " (open)" : turn.kept ? " (kept)" : ""))];
-    if (turn.post) parts.push(el("p", { class: "g-muted" }, nameOf(turn.post.actor) + " " + turn.post.kind + (turn.post.withheld ? " (withheld)" : "")));
+    for (const post of turn.posts || (turn.post ? [turn.post] : [])) {  // a combined turn (058) has one per player character
+      parts.push(el("p", { class: "g-muted" }, nameOf(post.actor) + " " + post.kind + (post.withheld ? " (withheld)" : "")));
+    }
     for (const label of turn.labels) parts.push(el("p", { class: "g-muted" }, "Labelled " + label.label + " (" + label.state + ")"));
     for (const effect of turn.effects) {
       const waits = effect.state === "proposed" || effect.state === "approved";

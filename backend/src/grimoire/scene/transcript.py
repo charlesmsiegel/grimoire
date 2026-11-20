@@ -156,7 +156,8 @@ def imported_table(pages: Iterable[TranscriptPage], names: Mapping[InstanceRef, 
 def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[InstanceRef, str], *,
               limit: int = MAX_HEARD, before: ImportedHistory | None = None,
               narration: bool = True, outcomes: Mapping[str, HeardLine] | None = None) -> tuple[HeardLine, ...]:
-    """What ``actor`` heard, oldest first: posts in its audience and kept lines it heard (the last ``limit``).
+    """What ``actor`` heard, oldest first: posts in its audience (each of a combined turn's, in order) and kept
+    lines it heard (the last ``limit``).
 
     ``before`` is the chat's imported history: an actor it was imported with heard it before turn 1. It holds
     only its own last ``MAX_HEARD`` lines, so a ``limit`` above that gets no more imported lines.
@@ -172,8 +173,9 @@ def heard_for(turns: Iterable[TurnRecord], actor: InstanceRef, names: Mapping[In
     if before is not None and actor in before.listeners:
         heard.extend(before.heard)
     for turn in _ordered(turns):
-        if turn.post is not None and actor in turn.post.audience:
-            heard.append(_post_line(turn.post, names))
+        posts = [post for post in turn.posts if actor in post.audience]  # a combined turn's (058), in their order
+        heard.extend(_post_line(post, names) for post in posts)
+        if turn.post in posts:  # the outcome of the turn's one action, which only its first post can be
             heard.append((outcomes or {}).get(turn.turn_id))
         heard.extend(_heard(line.speaker, line.text, line.actor) for line in turn.visible(actor)
                      if narration or line.actor is not None)
@@ -192,8 +194,8 @@ def table_lines(turns: Iterable[TurnRecord], names: Mapping[InstanceRef, str], *
     recorded no players gives none (fail closed). A take with no stage, or without ``as_heard``, gives every line."""
     seen: list[HeardLine | None] = list(before.table) if before is not None else []
     for turn in _ordered(turns):
+        seen.extend(_post_line(post, names) for post in turn.posts if not post.private)
         if turn.post is not None and not turn.post.private:
-            seen.append(_post_line(turn.post, names))
             seen.append((outcomes or {}).get(turn.turn_id))
         kept = turn.kept
         staged = as_heard and kept is not None and kept.on_stage is not None

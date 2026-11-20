@@ -41,7 +41,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [5](#wave-5) | 8/8 | ☑ | All eight scheduled first slices are present, including both persistent text-play paths. Later milestones are not implied. |
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
-| [8](#wave-8) | 15/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064, 066 and 067 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
+| [8](#wave-8) | 18/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
 | [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
@@ -499,7 +499,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-8"></a>
 ## Wave 8
 
-049, 050, 051, 053, 054, 055, 056, 057, 059, 060, 062, 063, 064, 066 and 067 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
+049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified.
 
 <a id="slice-049"></a>
 ### 049 — Offline Multi Device Sync
@@ -560,9 +560,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-058"></a>
 ### 058 — Local Multi PC
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/local-multi-pc.md)).
-- Evidence: [`textapi/api.py`](../../backend/src/grimoire/textapi/api.py) enforces a trusted library-owner player; [`test_textapi.py`](../../backend/tests/test_textapi.py)::test_only_the_owner_plays_in_this_slice verifies rejection of others.
-- Scope / gap: No independent local PC controllers/drafts and combined accepted contribution.
+- [x] Scheduled first-useful slice ([requirements](sprints/local-multi-pc.md)).
+- Evidence: [`play/together.py`](../../backend/src/grimoire/play/together.py), [`play/drafts.py`](../../backend/src/grimoire/play/drafts.py), [`textapi/table.py`](../../backend/src/grimoire/textapi/table.py) and the combined turn in [`scene/model.py`](../../backend/src/grimoire/scene/model.py) (`grimoire.scene-turn/2`); [`test_local_multi_pc.py`](../../backend/tests/test_local_multi_pc.py). Two PCs under separate human controllers post one turn, the cast (or the narrator) answers once in one generation, each post keeps its submitter after reopening, and the NPC stays the director's. An NPC, an unseated or another player's character, a duplicate or empty contribution and an unauthenticated handle are refused with nothing written; a retry returns the same turn; per-post whisper audiences, the owner-only handover with control history, the no-revived-delegation rule, one player holding two PCs, editable/reorderable drafts and the text API's local table are covered.
+- Scope / gap: Drafts are held in memory (persistence and interrupted-submission recovery are milestone 2); local players share the owner's screen; a combined turn takes no label, framing or effect; troupe play is milestone 3; the drafting UI is 115. See [contract](../LOCAL_MULTI_PC.md).
 
 <a id="slice-059"></a>
 ### 059 — Location Topology

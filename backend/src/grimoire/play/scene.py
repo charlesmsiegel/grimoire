@@ -13,7 +13,7 @@ from grimoire.comms import Message, Presence, TransmissionError, transmit
 from grimoire.context import Budget
 from grimoire.contextstore import stored_record
 from grimoire.core import DIRECTOR
-from grimoire.core.authority import ControlAssignment
+from grimoire.core.authority import ControlAssignment, PlayerContribution
 from grimoire.core.identity import ChatRef, InstanceRef
 from grimoire.party import PartyRefused, SceneCast, stage
 from grimoire.scene import ImportedHistory, SceneLine, SceneRefused, Take, TurnRecord
@@ -305,6 +305,15 @@ def _audience(message: Message, scene: Scene, chat: ChatRef, tid: str, number: i
             return (message.sender,)
         raise _refuse(error.reason, "the message cannot reach anyone here") from None
     return tuple(sorted({*sent.receivers, message.sender}, key=str))
+
+
+def post_contributions(record: TurnRecord) -> tuple[PlayerContribution, ...]:
+    """The players' own 003 contributions a turn's posts are, in order, each by its own controller: the first's id is
+    the turn id, a combined turn's further posts' ``<turn_id>.p<n>`` (058)."""
+    chat = record.chat
+    return tuple(PlayerContribution(chat.campaign_id, record.post_id(index), chat.chat_id, record.turn_id,
+                                    post.actor.instance_id, post.submitted_by, post.kind, post.text)
+                 for index, post in enumerate(record.posts, 1))
 
 
 def _payload(snapshot, ref, role: str) -> Mapping[str, object]:

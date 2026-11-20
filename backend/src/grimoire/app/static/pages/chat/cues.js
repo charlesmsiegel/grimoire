@@ -26,7 +26,7 @@ const STORE_V1 = "grimoire.vn.v1:"; // #694's per-tab cues, read once into the d
 export function eligibleActors(turn) {
   if (!turn?.kept) return [];
   const actors = new Map();
-  for (const item of [turn.post, ...turn.kept.lines].filter(Boolean))
+  for (const item of [...(turn.posts || [turn.post]), ...turn.kept.lines].filter(Boolean))
     if (item.actor && !actors.has(item.actor))
       actors.set(item.actor, { actor: item.actor, name: item.speaker || item.actor });
   return [...actors.values()];
@@ -265,7 +265,7 @@ const copy = (blocking) => new Map([...blocking].map(([id, b]) => [id, { ...b }]
 export function speakerLabels(kept) {
   const labels = new Map();
   for (const turn of kept)
-    for (const item of [turn.post, ...turn.kept.lines].filter(Boolean))
+    for (const item of [...(turn.posts || [turn.post]), ...turn.kept.lines].filter(Boolean))
       if (item.actor && item.speaker && !labels.has(item.actor)) labels.set(item.actor, item.speaker);
   return labels;
 }
@@ -326,7 +326,7 @@ export function timeline(turns, cues) {
       if (onStage(want)) focus = { actor: want, source: "authored" };
       else unavailable.push(`focus on ${nameOf(want)}, who is not on stage at this turn`);
     } else if (want === "auto") {
-      const lines = [turn.post, ...turn.kept.lines].filter((l) => l?.actor && onStage(l.actor));
+      const lines = [...(turn.posts || [turn.post]), ...turn.kept.lines].filter((l) => l?.actor && onStage(l.actor));
       if (lines.length) focus = { actor: lines.at(-1).actor, source: "automatic" };
     }
     if (cue && cue.background !== "inherit") background = cue.background;

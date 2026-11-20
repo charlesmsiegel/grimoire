@@ -13,8 +13,9 @@ import base64
 import binascii
 import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
+from functools import partial
 
 from grimoire.adjudicationstore import AdjudicationLibrary
 from grimoire.decisionstore import DecisionLibrary
@@ -44,9 +45,11 @@ from grimoire.peersync import (
 from grimoire.peersync.pairing import pairing_ended
 from grimoire.effective import chat_snapshot
 from grimoire.play import SceneRunner
+from grimoire.play.drafts import TurnDraft
 from grimoire.play.history import chat_transcript
 from grimoire.quickstart import QuickStart, QuickStartRefused
 from grimoire.scene import SceneRefused
+from grimoire.security import is_human
 from grimoire.store import BlobCorrupt, LibraryStore, RecordNotFound, StaleWrite, StoreError, etag
 from grimoire.store.jsonfmt import is_etag
 from grimoire.store.layout import placement_parts
@@ -54,6 +57,8 @@ from grimoire.sync import NoDeviceIdentity, SyncError, SyncInterrupted, device_o
 from grimoire.sync.turns import open_conflicts
 
 from .errors import ApiRefused
+from .fields import field, parse_ref
+from .table import OPS as TABLE_OPS, drafts_view
 from .continuity import configure_extractor
 from .workspace import workspace
 from .views import (
@@ -88,29 +93,6 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
-def field(args: Mapping[str, object], key: str, kind: type, *, required: bool = True, default=None):  # type: ignore[no-untyped-def]
-    """``args[key]`` as exactly ``kind`` (``bool`` is not an ``int``), else ``invalid_field``. Shared with the app's
-    adapter ops (108) so every op checks its fields the same way."""
-    value = args.get(key, default)
-    if value is None and not required:
-        return default
-    if type(value) is not kind:
-        raise ApiRefused("invalid_field", f"{key} must be a {kind.__name__}")
-    return value
-
-
-def parse_ref(parse: Callable[[str], object], args: Mapping[str, object], key: str, *, required: bool = True):  # type: ignore[no-untyped-def]
-    """``args[key]`` parsed by an owning backend's own parser (``SourceRef.parse``, ``ChatRef.parse``...), else
-    ``invalid_field``: a reference travels as its canonical string and is never guessed from a name."""
-    text = field(args, key, str, required=required)
-    if text is None:
-        return None
-    try:
-        return parse(text)
-    except (ValueError, TypeError):
-        raise ApiRefused("invalid_field", f"{key} is not a valid reference") from None
-
-
 def _refused(error: Exception) -> ApiRefused:
     reason = getattr(error, "reason", None)
     return ApiRefused(reason if isinstance(reason, str) and reason else type(error).__name__, str(error))
@@ -136,12 +118,15 @@ def refusal(error: BaseException) -> ApiRefused | None:
 class TextApi:
     """The ops a client may call on one open library. ``owner`` is the library owner (a ``human:`` principal)
     and ``player`` who plays at its table: in this slice only the owner (one person, one library; a different
-    player would read the table unfiltered and is refused until 053 and 102 give players their own view). ``runtime`` is the app's 027 ``GenerationRuntime`` (``None``: ``generate`` is refused
+    player would read the table unfiltered and is refused until 053 and 102 give players their own view).
+    ``local_players`` (058) are the other people playing at this same device, who read the owner's screen with them:
+    each drafts for a character the owner hands them, and a turn of several characters is submitted at once
+    (``textapi/table.py``). ``runtime`` is the app's 027 ``GenerationRuntime`` (``None``: ``generate`` is refused
     ``no_runtime``; everything else still works). ``peers`` maps each paired device id to the loopback address
     ``sync`` dials. Calls are serialized: one library, one writer at a time."""
 
     def __init__(self, store: LibraryStore, authority, *, owner: str, player: str | None = None,  # type: ignore[no-untyped-def]
-                 runtime=None, policy=None, voices=None, stages=None, agendas=(), peers: Mapping[str, tuple[str, int]] | None = None,
+                 local_players: Iterable[str] = (), runtime=None, policy=None, voices=None, stages=None, agendas=(), peers: Mapping[str, tuple[str, int]] | None = None,
                  clock: Callable[[], str] = _utc_now, new_id: Callable[[str], str] = _new_id,
                  transfer_timeout: float = 600.0) -> None:
         self.store = store
@@ -150,6 +135,13 @@ class TextApi:
             raise ValueError("this slice plays as the library owner only")
         self.owner = self.player = owner
         self.owner_handle = self.player_handle = authority.handle_for(owner, trusted=True)
+        # 058: the other people the owner plays with at this device, each a principal of their own the app vouches
+        # for when a call names them (``by``); a character is theirs only once the owner hands it over (``seat``)
+        local = tuple(local_players) if not isinstance(local_players, str) else (local_players,)
+        if not all(isinstance(each, str) and is_human(each) and each != owner for each in local):
+            raise ValueError("a local player is a human principal other than the owner")
+        self.seats = {owner: self.owner_handle, **{each: authority.handle_for(each, trusted=True) for each in local}}
+        self.drafts: dict[ChatRef, TurnDraft] = {}
         # one adjudication key for the app: a turn framed at the hub is read here with the key it was framed under
         self.adjudication = AdjudicationLibrary(store, authority, authority.handle_for(ADJUDICATOR, trusted=True))
         self.decisions = DecisionLibrary(store, authority, authority.handle_for("app:decisions", trusted=True))
@@ -180,7 +172,7 @@ class TextApi:
             "post": self._post, "generate": self._generate, "keep": self._keep, "pass": self._pass,
             "pause": self._pause, "resume": self._resume, "choose": self._choose, "add_art": self._add_art,
             "sync": self._sync, "resolve": self._resolve,
-            "continuity_review": self._continuity_review,
+            "continuity_review": self._continuity_review, **{op: partial(run, self) for op, run in TABLE_OPS.items()},
         }
 
     @property
@@ -376,8 +368,10 @@ class TextApi:
                 art = art_view(None, type(error).__name__)
             for slot in art["slots"]:
                 slot["etag"] = self._placement_etag(actor, slot["slot"])
-            cast.append({"actor": str(actor), "name": names.get(actor, actor.instance_id),
-                         "role": role_of(scene.controller(actor)), "persona": actor == scene.persona, "art": art})
+            role = role_of(scene.controller(actor))  # 058: a player character's view names who plays it
+            cast.append({"actor": str(actor), "name": names.get(actor, actor.instance_id), "role": role,
+                         "controller": scene.controller(actor) if role == "player" else None,
+                         "persona": actor == scene.persona, "art": art})
         conflicts, complete = self._conflicts(chat.campaign_id)
         if not complete:
             problems.append({"code": "conflicts_unknown", "detail": "this device's sync records cannot be read"})
@@ -399,6 +393,7 @@ class TextApi:
                                                            "name": names.get(scene.persona)},
             "cast": cast, "history": history,
             "turns": [turn_view(stored, names) for stored in scene.turns.turns],
+            "drafts": drafts_view(self.drafts.get(chat), names),  # 058: this device's drafts for one combined turn
             "set_aside": [set_aside_view(stored) for stored in scene.turns.set_aside],
             "fork": fork_view(scene.turns.fork),
             "state": {"waiting": waiting, "seated": seated, "open_turn": None if pending is None else pending.turn_id,
