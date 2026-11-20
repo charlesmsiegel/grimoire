@@ -31,8 +31,9 @@ import * as ui from '../../src/grimoire/app/static/shell/ui.js';
 import {href} from '../../src/grimoire/app/static/shell/router.js';
 import {mount} from '../../src/grimoire/app/static/pages/chats/page.js';
 
-async function workspacePage(query, pagedSources = false) {
+async function workspacePage(query, pagedSources = false, storage = undefined) {
   install('http://localhost');
+  if (storage) window.localStorage = storage;
   let navigation, refuse = false;
   const requests = [], drafts = new Map([['chat:alpha/one:composer', 'Kept composer draft']]);
   const ctx = {ui, href, query:new URLSearchParams(query), styles(){}, layout(){}, setTitle(){}, setCrumb(){},
@@ -98,4 +99,21 @@ test('mounted source and comparison paging retains useful focus forward and back
   await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(document.activeElement.textContent,'Restart browsing');
   assert.equal(page.root.querySelectorAll('a.chats-row').length,0);
+});
+
+test('saving and deleting a saved filter retains keyboard focus in the filter controls', async () => {
+  const values = new Map();
+  const page = await workspacePage('', false, {getItem:key=>values.get(key)||null, setItem:(key,value)=>values.set(key,value)});
+  let name = page.root.querySelector('input[aria-label="Saved filter name"]');
+  name.value = 'My view';
+  const save = byText(page.root, 'button', 'Save filter')[0];
+  save.focus(); save.click();
+  name = page.root.querySelector('input[aria-label="Saved filter name"]');
+  assert.equal(document.activeElement, name);
+  const remove = byText(page.root, 'button', 'Delete My view')[0];
+  assert.ok(remove);
+  remove.focus(); remove.click();
+  assert.equal(document.activeElement, page.root.querySelector('input[aria-label="Saved filter name"]'));
+  assert.equal(byText(page.root, 'button', 'Delete My view').length, 0);
+  assert.equal(page.drafts.get('chat:alpha/one:composer'), 'Kept composer draft');
 });

@@ -79,7 +79,7 @@ export async function mount(root, ctx) {
   let filters = savedFilters(storage);
   const selection = () => ({ q: state.q, group: state.group, sort: state.sort, filter, source,
     match: ctx.query.get("match") || "exact", campaign, world });
-  function savedControls() {
+  function savedControls(focus = false) {
     storageStatus.textContent = filters.error || "Saved filters are device-local and not synchronized.";
     const name = el("input", { type: "text", "aria-label": "Saved filter name", maxlength: "100" });
     saved.replaceChildren(name, ui.button("Save filter", () => {
@@ -87,7 +87,7 @@ export async function mount(root, ctx) {
       const values = [...filters.values.filter(x => x.name !== name.value.trim()), { name: name.value.trim(), selection: selection() }];
       const error = writeFilters(storage, values);
       if (error) { storageStatus.textContent = error; return; }
-      filters = { values, error: null }; savedControls();
+      filters = { values, error: null }; savedControls(true);
     }));
     for (const item of filters.values) {
       saved.append(ui.button("Apply " + item.name, () => {
@@ -99,9 +99,10 @@ export async function mount(root, ctx) {
         const values = filters.values.filter(x => x !== item);
         const error = writeFilters(storage, values);
         if (error) { storageStatus.textContent = error; return; }
-        filters = { values, error: null }; savedControls();
+        filters = { values, error: null }; savedControls(true);
       }));
     }
+    if (focus) name.focus();
   }
   savedControls();
   shelf = await readShelf(ctx);
