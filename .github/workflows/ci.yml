@@ -48,7 +48,11 @@ jobs:
       - run: python -m pytest backend/tests/test_speech_local.py backend/tests/test_app_voice.py -q -rs
         env:
           GRIMOIRE_REQUIRE_VOICE: "1"
-      - run: python -m grimoire.speech.measure --grammar
+      # The socket guard sees Python only; in a process with no network at all, the engine still works.
+      - run: sudo -E unshare -n -- "$(which python)" -m pytest backend/tests/test_speech_local.py -q -rs
+        env:
+          GRIMOIRE_REQUIRE_VOICE: "1"
+      - run: sudo -E unshare -n -- "$(which python)" -m grimoire.speech.measure --grammar
 
   # File replacement and path semantics differ by platform, and V1 isolation must
   # hold on each. Every cell must pass; see docs/TESTING.md#ci-gate.

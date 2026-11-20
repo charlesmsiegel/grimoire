@@ -7,14 +7,23 @@
 
 export const RATE = 16000;
 
-// Average the samples of each output frame (a simple low-pass and decimation), from `from` Hz to `to` Hz.
+// Resample from `from` Hz to `to` Hz: averaging each output frame's samples when going down (a simple
+// low-pass and decimation), interpolating linearly when going up (a microphone below 16 kHz).
 export function downsample(samples, from, to = RATE) {
   if (!(from > 0) || !(to > 0)) throw new RangeError("sample rates must be positive");
   if (from === to) return Float32Array.from(samples);
-  if (from < to) throw new RangeError("only downsampling is supported");
   const ratio = from / to;
   const length = Math.floor(samples.length / ratio);
   const out = new Float32Array(length);
+  if (from < to) {
+    for (let i = 0; i < length; i += 1) {
+      const at = i * ratio;
+      const left = Math.floor(at);
+      const right = Math.min(samples.length - 1, left + 1);
+      out[i] = samples[left] + (samples[right] - samples[left]) * (at - left);
+    }
+    return out;
+  }
   for (let i = 0; i < length; i += 1) {
     const start = Math.floor(i * ratio);
     const end = Math.min(samples.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
@@ -68,44 +77,64 @@ export function canRecord(scope = globalThis) {
     && (scope.AudioContext || scope.webkitAudioContext));
 }
 
-// Start recording. `maxSeconds` stops it by itself (`onlimit` is told). Answers { stop(): Promise<wav bytes>,
-// cancel() }: stop gives the recording; cancel drops it. Either closes the microphone.
+// Start recording. At `maxSeconds` the microphone closes by itself and `onlimit` is told. Answers
+// { stop(): Promise<wav bytes or null>, cancel() }: stop gives the recording (null when nothing was captured);
+// cancel drops it. Either closes the microphone, if it is still open.
 export async function record({ maxSeconds, onlimit, scope = globalThis } = {}) {
   const stream = await scope.navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
   const Context = scope.AudioContext || scope.webkitAudioContext;
-  let context;
-  try { context = new Context(); } catch (error) { for (const track of stream.getTracks()) track.stop(); throw error; }
-  const source = context.createMediaStreamSource(stream);
-  // ScriptProcessor is old but present in every browser and web view; it needs no extra module.
-  const node = context.createScriptProcessor(4096, 1, 1);
   const chunks = [];
   let frames = 0;
   let open = true;
   let timer = null;
-  const limit = Math.floor(maxSeconds * context.sampleRate);
-  node.onaudioprocess = (event) => {
-    if (!open) return;
-    const input = event.inputBuffer.getChannelData(0);
-    const room = limit - frames;
-    chunks.push(Float32Array.from(room < input.length ? input.subarray(0, Math.max(0, room)) : input));
-    frames += Math.min(room, input.length);
-    if (frames >= limit && onlimit) { const tell = onlimit; onlimit = null; tell(); }
-  };
-  source.connect(node);
-  node.connect(context.destination);
-  timer = setTimeout(() => { if (onlimit) { const tell = onlimit; onlimit = null; tell(); } }, maxSeconds * 1000 + 250);
-  const close = async () => {
+  let context = null;
+  let source = null;
+  let node = null;
+  let closing = null;
+  const close = () => {
+    if (closing) return closing;
     open = false;
     clearTimeout(timer);
-    try { source.disconnect(); node.disconnect(); } catch (error) { /* already disconnected */ }
-    for (const track of stream.getTracks()) track.stop();
-    try { await context.close(); } catch (error) { /* already closed */ }
+    closing = (async () => {
+      try { if (source) source.disconnect(); if (node) node.disconnect(); } catch (error) { /* already disconnected */ }
+      for (const track of stream.getTracks()) track.stop();
+      try { if (context) await context.close(); } catch (error) { /* already closed */ }
+    })();
+    return closing;
   };
+  // the limit closes the microphone here, whatever the page is doing, then tells the page
+  const reached = () => {
+    if (!open) return;
+    close();
+    if (onlimit) { const tell = onlimit; onlimit = null; tell(); }
+  };
+  try {
+    context = new Context();
+    source = context.createMediaStreamSource(stream);
+    // ScriptProcessor is old but present in every browser and web view; it needs no extra module.
+    node = context.createScriptProcessor(4096, 1, 1);
+    const limit = Math.floor(maxSeconds * context.sampleRate);
+    node.onaudioprocess = (event) => {
+      if (!open) return;
+      const input = event.inputBuffer.getChannelData(0);
+      const room = limit - frames;
+      chunks.push(Float32Array.from(room < input.length ? input.subarray(0, Math.max(0, room)) : input));
+      frames += Math.max(0, Math.min(room, input.length));
+      if (frames >= limit) reached();
+    };
+    source.connect(node);
+    node.connect(context.destination);
+    timer = setTimeout(reached, maxSeconds * 1000 + 250);
+  } catch (error) {
+    await close();
+    throw error;
+  }
+  const rate = context.sampleRate;
   return {
     async stop() {
-      const rate = context.sampleRate;
       await close();
-      return wav(pcm16(downsample(join(chunks), rate, RATE)));
+      const samples = downsample(join(chunks), rate, RATE);
+      return samples.length ? wav(pcm16(samples)) : null;
     },
     async cancel() { chunks.length = 0; await close(); },
   };

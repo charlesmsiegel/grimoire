@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import struct
 import sys
 from array import array
 import math
@@ -77,7 +78,9 @@ def pcm(audio: bytes, max_seconds: float) -> tuple[bytes, float]:
             if seconds > max_seconds:
                 raise AudioRefused("too_long", f"the recording is longer than the {max_seconds:g}-second limit")
             samples = reader.readframes(frames)
-    except (wave.Error, EOFError):
+    except (wave.Error, EOFError, RuntimeError, struct.error, ValueError) as error:
+        if isinstance(error, AudioRefused):
+            raise
         raise AudioRefused("invalid_audio", "the recording is not a readable WAV file") from None
     if len(samples) != frames * 2:
         raise AudioRefused("invalid_audio", "the recording is shorter than its header says")
@@ -108,7 +111,8 @@ class Measurements:
 
     loaded: bool
     load_seconds: float | None = None
-    #: Resident memory the model load added, in bytes, where the system reports resident memory.
+    #: Resident memory the first model load in this process added, in bytes, where the system reports it. A later
+    #: load after ``unload`` reuses memory the process kept, so only the first is the model's real cost.
     load_memory: int | None = None
     recognitions: int = 0
     last_audio_seconds: float | None = None
@@ -144,6 +148,7 @@ class PocketSphinxBackend:
         self._max_seconds = DEFAULT_SECONDS
         self.max_seconds = max_seconds
         self._measured = Measurements(False)
+        self._first_memory: int | None = None
         self.info = BackendInfo(ID, frozenset({"stt"}), "local", False, False, "free",
                                 installed() if available is None else available)
 
@@ -184,6 +189,9 @@ class PocketSphinxBackend:
         seconds = time.perf_counter() - started
         after = _rss_bytes()
         memory = after - before if before is not None and after is not None else None
+        if self._first_memory is None:
+            self._first_memory = memory
+        memory = self._first_memory
         self._decoder = decoder
         self._measured = Measurements(True, seconds, memory, self._measured.recognitions,
                                       self._measured.last_audio_seconds, self._measured.last_seconds)
@@ -193,7 +201,7 @@ class PocketSphinxBackend:
         """Let the model's memory go; the next recognition loads it again."""
         with self._lock:
             self._decoder = None
-            self._measured = Measurements(False, None, None, self._measured.recognitions,
+            self._measured = Measurements(False, None, self._first_memory, self._measured.recognitions,
                                           self._measured.last_audio_seconds, self._measured.last_seconds)
 
     def transcribe(self, audio: bytes) -> Utterance:
@@ -209,12 +217,16 @@ class PocketSphinxBackend:
             finally:
                 decoder.end_utt()
             hypothesis = decoder.hyp()
+            words = hypothesis.hypstr.strip() if hypothesis is not None else ""
+            probability = hypothesis.prob if hypothesis is not None else None
+            # Clear the engine's own copy of what it heard: deleting the session's artifacts must leave no
+            # transcript behind in the recognizer either.
+            decoder.start_utt()
+            decoder.end_utt()
             spent = time.perf_counter() - started
             measured = self._measured
             self._measured = Measurements(measured.loaded, measured.load_seconds, measured.load_memory,
                                           measured.recognitions + 1, seconds, spent)
-        words = hypothesis.hypstr.strip() if hypothesis is not None else ""
-        probability = hypothesis.prob if hypothesis is not None else None
         confidence = probability if isinstance(probability, float) and 0.0 <= probability <= 1.0 else None
         return Utterance(words, origin="voice", confidence=confidence if words else None)
 

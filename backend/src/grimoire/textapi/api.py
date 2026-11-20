@@ -212,15 +212,20 @@ class TextApi:
         turned into ``ApiRefused`` exactly as for the core ops. 108's app adapters (``grimoire.app.adapters``)
         run through this, so an adapter op can never write beside a core op or answer a refusal differently."""
         with self._lock:
-            try:
-                return handler(args)
-            except ApiRefused:
+            return self.unlocked(handler, args)
+
+    def unlocked(self, handler: Callable[[Mapping[str, object]], dict], args: Mapping[str, object]) -> dict:
+        """``serialized`` without the writer lock: refusals mapped the same way, for an app adapter op that touches
+        no library state (``grimoire.app.adapter.Adapter.unlocked``)."""
+        try:
+            return handler(args)
+        except ApiRefused:
+            raise
+        except Exception as error:
+            refused = refusal(error)
+            if refused is None:
                 raise
-            except Exception as error:
-                refused = refusal(error)
-                if refused is None:
-                    raise
-                raise refused from None
+            raise refused from None
 
     def image(self, ref: str) -> tuple[str, bytes]:
         """A picture's media type and exact bytes (038 checks them against the blob's name)."""

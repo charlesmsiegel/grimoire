@@ -33,6 +33,13 @@ def silence(seconds: float, rate: int = RATE) -> bytes:
     return to_wav(b"\x00\x00" * int(seconds * rate), rate)
 
 
+def _bad_chunk() -> bytes:
+    """A WAV whose fmt chunk says it is larger than the file: the standard library raises RuntimeError on it."""
+    audio = bytearray(silence(0.1))
+    struct.pack_into("<I", audio, 16, 0x7FFFFFF0)
+    return bytes(audio)
+
+
 def session_for(backend: PocketSphinxBackend, **policy) -> SpeechSession:
     return SpeechSession((backend,), Policy(stt=Selection("local_only", backend.info.id), recording=True, **policy))
 
@@ -52,7 +59,8 @@ def test_only_16_bit_mono_16khz_wav_within_the_limit_is_taken():
         writer.writeframes(b"\x00" * 400)
     for audio, reason in ((stereo.getvalue(), "invalid_audio"), (silence(1, 8000), "invalid_audio"),
                           (to_wav(b""), "invalid_audio"), (b"not a wav", "invalid_audio"),
-                          (silence(16), "too_long"), (silence(1)[:-100], "invalid_audio")):
+                          (silence(16), "too_long"), (silence(1)[:-100], "invalid_audio"),
+                          (_bad_chunk(), "invalid_audio")):
         with pytest.raises(AudioRefused) as refused:
             pcm(audio, 15)
         assert refused.value.reason == reason
@@ -174,6 +182,8 @@ def test_unload_frees_the_model_and_the_next_recognition_loads_and_measures_it_a
     assert backend.measurements.loaded is False and backend.measurements.load_seconds is None
     assert backend.transcribe(synthesize("yes", "slt")).text == "yes"
     assert backend.measurements.loaded and backend.measurements.load_seconds is not None and first is not None
+    hypothesis = backend._decoder.hyp()  # the engine keeps no copy of what it heard
+    assert hypothesis is None or hypothesis.hypstr == ""
 
 
 @acoustic

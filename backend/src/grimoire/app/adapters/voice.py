@@ -8,6 +8,9 @@ is recognized in this process by the trusted local adapter, and is kept only if 
 for this launch. The transcript is returned to the page for the person to read and use; no op here posts it,
 writes the library or runs a command.
 
+Every op here touches no library state, so all run without the library's writer lock (``Adapter.unlocked``):
+a recognition, however long, never stalls typed play. ``VoiceState.lock`` serializes them among themselves.
+
 The ops: ``status`` (every disclosure, the choices, what is kept now, the recognizer's measured cost),
 ``configure`` (choose), ``transcribe`` (one recording), ``delete`` (forget what is kept) and ``unload`` (free
 the recognizer's memory).
@@ -28,10 +31,13 @@ from grimoire.textapi import ApiRefused, TextApi
 
 #: Where a text API holds its voice state: on the text API itself, living exactly as long as it does.
 _ATTRIBUTE = "_voice_state"
-#: What the page may keep, for this launch only. Synthesized audio is not offered: there is no speech output.
-KEEPABLE = ("raw_audio", "provisional_transcript")
+#: What the page may keep, for this launch only: the last transcript. Recordings are never kept (no op could
+#: give one back, so keeping one would only be a copy of private speech), nor synthesized audio (there is none).
+KEEPABLE = ("provisional_transcript",)
 MODES = ("off", "local_only")
 _ABSENT = object()
+#: Guards making a library's voice state. Not the library's lock: voice ops never take that one.
+_MADE = Lock()
 
 
 class VoiceState:
@@ -49,7 +55,7 @@ class VoiceState:
 def configure(api: TextApi, backends: tuple) -> VoiceState:
     """Give ``api``'s library these local recognizers instead of the installed ones (tests, other engines).
     Called once, before the app serves ``api``."""
-    with api.lock:
+    with _MADE:
         if getattr(api, _ATTRIBUTE, None) is not None:
             raise ValueError("this library's voice is already configured")
         made = VoiceState(backends)
@@ -58,7 +64,7 @@ def configure(api: TextApi, backends: tuple) -> VoiceState:
 
 
 def state(api: TextApi) -> VoiceState:
-    with api.lock:
+    with _MADE:
         found = getattr(api, _ATTRIBUTE, None)
         if found is None:
             found = VoiceState()
@@ -224,7 +230,7 @@ def unload(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
         return _status(voice)
 
 
-ADAPTER = Adapter("voice", owner="061", ops={"status": status, "configure": configure_op, "transcribe": transcribe,
-                                              "delete": delete, "unload": unload})
+OPS = {"status": status, "configure": configure_op, "transcribe": transcribe, "delete": delete, "unload": unload}
+ADAPTER = Adapter("voice", owner="061", ops=OPS, unlocked=frozenset(OPS))
 
 __all__ = ["ADAPTER", "KEEPABLE", "MODES", "VoiceState", "configure", "state"]

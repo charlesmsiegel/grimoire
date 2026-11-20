@@ -131,9 +131,10 @@ def test_local_only_recognizes_with_no_connection_out_and_writes_nothing(app):
 
 def test_what_is_kept_is_listed_held_in_memory_and_deleted_on_request(app):
     api, _backend, desk, _chat = app
-    status = _ready(api, retain=["raw_audio", "provisional_transcript"])
+    _refused(api, "voice.configure", {"retain": ["raw_audio"]}, "invalid_field")  # recordings are never kept
+    status = _ready(api, retain=["provisional_transcript"])
     heard = _say(api, status)
-    assert heard["kept"] == ["provisional_transcript", "raw_audio"]
+    assert heard["kept"] == ["provisional_transcript"]
     assert not any("wav" in name or "voice" in name for name in _files(desk))
     deleted = api.call("voice.delete", {})
     assert deleted["kept"] == [] and deleted["capture_token"] != status["capture_token"]
@@ -197,10 +198,52 @@ def test_a_failing_recognizer_keeps_nothing_and_says_so(app):
         raise RuntimeError("secret words the person said")
 
     backend.transcribe = broken
-    status = _ready(api, retain=["raw_audio"])
+    status = _ready(api, retain=["provisional_transcript"])
     answer = _say(api, status)
     assert answer == {"status": "backend_failed", "next_sequence": status["next_sequence"] + 1,
                       "measurements": None, "kept": []}
+
+
+def test_a_slow_recognition_never_holds_up_typed_play(app):
+    """Voice ops run without the library's writer lock: core ops finish while a recognition is still running."""
+    api, backend, _desk, chat = app
+    started, release = threading.Event(), threading.Event()
+
+    def slow(audio: bytes) -> Utterance:
+        started.set()
+        assert release.wait(30)
+        return Utterance("is the cargo safe", origin="voice")
+
+    backend.transcribe = slow
+    status = _ready(api)
+    answers: list[dict] = []
+    worker = threading.Thread(target=lambda: answers.append(_say(api, status)))
+    worker.start()
+    try:
+        assert started.wait(10)
+        done = threading.Event()
+        opened: list[dict] = []
+
+        def core() -> None:
+            opened.append(api.call("open", {"chat": chat}))
+            done.set()
+
+        threading.Thread(target=core).start()
+        assert done.wait(10), "a core op waited on the recognizer"
+        assert len(opened) == 1
+    finally:
+        release.set()
+        worker.join(30)
+    assert answers and answers[0]["status"] == "ok"
+
+
+def test_an_adapter_may_only_unlock_its_own_ops():
+    from grimoire.app.adapter import Adapter
+    with pytest.raises(ValueError):
+        Adapter("demo", owner="000", ops={"a": lambda ctx, args: {}}, unlocked=frozenset({"b"}))
+    with pytest.raises(ValueError):
+        Adapter("demo", owner="000", ops={"a": lambda ctx, args: {}}, unlocked={"a"})
+    assert voice.ADAPTER.unlocked == frozenset(voice.OPS)
 
 
 @pytest.mark.skipif(not (installed() and flite_available()), reason="pocketsphinx and ffmpeg with Flite are needed")

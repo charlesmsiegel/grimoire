@@ -2,7 +2,7 @@
 //
 // Speech input is off or on this device only: no online speech service is offered, and none is used when the
 // local recognizer is missing, slow or fails. The microphone is a separate switch, off by default, and it is
-// opened only while Record is pressed. What may be kept (the last recording, the last transcript) is kept only
+// opened only while Record is pressed. Recordings are never kept; the last transcript may be, only
 // for this launch, is listed, and is deleted with one button. The recognizer's cost on this device (load time,
 // memory, how long the last recording took) is shown as measured, and the longest recording and the
 // recognizer's memory are the person's to limit. Typing and playing are the same whichever is chosen.
@@ -12,7 +12,7 @@
 
 import { base64, canRecord, record } from "./audio.js";
 
-const KEEP_LABELS = { raw_audio: "The last recording", provisional_transcript: "The last transcript" };
+const KEEP_LABELS = { provisional_transcript: "The last transcript" };
 const STATUS_TEXT = {
   ready: "Ready. Press Record to speak.",
   off: "Speech input is off.",
@@ -26,6 +26,7 @@ const STATUS_TEXT = {
 const RESULT_TEXT = {
   stale_capture: "The settings changed while you were recording, so that recording was dropped. Record again.",
   already_processed: "That recording was already handled. Record again.",
+  nothing_recorded: "Nothing was recorded. Press Record and speak, then Stop.",
   backend_failed: "The recognizer could not hear that recording. Nothing was kept. Try again, or type instead.",
   invalid_output: "The recognizer gave an answer the app could not use. Nothing was kept.",
 };
@@ -63,7 +64,7 @@ export async function mount(root, ctx) {
 
   const load = async () => { status = await ctx.api("voice.status", {}); draw(); };
   const choose = (change) => ctx.act(async () => {
-    if (recorder) { await recorder.cancel(); recorder = null; }
+    await drop();
     status = await ctx.api("voice.configure", change);
     heard = null;
     draw();
@@ -106,7 +107,7 @@ export async function mount(root, ctx) {
 
   const keptSection = () => {
     const card = ui.card({ label: "What is kept" }, el("h2", { class: "g-heading" }, "What is kept"),
-      el("p", { class: "g-muted" }, "By default nothing is kept: a recording is forgotten once it is recognized. Anything you choose to keep is held in this app's memory until it restarts, and is never written to your library."));
+      el("p", { class: "g-muted" }, "Recordings are never kept: each is forgotten once it is recognized. If you choose to keep the last transcript, it is held in this app's memory until it restarts, and is never written to your library."));
     for (const kind of status.keepable) {
       const id = ui.id("voice-keep");
       const box = el("input", { type: "checkbox", id, "data-focus-key": "voice:keep:" + kind });
@@ -120,6 +121,7 @@ export async function mount(root, ctx) {
     }
     card.append(el("p", { class: "voice-kept" }, status.kept.length ? "Kept now: " + status.kept.map((kind) => KEEP_LABELS[kind].toLowerCase()).join(", ") + "." : "Kept now: nothing."),
       ui.actions(ui.button("Delete voice data now", () => ctx.act(async () => {
+        await drop();
         status = await ctx.api("voice.delete", {});
         heard = null;
         draw();
@@ -142,6 +144,7 @@ export async function mount(root, ctx) {
       status.mode === "local_only" ? limit.node : null);
     if (measured.loaded) {
       card.append(ui.actions(ui.button("Free the recognizer's memory", () => ctx.act(async () => {
+        await drop();
         status = await ctx.api("voice.unload", {});
         draw();
       }))));
@@ -175,7 +178,10 @@ export async function mount(root, ctx) {
   // The capture token and sequence are latched when recording starts: a change of settings in the meantime
   // makes the recording stale, and it is dropped rather than recognized under the new settings.
   let latched = null;
+  let starting = false;  // a second press while the microphone is being opened is not a second recorder
   const start = async (backend) => {
+    if (starting || recorder) return;
+    starting = true;
     try {
       latched = { token: status.capture_token, sequence: status.next_sequence };
       recorder = await record({ maxSeconds: backend.max_seconds, onlimit: () => finish() });
@@ -184,18 +190,24 @@ export async function mount(root, ctx) {
     } catch (error) {
       recorder = null;
       ctx.notify("The microphone could not be opened: " + (error && error.message ? error.message : "permission refused") + ". Typing works as always.", { bad: true });
-    }
+    } finally { starting = false; }
+    // the page was left while the microphone was opening: close it at once
+    if (recorder && ctx.signal.aborted) { recorder.cancel(); recorder = null; }
   };
+  // Stop: send what was recorded, or nothing when nothing was captured. The page is drawn again whatever
+  // happens, so Stop never stays on screen for a microphone that is closed.
   const finish = () => ctx.act(async () => {
     const active = recorder;
     if (!active) return;
     recorder = null;
-    const audio = await active.stop();
-    const answer = await ctx.api("voice.transcribe", { sequence: latched.sequence, capture_token: latched.token, audio: base64(audio) });
-    heard = answer;
-    status = await ctx.api("voice.status", {});
-    draw();
+    try {
+      const audio = await active.stop();
+      if (audio === null) { heard = { status: "nothing_recorded" }; return; }
+      heard = await ctx.api("voice.transcribe", { sequence: latched.sequence, capture_token: latched.token, audio: base64(audio) });
+      status = await ctx.api("voice.status", {});
+    } finally { draw(); }
   });
+  const drop = async () => { if (recorder) { const active = recorder; recorder = null; await active.cancel(); } };
 
   const notYet = () => el("section", { class: "g-stack", "aria-label": "Not in this app yet" },
     el("h2", { class: "g-heading" }, "Not in this app yet"),

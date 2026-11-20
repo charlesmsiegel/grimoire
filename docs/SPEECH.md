@@ -166,14 +166,15 @@ kept. Settings (Voice) offers speech input **Off** or **On this device only**;
 there is no online option, and `voice.configure` refuses any other mode. The
 page shows the route's disclosure (runs on this device, no network, keeps no
 audio, free), a separate microphone switch (off by default), what may be kept for
-this launch (the last recording, the last transcript), what is kept now and a
+this launch (only the last transcript: recordings are never kept), what is kept now and a
 **Delete voice data now** button, and this device's measured cost with a
 recording-limit choice and **Free the recognizer's memory**. Turning voice off
 also frees it.
 
 Record opens the microphone only while recording (every track stopped and the
-audio context closed on Stop, at the limit, or when the page is left). The page
-downsamples to 16 kHz, encodes WAV and sends it to `voice.transcribe` on the
+audio context closed on Stop, at the limit by the recorder itself, on a change of
+settings, on delete or unload, or when the page is left). A Stop before any sound
+sends nothing. The page resamples to 16 kHz, encodes WAV and sends it to `voice.transcribe` on the
 app's loopback server, which never leaves the device. The capture token and
 sequence are latched when recording starts, so a recording made before a change
 of settings is dropped as `stale_capture`. The transcript is shown as text with a
@@ -184,13 +185,17 @@ is exactly as before.
 | Op | Arguments | Answer |
 |---|---|---|
 | `voice.status` | none | `stt`/`tts` disclosures, `mode`, `recording`, `retain`, `kept`, `backends` (with `max_seconds` and `measurements`), `selected`, `capture_token` and `next_sequence` (only while ready), `limits`, `keepable` |
-| `voice.configure` | any of `mode` (`off`, `local_only`), `backend`, `recording`, `retain` (`raw_audio`, `provisional_transcript`), `max_seconds` (1-60) | the new status; every change forgets what was kept and rotates the capture token |
+| `voice.configure` | any of `mode` (`off`, `local_only`), `backend`, `recording`, `retain` (`provisional_transcript` only), `max_seconds` (1-60) | the new status; every change forgets what was kept and rotates the capture token |
 | `voice.transcribe` | `sequence`, `capture_token`, `audio` (base64 WAV) | `status` (`ok` with `text` and `confidence`, or why not), `next_sequence`, `measurements`, `kept`; `invalid_audio`/`too_long` are 400 refusals; when not ready the recognizer is not touched |
 | `voice.delete` | none | the new status, `kept` empty |
 | `voice.unload` | none | the new status, the recognizer unloaded |
 
-Adapter ops run under the library's one writer lock, so a recognition holds it
-for its duration (the measured real-time factor times the recording's length).
+The voice ops touch no library state, so they run **without** the library's
+writer lock (`Adapter.unlocked`, `TextApi.unlocked`; refusals are mapped exactly
+as for any op): a recognition, however long, never holds up typed play. The
+adapter's own lock serializes the voice ops among themselves. A malformed WAV of
+any kind is an `invalid_audio` refusal, and after each recognition the engine's
+own last hypothesis is cleared, so delete leaves no transcript in the recognizer.
 
 ### Measuring a device
 
@@ -200,10 +205,15 @@ python -m grimoire.speech.measure --grammar  # the same phrases as a command voc
 python -m grimoire.speech.measure --wav me.wav="open the door" --rows
 ```
 
-It reports model load time, the memory the load added, the process's peak
+It reports model load time, the memory the first load in the process added (a
+reload after unloading reuses memory the process kept, so the page keeps showing
+the first figure), the process's peak
 memory, latency p50/p95/max, real-time factor, word error rate, exact matches and
-the network connections attempted while it ran (refused and counted; the tool
-fails if any is attempted), against a desktop budget of 10 s load, real-time
+the Python-level network connections attempted while it ran (refused and
+counted; the tool fails if any is attempted). That guard sees Python sockets only,
+not native code, so CI also runs the acoustic tests and the measurement in a
+process with no network at all (`unshare -n`): there the engine still works,
+which shows it needs none, against a desktop budget of 10 s load, real-time
 factor 1 and 512 MiB peak. The default corpus is eight phrases spoken by four
 `ffmpeg` Flite voices, synthesized at run time: computer speech, not a person or
 a microphone. One run in a Linux x86-64 cloud development container (Python 3.13,
