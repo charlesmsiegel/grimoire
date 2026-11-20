@@ -19,7 +19,6 @@ export const POSITIONS = ["left", "center", "right"];
 export const TRANSITIONS = ["none", "fade", "move"];
 export const MAX_CUES = 100;
 export const MAX_NOTE = 1000;
-const STORE_V2 = "grimoire.vn.v2:";
 const STORE_V1 = "grimoire.vn.v1:"; // #694's per-tab cues, read once into the device-local store
 
 // The speakers of a kept turn (its post, then the kept take's heard lines), first appearance first, under the
@@ -94,118 +93,148 @@ export const blankCue = () => ({ actors: {}, focus: "auto", background: "inherit
 
 // The device-local cue store for one chat. Every failure is reported in `warning`, never thrown.
 //
-// localStorage is shared by every tab of this device, so a change is applied to what is stored now, never to
-// this tab's copy: `put` and `remove` read the stored cues, change one turn and write them back, so two tabs
-// editing different turns both keep their cues. Stored cues this build cannot read (malformed, or a newer
-// version) are kept as they are until Reset local cues: changing one turn is refused rather than overwriting
-// them. `reload` takes up another tab's change (the page calls it on the `storage` event).
+// localStorage is shared by every tab of this device and has no transaction, so each turn's cue is its own
+// key (`grimoire.vn.cue:<chat>\u001f<turn>`, holding {version, cue}): a save writes only its turn, and two
+// tabs saving different turns, however interleaved, never touch each other's cue. Same-turn saves are last
+// writer wins. A stored turn this build cannot read (malformed, or a newer version) is kept as it is and
+// reported; saving over it is refused, and Reset cue or Reset local cues removes it. A change that could not
+// be written (storage full or gone) stays applied in memory, with its warning, through every reload, and is
+// written again with the next change. `reload` takes up another tab's change (the page calls it on the
+// `storage` event).
+const CUE_KEY = "grimoire.vn.cue:";
+const MIGRATED = "grimoire.vn.migrated:"; // #694's cues were carried over (or this chat already had cues)
 export function cueStore(chat, storage, legacy) {
-  let cues = {}, warning = "", unreadable = false;
-  // Turns whose last change could not be written (storage full or gone): turn -> cue, or null for a removal.
-  // Every later change re-applies them on top of what is stored, until one write carries them all.
-  const unsaved = new Map();
+  let cues = {}, warning = "", unreadable = new Map(); // turn -> "malformed" | "newer"
+  const unsaved = new Map(); // turn -> cue, or null for a removal, not yet written
   const probe = (get) => { try { return get(); } catch { return null; } };
   // Only the page's own stores carry #694's cues forward: a caller that hands in a store hands in both.
   if (!storage) {
     storage = probe(() => globalThis.localStorage);
     if (legacy === undefined) legacy = probe(() => globalThis.sessionStorage);
   }
-  const key = STORE_V2 + chat;
-  // What is stored now: {cues} when readable (or absent), else a reason. Throws only when storage is unusable.
-  function stored() {
-    if (!storage) throw Error("unavailable");
-    const raw = storage.getItem(key);
-    if (raw === null || raw === undefined) return { cues: null };
+  const prefix = CUE_KEY + chat + "\u001f";
+  const keyOf = (turn) => prefix + turn;
+  const UNSAVED = "Local cues not saved: storage unavailable or full; changes remain in memory.";
+  function read(raw) {
     let parsed;
     try { parsed = JSON.parse(raw); } catch { return { problem: "malformed" }; }
     if (!parsed || typeof parsed !== "object") return { problem: "malformed" };
     if (typeof parsed.version === "number" && parsed.version > 2) return { problem: "newer" };
-    if (parsed.version !== 2 || !validCues(parsed.cues)) return { problem: "malformed" };
-    return { cues: parsed.cues };
+    if (parsed.version !== 2 || !validCues({ t: parsed.cue })) return { problem: "malformed" };
+    return { cue: parsed.cue };
   }
-  const describe = (problem) => problem === "newer"
-    ? "Local cues were saved by a newer version of the app; they are kept. Reset local cues to replace them."
-    : "Malformed local cues. Reset local cues to recover.";
+  // Every stored turn of this chat. Throws only when storage is unusable.
+  function storedTurns() {
+    if (!storage) throw Error("unavailable");
+    const found = {}, problems = new Map();
+    for (let i = 0; i < storage.length; i += 1) {
+      const key = storage.key(i);
+      if (typeof key !== "string" || !key.startsWith(prefix)) continue;
+      const turn = key.slice(prefix.length), got = read(storage.getItem(key));
+      if (got.problem) problems.set(turn, got.problem);
+      else found[turn] = got.cue;
+    }
+    return { found, problems };
+  }
+  function describe() {
+    if (!unreadable.size) return "";
+    const newer = [...unreadable.values()].includes("newer");
+    return (newer ? "Some local cues were saved by a newer version of the app; they are kept. " : "Malformed local cues are kept. ") +
+      "Reset cue or Reset local cues to replace them.";
+  }
+  function overlay(found) {
+    for (const [turn, cue] of unsaved)
+      if (cue === null) delete found[turn];
+      else found[turn] = cue;
+    return found;
+  }
+  function migrate(found) {
+    if (Object.keys(found).length || storage.getItem(MIGRATED + chat)) return found;
+    const old = legacy ? probe(() => legacy.getItem(STORE_V1 + chat)) : null;
+    const parsed = old ? probe(() => JSON.parse(old)) : null;
+    if (parsed?.version === 1 && validCues(parsed.cues, 1))
+      for (const [turn, cue] of Object.entries(parsed.cues)) {
+        found[turn] = fromV1(cue);
+        storage.setItem(keyOf(turn), JSON.stringify({ version: 2, cue: found[turn] }));
+      }
+    storage.setItem(MIGRATED + chat, "1");
+    return found;
+  }
   function load() {
-    unreadable = false;
     try {
-      const now = stored();
-      if (now.problem) {
-        unreadable = true;
-        cues = {};
-        warning = describe(now.problem);
-        return;
-      }
-      if (now.cues) cues = now.cues;
-      else {
-        const old = legacy ? probe(() => legacy.getItem(STORE_V1 + chat)) : null;
-        const parsed = old ? probe(() => JSON.parse(old)) : null;
-        cues = {};
-        if (parsed?.version === 1 && validCues(parsed.cues, 1)) {
-          cues = Object.fromEntries(Object.entries(parsed.cues).map(([id, cue]) => [id, fromV1(cue)]));
-          storage.setItem(key, JSON.stringify({ version: 2, cues }));
-        }
-      }
-      warning = "";
+      const { found, problems } = storedTurns();
+      unreadable = problems;
+      cues = overlay(migrate(found));
+      warning = unsaved.size ? UNSAVED : describe();
     } catch {
-      warning = "Local cues not saved: storage unavailable.";
+      cues = overlay({ ...cues });
+      warning = unsaved.size ? UNSAVED : "Local cues not saved: storage unavailable.";
     }
   }
-  function write(next) {
-    cues = next;
+  // Writes this turn and every still-unsaved one. True: all written; false: kept in memory.
+  function flush() {
     try {
-      storage.setItem(key, JSON.stringify({ version: 2, cues }));
-      warning = "";
-      unreadable = false;
-      unsaved.clear();
+      for (const [turn, cue] of [...unsaved]) {
+        if (cue === null) storage.removeItem(keyOf(turn));
+        else storage.setItem(keyOf(turn), JSON.stringify({ version: 2, cue }));
+        unreadable.delete(turn);
+        unsaved.delete(turn);
+      }
+      storage.setItem(MIGRATED + chat, "1");
       return true;
     } catch {
-      warning = "Local cues not saved: storage unavailable or full; changes remain in memory.";
       return false;
     }
   }
-  // One turn's change (a cue, or null to remove it), applied with every still-unsaved change to the cues stored
-  // now (or to this tab's copy when storage is unusable). True: saved. "unsaved": applied in memory only, and
-  // kept for the next write. False: refused, nothing changed.
+  // One turn's change (a cue, or null to remove it). True: saved. "unsaved": applied in memory only, and
+  // written with a later change. False: refused, nothing changed.
   function change(turn, cue) {
-    let base = cues;
-    try {
-      const now = stored();
-      if (now.problem) {
-        unreadable = true;
-        warning = describe(now.problem);
-        return false;
-      }
-      base = now.cues || {};
-    } catch { /* unusable storage: change the copy in memory, and say so on write */ }
-    const next = { ...base };
-    for (const [id, value] of [...unsaved, [turn, cue]])
-      if (value === null) delete next[id];
-      else next[id] = value;
-    if (!validCues(next)) {
+    load();
+    if (cue !== null && unreadable.has(turn)) {
+      warning = describe();
+      return false;
+    }
+    const next = { ...cues };
+    if (cue === null) delete next[turn];
+    else next[turn] = cue;
+    if (!validCues(next) || Object.keys(next).length + unreadable.size - (unreadable.has(turn) ? 1 : 0) > MAX_CUES) {
       warning = `Invalid cues: maximum ${MAX_CUES} cues and ${MAX_NOTE} note characters.`;
       return false;
     }
-    if (write(next)) return true;
     unsaved.delete(turn);
     unsaved.set(turn, cue);
+    cues = next;
+    if (flush()) {
+      warning = describe();
+      return true;
+    }
+    warning = UNSAVED;
     return "unsaved";
   }
   load();
   return {
     get cues() { return cues; },
     get warning() { return warning; },
-    get unreadable() { return unreadable; },
+    get unreadable() { return unreadable.size > 0; },
     reload: load,
     put: (turn, cue) => change(turn, cue),
     remove: (turn) => change(turn, null),
-    // Replaces everything stored for this chat: Reset local cues, the one way past unreadable stored cues.
-    save(next) {
-      if (!validCues(next)) {
-        warning = `Invalid cues: maximum ${MAX_CUES} cues and ${MAX_NOTE} note characters.`;
-        return false;
+    // Reset local cues: removes every cue of this chat, readable or not.
+    reset() {
+      load();
+      const turns = new Set([...Object.keys(cues), ...unreadable.keys()]);
+      for (const turn of turns) {
+        unsaved.delete(turn);
+        unsaved.set(turn, null);
       }
-      return write(next);
+      cues = {};
+      if (flush()) {
+        unreadable = new Map();
+        warning = "";
+        return true;
+      }
+      warning = UNSAVED;
+      return "unsaved";
     },
   };
 }

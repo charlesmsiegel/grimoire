@@ -10,8 +10,17 @@ import { makeStaging } from "../../src/grimoire/app/static/pages/chat/staging.js
 
 const memory = (initial = {}) => {
   const data = { ...initial };
-  return { data, getItem: (k) => data[k] ?? null, setItem: (k, v) => { data[k] = v; } };
+  return {
+    data,
+    get length() { return Object.keys(data).length; },
+    key: (i) => Object.keys(data)[i] ?? null,
+    getItem: (k) => data[k] ?? null,
+    setItem: (k, v) => { data[k] = v; },
+    removeItem: (k) => { delete data[k]; },
+  };
 };
+const K = (chat, turn) => "grimoire.vn.cue:" + chat + "\u001f" + turn;
+const turnsIn = (store, chat) => Object.keys(store.data).filter((k) => k.startsWith("grimoire.vn.cue:" + chat + "\u001f")).map((k) => k.split("\u001f")[1]).sort();
 const line = (actor, speaker, text) => ({ actor, speaker, text });
 const kept = (turn, number, lines, present, post = null) => ({ turn, number, post, kept: { lines, present } });
 const who = (...pairs) => pairs.map(([actor, name]) => ({ actor, name }));
@@ -120,37 +129,46 @@ test("off stage, focus defaults, background inheritance and outfit changes are w
   assert.deepEqual(c.focus, { actor: "s", source: "automatic" });
 });
 
-test("two tabs editing different turns both keep their cues; unreadable stored cues are not overwritten", () => {
+test("two tabs saving different turns, even interleaved, both keep their cues; unreadable cues are kept", () => {
   const shared = memory();
   const cue = (note) => ({ actors: {}, focus: "auto", background: "inherit", transition: "none", note });
+  // Both tabs read the store before either writes: each save writes only its own turn.
   const tabA = cueStore("c", shared, null), tabB = cueStore("c", shared, null);
   assert.equal(tabA.put("t1", cue("from A")), true);
-  assert.equal(tabB.put("t2", cue("from B")), true); // B never reloaded, and still keeps A's cue
-  assert.deepEqual(Object.keys(JSON.parse(shared.data["grimoire.vn.v2:c"]).cues).sort(), ["t1", "t2"]);
+  assert.equal(tabB.put("t2", cue("from B")), true);
+  assert.deepEqual(turnsIn(shared, "c"), ["t1", "t2"]);
   assert.equal(tabA.remove("t2"), true);
   tabB.reload();
   assert.deepEqual(Object.keys(tabB.cues), ["t1"]);
-  // a newer build's cues: kept, reported, and changed only by Reset local cues
-  shared.data["grimoire.vn.v2:c"] = JSON.stringify({ version: 3, cues: { t9: { anything: true } } });
+  // a newer build's cue: kept and reported; saving over it is refused; Reset local cues removes it
+  shared.data[K("c", "t9")] = JSON.stringify({ version: 3, cue: { anything: true } });
   const old = cueStore("c", shared, null);
   assert.match(old.warning, /newer version/);
-  assert.equal(old.put("t1", cue("x")), false);
-  assert.equal(JSON.parse(shared.data["grimoire.vn.v2:c"]).version, 3);
-  assert.equal(old.save({}), true, "Reset local cues replaces them");
-  shared.data["grimoire.vn.v2:c"] = "null";
+  assert.equal(old.put("t9", cue("x")), false);
+  assert.equal(JSON.parse(shared.data[K("c", "t9")]).version, 3);
+  assert.equal(old.put("t3", cue("other turns still save")), true);
+  assert.equal(old.reset(), true);
+  assert.deepEqual(turnsIn(shared, "c"), []);
+  shared.data[K("c", "t1")] = "null";
   assert.match(cueStore("c", shared, null).warning, /malformed/i);
 });
 
-test("a change kept only in memory while storage is full survives the next successful save", () => {
+test("a change kept only in memory while storage is full survives reloads and the next successful save", () => {
   const shared = memory();
   let full = true;
-  const store = cueStore("c", { getItem: shared.getItem, setItem: (k, v) => { if (full) throw Error("quota"); shared.setItem(k, v); } }, null);
+  const store = cueStore("c", { get length() { return shared.length; }, key: shared.key, getItem: shared.getItem, removeItem: shared.removeItem,
+    setItem: (k, v) => { if (full) throw Error("quota"); shared.setItem(k, v); } }, null);
   const cue = (note) => ({ actors: {}, focus: "auto", background: "inherit", transition: "none", note });
   assert.equal(store.put("t1", cue("first")), "unsaved");
   assert.match(store.warning, /remain in memory/);
+  shared.data[K("c", "t5")] = JSON.stringify({ version: 2, cue: cue("another tab") });
+  store.reload(); // another tab's change arrives: the pending cue and its warning stay
+  assert.deepEqual(Object.keys(store.cues).sort(), ["t1", "t5"]);
+  assert.match(store.warning, /remain in memory/);
   full = false;
   assert.equal(store.put("t2", cue("second")), true);
-  assert.deepEqual(Object.keys(JSON.parse(shared.data["grimoire.vn.v2:c"]).cues).sort(), ["t1", "t2"]);
+  assert.deepEqual(turnsIn(shared, "c"), ["t1", "t2", "t5"]);
+  assert.equal(store.warning, "");
   assert.equal(store.put("t1", { ...cue("x"), transition: "spin" }), false, "an invalid cue is refused outright");
 });
 
@@ -177,14 +195,14 @@ test("#694's per-tab cues move once into the device-local store, keeping what th
   assert.equal(store.warning, "");
   assert.equal(store.cues.t1.focus, "none", "an empty v1 focus meant no focus");
   assert.equal(store.cues.t1.background, "", "an empty v1 background meant none, not inherit");
-  assert.equal(JSON.parse(local.data["grimoire.vn.v2:c"]).version, 2);
-  // the device store wins once it exists; a malformed one is reported, never replaced by the old cues
-  local.data["grimoire.vn.v2:c"] = "{";
-  assert.match(cueStore("c", local, session).warning, /malformed/i);
-  assert.equal(cueStore("c", memory(), memory()).save({ t: { actors: {}, focus: "auto", background: "inherit", transition: "spin", note: "" } }), false);
+  assert.equal(JSON.parse(local.data[K("c", "t1")]).version, 2);
+  const migrated = store.cues.t1;
+  // carried over once: after Reset local cues they do not come back
+  assert.equal(store.reset(), true);
+  assert.deepEqual(Object.keys(cueStore("c", local, session).cues), []);
   // a migrated cue still stages its own turn only: the next turn is back to what came before
   const turns = [1, 2].map((n) => kept("t" + n, n, [line("a", "A", "Line " + n)], who(["a", "A"])));
-  const [first, second] = timeline(turns, { t1: { ...store.cues.t1, background: "media:hall" } });
+  const [first, second] = timeline(turns, { t1: { ...migrated, background: "media:hall" } });
   assert.equal(first.actors[0].position, "left");
   assert.equal(first.background, "media:hall");
   assert.equal(second.actors[0].position, "center", "the v1 cue's blocking did not carry");
@@ -306,8 +324,8 @@ test("proving scenario: two outfits and a portrait-only NPC with focus and histo
   assert.equal(transcript.hidden, false);
   assert.equal(transcript.textContent, before);
   assert.equal(JSON.stringify(scene), frozen);
-  const saved = JSON.parse(globalThis.localStorage.data["grimoire.vn.v2:proof-chat"]);
-  assert.deepEqual(Object.keys(saved.cues).sort(), ["t1", "t2"]);
-  assert.deepEqual(Object.keys(saved.cues.t1.actors).sort(), ["char:seraphine", "npc:winifred"], "untouched actors are not written");
+  assert.deepEqual(turnsIn(globalThis.localStorage, "proof-chat"), ["t1", "t2"]);
+  const saved = JSON.parse(globalThis.localStorage.data[K("proof-chat", "t1")]).cue;
+  assert.deepEqual(Object.keys(saved.actors).sort(), ["char:seraphine", "npc:winifred"], "untouched actors are not written");
   delete globalThis.localStorage;
 });

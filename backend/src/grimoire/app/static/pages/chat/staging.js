@@ -103,7 +103,7 @@ export function makeStaging(ctx, chat, { log }) {
       shown = null;
       announce.textContent = "";
       body.append(el("p", {}, "Selected kept turn unavailable."));
-      body.append(button("Reset local cues", () => { store.save({}); selected = null; draw(); }));
+      body.append(button("Reset local cues", () => { store.reset(); selected = null; draw(); }));
       return;
     }
     const staged = timeline(turns, store.cues);
@@ -138,7 +138,7 @@ export function makeStaging(ctx, chat, { log }) {
           store.remove(selected);
           draw();
         }),
-        button("Reset local cues", () => { store.save({}); draw(); }),
+        button("Reset local cues", () => { store.reset(); draw(); }),
       );
       return;
     }
