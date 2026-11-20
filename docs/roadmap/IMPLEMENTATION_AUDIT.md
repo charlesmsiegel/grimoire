@@ -637,8 +637,8 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 ### 069 — Coding Skills Calibration
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/coding-skills-calibration.md)).
-- Evidence: [`grimoire.calibration`](../../backend/src/grimoire/calibration.py) runs a pinned external deterministic-specialist corpus with three repeat trials, unknown-analysis handling and structural confusion counts; [calibration report and limits](../CALIBRATION.md).
-- Scope / gap: Independent actionable-defect/theory model calibration, model pins, panel repeatability and defect false-positive rates remain unavailable. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
+- Evidence: [`grimoire.calibration`](../../backend/src/grimoire/calibration.py) runs a pinned external deterministic-specialist corpus with three repeat trials, unknown-analysis handling and structural confusion counts. [`grimoire.judgepanel`](../../backend/src/grimoire/judgepanel.py) runs three pinned judges × three trials over a behavior-confirmed labelled corpus, with per-call coverage canaries, served-model pin checks, defect false-positive/negative rates, repeatability and pinned-rubric theory scoring; it reproduces the pinned rubric awarding 100 to unread verdicts and refuses to score them ([calibration report and limits](../CALIBRATION.md)).
+- Scope / gap: No live, provider-reported judge capture has been run (billed; needs an approved spend cap), so independent defect/theory accuracy, repeatability and false-positive rates are not established. Structural wrapper detection is not a defect verdict; no blocking grader is activated.
 
 <a id="slice-070"></a>
 ### 070 — Multimodal Player Input
@@ -652,7 +652,8 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/theory-driven-simplification.md)).
 - Evidence: [Opaque envelope schema policy](../STORAGE.md#opaque-record-schema-policy-071-bounded-slice) removes one repeated validation decision in a verified high-churn module; 51 behavior cases passed before/after, and an executed hypothetical NUL-policy rehearsal required three edits before versus one after with 45 passing cases per variant.
-- Scope / gap: This narrower schema-policy slice does not prove the actor/world change scenario or Android runtime; those broader obligations remain open.
+- Evidence (actor change): [Chat role rules](../CHATS.md#role-rules-one-owner-071) make `grimoire.chats.ROLES` the single owner of each role's definition kind and actor mode, removing six scattered decision sites. An executed rehearsal adding a hypothetical creature `companion` role took six edits in two modules before (the two obvious table edits silently wrote a character instance for a creature) and one table entry after; `test_chats_new_role.py` proves the new role's creature actors are created, reused and refused by the one chat writer in one commit, and that a build without the role refuses such chats. `test_chats_compat_071.py` reads, composes and edits a chat library written by the pre-071 code, passing before and after; a 1,152-outcome differential dump matched except doubly invalid hand-edited roster entries, which now report the role first, and unhashable roles, which now refuse instead of raising `TypeError`. V2 imports no Pydantic; the suites pass on CPython 3.11 with only `pyluach`.
+- Scope / gap: Not yet run on an Android device or emulator (Termux), so the Android runtime part of the proving scenario remains unverified. Chat roles only: app adapters, quickstart, text API filters and 020's character-only projection keep their own role lists, and world lookup is unchanged.
 
 <a id="slice-072"></a>
 ### 072 — VN Staging And Cues
