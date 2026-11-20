@@ -53,6 +53,9 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   // the campaign's clock and its characters' memory (115), for the same chat and view
   const chronicle = ctx.registered("chronicle") ? ui.buttonLink("Chronicle", "chronicle", [campaign],
     { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
+  // who has captured whom, and recording a capture (050, 115), for the same chat and view
+  const companions = ctx.registered("companions") ? ui.buttonLink("Companions", "companions", [campaign],
+    { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
   // the campaign's places, rumors, factions and NPC minds (115): the director's alone
   const world = ctx.registered("world") && audience === "director" && chat
     ? ui.buttonLink("World", "world", [campaign], { chat, audience: "director" }, { size: "small" }) : null;
@@ -62,7 +65,7 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   // preparing it (115): its catalog bindings, ruleset contracts and a prepared scene, for the same chat and view
   const prep = ctx.registered("prep") ? ui.buttonLink("Prep", "prep", [campaign],
     { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
-  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, world, story, prep,
+  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, companions, world, story, prep,
     chats.length ? el("span", { class: "g-muted" }, count(chats.length, "chat") + " in this campaign") : null,
     el("nav", { class: "g-chips", "aria-label": "This campaign's chats" }, chips));
   root.append(el("div", { class: "g-stack campaign-top" }, cover, nav));

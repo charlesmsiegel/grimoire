@@ -81,15 +81,15 @@ person may cite for that character, newest first.
 | 060 | What an NPC thinks others think | `world` | `test_app_world.py`, `js/world.e2e.mjs` | evidence the NPC does not hold refuses `unavailable_evidence`; nothing is saved and nothing is inferred |
 | 049 | Reconciling divergent offline scenes | `story` ([STORY](STORY.md)) | `test_app_story.py`, `js/story.e2e.mjs` | the table sees that it is the director's; keeping one side of a scene held for semantic review is refused (`semantic_review`) with the reason; restoring a retained fork needs both libraries on one machine and is named as not available |
 | 054 | Reviewing a fork or retcon | `story` ([STORY](STORY.md)) | `test_app_story.py`, `js/story.e2e.mjs` | every op in the table's view refuses `director_only`; a stale review refuses `changed`; an incomplete snapshot previews with its problems and exports no correction; repair, generated continuations and promotion are named as not available |
-| 050 | Captured companions | not on a screen yet | | |
-| 051 | Several NPCs answering at once | not on a screen yet | | |
+| 050 | Captured companions | a campaign's hub, the director's ([TABLE.md](TABLE.md)) | `test_app_companions.py`, `js/companions.e2e.mjs`, `js/companions.test.mjs` | the table's view refuses `director_only`; a stale review refuses `changed`; a retry spends nothing again |
+| 051 | Several NPCs answering at once | a chat's Details, the director's ([TABLE.md](TABLE.md)) | `test_app_ensemble.py`, `js/ensemble.e2e.mjs`, `js/ensemble.test.mjs` | the table's view refuses `director_only`; running or accepting an exchange is named as not available |
 | 056 | Source catalogs | Prep (`prep`, director) | `test_app_prep_catalogs.py`, `js/prep.e2e.mjs` | the table's view refuses `director_only`; a catalog that does not compose shows 056's reason; changing a binding is the record's own reviewed Attach, and detaching one has no screen |
-| 058 | Two players at one screen | not on a screen yet | | |
+| 058 | Two players at one screen | in a chat: Shared turn ([TABLE.md](TABLE.md)) | `test_app_table.py`, `js/table.e2e.mjs`, `js/table.test.mjs` | one player at the keyboard: the chat's own composer; a draft reviewed and then changed refuses `changed` |
 | 062 | Ruleset action contracts | Prep (`prep`) | `test_app_prep_rulesets.py`, `js/prep.e2e.mjs`, `js/prep.test.mjs` | no ruleset is pinned for a campaign, so the reference profiles are used; a check is a proposal only, and one that does not fit refuses `invalid_proposal` with 062's words |
 | 064 | Scenario preparation | Prep (`prep`, director) | `test_app_prep_preparation.py`, `js/prep.e2e.mjs`, `js/prep.test.mjs` | off unless Scene preparation is switched on in Models and costs, or no model set up: the page says so and offers no call; the call is traced as `scene_preparation`; a stale estimate refuses `changed` and sends nothing; nothing is saved |
 
-"Not on a screen yet" is said on the page, with the reason, and never offered as a control. Those rows are the
-work left before Wave 8 is user-visible complete.
+Every user-facing first slice of Wave 8 is on a screen. A slice not on one would be said on the page, with the
+reason, and never offered as a control.
 
 ## Not proved here
 
