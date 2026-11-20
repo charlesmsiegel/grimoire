@@ -285,17 +285,86 @@ test("a review that cannot be read says why, and the divergent scenes are still 
   assert.ok(box(root, SCENE.path), "read again, the records are offered");
 });
 
+// A kept scene as story.divergent answers it; `extra` overrides.
+const divergentScene = (path_, number, extra = {}) => ({ path: path_, kind: "scene", chat: SCENE.chat, number, keep_one: "refused",
+  detected: ["phone"], peers: ["phone"], their_deletion: false, deleted_by: [], taking_deletion: null, uncertain: false, continues: null,
+  mine: { etag: "a", deleted: false, peers: [], said: "mine", set_aside: false, unreadable: false },
+  theirs: [{ etag: "b", deleted: false, peers: ["phone"], said: "theirs", set_aside: false, unreadable: false }],
+  taking_theirs: [{ reasons: [], uncertain: false, scenes: [], endpoints: [] }], ...extra });
+const article = (root, label) => root.querySelectorAll("article").find((node) => node.getAttribute("aria-label") === label);
+
 test("uncertain ancestry and a divergent continuation are shown as refused, with why", async () => {
-  const scene = (path_, number, extra) => ({ path: path_, kind: "scene", chat: SCENE.chat, number, keep_one: "refused", detected: ["phone"],
-    peers: ["phone"], their_deletion: false, uncertain: false, continues: null,
-    mine: { etag: "a", deleted: false, peers: [], said: "mine", set_aside: false, unreadable: false },
-    theirs: [{ etag: "b", deleted: false, peers: ["phone"], said: "theirs", set_aside: false, unreadable: false }],
-    taking_theirs: [{ reasons: ["legacy_scene_history"], uncertain: true, scenes: [], endpoints: [] }], ...extra });
-  const { root, done } = mounted({ divergent: () => ({ ...NOTHING_DIVERGENT,
-    scenes: [scene(SCENE.path, 1, {}), scene(LATER.path, 2, { continues: SCENE.path })] }) });
+  // the real server's shape for a legacy payment (test_app_story.py): 049's admission check sees nothing unmet,
+  // and the uncertainty is the snapshot's, in `uncertain` and `ancestry`
+  const ANCESTRY = "campaigns/c1/accepted/e-1.json: incomplete scene provenance: invalid or unsupported continuity_sources";
+  const { root, done } = mounted({ divergent: () => ({ ...NOTHING_DIVERGENT, ancestry: [ANCESTRY],
+    scenes: [divergentScene(SCENE.path, 1, { uncertain: true }), divergentScene(LATER.path, 2, { uncertain: true, continues: SCENE.path })] }) });
   await done;
-  const later = root.querySelectorAll("article").find((node) => node.getAttribute("aria-label") === "Divergent: Scene 2 · t-1");
-  assert.ok(later.textContent.includes("Refused: its ancestry is uncertain"));
-  assert.ok(later.textContent.includes("Refused: a divergent continuation."));
-  assert.ok(later.textContent.includes("no record of the scenes it rests on"));
+  for (const label of ["Divergent: Scene 1 · t-1", "Divergent: Scene 2 · t-1"]) {
+    const found = article(root, label);
+    assert.ok(found.textContent.includes("Refused: its ancestry is uncertain"), label);
+    assert.ok(!found.textContent.includes("leaves no recorded premise unmet"), "nothing calls taking it safe: " + found.textContent);
+    assert.ok(found.textContent.includes("Taking phone's version here cannot be shown safe"));
+  }
+  assert.ok(article(root, "Divergent: Scene 2 · t-1").textContent.includes("Refused: a divergent continuation."));
+  assert.ok(!article(root, "Divergent: Scene 1 · t-1").textContent.includes("divergent continuation"));
+  const listed = root.querySelectorAll("div").find((node) => node.getAttribute("aria-label") === "Uncertain ancestry");
+  assert.ok(listed && listed.textContent.includes(ANCESTRY), "the ancestry problems are listed");
+});
+
+test("a version that cannot be reviewed here counts as uncertain, and a certain one is not refused for it", async () => {
+  const { root, done } = mounted({ divergent: () => ({ ...NOTHING_DIVERGENT,
+    scenes: [divergentScene(SCENE.path, 1, { taking_theirs: [null] }), divergentScene(LATER.path, 2)] }) });
+  await done;
+  const first = article(root, "Divergent: Scene 1 · t-1");
+  assert.ok(first.textContent.includes("Its version from phone cannot be read here.") && first.textContent.includes("Refused: its ancestry is uncertain"));
+  const second = article(root, "Divergent: Scene 2 · t-1");
+  assert.ok(second.textContent.includes("Taking phone's version here leaves no recorded premise unmet.") && !second.textContent.includes("ancestry is uncertain"));
+});
+
+test("a deletion is shown under the devices that deleted it, with what taking it would break", async () => {
+  const { root, done } = mounted({ divergent: () => ({ ...NOTHING_DIVERGENT,
+    scenes: [divergentScene(SCENE.path, 1, { theirs: [], taking_theirs: [], their_deletion: true, peers: ["phone", "tablet"],
+      deleted_by: ["tablet"], taking_deletion: { reasons: ["accepted_scene_missing"], uncertain: true, scenes: [], endpoints: [] } }),
+    divergentScene(LATER.path, 2, { mine: { etag: null, deleted: true, peers: [], said: null, set_aside: false, unreadable: false } })] }) });
+  await done;
+  const deleted = article(root, "Divergent: Scene 1 · t-1");
+  const sides = deleted.querySelectorAll("div").filter((node) => node.classList.contains("story-side"));
+  assert.deepEqual(sides.map((node) => node.querySelector("div").textContent), ["This device", "tablet"], "titled by who deleted it, not every peer");
+  assert.equal(sides[1].querySelector("p").textContent, "Deleted on tablet.");
+  assert.ok(deleted.textContent.includes("Taking the deletion from tablet here would break what rests on it: an accepted event rests on a scene that would be missing."));
+  assert.ok(deleted.textContent.includes("Refused: its ancestry is uncertain"), "a deletion leaving an event without its scene is refused");
+  const mine = article(root, "Divergent: Scene 2 · t-1").querySelectorAll("div").filter((node) => node.classList.contains("story-side"))[0];
+  assert.equal(mine.querySelector("p").textContent, "Deleted on this device.");
+});
+
+test("a review refused because the records moved on reads them again, and the next review is of now", async () => {
+  let reads = 0;
+  const { root, done, calls } = mounted({
+    scenes: () => { reads += 1; return scenesOf("c1", "sha256:" + String(reads).repeat(64)); },
+    declare_plan: (args) => {
+      if (args.expected === "sha256:" + "1".repeat(64)) throw Object.assign(new Error("the records changed"), { reason: "changed" });
+      return { plan: { operation: "d", already_applied: false, source: PAID, dependent: LATER, reason: args.reason, files: ["f"], reaches: [] },
+        scenes: scenesOf("c1", args.expected) };
+    },
+  });
+  await done;
+  const form = () => retcon(root).querySelectorAll("div").find((node) => node.getAttribute("aria-label") === "Record what rests on what");
+  choose(form(), "This record", PAID.path);
+  choose(form(), "rests on it (the record that depends)", LATER.path);
+  button(form(), "Review").click();
+  await settle();
+  assert.equal(reads, 2, "the records were read again");
+  button(form(), "Review").click();  // the picks are kept across the reload
+  await settle();
+  const sent = calls.filter((call) => call.op === "story.declare_plan").map((call) => call.args.expected);
+  assert.deepEqual(sent, ["sha256:" + "1".repeat(64), "sha256:" + "2".repeat(64)], "the second review names the revision read since");
+  assert.ok(retcon(root).querySelectorAll("div").find((node) => node.getAttribute("aria-label") === "Review this change"));
+});
+
+test("taking a version is said with its deletion and its uncertainty", () => {
+  assert.equal(logic.takingText("phone", { reasons: [] }, { uncertain: true }),
+    "Taking phone's version here cannot be shown safe: what rests on this scene is not on record.");
+  assert.equal(logic.takingText("tablet", null, { deletion: true }), "Taking the deletion from tablet cannot be reviewed here.");
+  assert.equal(logic.takingText("tablet", { reasons: [] }, { deletion: true }), "Taking the deletion from tablet here leaves no recorded premise unmet.");
 });

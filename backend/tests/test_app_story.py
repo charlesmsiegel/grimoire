@@ -31,15 +31,16 @@ from test_effect_continuity import write_turn
 from test_peersync_ledger import _accept
 
 from grimoire.app import AppServer
+from grimoire.app.adapters import story as story_adapter
 from grimoire.app.adapters.chronicle import FEATURES
 from grimoire.app.appapi import AppApi
 from grimoire.app.pages import load_pages
 from grimoire.continuitystore import resolve_fork
-from grimoire.core.identity import ContinuityRef
+from grimoire.core.identity import ChatRef, ContinuityRef
 from grimoire.peersync import new_pairing_key
 from grimoire.peersync import pair as make_pair
 from grimoire.security import Grant, Permission, ResourcePath
-from grimoire.store import LibraryStore, ScopeRecord
+from grimoire.store import LibraryStore, ScopeRecord, etag
 from grimoire.store.jsonfmt import thaw
 from grimoire.sync import identify, plan_sync, semantic
 from grimoire.testing.fileops import snapshot
@@ -175,10 +176,11 @@ def test_a_divergent_scene_keeps_both_versions_and_keeping_one_side_is_refused(p
     assert len(desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["scenes"]) == 1
 
 
-def test_a_divergent_continuation_and_an_uncertain_ancestry_show_as_refused(pair, desktop):
+def legacy_history(pair) -> None:
+    """The phone continues the chat offline after its edit, and the desktop's payment loses its record of the
+    scenes it rests on (as one accepted before scenes were pinned): its ancestry is not on record."""
     phone = pair[PHONE]
     write_turn(phone.store, SimpleNamespace(app=phone.handle), number=2, text="Tam mourns the key.")
-    # a payment recorded before scenes were pinned: its ancestry is not on record
     store = pair[DESKTOP].store
     (ref, stored), = store.campaign_accepted("c").records.items()
     assert "continuity_sources" in stored.record.payload
@@ -186,6 +188,10 @@ def test_a_divergent_continuation_and_an_uncertain_ancestry_show_as_refused(pair
     txn = store.transaction()
     txn.put(ScopeRecord(ref, stored.record.schema, legacy, owner=stored.record.owner), stored.etag)
     txn.commit(pair[DESKTOP].handle)
+
+
+def test_a_divergent_continuation_and_an_uncertain_ancestry_show_as_refused(pair, desktop):
+    legacy_history(pair)
     assert desktop.call("media.sync", {"peer": PHONE})["status"] == "conflicts"
     found = {item["path"]: item for item in desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["scenes"]}
     assert set(found) == {SCENE, LATER}
@@ -194,8 +200,64 @@ def test_a_divergent_continuation_and_an_uncertain_ancestry_show_as_refused(pair
     for item in found.values():
         assert item["keep_one"] == "refused"
         assert item["uncertain"] is True
+        # 049's admission check sees nothing unmet: the uncertainty is the snapshot's, so the page must read
+        # `uncertain` (and `ancestry`), never the per-version review alone (the e2e "uncertain" phase shows it)
+        assert [(review["reasons"], review["uncertain"]) for review in item["taking_theirs"]] == [([], False)]
     (problem,) = desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["ancestry"]
     assert "/accepted/" in problem and "scene provenance" in problem
+
+
+def test_taking_another_devices_deletion_is_reviewed_and_titled_by_who_deleted(pair, desktop, monkeypatch):
+    """A kept deletion is listed under the devices that deleted it, and taking it here is 049's own admission
+    check with the file removed. (A turn cannot be deleted in this store, so the conflict is listed as Devices
+    and sync would list one for a deleted record; the review runs over the real library.)"""
+    real = story_adapter.media_of
+
+    class Listed:
+        def __init__(self, api):
+            self.media = real(api)
+
+        def call(self, op, args):
+            answer = self.media.call(op, args)
+            if op != "sync.conflicts":
+                return answer
+            mine = pair[DESKTOP].store.read_exact(SCENE)
+            item = {"path": SCENE, "campaign": "c", "kind": "turn", "their_deletion": True, "theirs": [],
+                    "mine": {"etag": etag(mine), "deleted": False, "peers": [], "preview": {}},
+                    "peers": [{"peer": PHONE, "versions": [], "deleted": True}]}
+            return {**answer, "conflicts": [*answer["conflicts"], item]}
+
+    monkeypatch.setattr(story_adapter, "media_of", Listed)
+    before = snapshot(pair[DESKTOP].store.root)
+    (scene,) = desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["scenes"]
+    assert scene["their_deletion"] is True and scene["deleted_by"] == [PHONE] and scene["theirs"] == []
+    review = scene["taking_deletion"]
+    assert "accepted_scene_missing" in review["reasons"] and review["uncertain"] is True
+    assert scene["uncertain"] is True  # a deletion that leaves an accepted event without its scene is refused
+    assert snapshot(pair[DESKTOP].store.root) == before
+
+
+def test_the_revision_shown_is_of_the_records_once_the_chats_are_open(pair, desktop):
+    """Opening a chat may write an accepted effect's pending 020 knowledge, which 054 pins. The revision a page is
+    shown must be the one a review is then checked against, or the first review would always be stale."""
+    runner = desktop.api.runner
+    original = runner.open
+    wrote = []
+
+    def opening(chat):
+        if not wrote:  # what settling pending knowledge does: a pinned record written while the chat is opened
+            wrote.append(write_turn(pair[DESKTOP].store, SimpleNamespace(app=pair[DESKTOP].handle),
+                                    chat=ChatRef("c", "t-2"), text="A witness remembers the key."))
+        return original(chat)
+
+    runner.open = opening
+    shown = scenes(desktop)
+    assert wrote and "campaigns/c/turns/t-2.000001.json" in {item["path"] for item in shown["records"]}
+    plan = desktop.call("story.declare_plan", {"campaign": "c", **DIRECTOR, "operation_id": "first",
+                                                "expected": shown["etag"], "reason": "dialogue",
+                                                "source": pin(shown, payment(shown)), "dependent": pin(shown, LATER)})
+    assert plan["plan"]["already_applied"] is False
+    assert scenes(desktop)["etag"] == shown["etag"]
 
 
 def test_a_retcon_preview_names_what_rests_on_the_scene_and_writes_nothing(pair, desktop):
@@ -360,6 +422,16 @@ def app_of(pair, name: str, peer: str):
         finally:
             app.close()
             thread.join(10)
+
+
+@pytest.mark.skipif(NODE is None, reason="Node is not installed")
+def test_the_story_page_shows_an_uncertain_ancestry_as_refused(pair):
+    # the real server's answer for a legacy payment and a divergent continuation, drawn by the real page
+    legacy_history(pair)
+    with app_of(pair, DESKTOP, PHONE) as env:
+        ran = _node("story.e2e.mjs", {**env, "GRIMOIRE_PHASE": "uncertain"})
+    assert ran.returncode == 0, ran.stdout[-6000:] + ran.stderr[-3000:]
+    assert "# pass 1" in ran.stdout
 
 
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")

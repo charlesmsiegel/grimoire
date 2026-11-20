@@ -233,8 +233,21 @@ def _record(ctx: AdapterContext, campaign: str, pin: Pin, chats: _Chats) -> dict
     return entry
 
 
-def _records_view(ctx: AdapterContext, campaign: str, snap) -> dict:  # type: ignore[no-untyped-def]
-    chats = _Chats(ctx, campaign)
+def _settled(ctx: AdapterContext, campaign: str, chats: _Chats):  # type: ignore[no-untyped-def]
+    """054's snapshot as it stands once the campaign's chats are open. Opening a chat writes any accepted effect's
+    pending 020 knowledge (``SceneRunner.open``), which 054 pins, so a snapshot taken before the page's labels are
+    read could differ from one taken after: every revision shown or checked is of the settled snapshot."""
+    library = _library(ctx)
+    first = library.snapshot(campaign)
+    for path in sorted(first.pins):
+        turn = _turn_of(path)
+        if turn is not None:
+            chats.scene(turn[0])
+    return library.snapshot(campaign) if chats.open else first
+
+
+def _records_view(ctx: AdapterContext, campaign: str, snap, chats: _Chats | None = None) -> dict:  # type: ignore[no-untyped-def]
+    chats = chats if chats is not None else _Chats(ctx, campaign)
     records = [_record(ctx, campaign, snap.pins[path], chats) for path in sorted(snap.pins)]
     edges = [{"source": edge.source.path, "dependent": edge.dependent.path, "reason": edge.reason,
               "certainty": edge.certainty} for edge in snap.dependencies]
@@ -245,7 +258,8 @@ def _records_view(ctx: AdapterContext, campaign: str, snap) -> dict:  # type: ig
 
 def _scenes(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     campaign = _campaign(ctx, args)
-    return _records_view(ctx, campaign, _library(ctx).snapshot(campaign))
+    chats = _Chats(ctx, campaign)
+    return _records_view(ctx, campaign, _settled(ctx, campaign, chats), chats)
 
 
 def _pin(value: object, key: str) -> Pin:
@@ -289,12 +303,13 @@ def _preview(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                                     or len(alternative) > MAX_ALTERNATIVE):
         raise ApiRefused("invalid_field", f"an alternative is your own words, at most {MAX_ALTERNATIVE} characters")
     library = _library(ctx)
-    snap = library.snapshot(campaign)
+    chats = _Chats(ctx, campaign)
+    snap = _settled(ctx, campaign, chats)
     roots = [_pin(item, "roots") for item in raw]
     if len({pin.path for pin in roots}) != len(roots):
         raise ApiRefused("invalid_field", "each record is named once")
     roots = [_current(snap, pin, campaign) for pin in roots]
-    view = _records_view(ctx, campaign, snap)
+    view = _records_view(ctx, campaign, snap, chats)
     labels = {item["path"]: item for item in view["records"]}
     if alternative is None:
         report, rehearsal = library.preview(campaign, roots, action), None
@@ -347,8 +362,8 @@ def _declaration(ctx: AdapterContext, args: Mapping[str, object]):  # type: igno
                 same = False
         if not same:
             raise ApiRefused("operation_conflict", "this operation id already records something else")
-        return campaign, library, library.snapshot(campaign), edge, ref, True
-    snap = library.snapshot(campaign)
+        return campaign, library, _settled(ctx, campaign, _Chats(ctx, campaign)), edge, ref, True
+    snap = _settled(ctx, campaign, _Chats(ctx, campaign))
     if _digest(snap) != expected:
         raise ApiRefused("changed", "the campaign's records changed since they were shown: review them again")
     if snap.problems:
@@ -392,16 +407,19 @@ def _declare_commit(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
             if "stale" in message or "missing" in message:
                 raise ApiRefused("changed", message) from None
             raise ApiRefused("invalid_dependency", message) from None
-    return {"done": done, "scenes": _records_view(ctx, campaign, library.snapshot(campaign))}
+    return {"done": done, "scenes": _records_view(ctx, campaign, _settled(ctx, campaign, _Chats(ctx, campaign)))}
 
 
 # -- divergent offline scenes (049) ----------------------------------------------------------------------------
-def _reasons(ctx: AdapterContext, campaign: str, path: str, data: bytes | None) -> dict | None:
-    """What 049's serving-side admission check says of taking ``data`` at ``path`` on this device."""
-    if data is None:
+def _reasons(ctx: AdapterContext, campaign: str, path: str, data: bytes | None, *, removal: bool = False) -> dict | None:
+    """What 049's serving-side admission check says of taking ``data`` at ``path`` on this device, or of taking
+    another device's deletion of it (``removal``). None when the version taken cannot be read here."""
+    if data is None and not removal:
         return None
     try:
-        found = [review for review in semantic.validate_transition(ctx.store, {path: data})
+        replacements = {} if removal else {path: data}
+        found = [review for review in semantic.validate_transition(ctx.store, replacements,
+                                                                   removals=(path,) if removal else ())
                  if review.campaign == campaign]
     except (StoreError, LibraryPathError, OSError, SyncError):
         return {"reasons": ["unreadable_semantic_sources"], "uncertain": True, "scenes": [], "endpoints": []}
@@ -505,11 +523,15 @@ def _divergent(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                  "keep_one": "refused" if any(refused.values()) or not peers else "needs_you",
                  "detected": sorted(peer for peer, paths in held_by.items() if path in paths),
                  "taking_theirs": [_reasons(ctx, campaign, path, kept_bytes.get(t["etag"])) for t in item["theirs"]],
+                 # the devices whose kept side is a deletion, and what taking that deletion here would leave unmet
+                 "deleted_by": sorted(side["peer"] for side in item["peers"] if side.get("deleted")),
+                 "taking_deletion": _reasons(ctx, campaign, path, None, removal=True) if item["their_deletion"] else None,
                  "uncertain": bool(ancestry),
                  "chat": None if turn is None else str(ChatRef(campaign, turn[0])),
                  "number": None if turn is None else turn[1], "continues": None}
-        entry["uncertain"] = entry["uncertain"] or any(review is None or review["uncertain"]
-                                                       for review in entry["taking_theirs"])
+        entry["uncertain"] = (entry["uncertain"] or any(review is None or review["uncertain"]
+                                                        for review in entry["taking_theirs"])
+                              or (entry["taking_deletion"] is not None and entry["taking_deletion"]["uncertain"]))
         scenes.append(entry)
     # a later scene of the same chat that differs too is a divergent continuation: it may rest on the earlier one
     for entry in scenes:

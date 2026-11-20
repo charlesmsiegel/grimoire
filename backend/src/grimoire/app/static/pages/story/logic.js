@@ -63,11 +63,16 @@ const SEMANTIC = {
 
 export function semanticText(code) { return SEMANTIC[code] || String(code); }
 
-// The sentence for what taking another device's version here would leave unmet.
-export function takingText(peer, review) {
-  if (!review) return "Its version from " + peer + " cannot be read here.";
-  if (!review.reasons.length) return "Taking " + peer + "'s version here leaves no recorded premise unmet.";
-  return "Taking " + peer + "'s version here would break what rests on it: " + review.reasons.map(semanticText).join("; ") + ".";
+// The sentence for what taking another device's version (or its deletion) here would leave unmet. With
+// `uncertain`, no recorded premise unmet is not enough to call it safe: the scene's ancestry is not on record.
+export function takingText(peer, review, { uncertain = false, deletion = false } = {}) {
+  const what = deletion ? "the deletion from " + peer : peer + "'s version";
+  if (!review) return deletion ? "Taking the deletion from " + peer + " cannot be reviewed here." : "Its version from " + peer + " cannot be read here.";
+  if (!review.reasons.length) {
+    return uncertain ? "Taking " + what + " here cannot be shown safe: what rests on this scene is not on record."
+      : "Taking " + what + " here leaves no recorded premise unmet.";
+  }
+  return "Taking " + what + " here would break what rests on it: " + review.reasons.map(semanticText).join("; ") + ".";
 }
 
 // What one device's last sync did, from story.divergent's peers.

@@ -26,10 +26,14 @@ Each entry of `scenes` is a file the sync kept in two versions here: `mine` and 
 person resolves the file), `keep_one` (`refused` where 049's semantic review holds the file, so the ordinary
 keep-one resolver would take one version over what rests on the other; `needs_you` otherwise), `detected` (the
 peers whose last sync held it), `taking_theirs` (049's reason codes for what taking each other version here would
-leave unmet), `uncertain` (its ancestry is not recorded: a legacy or unreadable accepted event, or a review that
-cannot be made) and `continues` (an earlier scene of the same chat differs too: a divergent continuation). The page
-shows uncertain ancestry and divergent continuations as **refused**, with the reason. `held` lists the accepted
-events and holdings the last sync held with them, so no effect is applied twice or lost.
+leave unmet, from `semantic.validate_transition`; null for a version that cannot be read here), `deleted_by` and
+`taking_deletion` (the devices whose kept side is a deletion, and the same check with the file removed),
+`uncertain` (its ancestry is not recorded: a campaign-wide `ancestry` problem such as a legacy or unreadable
+accepted event, or a review that cannot be made or names an uncertain reason) and `continues` (an earlier scene of
+the same chat differs too: a divergent continuation). `uncertain` is the scene's own verdict: 049's admission
+check can find nothing unmet for a legacy history, and the page never calls such a version safe. The page shows
+uncertain ancestry and divergent continuations as **refused**, with the reason, and lists `ancestry`. `held` lists
+the accepted events and holdings the last sync held with them, so no effect is applied twice or lost.
 
 `retained` lists the retained forks the campaign holds: each scene's exact original from every device, which one
 was restored, and `reconciled_here` (this device holds the restored scenes and the ledger the fork predicts).
@@ -46,6 +50,10 @@ and sync (`pages/sync`), which the page links rather than repeats.
 | `story.preview` | `action` (edit, cut, replace, replay, fork), `roots[]` (`{path, revision}` as shown, at most 64), optional `alternative` | `{complete, problems[], impacts[], corrections, corrections_refused, rehearsal, written: false}` |
 | `story.declare_plan` | `source`, `dependent` (`{path, revision}`), `reason` (dialogue, causal_action, asset), `operation_id`, `expected` (the `etag` shown) | `{plan: {operation, already_applied, source, dependent, reason, files[], reaches[]}, scenes}`; nothing is written |
 | `story.declare_commit` | the same args as the plan | `{done, scenes}` |
+
+Opening a chat may write an accepted effect's pending 020 knowledge, which 054 pins, so every revision these ops
+show or check (`etag`, a root's revision) is of the snapshot taken once the campaign's chats are open. A review
+refused `changed` or `missing_record` reads the records again, and the next review is of what they are now.
 
 A preview names each record that rests on the roots, why (`reason`) and whether that is `known` or only
 `potential`, with the references a memory correction (053) would cite. An incomplete snapshot previews with its
@@ -68,7 +76,14 @@ Named on the page with the reason, never offered as a control:
 
 - **Restore one device's scene as a retained fork.** `continuitystore.resolve_fork` needs both devices'
   libraries open on one machine, each with its own authority; this app serves one library and reaches the other
-  only through sync. Its result (a retained fork) is shown once it exists.
+  only through sync. Its result (a retained fork) is shown once it exists. A stand-in for the other library
+  (a copy built from the keep-both record's bytes) would not do: the review token is over both devices' whole
+  campaign premises and sync bases, which the record does not hold; the other device's owner check would be
+  forged; and the other device's half of the restoration would land in the copy, so the real device keeps its
+  version and the fork never reconciles. What the domain lacks is a peer-sync step for the other half: the serving
+  device rechecks the token against its own library and writes its half (the receipt and the restored scene)
+  under its own authority, resumably; or a one-sided restoration whose receipt ordinary sync admits on the other
+  device.
 - **Merge both versions of a scene.** 049 keeps both versions; it never merges their text.
 - **Repair what depends on a changed scene**, **write a continuation** and **promote an alternative into the
   story.** 054 flags what a change touches, calls no model and keeps alternatives historical.

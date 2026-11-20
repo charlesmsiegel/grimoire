@@ -107,6 +107,12 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
     if (answer.peers.length) parts.push(el("ul", { class: "story-lines" }, answer.peers.map((peer) => el("li", {}, syncText(peer)))));
     else parts.push(el("p", { class: "g-muted" }, "No sync with another device since the app started: what earlier syncs kept is listed below."));
     if (answer.unknown) parts.push(ui.notice("Some of this campaign's sync records cannot be read here, so any of its files may be in conflict.", { kind: "bad" }));
+    if (answer.ancestry.length) {  // 054 cannot establish these scenes' ancestry: no restoration can be shown safe
+      parts.push(el("div", { class: "g-stack", role: "group", "aria-label": "Uncertain ancestry" },
+        el("p", {}, el("strong", {}, "Uncertain ancestry: "), "the campaign's records cannot establish which scenes these rest on, "
+          + "so neither version of a scene can be shown to fit what follows from it."),
+        el("ul", { class: "story-lines" }, answer.ancestry.map((problem) => el("li", { class: "story-said" }, problem)))));
+    }
     if (!answer.scenes.length) parts.push(ui.empty("No scene of this campaign is kept in two versions on this device."));
     for (const scene of answer.scenes) parts.push(divergentScene(scene));
     if (answer.held.length) {
@@ -128,8 +134,9 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
     body.replaceChildren(...parts);
   }
 
-  function side(title, candidate) {
-    const said = candidate.deleted ? "Deleted on this device." : candidate.set_aside ? "Set aside by a fork choice: heard by no one."
+  // one kept version; `where` says whose it is, for a deletion's words
+  function side(title, candidate, where) {
+    const said = candidate.deleted ? "Deleted on " + where + "." : candidate.set_aside ? "Set aside by a fork choice: heard by no one."
       : candidate.unreadable ? "This version cannot be read here." : candidate.said || "(no words)";
     return el("div", { class: "g-stack story-side" }, el("div", { class: "g-eyebrow" }, title),
       el("p", { class: "story-said" }, said));
@@ -138,10 +145,15 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
   function divergentScene(scene) {
     const title = scene.kind === "scene" ? "Scene " + scene.number + (scene.chat ? " · " + chatText(chatNames, scene.chat) : "")
       : kindText(scene.kind) + " " + scene.path.split("/").pop();
-    const sides = [side("This device", scene.mine), ...scene.theirs.map((version) => side(version.peers.join(", ") || "Another device", version))];
-    if (scene.their_deletion) sides.push(side(scene.peers.join(", ") || "Another device", { deleted: true }));
-    const why = scene.theirs.map((version, index) => el("li", {}, takingText(version.peers.join(", ") || "the other device", scene.taking_theirs[index])));
-    const uncertain = scene.taking_theirs.some((review) => review && review.uncertain);
+    const deleters = (scene.deleted_by || []).join(", ") || "another device";
+    const sides = [side("This device", scene.mine, "this device"),
+      ...scene.theirs.map((version) => side(version.peers.join(", ") || "Another device", version, version.peers.join(", ") || "another device"))];
+    if (scene.their_deletion) sides.push(side((scene.deleted_by || []).join(", ") || "Another device", { deleted: true }, deleters));
+    // uncertain: the campaign cannot establish this scene's ancestry, or a version taken here cannot be reviewed
+    const uncertain = Boolean(scene.uncertain) || scene.taking_theirs.some((review) => !review || review.uncertain)
+      || Boolean(scene.their_deletion && (!scene.taking_deletion || scene.taking_deletion.uncertain));
+    const why = scene.theirs.map((version, index) => el("li", {}, takingText(version.peers.join(", ") || "the other device", scene.taking_theirs[index], { uncertain })));
+    if (scene.their_deletion) why.push(el("li", {}, takingText(deleters, scene.taking_deletion, { uncertain, deletion: true })));
     const article = el("article", { class: "g-stack story-scene", "aria-label": "Divergent: " + title },
       el("div", { class: "g-row" }, el("strong", { class: "g-grow" }, title), ui.pill("Both kept", { kind: "accent" }),
         scene.detected.length ? ui.pill("Held for review", { kind: "bad" }) : null),
@@ -236,7 +248,13 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
 
   const plan = (args) => ctx.act(async () => {
     const full = { campaign, audience: "director", operation_id: newOperationId(), expected: scenes.etag, ...args };
-    const answer = await ctx.api("story.declare_plan", full);
+    let answer;
+    try {
+      answer = await ctx.api("story.declare_plan", full);
+    } catch (error) {  // the records moved on since they were shown: read them again, so the next review is of now
+      if (error && (error.reason === "changed" || error.reason === "missing_record")) await load();
+      throw error;
+    }
     review = { args: full, plan: answer.plan };
     scenes = answer.scenes;
     drawDeclare();

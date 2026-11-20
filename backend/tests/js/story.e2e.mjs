@@ -1,4 +1,4 @@
-// Sprint 115's Story page end to end, in fakedom against a real app server, in two phases (GRIMOIRE_PHASE).
+// Sprint 115's Story page end to end, in fakedom against a real app server, in three runs (GRIMOIRE_PHASE).
 //   review (the desktop's app, with the phone served to it): from the campaign hub to its story; the table sees
 //     that it is the director's; the director syncs from Devices and sync, sees the scene both devices changed
 //     apart kept in both versions, keeping one side refused with the reason, the accepted payment and holdings
@@ -8,6 +8,9 @@
 //   restored (the phone's app, with the desktop served to it, after 054's owner operation restored the desktop's
 //     scene as a retained fork): the fork shows both originals and waits on sync; one sync from Devices and sync
 //     brings the payment across, and the fork is reconciled here with nothing left divergent.
+//   uncertain (the desktop's app, its payment with no record of the scenes it rests on and the phone's chat
+//     continued offline): both divergent scenes are refused for their uncertain ancestry, the later one as a
+//     divergent continuation, and the ancestry problem is listed.
 // Run by test_app_story.py, which passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHAT, GRIMOIRE_CAMPAIGN,
 // GRIMOIRE_PEER, GRIMOIRE_DEVICE and GRIMOIRE_PHASE.
 import assert from "node:assert/strict";
@@ -174,6 +177,26 @@ test("divergent offline scenes and a reviewed retcon, on the desktop", { skip: !
   const second = await until(() => impacts(main), 15000, "the preview again");
   assert.ok(second.some((line) => line.includes(DIALOGUE) && line.includes("Known")), "the declared dialogue is known: " + second.join("\n"));
   assert.ok(labelled(main, "div", "What it would touch").textContent.includes("not saved, and no model was called"));
+});
+
+test("an uncertain ancestry and a divergent continuation are refused, on the desktop", { skip: !base || phase !== "uncertain" }, async () => {
+  const { window, main } = await start();
+  await syncNow(window, main);
+  window.location.hash = storyHash();
+  const divergent = await until(() => {
+    const found = section(main, "Divergent offline scenes");
+    return found && found.querySelectorAll("article").filter((node) => (node.getAttribute("aria-label") || "").startsWith("Divergent: Scene ")).length === 2 && found;
+  }, 15000, "both divergent scenes");
+  const scenes = divergent.querySelectorAll("article").filter((node) => (node.getAttribute("aria-label") || "").startsWith("Divergent: Scene "));
+  for (const scene of scenes) {
+    assert.ok(scene.textContent.includes("Refused: its ancestry is uncertain"), "uncertain ancestry is refused: " + scene.textContent);
+    assert.ok(!scene.textContent.includes("leaves no recorded premise unmet"), "nothing calls taking it safe: " + scene.textContent);
+    assert.ok(scene.textContent.includes("cannot be shown safe"));
+  }
+  const later = scenes.find((node) => node.getAttribute("aria-label").startsWith("Divergent: Scene 2"));
+  assert.ok(later.textContent.includes("Refused: a divergent continuation."));
+  const ancestry = divergent.querySelectorAll("div").find((node) => node.getAttribute("aria-label") === "Uncertain ancestry");
+  assert.ok(ancestry && ancestry.textContent.includes("/accepted/") && ancestry.textContent.includes("scene provenance"), "the ancestry problem is listed");
 });
 
 test("a retained fork waits on sync, then is reconciled once, on the phone", { skip: !base || phase !== "restored" }, async () => {
