@@ -196,7 +196,7 @@ export function makeDictation(ctx, { composer, names = () => [], record = browse
 
   function show(revision) {
     const heardText = "Heard " + quoted(revision.heard) + ". ";
-    const previous = { text: composer.value, passage: state.passage };
+    const previous = { text: composer.value, passage: lastPassage() };
     const changes = ["added", "corrected", "scratched"].includes(revision.kind);
     if (changes) put(revision.text, revision.passage, previous);
     const controls = [];

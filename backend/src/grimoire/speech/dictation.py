@@ -41,6 +41,8 @@ MAX_CORRECTION_WORDS = 24
 MAX_ALIGN_WORDS = 200
 MAX_SUGGEST_WORDS = 300
 MAX_NAME_WORDS = 4
+#: The most words a correction takes out ("the big west gate" for "the gate").
+MAX_DROPPED = 4
 
 _WORD = re.compile(r"[\w']+")
 _FILLERS = frozenset({"no", "sorry", "wait", "oh", "um", "uh", "er", "actually"})
@@ -49,6 +51,8 @@ _SUBMIT_VERBS = frozenset({"post", "send", "submit"})
 _SUBMIT_OBJECTS = frozenset({(), ("it",), ("that",), ("this",), ("my", "turn"), ("the", "turn"), ("my", "reply"),
                              ("the", "reply")})
 _POLITE = frozenset({"please", "now"})
+#: Only "please" is trimmed from a correction: "no, I meant we leave now" means now.
+_COURTESY = frozenset({"please"})
 #: Words that do not anchor a correction or a name on their own.
 _STOP = frozenset({"a", "an", "the", "to", "of", "and", "or", "in", "on", "at", "for", "by", "with", "from", "i",
                    "we", "you", "he", "she", "it", "they", "is", "are", "was", "my", "our", "your", "his", "her",
@@ -146,7 +150,7 @@ def _correction(heard: str) -> str | None:
     else:
         return None
     end = len(tokens)
-    while end > begin and words[end - 1] in _POLITE:
+    while end > begin and words[end - 1] in _COURTESY:
         end -= 1  # "... the west gate please": the courtesy is not part of what is put in
     if begin >= end:
         return None
@@ -162,20 +166,34 @@ def _submit(heard: str) -> bool:
     return bool(words) and words[0] in _SUBMIT_VERBS and tuple(words[1:]) in _SUBMIT_OBJECTS
 
 
-def _fits(window: list[str], wanted: list[str]) -> int | None:
+def _stops(words: list[str]) -> bool:
+    return all(word in _STOP for word in words)
+
+
+def _fits(window: list[str], wanted: list[str], before: str | None, after: str | None) -> int | None:
     """How many words ``window`` and ``wanted`` share when ``wanted`` reads as a correction of ``window``, else
-    ``None``: they share a word that is not a stop word, in order, and every word of the window they do not share
-    is either swapped for new words in the same place ("east" for "west" in "the east gate") or dropped from
-    between shared words ("the gate" for "the west gate"). A window may not begin or end with a word nothing
-    replaces ("ride to the gate" for "the west gate"), nor swap stop words for new content ("to" for "west")."""
+    ``None``. ``before`` and ``after`` are the passage's words just outside the window (``None`` at its ends).
+
+    They must share a word that is not a stop word, in order. Each run of window words they do not share is either
+    swapped, in the same place, for new words ("east" for "west", "swords" for "our bows", "at dawn" for "now",
+    "a" for "the"; never stop words for a content word, as "to" for "west", nor a content word for stop words), or
+    dropped from between shared words ("the big west gate" for "the gate"). New words go in at the window's start
+    only at the passage's start or after a stop word, and then not starting with one ("west" before "gate" in "to
+    the gate", but not "the west" after "a", nor anything beside "east"); at its end only at the passage's end. So
+    a correction never takes a neighbouring word, nor leaves one doubled."""
     matcher = SequenceMatcher(None, window, wanted, autojunk=False)
     shared = [word for block in matcher.get_matching_blocks() for word in window[block.a:block.a + block.size]]
-    if all(word in _STOP for word in shared):
+    if _stops(shared):
         return None
     for tag, start, end, begin, stop in matcher.get_opcodes():
+        old, new = window[start:end], wanted[begin:stop]
         if tag == "delete" and (start == 0 or end == len(window)):
             return None
-        if tag == "replace" and (end - start > stop - begin or all(word in _STOP for word in window[start:end])):
+        if tag == "replace" and (_stops(old) and new[0] not in _STOP or _stops(new) and not _stops(old)):
+            return None
+        if tag == "insert" and start == 0 and before is not None and (before not in _STOP or new[0] in _STOP):
+            return None
+        if tag == "insert" and start == len(window) and after is not None:
             return None
     return len(shared)
 
@@ -184,9 +202,9 @@ def _align(passage: str, replacement: str) -> tuple[int, int] | None:
     """The character span of ``passage`` that ``replacement`` corrects, or ``None`` when nothing lines up.
 
     A span lines up when the replacement reads as a correction of it (``_fits``), or, sharing no word, sounds like
-    the replacement as a whole (a misheard name). The most shared words win, then the span that the replacement
-    accounts for most of, then the latest, since a correction usually follows what it corrects. Only the passage's
-    last words are searched, and a long replacement is not a correction to line up."""
+    the replacement as a whole (a misheard name). The most shared words win, then the tightest span, then the
+    latest, since a correction usually follows what it corrects. Only the passage's last words are searched, a
+    correction drops at most a few words, and a long replacement is not a correction to line up."""
     words = _tokens(passage)[-MAX_ALIGN_WORDS:]
     wanted = [word for word, _s, _e in _tokens(replacement)]
     if not words or not wanted or len(wanted) > MAX_CORRECTION_WORDS:
@@ -196,12 +214,14 @@ def _align(passage: str, replacement: str) -> tuple[int, int] | None:
         return None  # already said just so: there is nothing to correct
     wanted_key = key("".join(word for word in wanted if word not in _STOP))
     best: tuple[float, int, int, int, int] | None = None
-    for size in range(1, min(len(wanted) + 1, len(words)) + 1):
+    for size in range(1, min(len(wanted) + MAX_DROPPED, len(words)) + 1):
         for at in range(len(words) - size + 1):
             window = spoken[at:at + size]
-            shared = _fits(window, wanted)
+            before = spoken[at - 1] if at > 0 else None
+            after = spoken[at + size] if at + size < len(spoken) else None
+            shared = _fits(window, wanted, before, after)
             if shared is not None:
-                score: tuple[float, int, int] = (float(shared), size, at)
+                score: tuple[float, int, int] = (float(shared), -size, at)
             elif any(word in wanted for word in window) or abs(size - len(wanted)) > 1:
                 continue
             else:
@@ -209,7 +229,7 @@ def _align(passage: str, replacement: str) -> tuple[int, int] | None:
                 sound = _ratio(heard_key, wanted_key) if min(len(heard_key), len(wanted_key)) >= 3 else 0.0
                 if sound < 0.85:
                     continue
-                score = (sound, size, at)
+                score = (sound, -abs(size - len(wanted)), at)
             if best is None or score > best[:3]:
                 best = (*score, words[at][1], words[at + size - 1][2])
     return (best[3], best[4]) if best is not None else None
@@ -253,30 +273,43 @@ def _names(names: tuple[str, ...]) -> list[str]:
     return sorted(found, key=lambda part: -len(part.split()))  # stable: scene order within a length
 
 
+def _close(left: str, right: str, at_least: float) -> float:
+    """``_ratio`` of the two, or 0 when their lengths alone rule out reaching ``at_least``."""
+    if not left or not right or 2 * min(len(left), len(right)) < at_least * (len(left) + len(right)):
+        return 0.0
+    matcher = SequenceMatcher(None, left, right)
+    return matcher.ratio() if matcher.quick_ratio() >= at_least else 0.0
+
+
 def suggest(passage: str, names: tuple[str, ...]) -> tuple[Suggestion, ...]:
-    """Spans of ``passage`` that sound like a scene name without being it: one suggestion per span and name."""
+    """Spans of ``passage`` that sound like a scene name without being it: one suggestion per span and name.
+    Each span's sound and spelling are worked out once, and only spans the length of a name are compared."""
     words = _tokens(passage)[:MAX_SUGGEST_WORDS]
     present = {word for word, _s, _e in words}
+    parts = _names(names)
+    longest = max((len(_tokens(part)) for part in parts), default=0)
+    spans: dict[int, list[tuple[int, int, str, str]]] = {}
+    for size in range(1, longest + 2):
+        for at in range(len(words) - size + 1):
+            spoken = [word for word, _s, _e in words[at:at + size]]
+            if not all(word in _STOP for word in spoken):
+                joined = "".join(spoken)
+                spans.setdefault(size, []).append((words[at][1], words[at + size - 1][2], key(joined), joined))
     taken: list[tuple[int, int]] = []
     found: list[Suggestion] = []
-    for name in _names(names):
+    for name in parts:
         name_words = [word for word, _s, _e in _tokens(name)]
         if all(word in present for word in name_words):
             continue  # the name is already spelled out
-        name_key = key(name)
+        name_key, name_letters = key(name), re.sub(r"[^a-z]", "", name.lower())
         best: tuple[float, int, int] | None = None
         for size in range(1, len(name_words) + 2):
-            for at in range(len(words) - size + 1):
-                window = words[at:at + size]
-                spoken = [word for word, _s, _e in window]
-                if all(word in _STOP for word in spoken):
-                    continue
-                start, end = window[0][1], window[-1][2]
+            for start, end, sound_key, letters in spans.get(size, ()):
                 if any(start < stop and begin < end for begin, stop in taken):
                     continue
-                sound = _ratio(key("".join(spoken)), name_key)
-                spelling = _ratio("".join(spoken), re.sub(r"[^a-z]", "", name.lower()))
-                if sound >= 0.85 and spelling >= 0.6 and (best is None or sound + spelling > best[0]):
+                sound = _close(sound_key, name_key, 0.85)
+                spelling = _close(letters, name_letters, 0.6) if sound else 0.0
+                if sound and spelling and (best is None or sound + spelling > best[0]):
                     best = (sound + spelling, start, end)
         if best is not None:
             taken.append((best[1], best[2]))

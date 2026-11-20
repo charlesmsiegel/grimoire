@@ -58,6 +58,14 @@ def test_a_correction_only_reaches_the_last_dictated_passage():
     ("We hire three guards", "no I meant four guards", "We hire four guards"),  # a word swapped
     ("We draw swords and charge the line", "no I meant we draw bows", "We draw bows and charge the line"),
     ("We head to the east gate", "no, I meant the west gate please", "We head to the west gate"),  # not the courtesy
+    ("We draw swords and charge", "no I meant we draw our bows", "We draw our bows and charge"),
+    ("I attack the orc and flee", "I meant I attack the goblin chief", "I attack the goblin chief and flee"),
+    ("We ride to a gate", "I meant the west gate", "We ride to the west gate"),  # no "a the"
+    ("We ride to the gate", "I meant a gate", "We ride to a gate"),
+    ("We go to the big west gate", "I meant the gate", "We go to the gate"),  # two words taken out
+    ("East gate now", "correction west gate", "West gate now"),  # swapped, not put in beside "east"
+    ("We leave at dawn", "no I meant we leave now", "We leave now"),  # "now" is meant
+    ("Gate is shut", "I meant the west gate", "The west gate is shut"),
 ])
 def test_a_correction_that_puts_in_takes_out_or_swaps_words_keeps_its_neighbours(passage, said, expected):
     fixed = revise(passage, passage, said)
