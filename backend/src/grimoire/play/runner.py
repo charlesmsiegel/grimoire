@@ -664,7 +664,9 @@ class SceneRunner:
         deciders = [actor.instance_id for actor, _ in chosen
                     if self.decisions is not None and actor in self._agendas and actor not in existing]
         # 068: an opt-in presentation suggestion for each speaker, capped per take by the policy; none when off.
-        planners = ([actor.instance_id for actor, _ in chosen]
+        # An actor with an agenda is briefed with its choice, so it is never a planner: a forgone call
+        # would only use up the cap another speaker could have had.
+        planners = ([actor.instance_id for actor, _ in chosen if actor not in self._agendas]
                     if self.policy.cap_for(InferenceStage.PLANNING) else [])
         try:
             with span("plan"):

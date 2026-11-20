@@ -75,7 +75,8 @@ ENDPOINTS = {"openrouter": "https://openrouter.ai/api/v1", "anthropic": "https:/
 PROTOCOL_NOTES = {
     "anthropic": ("0.2.1 called Anthropic's own Messages API; V2 calls Anthropic's OpenAI-compatible "
                   "endpoint, which offers no prompt caching and reports no cached-token counts, so the "
-                  "cost comparison is usage_incomplete and the token sums are not like for like."),
+                  "cost comparison is usage_incomplete and the token sums are not like for like. The two "
+                  "requests may also differ in options 0.2.1's call set (extended thinking among them)."),
 }
 DRY_RUN_ENDPOINT = "https://dry-run.invalid/v1"
 #: The harness a run of this module names in its source.
@@ -257,8 +258,16 @@ def planned_requests(scenario: Scenario, baseline: Baseline, *, with_planning: b
     return calls * baseline.attempts
 
 
+def spent(meters: Sequence[TurnMeter]) -> str:
+    """What the turns played so far sent, as counts only (never text): for a run that fails or is stopped."""
+    attempts = [a for meter in meters for a in meter.ledger.attempts if a.outcome != "not_sent"]
+    sums = {name: sum(getattr(a.usage, name) or 0 for a in attempts) for name in ("input_tokens", "output_tokens")}
+    return (f"{len(attempts)} requests sent; reported input tokens {sums['input_tokens']}, "
+            f"output tokens {sums['output_tokens']}")
+
+
 def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup: Mapping, *,
-         planning: bool) -> dict:
+         planning: bool, meters: list[TurnMeter] | None = None) -> dict:
     """The V2 run, as a ``/2`` run dict with the baseline's conditions."""
     cast = _cast(scenario, setup)
     runtime = _runtime(options, baseline, setup, scenario, planning)
@@ -275,6 +284,8 @@ def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup:
                                     controls=cast.controls, policy=policy,
                                     planners=script.speakers if planning else ())
         meter = TurnMeter(TurnUsageLedger(plan))
+        if meters is not None:
+            meters.append(meter)
         try:
             outcome = runtime.run_turn(meter, briefs, controls=cast.controls)
         except GenerationError as error:
@@ -347,9 +358,15 @@ def run_compare(options: CompareOptions) -> Path:
     if options.mode == "live":
         print(f"live: at most {planned_requests(scenario, baseline, with_planning=options.with_planning)} "
               f"billed requests to {baseline.provider} ({baseline.model})", file=sys.stderr)
-    runs = {"baseline": play(options, baseline, scenario, setup, planning=False)}
-    if options.with_planning:
-        runs["planning"] = play(options, baseline, scenario, setup, planning=True)
+    meters: list[TurnMeter] = []
+    try:
+        runs = {"baseline": play(options, baseline, scenario, setup, planning=False, meters=meters)}
+        if options.with_planning:
+            runs["planning"] = play(options, baseline, scenario, setup, planning=True, meters=meters)
+    except BaseException:  # failed or interrupted: nothing is written, but say what was already sent
+        if options.mode == "live" and meters:
+            print(f"stopped after billed calls: {spent(meters)}", file=sys.stderr)
+        raise
     files = {f"v2-{name}.run.json": json.dumps(raw, indent=2, ensure_ascii=False) + "\n"
              for name, raw in runs.items()}
     files["comparison-report.txt"] = _report(options, baseline, scenario, runs)

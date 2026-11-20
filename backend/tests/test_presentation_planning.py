@@ -224,3 +224,22 @@ def test_actual_app_plans_meters_persists_usage_and_turns_off(tmp_path):
     stored = "".join(p.read_text("utf-8", errors="replace") for p in folder.rglob("*") if p.is_file()
                      and p.suffix in (".json", ".md", ".jsonl"))
     assert SUGGESTION not in stored
+
+
+def test_an_adapter_exception_in_planning_halts_the_turn_as_it_does_for_a_reply():
+    controls, voices = world()
+    harness = Harness([say("Coin first."), say("Darling!")])
+    plan = plan_generation_turn(CAMPAIGN, "t1", present=PRESENT, speakers=SPEAKERS, controls=controls,
+                                policy=PLAN_ONE, planners=SPEAKERS)
+    real = harness.adapter.execute
+
+    def broken(meter, call, *args, **kwargs):
+        if call.stage is InferenceStage.PLANNING:
+            raise RuntimeError("approvals callback bug")
+        return real(meter, call, *args, **kwargs)
+
+    harness.adapter.execute = broken
+    outcome = harness.runtime.run_turn(harness.meter(plan), [brief(ODA, "Oda", voices), brief(BELLAMY, "Bellamy", voices)],
+                                       controls=controls)
+    assert outcome.status == "halted" and outcome.lines == () and harness.transport.sends == []
+    assert outcome.calls[0].status == "failed" and outcome.calls[0].reason == "RuntimeError"

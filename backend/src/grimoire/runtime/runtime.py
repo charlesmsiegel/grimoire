@@ -352,14 +352,15 @@ class GenerationRuntime:
 
     def _plan(self, meter: TurnMeter, call: PlannedCall, brief: NpcBrief, cancel: CancelToken,
               voices: tuple[ResolvedVoice, ...], outcomes: list[CallOutcome],
-              suggestions: dict[InstanceRef, str]) -> CallStatusLabel:
+              suggestions: dict[InstanceRef, str]) -> CallStatusLabel | Literal["error"]:
         """Issue one optional ``planning`` call (068) and record its outcome; never halts the turn.
 
         The call sees only the NPC's own brief (no line of this turn). An NPC whose brief carries a
         choice (039/045) gets no call: a suggestion may never compete with a decided intention, so the
         call is forgone (``not_issued``, ``has_choice``) and nothing is billed. A refused, failed,
         incomplete or screened-out suggestion is recorded and the NPC speaks without one, exactly as
-        it would with the stage off. Only a cancellation stops the turn.
+        it would with the stage off. A cancellation stops the turn, and so does an exception from the
+        adapter (an approvals callback or adapter bug), as it does for a reply: ``failed`` is returned.
         """
         if brief.intention is not None:
             meter.forgo(call)
@@ -369,9 +370,9 @@ class GenerationRuntime:
         try:
             result = self._adapter.execute(meter, call, request, self._routes, self._handle,
                                            approvals=self._approvals, cancel=cancel)
-        except Exception as error:  # the NPC still speaks without a suggestion
+        except Exception as error:  # a bug, not a provider answer: halt as a reply's call does
             outcomes.append(CallOutcome(call.call_id, "failed", type(error).__name__))
-            return "failed"
+            return "error"
         if result.status != "accepted":
             outcomes.append(CallOutcome(call.call_id, result.status, _reason(result)))
             return result.status
@@ -452,6 +453,8 @@ class GenerationRuntime:
                     status = self._plan(meter, call, brief, cancel, voices, outcomes, suggestions)  # type: ignore[arg-type]
                     if status == "cancelled":
                         return ended("cancelled")
+                    if status == "error":
+                        return ended("halted")
                     continue
                 listener = brief.actor if isinstance(brief, NpcBrief) else None
                 spoken = tuple(HeardLine(line.speaker, line.text, line.actor) for line in lines
