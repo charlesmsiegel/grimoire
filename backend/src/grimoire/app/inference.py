@@ -48,7 +48,9 @@ from .config import (
     KEYS,
     MAX_ATTEMPTS,
     MAX_FALLBACKS,
+    MAX_DECISION_CALLS,
     MAX_OUTPUT_TOKENS,
+    MAX_PLANNING_CALLS,
     PRICE_KEYS,
     ConfigError,
     ModelConfig,
@@ -103,7 +105,6 @@ _LOCKER = OsLocker()
 #: the app never offers a switch that would change nothing.
 _NOT_WIRED = {
     InferenceStage.LABELLING: "campaign labelling is configured separately through --campaign-config and used at the campaign hub",
-    InferenceStage.PLANNING: "no V2 service plans an NPC with a model yet",
     InferenceStage.EPISTEMIC_INFERENCE: "no V2 service infers perception with a model yet",
     InferenceStage.RECALL: "memory recall is deterministic in V2; no model-assisted recall exists yet",
     InferenceStage.GRAPH_LOOKUP: "graph traversal is deterministic in V2; no model-assisted lookup exists yet",
@@ -395,6 +396,7 @@ class InferenceApi:
         view = config_json(config)
         view.setdefault("key_env", None)
         view.setdefault("critique", 0)
+        view.setdefault("planning", 0)
         for name in PRICE_KEYS:
             view.setdefault(name, None)
         view["key_set"] = None if config.key_env is None else bool(self.environ.get(config.key_env))
@@ -416,6 +418,12 @@ class InferenceApi:
         stages.append({"stage": "decision", "kind": "optional", "enabled": decisions > 0,
                        "cap": decisions, "available": self.text_api.runner.decisions is not None,
                        "note": "optional bounded choices for NPCs with authored tactics; recorded once per turn"})
+        planning = 0 if config is None else config.planning_calls
+        stages.append({"stage": InferenceStage.PLANNING.value, "kind": "optional", "enabled": planning > 0,
+                       "cap": planning or None, "available": True,
+                       "note": "one short presentation suggestion before a speaking NPC's reply, capped per take; "
+                               "it never chooses actions, is never stored, and is skipped for an NPC with a "
+                               "decided choice"})
         for stage, reason in _NOT_WIRED.items():
             stages.append({"stage": stage.value, "kind": "optional", "enabled": False, "cap": None,
                            "available": False, "note": reason})
@@ -440,10 +448,12 @@ class InferenceApi:
             "limits": None if config is None else {
                 "attempts_per_call": config.attempts, "max_output_tokens": config.max_output_tokens,
                 "director_calls_per_turn": min(config.director_calls, 1),
-                "critique_calls_per_take": config.critique_calls, "decision_calls_per_turn": config.decision_calls},
+                "critique_calls_per_take": config.critique_calls, "decision_calls_per_turn": config.decision_calls,
+                "planning_calls_per_take": config.planning_calls},
             "prices": self._prices_view(config), "test_call": self._test_view(config),
             "unavailable": [{"feature": feature, "reason": reason} for feature, reason in UNAVAILABLE],
-            "bounds": {"fallbacks": MAX_FALLBACKS, "attempts": MAX_ATTEMPTS, "max_output_tokens": MAX_OUTPUT_TOKENS, "decisions": 16},
+            "bounds": {"fallbacks": MAX_FALLBACKS, "attempts": MAX_ATTEMPTS, "max_output_tokens": MAX_OUTPUT_TOKENS,
+                       "decisions": MAX_DECISION_CALLS, "planning": MAX_PLANNING_CALLS},
         }
 
     def _prices_view(self, config: ModelConfig | None) -> dict:

@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from grimoire.core.identity import InstanceRef
 from grimoire.core.knowledge import Moment
 from grimoire.store.errors import LedgerInvalid
-from grimoire.memory.model import MemorySelection, MemoryCorrection
+from grimoire.memory.model import MemorySelection, MemoryCorrection, MemorySummary
 
 
 def encode(value):
@@ -13,13 +13,18 @@ def encode(value):
         return 'selection', {**common, 'collection_id': value.collection_id, 'evidence_ids': list(value.evidence_ids)}
     if type(value) is MemoryCorrection:
         return 'correction', {**common, 'obsolete_ids': list(value.obsolete_ids), 'replacement_ids': list(value.replacement_ids), 'provenance': value.provenance}
+    if type(value) is MemorySummary:  # 053: an authored account citing evidence
+        return 'summary', {**common, 'collection_id': value.collection_id, 'topic': value.topic, 'text': value.text,
+                           'evidence_ids': list(value.evidence_ids), 'supersedes': value.supersedes}
     raise ValueError('invalid_record')
 
 
 def decode(kind, data):
     try:
         common = {'operation_id', 'actor', 'moment'}
-        extra = {'collection_id', 'evidence_ids'} if kind == 'selection' else {'obsolete_ids', 'replacement_ids', 'provenance'} if kind == 'correction' else None
+        extra = {'selection': {'collection_id', 'evidence_ids'},
+                 'correction': {'obsolete_ids', 'replacement_ids', 'provenance'},
+                 'summary': {'collection_id', 'topic', 'text', 'evidence_ids', 'supersedes'}}.get(kind)
         if extra is None or not isinstance(data, Mapping) or set(data) != common | extra:
             raise ValueError()
         m = data['moment']
@@ -33,6 +38,9 @@ def decode(kind, data):
             return tuple(value)
         if kind == 'selection':
             return MemorySelection(data['operation_id'], actor, data['collection_id'], ids('evidence_ids'), moment)
+        if kind == 'summary':
+            return MemorySummary(data['operation_id'], actor, data['collection_id'], data['topic'], data['text'],
+                                 ids('evidence_ids'), moment, data['supersedes'])
         return MemoryCorrection(data['operation_id'], actor, ids('obsolete_ids'), ids('replacement_ids'), moment, data['provenance'])
     except (ValueError, TypeError, KeyError):
         raise LedgerInvalid('invalid_memory_record') from None
