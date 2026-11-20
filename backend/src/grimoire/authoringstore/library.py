@@ -177,11 +177,17 @@ class AuthoringLibrary:
         duplicates = []
         for candidate in proposal.candidates:
             key = (candidate.kind, name_key(candidate.name))
-            for definition in sorted(existing.get(key, ()), key=lambda d: str(d.ref)):  # type: ignore[attr-defined]
+            slug = _slug(candidate.name, candidate.key)
+            same = {str(d.ref): d for d in existing.get(key, ())}  # type: ignore[attr-defined]
+            named = heads.get((candidate.kind, slug))  # its id would be taken by one of the same kind
+            if named is not None:
+                same.setdefault(str(named.ref), named)  # type: ignore[attr-defined]
+            for _, definition in sorted(same.items()):
                 duplicates.append(Duplicate(candidate.key, existing=definition.ref,  # type: ignore[attr-defined]
-                                            existing_name=definition.name))  # type: ignore[attr-defined]
+                                            existing_name=getattr(definition, "name", "")))
             for other in proposal.candidates:
-                if other.key != candidate.key and (other.kind, name_key(other.name)) == key:
+                if other.key != candidate.key and other.kind == candidate.kind and (
+                        name_key(other.name) == key[1] or _slug(other.name, other.key) == slug):
                     duplicates.append(Duplicate(candidate.key, other=other.key))
         problems = []
         for link in proposal.links:
@@ -206,6 +212,10 @@ class AuthoringLibrary:
         ``topology`` names the topology entity to extend when the world has several."""
         if type(review) is not ProposalReview:
             raise AuthoringError("invalid_review")
+        with self.store.lock:  # one read of the world builds the content and the guards that check it
+            return self._draft(review, decision, topology)
+
+    def _draft(self, review: ProposalReview, decision: Decision, topology: str | None) -> AcceptanceDraft:
         proposal = review.proposal
         source = proposal.request.source
         view, _, heads = self._world(source)
@@ -213,6 +223,7 @@ class AuthoringLibrary:
             raise AuthoringError("stale_review")
         selection = select(proposal, decision, review.duplicates, review.problems)
         taken = {entity_id.casefold() for _, entity_id in self.store.source_entities(source)}
+        taken |= self._mapped(source, heads)  # a map may name a place whose record is gone: never reuse it
         records: dict[str, SourceRef] = {}
         for candidate in selection.accepted:
             records[candidate.key] = SourceRef(source, candidate.kind, self._allocate(candidate, taken), "r1")
@@ -237,6 +248,20 @@ class AuthoringLibrary:
         except ChangeSetError as error:
             raise AuthoringError(error.reason) from None
         return AcceptanceDraft(review, decision, selection, records, topology_ref, self.changes.review(changeset))
+
+    @staticmethod
+    def _mapped(source: str, heads: Mapping[tuple[str, str], object]) -> set[str]:
+        """The folded ids of this source's places named by any of its readable topologies."""
+        mapped: set[str] = set()
+        for (kind, _), head in heads.items():
+            if kind != TOPOLOGY:
+                continue
+            try:
+                graph = decode_topology(head.ref, head.envelope.payload)  # type: ignore[attr-defined]
+            except TopologyError:
+                continue
+            mapped |= {place.ref.entity_id.casefold() for place in graph.places if place.ref.source == source}
+        return mapped
 
     @staticmethod
     def _allocate(candidate: Candidate, taken: set[str]) -> str:
@@ -288,14 +313,18 @@ class AuthoringLibrary:
         def place_of(endpoint: str | SourceRef) -> SourceRef:
             if type(endpoint) is not SourceRef:
                 ref = records[endpoint]  # type: ignore[index]
-                places.setdefault(ref.entity_key, Place(ref))
+                known = places.get(ref.entity_key)
+                if known is None:
+                    places[ref.entity_key] = Place(ref)
+                elif known.ref != ref:  # a fresh id is never on a map: refuse rather than merge into it
+                    raise AuthoringError("invalid_topology")
                 return ref
+            if endpoint not in pinned:  # the link relies on it as reviewed, on the map or not
+                pinned.append(endpoint)
             known = places.get(endpoint.entity_key)
             if known is not None:  # the map already holds this place at its own pinned revision
                 return known.ref
             places[endpoint.entity_key] = Place(endpoint)
-            if endpoint not in pinned:
-                pinned.append(endpoint)
             return endpoint
 
         for link in selection.links:
@@ -325,6 +354,8 @@ class AuthoringLibrary:
                 change = self.changes.revise(source, TOPOLOGY, entity_id, payload, evidence=evidence)  # type: ignore[arg-type]
         except ChangeSetError as error:
             raise AuthoringError(error.reason) from None
+        if head is not None and change.base != head.ref.revision:  # type: ignore[attr-defined]
+            raise AuthoringError("stale_review")  # the map moved since it was read: build again
         return change, SourceRef(source, TOPOLOGY, entity_id, change.revision), tuple(pinned)  # type: ignore[arg-type]
 
     # -- approve, apply, reject -------------------------------------------------------------------

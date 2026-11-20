@@ -28,13 +28,15 @@ def proposal(*links: Link, candidates=(A, B, C, G, IDEA)) -> Proposal:
     ("Guild of the Lamplighters", "lamplighters guild"),
     ("ＢＲＩＮＥＷＩＣＫ", "brinewick"),
     ("Mara's Rest", "Mara Rest"),
+    ("Lamplighter's Guild", "Lamplighters Guild"),
+    ("Café Noir", "Cafe Noir"),
 ])
 def test_namesakes_share_a_key(left, right):
     assert name_key(left) == name_key(right)
 
 
-@pytest.mark.parametrize("left,right", [("Lamplighter's Guild", "Lamplighters Guild"), ("Brinewick", "Brine Wick"),
-                                        ("North Gate", "Gate")])
+@pytest.mark.parametrize("left,right", [("Brinewick", "Brine Wick"), ("North Gate", "Gate"),
+                                        ("Glass Tower", "Glas Tower")])
 def test_different_names_do_not(left, right):
     assert name_key(left) != name_key(right)
 
@@ -68,6 +70,9 @@ def test_a_name_made_only_of_ignored_words_still_has_a_key():
     (lambda: Proposal("p", AuthoringRequest("r", REALM, "x", max_candidates=1), (A, B)), "candidate_bound"),
     (lambda: AuthoringRequest("r", REALM, "x", max_candidates=17), "invalid_bound"),
     (lambda: AuthoringRequest("r", "campaign:c", "x"), "invalid_source"),
+    (lambda: AuthoringRequest("r", "character:wren", "x"), "invalid_source"),
+    (lambda: AuthoringRequest("r", "addon:fan", "x"), "invalid_source"),
+    (lambda: AuthoringRequest("r", "plain", "x"), "invalid_source"),
     (lambda: AuthoringRequest("r", REALM, "x", ("same", "same")), "duplicate_constraint"),
     (lambda: Decision((), "human:owner"), "nothing_accepted"),
     (lambda: Decision(("a",), "human:owner", ("b",)), "distinct_not_accepted"),

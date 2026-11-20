@@ -77,14 +77,26 @@ def _text(value: object, limit: int, *, empty: bool = False) -> str:
     return value
 
 
+def _fold(name: str) -> str:
+    """NFKC, casefolded, with accents removed (so "Café" and "Cafe" compare equal)."""
+    decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", name).casefold())
+    return unicodedata.normalize("NFC", "".join(c for c in decomposed if not unicodedata.combining(c)))
+
+
+def _stem(word: str) -> str:
+    """A trailing plural ``s`` dropped from a longer word, so "Lamplighter's" meets "Lamplighters"."""
+    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+
+
 def name_key(name: str) -> tuple[str, ...]:
     """What two names share when a reviewer should be told they may be one record.
 
-    NFKC, casefolded, possessive ``'s`` and punctuation dropped, the words ``the``, ``a``, ``an`` and
-    ``of`` ignored, the rest as a sorted set. This only *suggests* a duplicate: names never establish
-    identity, and a reviewer may keep a namesake as a distinct record."""
-    folded = _POSSESSIVE.sub("", unicodedata.normalize("NFKC", name).casefold())
-    words = set(_WORD.findall(folded))
+    Folded (NFKC, case, accents), possessive ``'s``, punctuation and a plural ``s`` dropped, the words
+    ``the``, ``a``, ``an`` and ``of`` ignored, the rest as a sorted set. This deliberately leans to
+    flagging: a false match costs the reviewer one ``distinct`` mark, while a missed one would store
+    a second record. It only *suggests* a duplicate; names never establish identity."""
+    folded = _POSSESSIVE.sub("", _fold(name))
+    words = {_stem(word) for word in _WORD.findall(folded)}
     kept = words - _STOP
     return tuple(sorted(kept or words)) or (folded.strip(),)
 
@@ -105,6 +117,8 @@ class AuthoringRequest:
             validate_source_id(self.source)
         except (ValueError, TypeError):
             raise AuthoringError("invalid_source") from None
+        if not self.source.startswith("world:"):  # a shared character or add-on would carry the towns everywhere
+            raise AuthoringError("invalid_source")
         _text(self.brief, BRIEF_MAX)
         if type(self.constraints) is not tuple or len(self.constraints) > MAX_CONSTRAINTS:
             raise AuthoringError("invalid_constraints")

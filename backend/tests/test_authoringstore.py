@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from grimoire.authoring import AuthoringError, AuthoringRequest, Candidate, Decision, Link, Proposal
 from grimoire.authoringstore import AuthoringLibrary
-from grimoire.changesetstore import ChangeSetConflict
+from grimoire.changesets import ChangeSetError
+from grimoire.changesetstore import ChangeSetConflict, ChangeSetLibrary
 from grimoire.core import DIRECTOR
 from grimoire.core.entity_codec import ENTITY_SCHEMA, definition_from_payload
 from grimoire.core.facets import Spatial
@@ -14,8 +17,8 @@ from grimoire.core.identity import SourceRef
 from grimoire.security import Authorizer, Grant, Permission, ResourcePath
 from grimoire.store import LibraryStore, RecordEnvelope, SourceManifest, WriteDenied
 from grimoire.testing.fileops import snapshot
-from grimoire.topology import Place, Topology
-from grimoire.topology.codec import encode_topology
+from grimoire.topology import Path, Place, Topology
+from grimoire.topology.codec import decode_topology, encode_topology
 from grimoire.topologystore import TopologyLibrary
 
 from authoring_fixtures import COAST, GUILD, LIGHT, MANIFEST, MAP, REALM, entity, seed
@@ -273,7 +276,7 @@ def test_reject_writes_nothing_and_ends_the_draft(store):
     before = snapshot(store.root)
     authoring.reject(draft)
     assert written(before, snapshot(store.root)) == set() and draft.changes.state == "rejected"
-    with pytest.raises(Exception):
+    with pytest.raises(ChangeSetError, match="already_decided"):
         authoring.apply(draft)
 
 
@@ -303,3 +306,86 @@ def test_an_untrusted_author_needs_a_human_approval_of_every_written_file(store)
     approvals = authoring.approve(draft, authority, approved_by=OWNER, new_id=lambda: f"ap-{next(counter)}")
     authoring.apply(draft, approvals)
     assert store.load().index.resolve(SourceRef(REALM, "location", "brinewick")).name == "Brinewick"
+
+
+def put_map(store, graph: Topology, *, records=()) -> None:
+    """Write ``graph`` (and any extra records) as the world's map head."""
+    stored = store.read_source(REALM)
+    heads = dict(stored.manifest.heads, **{f"topology/{graph.ref.entity_id}": graph.ref.revision})
+    txn = store.transaction()
+    for envelope in records:
+        heads[f"{envelope.ref.kind}/{envelope.ref.entity_id}"] = envelope.ref.revision
+        txn.put(envelope, None)
+    txn.put(RecordEnvelope(graph.ref, encode_topology(graph), name="Coast map", owner=OWNER), None)
+    txn.put(SourceManifest(REALM, OWNER, "Realm", heads), stored.etag)
+    txn.commit(owner_handle())
+
+
+def test_a_map_revised_while_drafting_refuses_rather_than_dropping_its_new_path(store, monkeypatch):
+    put_map(store, Topology(MAP, (Place(COAST), Place(LIGHT, parent=COAST)), (), "drawn by hand"))
+    authoring = lib(store)
+    review = authoring.review(towns())
+    revise, raced = ChangeSetLibrary.revise, []
+
+    def racing(self, *args, **kwargs):  # another edit of the map lands while the draft is being built
+        if not raced:
+            raced.append(True)
+            put_map(store, Topology(MAP.at("r2"), (Place(COAST), Place(LIGHT, parent=COAST)),
+                                    (Path("cliff-road", COAST, LIGHT, True),), "drawn by hand"))
+        return revise(self, *args, **kwargs)
+
+    monkeypatch.setattr(ChangeSetLibrary, "revise", racing)
+    before = snapshot(store.root)
+    with pytest.raises(AuthoringError, match="stale_review"):
+        authoring.draft(review, accept("brinewick", "gullhaven"))
+    assert written(before, snapshot(store.root)) == {record(MAP.at("r2")), MANIFEST}  # only the other edit
+    monkeypatch.setattr(ChangeSetLibrary, "revise", revise)
+    draft = authoring.draft(authoring.review(towns()), accept("brinewick", "gullhaven"))
+    authoring.apply(draft)
+    graph = decode_topology(draft.topology, store.read(draft.topology).envelope.payload)
+    assert draft.topology == MAP.at("r3")
+    assert {path.path_id for path in graph.paths} == {"cliff-road", "p1-shore-road"}
+
+
+def test_a_mapped_place_without_a_record_keeps_its_id_aliases_and_paths(store):
+    gone = SourceRef(REALM, "location", "brinewick", "r1")  # on the map, but its record was never written
+    put_map(store, Topology(MAP, (Place(COAST), Place(LIGHT, parent=COAST),
+                                  Place(gone, aliases=("The Old Wharf",), parent=LIGHT)),
+                            (Path("wharf-road", gone, LIGHT, requires=("boat",), blocked=True),), "drawn by hand"))
+    authoring = lib(store)
+    draft = authoring.draft(authoring.review(towns()), accept("brinewick", "gullhaven"))
+    assert draft.records["brinewick"].entity_id == "brinewick-2"
+    authoring.apply(draft)
+    graph = decode_topology(draft.topology, store.read(draft.topology).envelope.payload)
+    places = {place.ref: place for place in graph.places}
+    assert places[gone] == Place(gone, aliases=("The Old Wharf",), parent=LIGHT)
+    assert places[draft.records["brinewick"]].parent == COAST
+    assert Path("wharf-road", gone, LIGHT, requires=("boat",), blocked=True) in graph.paths
+    assert graph.provenance == "drawn by hand"
+
+
+def test_an_endpoint_already_on_the_map_is_still_pinned(store):
+    put_map(store, Topology(MAP, (Place(COAST), Place(LIGHT, parent=COAST)), (), "drawn by hand"))
+    authoring = lib(store)
+    draft = authoring.draft(authoring.review(towns()), accept("brinewick", "gullhaven"))
+    assert [(pin.kind, pin.entity_id) for pin in draft.changes.changeset.preconditions] == [
+        ("location", "saltmarch-coast")]
+    path = store.root / record(COAST)
+    data = json.loads(path.read_bytes())
+    data["name"] = data["payload"]["name"] = "Saltmarch Sea"
+    data["payload"]["traits"] = []  # an outside editor turns the coast into something that is not a place
+    path.write_text(json.dumps(data, indent=2))
+    before = snapshot(store.root)
+    with pytest.raises(ChangeSetConflict) as refused:
+        authoring.apply(draft)
+    assert [c.reason for c in refused.value.conflicts] == ["base_edited"]
+    assert written(before, snapshot(store.root)) == set()
+
+
+def test_a_candidate_whose_id_an_existing_record_of_its_kind_holds_is_flagged(store):
+    add_town(store, "The Salt Gate", "brinewick")  # renamed long ago; its id still reads brinewick
+    review = lib(store).review(towns())
+    assert ("brinewick", SourceRef(REALM, "location", "brinewick", "r1")) in {
+        (d.candidate, d.existing) for d in review.duplicates}
+    with pytest.raises(AuthoringError, match="duplicate_unacknowledged"):
+        lib(store).draft(review, accept("brinewick"))
