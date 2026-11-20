@@ -81,7 +81,8 @@ compute with formulas; untrusted rule scripts are not run in-process with librar
 `checks.stealth.total: unknown name 'gear': 'gear' is a list field and holds no number`. Unknown keys are
 problems too. A check of a sheet type that has problems is checked once that sheet is valid, so one mistake
 is not reported many times, and neither is a formula that only uses a broken field or derived value.
-`parse_module` returns the validated `MechanicsModule` or raises `ModuleInvalid` with the same list: a module with any problem has no value at all, so it cannot be published, loaded or
+`parse_module` returns the validated `MechanicsModule` or raises `ModuleInvalid` with the same list: a
+module with any problem has no value at all, so it cannot be published, loaded or
 bound.
 
 ### Revisions
@@ -131,7 +132,8 @@ config/mechanics/modules/<id>/<digest>.json  one published revision, named by it
   publish as.
 - `publish(id, expected)` writes the revision file only when the draft read at `expected` has no problem.
   Publishing the same content again writes nothing (a revision file laid out differently but holding the same
-  module counts as the same). An edited draft publishes a new file beside the old one; a revision file is never rewritten, and one found with other content is refused (`altered`) and left alone.
+  module counts as the same). An edited draft publishes a new file beside the old one; a revision file is
+  never rewritten, and one found with other content is refused (`altered`) and left alone.
 - `load(id, revision)` returns exactly that revision. It is refused when it was never published
   (`unpublished`), no longer validates (`invalid`) or no longer has its digest (`altered`); there is no
   fallback to another revision or to the draft.
