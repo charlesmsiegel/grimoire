@@ -160,6 +160,8 @@ that can work, and a status line that says when voice is off or unavailable:
   window is never sent, and an answer that arrives after Back to typing is dropped.
   One window is open at a time, through recognition, and reading never starts
   inside an open window: synthesis that finishes while listening waits for it.
+  The window's own end-of-speech check uses the same floor-relative level as the
+  analysis, so quiet speech is not taken for silence.
 - Every result is a caption in a `role=log` list; blocked windows say why.
 - An instant command (pause, stop, resume, cancel) acts; the person's words go
   into the composer as a draft to check; a low-confidence miss can be used as a

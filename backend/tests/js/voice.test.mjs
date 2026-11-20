@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { install, byText } from "./fakedom.mjs";
 import * as ui from "../../src/grimoire/app/static/shell/ui.js";
-import { encodeWav, makeVoice } from "../../src/grimoire/app/static/pages/chat/voice.js";
+import { browserRecorder, encodeWav, makeVoice } from "../../src/grimoire/app/static/pages/chat/voice.js";
 
 const READY = { status: "ready", backend: "fake", input: "audio", locality: "local", network: false,
   retains_inputs: false, billing: "free", fallback: "text" };
@@ -337,4 +337,78 @@ test("one window at a time: a press while the last one is being heard opens noth
   s.press("Listen once");
   await settle();
   assert.equal(s.recordings.length, 2);
+});
+
+test("pressing a reading control keeps focus on it", async () => {
+  const s = strip({ answers: { "speech.speak": (args) => ({ status: "ok", caption: args.text, audio: "UklGRg==" }) } });
+  await settle();
+  s.voice.setLatest("A reply.");
+  s.press("Read aloud");
+  await settle();
+  const pause = byText(s.voice.node, "button", "Pause reading")[0];
+  pause.focus();
+  pause.click();
+  assert.equal(pause.textContent, "Resume reading");
+  assert.ok(s.voice.node.contains(pause) && document.activeElement === pause, "the pressed button stays in place, focused");
+  const parent = pause.parentNode;
+  const removed = [];
+  const remove = parent.replaceChildren.bind(parent);
+  parent.replaceChildren = (...nodes) => { removed.push(nodes.length); remove(...nodes); };
+  pause.click();
+  assert.deepEqual(removed, [], "the toolbar is not rebuilt when its controls are the same");
+});
+
+test("a pause made while a reading is being made keeps it from starting", async () => {
+  let second;
+  let calls = 0;
+  const s = strip({ answers: { "speech.speak": (args) => (++calls === 1 ? { status: "ok", caption: args.text, audio: "UklGRg==" }
+    : new Promise((resolve) => { second = resolve; })) } });
+  await settle();
+  s.voice.setLatest("A reply.");
+  s.press("Read aloud");
+  await settle();
+  s.press("Read aloud");
+  await settle();
+  s.press("Pause reading");
+  second({ status: "ok", caption: "A reply.", audio: "UklGRg==" });
+  await settle();
+  assert.equal(s.plays.length, 1, "the late reading is dropped");
+  assert.equal(s.plays[0].paused, true);
+});
+
+test("the browser recorder takes quiet speech for speech, not silence, and releases the microphone", async () => {
+  install("http://localhost");
+  const stopped = [];
+  let node;
+  globalThis.navigator.mediaDevices = { async getUserMedia() { return { getTracks: () => [{ stop: () => stopped.push(true) }] }; } };
+  globalThis.AudioContext = class {
+    constructor() { this.sampleRate = 48000; }
+    resume() {}
+    async close() {}
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    createScriptProcessor() { node = { connect() {}, disconnect() {} }; return node; }
+    get destination() { return {}; }
+  };
+  try {
+    let opened = false;
+    let ended = false;
+    const recording = browserRecorder()({ maxSeconds: 15, until: new Promise(() => {}), onOpen: () => { opened = true; } })
+      .then((taken) => { ended = true; return taken; });
+    await settle();
+    assert.ok(opened);
+    const chunk = (amplitude) => ({ inputBuffer: { getChannelData: () => new Float32Array(4800).fill(amplitude) } });
+    const feed = (amplitude, seconds) => { for (let i = 0; i < seconds * 10; i += 1) node.onaudioprocess(chunk(amplitude)); };
+    feed(0.0002, 0.5);            // the room, about -74 dBFS
+    feed(0.0018, 7);              // quiet speech, about -55 dBFS: under a fixed -50 dBFS line, but speech here
+    await settle();
+    assert.equal(ended, false, "seven seconds of quiet speech do not end the window");
+    feed(0.0002, 1.3);            // then the room again
+    const taken = await recording;
+    assert.equal(ended, true);
+    assert.equal(taken.rate, 48000);
+    assert.equal(taken.samples.length, 88 * 4800);
+    assert.deepEqual(stopped, [true], "the microphone goes off with the window");
+  } finally {
+    delete globalThis.AudioContext;
+  }
 });

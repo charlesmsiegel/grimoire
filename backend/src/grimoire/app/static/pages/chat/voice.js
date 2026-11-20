@@ -13,7 +13,10 @@
 
 const MAX_CAPTIONS = 20;
 const TARGET_RATE = 16000;
-const SPEECH_DB = -50;  // dBFS a chunk must reach to count as speech while listening, for ending the window only
+// While listening, speech is a chunk 9 dB above the quietest chunk so far (never below -60 dBFS), as the server's
+// analysis counts it, so quiet speech is not taken for silence; used only to end the window by itself.
+const FLOOR_MARGIN = 9;
+const ABSOLUTE_FLOOR = -60;
 const END_SILENCE = 1.2;  // seconds of quiet after speech that end the window by themselves
 const NOTHING_HEARD = 5;  // seconds with no speech that end the window
 
@@ -87,6 +90,7 @@ export function browserRecorder() {
     const chunks = [];
     let heard = false;
     let quiet = 0;
+    let floor = Infinity;
     try {
       const source = context.createMediaStreamSource(stream);
       const node = context.createScriptProcessor(4096, 1, 1);
@@ -97,7 +101,9 @@ export function browserRecorder() {
           const chunk = Float32Array.from(event.inputBuffer.getChannelData(0));
           chunks.push(chunk);
           const seconds = chunk.length / context.sampleRate;
-          if (level(chunk) >= SPEECH_DB) { heard = true; quiet = 0; } else quiet += seconds;
+          const db = level(chunk);
+          floor = Math.min(floor, db);
+          if (db >= Math.max(floor + FLOOR_MARGIN, ABSOLUTE_FLOOR)) { heard = true; quiet = 0; } else quiet += seconds;
           if ((heard && quiet >= END_SILENCE) || (!heard && quiet >= NOTHING_HEARD)) { clearTimeout(limit); resolve(); }
         };
         source.connect(node);
@@ -126,7 +132,7 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
   if (!ctx.has("speech.status")) return { node: null, readAloud: () => {} };
   ctx.styles("voice.css");
   const state = { status: null, listening: null, pending: null, player: null, lastText: "", disposed: false,
-    generation: 0, resumeReading: false, hearing: false };
+    generation: 0, resumeReading: false, hearing: false, readSeq: 0 };
   const statusLine = el("p", { class: "chat-voice-status", role: "status" }, "Checking voice…");
   const captions = el("ol", { class: "chat-voice-captions", role: "log", "aria-live": "polite", "aria-label": "Voice captions" });
   const question = el("div", { class: "chat-voice-question", role: "group", "aria-label": "Confirm what you said" });
@@ -156,8 +162,10 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
     listen.textContent = state.listening ? "Stop listening" : (state.pending ? "Answer by voice" : "Listen once");
     // Only what can be used is shown, never a control that cannot work; playback only once something was read.
     const listens = Boolean(state.listening) || (ready("stt") && Boolean(record));
-    bar.replaceChildren(...(listens ? [listen, back] : []), ...(ready("tts") && play ? [read] : []),
-      ...(state.player ? [pause, replay] : []));
+    const shown = [...(listens ? [listen, back] : []), ...(ready("tts") && play ? [read] : []),
+      ...(state.player ? [pause, replay] : [])];
+    // put back only when the set changes: re-inserting the pressed button would take focus from it
+    if (shown.length !== bar.children.length || shown.some((control, at) => bar.children[at] !== control)) bar.replaceChildren(...shown);
     const held = state.listening ? !state.resumeReading : Boolean(state.player && state.player.paused);
     pause.textContent = held ? "Resume reading" : "Pause reading";
     // Built once per question, so a redraw keeps focus on Yes or No
@@ -244,6 +252,7 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
   function perform(command) {
     if (command.name === "pause" || command.name === "stop") {
       state.resumeReading = false;
+      state.readSeq += 1;  // a reading still being made does not start after this
       if (state.player) state.player.pause(command.name === "stop");
       draw();
       return SPOKEN[command.name];
@@ -282,6 +291,7 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
   async function backToTyping() {
     state.generation += 1;
     state.resumeReading = false;
+    state.readSeq += 1;
     if (state.listening) { state.listening.cancelled = true; state.listening.finish(); }
     state.pending = null;
     composer.input.focus();
@@ -293,8 +303,11 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
   async function readAloud(text) {
     if (!ready("tts") || !play) return;
     if (!text) { say("Nothing to read yet."); return; }
+    const asked = ++state.readSeq;
     let spoken;
     try { spoken = await ctx.api("speech.speak", { text }); } catch (error) { say("Read-aloud didn't answer."); return; }
+    // a newer press (another Read aloud, a pause, a stop, Back to typing) wins over this late answer
+    if (asked !== state.readSeq || state.disposed) return;
     if (spoken.status !== "ok" || !spoken.audio) { say("Read-aloud isn't available just now; the text stays on screen."); return; }
     if (state.player) state.player.dispose();
     // never into an open window: synthesis that finishes while listening starts when the window closes
@@ -308,8 +321,10 @@ export function makeVoice(ctx, { composer, onCommand = () => null, record = brow
     if (!state.player) return;
     if (state.listening) {  // reading waits for the window; this press says whether it goes on afterwards
       state.resumeReading = !state.resumeReading;
+      if (!state.resumeReading) state.readSeq += 1;
       say(state.resumeReading ? "Reading goes on after listening." : "Reading stays paused.");
     } else {
+      if (!state.player.paused) state.readSeq += 1;  // pausing also stops a reading still being made
       if (state.player.paused) state.player.resume(); else state.player.pause(false);
       say(state.player.paused ? "Paused reading." : "Resumed reading.");
     }
