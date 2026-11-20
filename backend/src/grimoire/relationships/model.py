@@ -8,7 +8,7 @@ validate shape and chain history only.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Set as AbstractSet
 from dataclasses import dataclass
 from itertools import islice
 
@@ -51,7 +51,8 @@ def sequence(value: object) -> None:
 
 
 def bounded(values: object, maximum: int) -> tuple:
-    if isinstance(values, (str, bytes, Mapping)):
+    """An ordered bounded collection; sets are refused, since their order depends on the hash seed."""
+    if isinstance(values, (str, bytes, Mapping, AbstractSet)):
         raise RelationshipError('invalid_collection')
     try:
         result = tuple(islice(iter(values), maximum + 1))
@@ -64,6 +65,8 @@ def bounded(values: object, maximum: int) -> tuple:
 
 def _ids(values: object) -> tuple[str, ...]:
     """Grounds are a set in meaning: stored sorted, so equal grounds compare equal however supplied."""
+    if isinstance(values, AbstractSet):  # order is irrelevant here: the result is sorted
+        values = tuple(islice(values, MAX_GROUNDS + 1))
     result = bounded(values, MAX_GROUNDS)
     for item in result:
         segment(item)

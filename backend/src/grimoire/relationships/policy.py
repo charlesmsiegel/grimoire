@@ -49,6 +49,12 @@ def admit(ledger: AttitudeLedger, attitude: Attitude, *, knowledge: Knowledge,
             or not isinstance(definitions, DefinitionIndex)):
         raise RelationshipError('invalid_input')
     sequence(expected_revision)
+    replay = False
+    for original_revision, existing in enumerate(ledger.records):
+        if existing.attitude_id == attitude.attitude_id:
+            if existing != attitude or expected_revision != original_revision:
+                raise RelationshipError('retry_conflict')
+            replay = True  # an exact retry: still recheck every present condition below
     sequence(now)
     if attitude.moment.sequence > now:
         raise RelationshipError('future_moment')
@@ -76,11 +82,8 @@ def admit(ledger: AttitudeLedger, attitude: Attitude, *, knowledge: Knowledge,
     if authored_by != DIRECTOR:
         raise RelationshipError('npc_authority_required')
     _check_grounds(attitude, knowledge)
-    for original_revision, existing in enumerate(ledger.records):
-        if existing.attitude_id == attitude.attitude_id:
-            if existing != attitude or expected_revision != original_revision:
-                raise RelationshipError('retry_conflict')
-            return ledger
+    if replay:
+        return ledger
     if expected_revision != ledger.revision:
         raise RelationshipError('stale_revision')
     return AttitudeLedger(campaign, (*ledger.records, attitude))

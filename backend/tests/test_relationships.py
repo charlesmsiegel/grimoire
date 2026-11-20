@@ -127,9 +127,9 @@ def test_envoy_resents_the_insult_and_absent_members_do_not_until_told():
     assert attitudes_of(ledger, TOLD, as_of=4) == ()
     assert attitudes_of(ledger, AWAY, as_of=9) == ()
     # Asymmetry: nobody's attitude toward the envoy, and the PC has none written for them.
-    with pytest.raises(RelationshipError):
+    with pytest.raises(RelationshipError) as caught:
         attitudes_of(ledger, PC, as_of=9)
-    assert not any(a.holder == PC for a in ledger.records)
+    assert caught.value.reason == 'pc_interiority'
     for holder in (ENVOY, TOLD, AWAY, DOCKHAND):
         assert attitudes_of(ledger, holder, as_of=9, toward=ENVOY) == ()
     # Nothing about knowledge or truth changed.
@@ -230,6 +230,13 @@ def test_retry_is_idempotent_and_still_checks_the_present():
     gone = CampaignRoster(C, tuple(x for x in ROSTER.instances if x.ref != PC))
     refused('unresolved_actor', ledger, item, expected_revision=0, roster=gone)
     refused('invalid_sequence', ledger, item, expected_revision=True)
+    unconfirmed = knowledge()
+    unconfirmed = replace(unconfirmed, evidence=tuple(replace(e, confirmed=False) if e.evidence_id == 'heard' else e
+                                                      for e in unconfirmed.evidence))
+    refused('unavailable_grounds', ledger, item, expected_revision=0, knowledge=unconfirmed)
+    # Reusing an ID for a different record is a conflict, whatever else is wrong with it.
+    refused('retry_conflict', ledger, replace(item, evidence_ids=('missing',)), expected_revision=0)
+    refused('retry_conflict', ledger, replace(item, holder=DOCKHAND), expected_revision=0)
 
 
 @pytest.mark.parametrize('changes,reason', [
@@ -358,3 +365,33 @@ def test_retry_of_a_superseded_record_and_admission_at_the_cap():
     full = AttitudeLedger(C, tuple(replace(item, attitude_id=f'r{i}', toward=InstanceRef(C, 'character', f'n{i}'))
                                    for i in range(MAX_RECORDS)))
     refused('budget_exceeded', full, attitude(attitude_id='over'))
+
+
+def test_grounds_must_be_about_this_target_not_merely_about_someone():
+    # "Your guild are thieves and you are their lackey" is about the guild and the envoy, and was
+    # attributed to the newcomer, not the dockhand.
+    refused('unrelated_grounds', AttitudeLedger(C), attitude(toward=DOCKHAND, evidence_ids=('heard',)))
+    # A belief about the guild alone does not concern the newcomer.
+    guild_belief = Belief(C, 'g1', ENVOY, 'p5', 'believed', Moment(6), DIRECTOR, ('apology',))
+    apology = Report(C, 'apology', ENVOY, 'p5', 'told', Moment(6), 'scene:hall/t2', True, attributed_to=TOLD)
+    facts = knowledge(apology, beliefs=(guild_belief,))
+    refused('unrelated_grounds', AttitudeLedger(C), attitude(moment=Moment(6), evidence_ids=(), belief_ids=('g1',)),
+            knowledge=facts)
+    # The same belief does concern the guild.
+    assert put(AttitudeLedger(C), attitude(toward=GUILD, moment=Moment(6), evidence_ids=(), belief_ids=('g1',)),
+               knowledge=facts).revision == 1
+
+
+def test_now_bounds_since_and_snapshot_campaigns():
+    assert put(AttitudeLedger(C), attitude(moment=Moment(9)), now=9).revision == 1
+    refused('future_moment', AttitudeLedger(C), attitude(moment=Moment(10)), now=9)
+    ledger = put(AttitudeLedger(C), attitude(moment=Moment(4)))
+    assert dispositions(ledger, ENVOY, as_of=9)[0].since == 4
+    refused('campaign_mismatch', AttitudeLedger(C), attitude(), knowledge=Knowledge('other'))
+    refused('campaign_mismatch', AttitudeLedger(C), attitude(), roster=CampaignRoster('other', ()))
+
+
+def test_ledgers_refuse_unordered_record_collections():
+    with pytest.raises(RelationshipError) as caught:
+        AttitudeLedger(C, {attitude()})
+    assert caught.value.reason == 'invalid_collection'
