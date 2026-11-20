@@ -149,10 +149,12 @@ def test_update_reports_by_id_when_catalog_names_and_head_order_swap(tmp_path):
         assert changes[ALPHA.unpinned()].renamed and changes[ALPHA.unpinned()].status == 'moved'
         # Pinned actors and chats stay on r1 and are offered r2; the following chat and its actor move.
         assert {(row.status, row.newer_head) for row in rows[str(BASE)]} == {('unchanged', 'r2')}
-        moving = [row for row in rows[str(BASE.unpinned())] if row.path.startswith('campaigns/')]
+        moving = [row for row in rows[str(BASE.unpinned())] if row.status == 'follows_head']
         assert {row.record for row in moving} == {'chat', 'instance'}
         assert all(row.path.startswith(f'campaigns/{following.scope.campaign_id}/') for row in moving)
         assert {(row.status, row.before, row.after) for row in moving} == {('follows_head', 'r1', 'r2')}
+        # Art layers and the exclusion name Mara only: listed, unchanged, never a follow.
+        assert {row.status for row in rows[str(BASE.unpinned())] if row not in moving} == {'unchanged'}
         assert set(moving) <= set(preview.attention) and preview.edited == ()
         # The vampire catalog's exclusion of Mara reaches no content, so it never reads as a follow.
         assert not any(row.path.startswith('sources/world/elderfen-vampire/_source/records/catalog/')
