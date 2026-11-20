@@ -24,7 +24,7 @@ Each is called as `providers.<op>`.
 | `save_models` | `settings`, `expected` (the `etag` `models` gave; `null` when there was no file) | `models`' answer, after the file is written and the runner given what it configures |
 | `usage` | `chat`, `limit` (turns listed, 1 to 1000, default 200), `skip` (the newest turns left out, default 0: how earlier turns are listed); the totals always cover every turn | `turns` (each `turn`, `number`, `set_aside`, `calls`), `skip`, `listed`, `of`, `total`, `by_stage`, `complete`, `problems` |
 | `context` | `chat`, optional `actor` (full InstanceRef) | Present director-controlled NPCs; for the selected NPC, current brief, selected items/provenance, budget omissions/estimate, effective routes and editable tactics. No model call or write |
-| `preview_context` | `chat`, `actor`, `draft` (1 to 20,000 characters) | 085: the NPC's likely context if the owner's player character posted `draft` now ([Draft preview](#draft-preview-085)): `draft` (`heard`, `kind`), `context` (the inspector's view), `recalls`, `more_recalls`, `changes` (`added`, `removed`), `tokens` (`now`, `with_draft`), `estimated: true`, `sent: false`, `written: false`. Nothing is posted, kept, written or sent |
+| `preview_context` | `chat`, `actor`, `draft` (1 to 20,000 characters) | 085: the NPC's likely context if the owner's player character posted `draft` now ([Draft preview](#draft-preview-085)): `draft` (`heard`, `kind`), `context` (the inspector's view), `recalls`, `shed_recalls`, `more_recalls`, `changes` (`added`, `removed`), `tokens` (`now`, `with_draft`), `estimated: true`, `sent: false`, `written: false`. Nothing is posted, kept, written or sent |
 | `save_agenda` | `chat`, `actor`, `expected`, `aim`, `actions` (1–8 lines), or `remove: true` | Saves only this NPC’s simple tactics in the settings file; returns `models`. Refuses player/foreign actors and advanced policies |
 | `diagnostics` | none | `available`, `traces`: this process's last runner calls and test calls, newest first |
 | `test_call` | `expected` (the `etag` `models` gave) | How one test request to the saved model ended: see [The test call](#the-test-call) |
@@ -246,11 +246,13 @@ memories and which lore an unsent draft is likely to bring into that NPC's conte
 when the person presses **Preview with draft**, never per keystroke, and calls no provider and no embedding: it is
 two or three runs of the deterministic packer generation itself uses ([CONTEXT](CONTEXT.md)).
 
-- **The draft is read as a post.** `SceneRunner.post`'s checks, in its order, then 035's `read_post`: 008 routes
-  it, 003 checks that the player controls the chat's persona, and 032 says who would hear it. What `post` would
-  refuse (a table request such as "Grimoire, pause" is `table_request`; an open turn is `turn_open`; an unknown
-  addressee, a paused table, a persona off the stage) is refused with `post`'s own reason and words, and nothing
-  is packed. The preview acts as the owner's handle, as the app's `post` does.
+- **The draft is read as a post.** Through the reading `SceneRunner.post` saves from, in its order: play not
+  paused, the persona present and on stage, 035's `read_post` (008 routes it, 003 checks that the player
+  controls the chat's persona, 032 says who would hear it), the last turn closed. What `post` would refuse (an
+  open turn, an unknown addressee, a paused table, a persona off the stage) is refused with `post`'s own reason
+  and words, and nothing is packed; a table request such as "Grimoire, pause", which `post` would run, is
+  `table_request`; the open turn's own post retried is that saved turn, as `post` would return it. The preview
+  acts as the owner's handle, as the app's `post` does.
 - **The same assembly twice.** The NPC's context is packed from the saved turns (exactly the inspector's answer),
   then again with the draft as a new, unsaved turn after them, so the draft is in what the NPC heard and triggers
   lore just as a posted line does. With nothing changed in between, posting the draft gives the context the
@@ -268,8 +270,9 @@ two or three runs of the deterministic packer generation itself uses ([CONTEXT](
   that the NPC will hold both in view, not a ranking. Words of fewer than three letters and common English words
   are ignored; other languages match on every word of three letters or more. A shed recall is the preview's
   warning: the draft points at context the NPC will not get. Its line comes from one more pack of the same
-  candidates without a budget limit, so it is still only the NPC's own authorized context. At most 50 are listed;
-  `more_recalls` counts the rest.
+  candidates without a budget limit, so it is still only the NPC's own authorized context. Shed recalls are
+  listed first and `shed_recalls` counts them all; at most 50 recalls are listed, and `more_recalls` counts the
+  rest.
 - **An estimate.** The turn's prompt is rebuilt from saved state when it is generated: another post, a kept line,
   new knowledge, edited settings or sources change it, and token counts are the pack's estimate, not provider
   usage. The page says so above every preview. No snapshot of the prompt a turn was sent is retained (see

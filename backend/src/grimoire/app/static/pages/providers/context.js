@@ -4,7 +4,8 @@ const WHY = { lane_cap: "its lane is full", over_budget: "the context budget is 
 
 export function contextPanel(ctx, onSaved) {
   const { ui } = ctx, { el } = ui;
-  let chat = null, actor = null, serial = 0;
+  // serial orders context reads and tactics saves; previewing orders previews, so a preview never drops either.
+  let chat = null, actor = null, serial = 0, previewing = 0;
   const body = el("div", { class: "g-stack" });
   const previewBody = el("div", { class: "g-stack" });
   const draft = ui.field("Draft to preview", { multiline: true,
@@ -22,6 +23,7 @@ export function contextPanel(ctx, onSaved) {
 
   function clear(message) {
     body.replaceChildren(el("p", { class: "g-muted", role: "status" }, message));
+    previewing++;  // a preview asked before this read is of a context no longer shown
     previewBody.replaceChildren();
     if (!actor) preview.hidden = true;
   }
@@ -36,7 +38,7 @@ export function contextPanel(ctx, onSaved) {
   }
   function drawPreview(result) {
     const view = result.context, changes = result.changes;
-    const shed = result.recalls.filter(item => !item.included);
+    const shed = result.shed_recalls;  // counted by the server: the list itself may be cut
     const parts = [
       el("p", { role: "status" }, "Estimate: built as if this draft were posted now. The turn's own prompt is rebuilt when it is generated, so anything that changes first changes it. Nothing was posted, saved or sent."),
     ];
@@ -44,7 +46,7 @@ export function contextPanel(ctx, onSaved) {
       parts.push(el("p", {}, "This NPC would not hear this draft, so its context stays as saved."));
     } else {
       parts.push(el("p", {}, `${result.tokens.with_draft} / ${view.budget.max_tokens} context tokens with the draft, ${result.tokens.now} now (${view.budget.measurement}).`));
-      if (shed.length) parts.push(el("p", { role: "alert" }, `Your draft points at ${shed.length === 1 ? "something" : shed.length + " things"} this NPC will not get: ${shed.length === 1 ? "it is" : "they are"} left out by the budget.`));
+      if (shed) parts.push(el("p", { role: "alert" }, `Your draft points at ${shed === 1 ? "something" : shed + " things"} this NPC will not get: ${shed === 1 ? "it is" : "they are"} left out by the budget.`));
       parts.push(el("h4", {}, "Likely recalled"),
         result.recalls.length ? el("ul", {}, result.recalls.map(recall)) : el("p", {}, "Nothing in this NPC's memory or lore matches the draft."));
       if (result.more_recalls) parts.push(el("p", { class: "g-muted" }, `and ${result.more_recalls} more.`));
@@ -60,16 +62,16 @@ export function contextPanel(ctx, onSaved) {
     previewBody.replaceChildren(...parts);
   }
   async function runPreview() {
-    const asked = ++serial, selectedChat = chat, selected = actor, text = draft.value;
+    const asked = ++previewing, selectedChat = chat, selected = actor, text = draft.value;
     draft.setError(null);
     if (!text.trim()) { draft.setError("Write a draft to preview."); return; }
     previewBody.replaceChildren(el("p", { class: "g-muted", role: "status" }, "Building the preview…"));
     try {
       const result = await ctx.api("providers.preview_context", { chat: selectedChat, actor: selected, draft: text });
-      if (asked !== serial) return;
+      if (asked !== previewing) return;
       drawPreview(result);
     } catch (error) {
-      if (asked !== serial || error.reason === "left") return;
+      if (asked !== previewing || error.reason === "left") return;
       previewBody.replaceChildren(el("p", { role: "alert" }, "The draft could not be previewed: " + error.message));
     }
   }

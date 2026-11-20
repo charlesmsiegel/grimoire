@@ -111,7 +111,7 @@ _NOT_WIRED = {
     InferenceStage.GRAPH_LOOKUP: "graph traversal is deterministic in V2; no model-assisted lookup exists yet",
 }
 #: The runner's refusals of an actor that is not a present, voiced director NPC (``SceneRunner._speakers``).
-_NOT_AN_NPC = frozenset({"not_present", "not_an_npc", "not_on_stage", "no_voice"})
+_NOT_AN_NPC = frozenset({"not_present", "not_an_npc", "not_on_stage"})
 #: Features of the settings screen that have no V2 service behind them, with the reason the screen shows.
 UNAVAILABLE = (
     ("director_model", "027's runtime calls one list of models for every call, so the director uses the NPC models"),

@@ -22,6 +22,7 @@ from grimoire.context import Budget
 from grimoire.core import Moment, Proposition, Report
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.play.preview import DraftRefused, preview_context
+from grimoire.scene import SceneRefused
 from grimoire.textapi import ApiRefused
 
 HERE = Path(__file__).parent
@@ -35,14 +36,13 @@ def files(folder):
     return {str(path.relative_to(folder)): path.read_bytes() for path in folder.rglob("*") if path.is_file()}
 
 
-def archive(table, chat, mara, *, chatter=0):
-    """The promise Mara was told long ago, then ``chatter`` newer, unrelated things she was told."""
+def archive(table, chat, mara, *, chatter=0, about="The fishmonger raised the price of eels, rumor {n}."):
+    """The promise Mara was told long ago, then ``chatter`` newer things she was told (``about``, numbered)."""
     c = chat.campaign_id
     records = [Proposition(c, "promise", PROMISE, Moment(1), "director"),
                Report(c, "promised", mara, "promise", "told", Moment(1), "scene:quay", confirmed=True)]
     for n in range(chatter):
-        records += [Proposition(c, f"gossip-{n}", f"The fishmonger raised the price of eels, rumor {n}.", Moment(2 + n),
-                                "director"),
+        records += [Proposition(c, f"gossip-{n}", about.format(n=n), Moment(2 + n), "director"),
                     Report(c, f"heard-{n}", mara, f"gossip-{n}", "told", Moment(2 + n), "scene:market", confirmed=True)]
     EvidenceLibrary(table.store, table.owner, owner=OWNER).append(c, records).commit()
 
@@ -102,6 +102,22 @@ def test_a_recalled_memory_the_budget_sheds_is_a_warning_with_its_line(tmp_path)
         assert PROMISE not in preview["context"]["system"]
         # an unrelated memory is not offered as a recall
         assert not any("eels" in r["line"] for r in preview["recalls"])
+        assert preview["shed_recalls"] == 1
+
+
+def test_a_shed_recall_is_listed_and_counted_however_many_packed_memories_match(tmp_path):
+    folder, chat, _ = card_library(tmp_path)
+    with Table(folder, runtime=False) as table:
+        table.runner.seat(chat, ANA)
+        mara = next(iter(table.runner.open(chat).npcs))
+        archive(table, chat, mara, chatter=120, about="Talk of the compass, day {n}.")
+    with Table(folder, runtime=False) as table:  # the default budget sheds the oldest, the promise among them
+        preview = preview_context(table.runner, chat, table.player(), mara, DRAFT)
+        assert preview["more_recalls"] > 0  # more match than are listed
+        shed = [r for r in preview["recalls"] if not r["included"]]
+        assert preview["shed_recalls"] == len(shed) > 0
+        assert f"You were told: {PROMISE}" in [r["line"] for r in shed]
+        assert preview["recalls"][:len(shed)] == shed  # the warnings come first
 
 
 def test_an_npc_that_would_not_hear_the_draft_keeps_its_saved_context(tmp_path):
@@ -132,12 +148,32 @@ def test_a_draft_post_would_refuse_is_refused_with_its_reason(chat_with_mara, dr
         assert files(folder) == before
 
 
-def test_a_draft_cannot_be_previewed_for_a_character_another_player_controls(chat_with_mara):
+@pytest.mark.parametrize(("who", "reason"), [("owner", "not_your_character"), ("human:bob", "not_at_table")])
+def test_a_draft_cannot_be_previewed_for_a_character_someone_else_controls(chat_with_mara, who, reason):
+    folder, chat, mara = chat_with_mara
+    with Table(folder, runtime=False) as table:  # Anya is seated to her player: the owner may not speak for her
+        by = table.owner if who == "owner" else table.player(who)
+        with pytest.raises(DraftRefused) as refused:
+            preview_context(table.runner, chat, by, mara, DRAFT)
+        assert refused.value.reason == reason
+
+
+def test_a_draft_is_refused_with_posts_own_reason_and_words(chat_with_mara):
     folder, chat, mara = chat_with_mara
     with Table(folder, runtime=False) as table:
-        with pytest.raises(DraftRefused) as refused:
-            preview_context(table.runner, chat, table.player("human:bob"), mara, DRAFT)
-        assert refused.value.reason == "not_at_table"
+        table.runner.post(chat, table.player(), DRAFT)  # the turn stays open
+        before = files(folder)
+        for draft in ("   ", 'I whisper to Zed Quorn, "hi"', '"Something else entirely."'):
+            with pytest.raises(SceneRefused) as posted:
+                table.runner.post(chat, table.player(), draft)
+            with pytest.raises(DraftRefused) as previewed:
+                preview_context(table.runner, chat, table.player(), mara, draft)
+            assert (previewed.value.reason, str(previewed.value)) == (posted.value.reason, str(posted.value))
+        # the open turn's own post, retried, is what post returns: that turn, so the context is the current one
+        again = preview_context(table.runner, chat, table.player(), mara, DRAFT)
+        assert again["context"]["items"] == table.runner.inspect_context(chat, mara)["items"]
+        assert again["changes"] == {"added": [], "removed": []}
+        assert files(folder) == before
 
 
 def test_the_app_offers_the_preview_beside_the_inspector_and_writes_nothing(tmp_path):
@@ -167,7 +203,7 @@ def test_the_app_offers_the_preview_beside_the_inspector_and_writes_nothing(tmp_
 
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")
 def test_the_inspector_page_previews_a_draft_as_an_estimate_and_warns_of_shed_recalls():
-    done = subprocess.run([NODE, str(HERE / "pages" / "context_preview_dom.mjs"), PANEL.as_uri()], capture_output=True,
-                          text=True, timeout=60)
+    done = subprocess.run([NODE, str(HERE / "pages" / "context_preview_dom.mjs"), PANEL.as_uri()], check=False,
+                          capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "ok"

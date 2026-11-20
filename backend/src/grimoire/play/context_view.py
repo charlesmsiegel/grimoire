@@ -1,10 +1,11 @@
 """The safe view of one NPC's assembled context: what 112's inspector and 085's draft preview return.
 
-One function builds it for both, so the preview can never show more than the inspector: the brief's system text
+One function builds it for both, so the preview's context is never wider than the inspector's: the brief's system text
 and what the NPC heard, each packed item's line, lane, tokens and provenance, each item the budget shed (its lane,
 reason, tokens and provenance, never its line), and the budget. Provenance names a record only by the kinds the
 pack carries (source, entry name, record, belief, evidence ids) and names the NPC itself, never another actor:
-no selection bases, no source-wide diagnostics, no snapshot and no secret markers.
+no selection bases, no source-wide diagnostics, no snapshot and no secret markers. (The preview's recalls
+also show the line of a recalled item the budget sheds: one of the same NPC's own authorized candidates.)
 """
 
 from __future__ import annotations

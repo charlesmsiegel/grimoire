@@ -531,6 +531,16 @@ class SceneRunner:
                 return self._resume(scene, principal)
             targets = () if command.name == "pause" else None  # None: the lines on show
             return self._request(scene, principal, command.name, targets, command.argument)
+        record, saved = self._unsaved_post(scene, chat, principal, text, mode)
+        if saved is not None:
+            return saved  # the same post retried: it is already saved
+        self._write(record, None, after=scene.turns.last)
+        return record
+
+    def _unsaved_post(self, scene, chat: ChatRef, principal, text: str, mode: str):  # type: ignore[no-untyped-def]
+        """``post``'s reading of ``text`` once the table request is ruled out, writing nothing: the new turn
+        it would save, or (when ``text`` retries the open turn's own post) that saved turn. 085's draft
+        preview reads a draft through here, so it refuses exactly what ``post`` refuses, with its words."""
         self._ready(scene)
         persona = scene.persona
         if persona is None:
@@ -546,11 +556,9 @@ class SceneRunner:
         post = read_post(scene, chat, principal, persona, text, mode, tid=tid, number=number, contribution_id=tid)
         if last is not None and last.open:
             if last.posts == (post,) and not last.takes:
-                return last  # the same post retried: it is already saved
+                return None, last
             raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it")
-        record = TurnRecord(chat, number, "post", post, device=device, follows=_follows(last))
-        self._write(record, None, after=scene.turns.last)
-        return record
+        return TurnRecord(chat, number, "post", post, device=device, follows=_follows(last)), None
 
     @traced("post_together")
     def post_together(self, chat: ChatRef, contributions: Iterable[Contribution]) -> TurnRecord:

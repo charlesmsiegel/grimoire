@@ -1,6 +1,7 @@
 // The Models and costs page's context panel (112) and its draft preview (085), run in the stand-in DOM with a
 // fake ctx.api: no browser, no network. Fails (exit 1) when the preview asks for nothing typed, hides a recalled
-// memory the budget sheds, says an unheard draft changed the context, or draws a stale answer.
+// memory the budget sheds, says an unheard draft changed the context, draws a stale answer, or drops a tactics save
+// or a context read made around a preview.
 import assert from "node:assert/strict";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
@@ -15,19 +16,27 @@ const { contextPanel } = await import(process.argv[2]);
 const view = { label: "x", actor: "q/character/npc", system: "You are Mara.", heard: "Anya: <b>compass</b>?",
   items: [], omitted: [], budget: { tokens: 10, max_tokens: 1500, measurement: "estimated", lane_caps: {}, item_overhead: 1 } };
 const heard = { estimated: true, sent: false, written: false, actor: "q/character/npc", draft: { heard: true, kind: "speech" },
-  tokens: { now: 10, with_draft: 22 }, more_recalls: 0, context: view,
+  tokens: { now: 10, with_draft: 22 }, more_recalls: 0, shed_recalls: 1, context: view,
   recalls: [
     { line: "You were told: the <i>silver</i> compass", lane: "memory", tokens: 9, included: true, reason: null, why: "shared_words", words: ["compass", "silver"], provenance: {} },
     { line: "The lighthouse has been dark for a year.", lane: "lore", tokens: 9, included: false, reason: "lane_cap", why: "triggered", words: [], provenance: {} }],
   changes: { added: [{ line: "Added lore", lane: "lore", tokens: 3, provenance: {} }], removed: [] } };
-const unheard = { ...heard, draft: { heard: false, kind: "speech" }, recalls: [], changes: { added: [], removed: [] }, tokens: { now: 10, with_draft: 10 } };
+const unheard = { ...heard, draft: { heard: false, kind: "speech" }, recalls: [], shed_recalls: 0, changes: { added: [], removed: [] }, tokens: { now: 10, with_draft: 10 } };
+// the list the server cut: every listed recall is packed, but it counts three it shed
+const cut = { ...heard, recalls: [heard.recalls[0]], more_recalls: 70, shed_recalls: 3 };
 
-const calls = [];
-let answer = heard, hold = null;
+const calls = [], saved = [];
+let answer = heard, hold = null, holdRead = null, refuseSave = null;
 const api = async (op, args) => {
   calls.push([op, args]);
-  if (op === "providers.context") return { actors: [{ actor: "q/character/npc", name: "Mara" }, { actor: "q/character/b", name: "Bo" }],
-    context: args.actor ? view : null, agenda: null, routes: [], etag: null, writable: false };
+  if (op === "providers.context") {
+    const read = { actors: [{ actor: "q/character/npc", name: "Mara" }, { actor: "q/character/b", name: "Bo" }],
+      context: args.actor ? view : null, agenda: args.actor ? { editable: true, aim: "Keep the light", actions: ["wait"] } : null,
+      routes: [], etag: "e1", writable: true };
+    if (holdRead) return new Promise((resolve) => { const release = holdRead; holdRead = null; release(() => resolve(read)); });
+    return read;
+  }
+  if (op === "providers.save_agenda") { if (refuseSave) throw refuseSave; return { etag: "e2" }; }
   if (op === "providers.preview_context") {
     if (hold) return new Promise((resolve) => { const release = hold; hold = null; release(() => resolve(answer)); });
     return answer;
@@ -35,7 +44,7 @@ const api = async (op, args) => {
   throw new Error(op);
 };
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
-const panel = contextPanel({ ui, api }, () => {});
+const panel = contextPanel({ ui, api }, (result) => saved.push(result));
 document.body.append(panel.node);
 const form = () => panel.node.querySelector('div[aria-label="Draft preview"]');
 const textarea = () => form().querySelector("textarea");
@@ -46,9 +55,10 @@ const choose = async (value) => { const select = panel.node.querySelector("selec
 panel.changeChat("c1");
 await tick();
 assert.equal(form().hidden, true, "no draft box before an NPC is chosen");
-assert.equal(panel.node.querySelector("form"), null, "the preview saves nothing, so it is not a form");
+
 await choose("q/character/npc");
 assert.equal(form().hidden, false);
+assert.equal(panel.node.querySelectorAll("form").length, 1, "the preview saves nothing, so only the tactics are a form");
 
 // nothing typed: nothing asked
 submit();
@@ -89,6 +99,42 @@ release();
 await tick();
 assert.doesNotMatch(form().textContent, /Likely recalled/);
 assert.equal(textarea().value, '"Did you keep the silver compass?"');
+
+// the warning counts what the server shed, not what survived its cut list
+await choose("q/character/npc");
+answer = cut;
+submit();
+await tick();
+assert.match(form().textContent, /points at 3 things this NPC will not get/);
+assert.match(form().textContent, /and 70 more/);
+
+// a tactics save after a preview is still reported and refreshes the page; a refused save says why
+const tactics = () => panel.node.querySelector("form");
+answer = heard;
+submit();
+await tick();
+tactics().dispatchEvent({ type: "submit", preventDefault() {} });
+await tick();
+assert.deepEqual(saved, [{ etag: "e2" }], "the saved tactics reach the page");
+submit();
+await tick();
+refuseSave = Object.assign(new Error("the settings changed; reload before saving tactics"), { reason: "changed" });
+tactics().dispatchEvent({ type: "submit", preventDefault() {} });
+await tick();
+assert.match(tactics().textContent, /the settings changed/);
+refuseSave = null;
+
+// a preview asked while the context is being read does not leave the read unanswered
+let releaseRead = null;
+holdRead = (resolve) => { releaseRead = resolve; };
+[...panel.node.querySelectorAll("button")].find((item) => item.textContent === "Refresh context").click();
+await tick();
+submit();
+await tick();
+releaseRead();
+await tick();
+assert.doesNotMatch(panel.node.textContent, /Reading current context/);
+assert.match(panel.node.textContent, /Selected context and provenance/);
 
 // a refusal is said, with its reason's words
 const refusing = contextPanel({ ui, api: async (name, given) => {

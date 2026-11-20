@@ -6,10 +6,12 @@ nothing: no provider is called, nothing is written, and the draft is not kept.
 
 How it is built, so the answer is the runner's own and not a second retrieval model:
 
-- **The draft is read as a post would be.** The same checks ``SceneRunner.post`` makes, in its order (the
-  player, a table request, play paused, the persona present and on stage, the last turn closed), then 035's
-  ``read_post``: 008 routes it, 003 checks the player controls the persona, and 032 says who would hear it. A
-  draft ``post`` would refuse is refused here with ``post``'s reason (``DraftRefused``), and nothing is packed.
+- **The draft is read by ``post``'s own reading.** ``SceneRunner._unsaved_post``, which ``post`` itself saves
+  from, after ``post``'s player and table-request checks: play paused, the persona present and on stage, 035's
+  ``read_post`` (008 routes it, 003 checks the player controls the persona, 032 says who would hear it), then
+  the last turn closed. A draft ``post`` would refuse is refused here with ``post``'s reason and words
+  (``DraftRefused``) and nothing is packed; a table request, which ``post`` would run, is ``table_request``; a
+  draft that retries the open turn's own post is that saved turn, as ``post`` would return it.
 - **Packed twice through generation's own assembly.** The selected NPC's context is assembled now, from the
   saved turns (the inspector's answer), and again with the draft as a new, unsaved turn after them, so the draft
   is in what the NPC heard and triggers its lore exactly as a posted line would. An NPC that would not hear the
@@ -19,8 +21,8 @@ How it is built, so the answer is the runner's own and not a second retrieval mo
   with the draft. ``recalls`` explains them: a lore entry the draft triggers (exact: it was not a candidate
   without the draft), and a memory whose own words the draft shares (an estimate: memory is ranked by recency
   and by who is present, never by the draft, so sharing words says only that the NPC will hold both in view).
-  A recalled item the budget sheds is listed with its reason, the warning the preview exists for: the draft
-  points at context the NPC will not get. Its line comes from one more pack of the same candidates with no
+  A recalled item the budget sheds is listed first, with its reason, and counted in ``shed_recalls`` however
+  many are listed: the warning the preview exists for, that the draft points at context the NPC will not get. Its line comes from one more pack of the same candidates with no
   budget limit, the NPC's own authorized candidates only.
 
 It is an **estimate**: the turn's own prompt is rebuilt from saved state when it is generated, so anything that
@@ -33,12 +35,11 @@ from __future__ import annotations
 
 from grimoire.context import MAX_TOKENS, Budget, ContextPack, Origin, words
 from grimoire.core.identity import ChatRef, InstanceRef
-from grimoire.scene import SceneRefused, TurnRecord, turn_id
+from grimoire.scene import SceneRefused, TurnRecord
 
 from .context_view import context_view, origin_view
 from .runner import SceneRunner, _table_command
-from .scene import _follows, _refuse
-from .together import read_post
+from .scene import _refuse
 
 #: The lanes whose content a scene's text can change or point at: what a draft can recall.
 RECALL_LANES = ("memory", "lore")
@@ -76,27 +77,16 @@ def _candidates(pack: ContextPack) -> set[tuple[str, Origin]]:
     return {(item.lane, item.origin) for item in pack.items} | {(item.lane, item.origin) for item in pack.omitted}
 
 
-def _read_draft(runner: SceneRunner, scene, chat: ChatRef, by, draft: str, mode: str) -> TurnRecord:  # type: ignore[no-untyped-def]
-    """The draft as ``post`` would save it, unsaved: ``post``'s checks in ``post``'s order, nothing written."""
+def _read_draft(runner: SceneRunner, scene, chat: ChatRef, by, draft: str, mode: str) -> tuple[TurnRecord, bool]:  # type: ignore[no-untyped-def]
+    """The draft as ``post`` would read it, and whether it is a new turn: ``post``'s own reading, nothing written.
+
+    A table request is refused (``post`` would run it, not save a line). A draft that retries the open turn's
+    own post is that saved turn: ``post`` would return it, so the context it gives is the current one."""
     principal = runner._principal(scene, by)
     if _table_command(scene, draft, mode) is not None:
         raise _refuse("table_request", "this draft is a table request (pause, resume, skip or redirect), not a post")
-    runner._ready(scene)
-    persona = scene.persona
-    if persona is None:
-        raise _refuse("no_persona", "this chat has no player character to post as")
-    if persona not in scene.cast:
-        raise _refuse("persona_absent", "the player character is not present in this scene")
-    if persona not in scene.on_stage:
-        raise _refuse("not_on_stage", "the player character has left the scene's stage")
-    last = scene.last
-    if last is not None and last.open:
-        raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it, before the next post")
-    number = 1 if last is None else last.number + 1
-    device = runner.scenes.tag_for(scene.turns, number)
-    tid = turn_id(chat, number, device)
-    post = read_post(scene, chat, principal, persona, draft, mode, tid=tid, number=number, contribution_id=tid)
-    return TurnRecord(chat, number, "post", post, device=device, follows=_follows(last))
+    record, saved = runner._unsaved_post(scene, chat, principal, draft, mode)
+    return (saved, False) if saved is not None else (record, True)
 
 
 def _line_view(item, actor: InstanceRef) -> dict:  # type: ignore[no-untyped-def]
@@ -113,13 +103,14 @@ def _changes(now: ContextPack, after: ContextPack, actor: InstanceRef) -> dict:
 
 
 def _recalls(draft: str, now: ContextPack, after: ContextPack, wide: ContextPack, actor: InstanceRef) -> list[dict]:
-    """What the draft likely brings to mind, packed items first (in pack order), then those the budget shed."""
+    """What the draft likely brings to mind: those the budget sheds first (the warnings), then packed items, each
+    in pack order."""
     asked = _topic(draft)
     triggered = {key for key in _candidates(after) - _candidates(now) if key[0] == "lore"}
     lines = {(item.lane, item.origin): item.line for item in wide.items}  # every candidate's line, unlimited
     found = []
-    entries = [(item, True, None) for item in after.items]
-    entries += [(item, False, item.reason) for item in after.omitted]
+    entries = [(item, False, item.reason) for item in after.omitted]
+    entries += [(item, True, None) for item in after.items]
     for item, included, reason in entries:
         key = (item.lane, item.origin)
         if item.lane not in RECALL_LANES:
@@ -145,7 +136,7 @@ def preview_context(runner: SceneRunner, chat: ChatRef, by, actor: InstanceRef, 
     context, voice, ledger, entry = runner._inspectable(chat, actor)
     scene = context.scene
     try:
-        record = _read_draft(runner, scene, chat, by, draft, mode)
+        record, new = _read_draft(runner, scene, chat, by, draft, mode)
     except SceneRefused as refused:  # the same reason and words: ``str`` of either reads ``reason: message``
         text, lead = str(refused), f"{refused.reason}: "
         raise DraftRefused(refused.reason, text[len(lead):] if text.startswith(lead) else "") from None
@@ -156,11 +147,11 @@ def preview_context(runner: SceneRunner, chat: ChatRef, by, actor: InstanceRef, 
     result = {"label": "Estimated preview with your draft", "estimated": True, "actor": str(actor),
               "draft": {"heard": hears, "kind": record.post.kind},
               "tokens": {"now": now["pack"].tokens, "with_draft": now["pack"].tokens},
-              "changes": {"added": [], "removed": []}, "recalls": [], "more_recalls": 0}
+              "changes": {"added": [], "removed": []}, "recalls": [], "shed_recalls": 0, "more_recalls": 0}
     if not hears:  # its context is the saved one: the draft never reaches it
         result["context"] = context_view(now["brief"], now["pack"], actor, label="Current generation context")
         return result
-    turns = (*records, record)
+    turns = (*records, record) if new else records  # a retried post is already the last saved turn
     after = runner._actor_assembly(context, actor, voice, turns, ledger)
     wide = runner._actor_assembly(context, actor, voice, turns, ledger,
                                   budget=Budget(MAX_TOKENS, item_overhead=runner.budget.item_overhead))
@@ -168,7 +159,8 @@ def preview_context(runner: SceneRunner, chat: ChatRef, by, actor: InstanceRef, 
     result.update(context=context_view(after["brief"], after["pack"], actor, label="Estimated context with your draft"),
                   tokens={"now": now["pack"].tokens, "with_draft": after["pack"].tokens},
                   changes=_changes(now["pack"], after["pack"], actor),
-                  recalls=recalls[:MAX_RECALLS], more_recalls=max(0, len(recalls) - MAX_RECALLS))
+                  recalls=recalls[:MAX_RECALLS], more_recalls=max(0, len(recalls) - MAX_RECALLS),
+                  shed_recalls=sum(not item["included"] for item in recalls))
     return result
 
 
