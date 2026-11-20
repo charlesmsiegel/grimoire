@@ -65,7 +65,6 @@ def test_a_correction_only_reaches_the_last_dictated_passage():
     ("Gate is shut", "I meant the west gate", "The west gate is shut"),
     ("We ride to an old gate", "I meant the west gate", "We ride to the west gate"),  # no "an the"
     ("Bring the rope and the lamp", "I meant the rope and a torch", "Bring the rope and a torch"),
-    ("We hire three guards and two archers", "I meant three archers", "We hire three guards and three archers"),
     ("Mara waits and I go", "I meant we go", "Mara waits and we go"),  # no capital mid-sentence
 ])
 def test_a_correction_that_puts_in_takes_out_or_swaps_words_keeps_its_neighbours(passage, said, expected):
@@ -83,6 +82,9 @@ def test_a_correction_that_puts_in_takes_out_or_swaps_words_keeps_its_neighbours
     ("the captain and the guard leave", "no I meant the captain and guard", "The captain and guard"),
     ("we wait for the dawn", "no I meant for dawn", "For dawn"),  # never "for for dawn"
     ("west my at road we", "no I meant a road", "A road"),  # never "my a road"
+    ("we open the west gate", "no I meant open east gate", "Open east gate"),  # never "open the open east gate"
+    ("I pick the lock on the iron chest", "no I meant pick wooden chest", "Pick wooden chest"),
+    ("We hire three guards and two archers", "I meant three archers", "Three archers"),  # "three" is already there
 ])
 def test_a_correction_that_is_not_plainly_one_edit_is_kept_as_words_with_the_whole_passage_offered(passage, said, whole):
     kept = revise(passage, passage, said)
@@ -94,6 +96,11 @@ def test_a_misheard_name_is_corrected_by_its_sound_and_only_past_its_last_words_
     assert revise("ask Marabel for help", "ask Marabel for help", "no I meant Mara Vell").text == "ask Mara Vell for help"
     long = "we pass the west gate " + "walk " * 199
     assert revise(long, long, "no I meant the east gate").kind == "added"  # the gate is out of reach, not "found"
+
+
+def test_words_kept_by_a_correction_keep_the_passage_spelling():
+    passage = "we meet Mara Vell at the west gate"
+    assert revise(passage, passage, "no I meant mara vell at the east gate").text == "we meet Mara Vell at the east gate"
 
 
 def test_a_capital_is_kept_where_the_correction_starts_a_sentence():

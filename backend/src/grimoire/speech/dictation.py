@@ -229,7 +229,8 @@ def _align(passage: str, replacement: str) -> tuple[int, int] | None:
     words and sharing none, sounds like it as a whole (a misheard name: "Marabel" for "Mara Vell"). The most shared
     words win, then the tightest span, then the latest, since a correction usually follows what it corrects; a
     span whose correction would leave words said twice in a row that neither the passage nor the replacement says
-    twice ("the the guards", "for for dawn") is passed over. Only the passage's last words are searched, a
+    twice ("the the guards", "for for dawn"), or that restates a word from just beside it ("open east gate" for
+    "west gate" in "we open the west gate"), is passed over. Only the passage's last words are searched, a
     correction drops at most a few words, and a long replacement is not a correction to line up."""
     tokens = _tokens(passage)
     offset = max(0, len(tokens) - MAX_ALIGN_WORDS)
@@ -263,6 +264,9 @@ def _align(passage: str, replacement: str) -> tuple[int, int] | None:
             found.append((*score, at, at + size))
     for *_score, first, past in sorted(found, reverse=True):
         left, right = spoken[max(0, first - 6):first], spoken[past:past + 6]  # all a three-word repeat can reach
+        added = {word for word in wanted if word not in _STOP and word not in spoken[first:past]}
+        if added.intersection(left + right):
+            continue  # a word restated from beside the span ("open" in "open the west gate") would be said twice
         if _repeats(left + wanted + right) <= _repeats(left + spoken[first:past] + right) | _repeats(wanted):
             return tokens[first][1], tokens[past - 1][2]
     return None
@@ -404,7 +408,13 @@ def revise(draft: str, last: str | None, heard: str, *, confidence: float | None
                         suggestions=verbatim.suggestions, alternative=offered)
     start, end = span
     replaced = last[start:end]
-    put = _format(replacement, draft[:at] + last[:start])
+    # words kept from the passage keep its spelling ("Mara Vell" as the player fixed it), new ones are as heard
+    leading = _sentence_start(draft[:at] + last[:start])
+    kept = {match.group().lower(): match.group() for match in _WORD.finditer(replaced)
+            if match.group() != match.group().lower() and not (leading and match.start() == 0)}
+    respelled = _WORD.sub(lambda match: kept.get(match.group(), match.group()) if match.group().islower()
+                          else match.group(), replacement)
+    put = _format(respelled, draft[:at] + last[:start])
     passage = last[:start] + put + last[end:]
     text = draft[:at] + passage + draft[at + len(last):]
     if len(text) > MAX_DRAFT:
