@@ -26,7 +26,6 @@ from grimoire.context import Budget
 from grimoire.contextstore import actor_context, chat_lore
 from grimoire.decisionstore import DecisionLibrary
 from grimoire.decisions import DecisionError, record_decision, replay
-from grimoire.generation.brief import heard_transcript
 from grimoire.effectstore import EffectRecovery, TurnEffectsLibrary
 from grimoire.core import DIRECTOR, snapshot_actor_view
 from grimoire.core.authority import (
@@ -74,6 +73,7 @@ from grimoire.providers.meter import TurnMeter
 from grimoire.runtime import GenerationRuntime, LabelRuntime, RunFence
 from grimoire.narration_review import ExtractionRuntime
 from . import continuity
+from .context_view import context_view
 from .continuity_facts import snapshot as continuity_snapshot
 from grimoire.scene import (
     MAX_TAKES, NARRATOR, CallRecord, Intention, IntentionOption, Label, SceneLine, SceneRefused, Take, TurnRecord,
@@ -222,6 +222,15 @@ class SceneRunner:
 
     def inspect_context(self, chat: ChatRef, actor: InstanceRef) -> dict:
         """Current actor-authorized context only, without providers or writes."""
+        context, voice, ledger, entry = self._inspectable(chat, actor)
+        built = self._actor_assembly(context, actor, voice, context.scene.records, ledger,
+                                     recorded=entry.record if entry is not None else None)
+        return context_view(built["brief"], built["pack"], actor, label="Current generation context")
+
+    def _inspectable(self, chat: ChatRef, actor: InstanceRef):
+        """The checks inspection makes before assembling ``actor``'s context (112, and 085's draft preview):
+        the chat, its cast and knowledge read in full, and ``actor`` a present director NPC with a voice.
+        ``(context, voice, ledger, the actor's recorded decision for the pending turn or None)``."""
         context = self._context(chat)
         _readable(context.scene)
         chosen = self._speakers(context, (actor,))  # membership and sovereignty before assembly
@@ -235,32 +244,7 @@ class SceneRunner:
                  if self.decisions is not None and pending is not None else None)
         if entry is not None and actor not in self._agendas:
             raise _refuse("agenda_changed", "the recorded decision no longer has its authored agenda")
-        built = self._actor_assembly(context, actor, chosen[0][1], context.scene.records, ledger,
-                                     recorded=entry.record if entry is not None else None)
-        brief, pack = built["brief"], built["pack"]
-
-        def origin(value):
-            # No selection bases, global source diagnostics or other actors' identities.
-            result = {"kind": value.kind}
-            for name in ("source", "name", "record", "belief"):
-                field = getattr(value, name)
-                if field is not None:
-                    result[name] = str(field)
-            if value.actor == actor:
-                result["actor"] = str(actor)
-            if value.evidence:
-                result["evidence"] = list(value.evidence)
-            return result
-
-        return {"label": "Current generation context", "actor": str(actor),
-                "system": brief.system, "heard": heard_transcript(brief),
-                "items": [{"line": item.line, "tokens": item.tokens, "lane": item.lane,
-                           "provenance": origin(item.origin)} for item in pack.items],
-                "omitted": [{"reason": item.reason, "tokens": item.tokens, "lane": item.lane,
-                             "provenance": origin(item.origin)} for item in pack.omitted],
-                "budget": {"tokens": pack.tokens, "max_tokens": pack.budget.max_tokens,
-                           "measurement": pack.measurement, "lane_caps": dict(pack.budget.lane_caps),
-                           "item_overhead": pack.budget.item_overhead}}
+        return context, chosen[0][1], ledger, entry
 
     @traced("open")
     def open(self, chat: ChatRef) -> Scene:
@@ -547,6 +531,16 @@ class SceneRunner:
                 return self._resume(scene, principal)
             targets = () if command.name == "pause" else None  # None: the lines on show
             return self._request(scene, principal, command.name, targets, command.argument)
+        record, saved = self._unsaved_post(scene, chat, principal, text, mode)
+        if saved is not None:
+            return saved  # the same post retried: it is already saved
+        self._write(record, None, after=scene.turns.last)
+        return record
+
+    def _unsaved_post(self, scene, chat: ChatRef, principal, text: str, mode: str):  # type: ignore[no-untyped-def]
+        """``post``'s reading of ``text`` once the table request is ruled out, writing nothing: the new turn
+        it would save, or (when ``text`` retries the open turn's own post) that saved turn. 085's draft
+        preview reads a draft through here, so it refuses exactly what ``post`` refuses, with its words."""
         self._ready(scene)
         persona = scene.persona
         if persona is None:
@@ -562,11 +556,9 @@ class SceneRunner:
         post = read_post(scene, chat, principal, persona, text, mode, tid=tid, number=number, contribution_id=tid)
         if last is not None and last.open:
             if last.posts == (post,) and not last.takes:
-                return last  # the same post retried: it is already saved
+                return None, last
             raise _refuse("turn_open", "the last turn is still open: keep a take, or pass it")
-        record = TurnRecord(chat, number, "post", post, device=device, follows=_follows(last))
-        self._write(record, None, after=scene.turns.last)
-        return record
+        return TurnRecord(chat, number, "post", post, device=device, follows=_follows(last)), None
 
     @traced("post_together")
     def post_together(self, chat: ChatRef, contributions: Iterable[Contribution]) -> TurnRecord:
@@ -770,14 +762,15 @@ class SceneRunner:
                                                                                      requested_by=DIRECTOR)
             return ledger, _latest(ledger.knowledge)
 
-    def _actor_assembly(self, context, actor, voice, turns, ledger, *, recorded=None):
-        """One shared pack/brief assembly for generation and read-only inspection."""
+    def _actor_assembly(self, context, actor, voice, turns, ledger, *, recorded=None, budget=None):
+        """One shared pack/brief assembly for generation and read-only inspection. ``budget`` replaces the
+        runner's own for a read-only answer only (085's preview packs once without limits to see what was shed)."""
         with span("brief.npc") as timed:
-            built = self._assemble_actor(context, actor, voice, turns, ledger, recorded=recorded)
+            built = self._assemble_actor(context, actor, voice, turns, ledger, recorded=recorded, budget=budget)
             timed.count(heard=len(built["brief"].heard))
             return built
 
-    def _assemble_actor(self, context, actor, voice, turns, ledger, *, recorded=None):
+    def _assemble_actor(self, context, actor, voice, turns, ledger, *, recorded=None, budget=None):
         scene, snap, chat = context.scene, context.captured.snapshot, context.scene.chat
         as_of = _latest(ledger.knowledge)
         _, bare = outcome_lines(self, turns, scene.names)
@@ -788,7 +781,8 @@ class SceneRunner:
         if memory is not None:  # the pack, the brief and the agenda's choice all read the corrected projection
             knowledge = corrected_knowledge(knowledge, memory)
         with span("pack") as packed:
-            built = actor_context(context.view, chat, ledger, actor, as_of=as_of, budget=self.budget,
+            built = actor_context(context.view, chat, ledger, actor, as_of=as_of,
+                                  budget=self.budget if budget is None else budget,
                                   present=seen, scene_text=render(heard), memory=memory)
             packed.count(items=len(built.pack.items), omitted=len(built.pack.omitted))
         view = snapshot_actor_view(snap.instance(actor), snap, knowledge)
