@@ -95,12 +95,17 @@ class Adapter:
     ``refusals`` maps a refusal its services raise that the text API does not know (``CardError``,
     ``ImportRefused``, a provider's ``CallRefused``) to the machine-readable reason the client is answered with,
     as a 409 unless the reason is one of the text API's not-found or bad-request reasons. A subclass matches its
-    base. Any other exception is a bug: logged by the server and answered 500."""
+    base. Any other exception is a bug: logged by the server and answered 500.
+
+    ``unlocked`` names ops that run **without** the library's writer lock: only an op that reads and writes no
+    library state at all (not ``store``, ``chats``, ``runner``... nor a core op), guarding its own state with its
+    own lock, may be listed, so a slow one (061's speech recognition) never stalls play."""
 
     name: str
     owner: str
     ops: Mapping[str, Handler] = field(default_factory=dict)
     refusals: Mapping[type[BaseException], str] = field(default_factory=dict)
+    unlocked: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not NAME.fullmatch(self.name):
@@ -117,6 +122,8 @@ class Adapter:
                 raise ValueError(f"adapter {self.name!r}: a refusal is an exception class, not {kind!r}")
             if not isinstance(reason, str) or not NAME.fullmatch(reason):
                 raise ValueError(f"adapter {self.name!r}: refusal reason {reason!r} must match {NAME.pattern}")
+        if not isinstance(self.unlocked, frozenset) or not self.unlocked <= set(self.ops):
+            raise ValueError(f"adapter {self.name!r}: unlocked must be a frozenset of its own op names")
         object.__setattr__(self, "ops", MappingProxyType(dict(self.ops)))
         object.__setattr__(self, "refusals", MappingProxyType(dict(self.refusals)))
 

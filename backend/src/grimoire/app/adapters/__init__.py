@@ -13,4 +13,8 @@ from . import speech  # noqa: E402 -- voice status, one listening window, captio
 
 ADAPTERS = tuple(sorted((*ADAPTERS, shelf.ADAPTER, speech.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import voice  # noqa: E402 -- 061's private local voice input (docs/SPEECH.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, voice.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]

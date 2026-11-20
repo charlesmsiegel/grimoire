@@ -1,0 +1,8 @@
+/* Voice (061): private local voice input. */
+.voice-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 8px 0; }
+.voice-facts dt { color: var(--g-muted); }
+.voice-facts dd { margin: 0; }
+.voice-check { gap: 8px; }
+.voice-check input { width: 18px; height: 18px; }
+.voice-heard { font-size: 18px; white-space: pre-wrap; }
+.voice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }

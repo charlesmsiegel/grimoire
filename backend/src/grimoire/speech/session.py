@@ -37,6 +37,17 @@ class SpeechSession:
         self._lock = Lock()
 
     @property
+    def policy(self) -> Policy:
+        with self._lock:
+            return self._policy
+
+    @property
+    def sequence(self) -> int:
+        """The highest invocation ID accepted so far (0 before any): the next must be greater."""
+        with self._lock:
+            return self._sequence
+
+    @property
     def capture_token(self) -> str:
         with self._lock:
             return self._capture_token
