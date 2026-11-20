@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, the 070, 067, 072, 061 and 058 proofs to **76/119**, and 087's world authoring proof to **77/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, the 070, 067, 072, 061 and 058 proofs to **76/119**, and the Wave 9 075, 076 and 087 proofs to **79/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 1/16 | ☐ | 087 is checked; the other scheduled domain slices and UI exit 116 are not complete. |
+| [9](#wave-9) | 3/16 | ☐ | 075, 076 and 087 are complete at their bounded headless first-proof boundaries. Other domain slices and UI exit 116 remain incomplete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-087 meets the bounded world-authoring proof; the other scheduled domain slices and UI exit 116 are not complete.
+075, 076 and 087 meet their bounded first proofs; the other scheduled domain slices and UI exit 116 are not complete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -693,16 +693,16 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-075"></a>
 ### 075 — Mechanical Resolution
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/mechanical-resolution.md)).
-- Evidence: adjudication/effects provide fiction-first reviewed outcomes and durable application.
-- Scope / gap: No rules-family mechanical roll record that narration consumes without rerolling.
+- [x] Scheduled first-useful slice ([requirements](sprints/mechanical-resolution.md)).
+- Evidence: [`rolls/model.py`](../../backend/src/grimoire/rolls/model.py), [`rolls/codec.py`](../../backend/src/grimoire/rolls/codec.py) and [`rollstore/library.py`](../../backend/src/grimoire/rollstore/library.py); [`test_rollstore.py`](../../backend/tests/test_rollstore.py), [`test_rollstore_recovery.py`](../../backend/tests/test_rollstore_recovery.py) and [`test_rolls.py`](../../backend/tests/test_rolls.py). Milestone 1: a 5e Stealth check by a player character, backed by the player's own action and handle, draws its d20 once and appends the faces to the `rolls/<campaign>` authority ledger before returning them. The roll's 003 resolution makes `review_narration` reject a narration retry that turns the failure into a success (`contradicts_resolution`); asking again, or after reopening, reads the same failure back and draws no die. The ledger stores faces only and replay re-derives each result with 062's profile, so a forged result or a second roll of one request is `LedgerInvalid`; the fault harness shows a roll is on record whole or not at all. WoD fixed-difficulty pools and PbtA moves roll through the same interface with their own result shapes. Docs: [ROLLS](../ROLLS.md).
+- Scope / gap: Headless, with no UI (116) and no scene-runner wiring (milestone 3). The action's DC, modifier and pool are the caller's, not read off a sheet, and legality is not checked; the selected module is passed by the caller. WoD opposed pools and a PbtA partial's recorded choice (milestone 2), durable effects, conditions and action journals (milestone 3) remain; 029 does not yet refuse to frame a rolled attempt, and nothing yet reviews narration against both libraries' resolutions; no-re-roll holds per attempt, not per turn (a new contribution or director request id is a new roll), until the milestone-3 runner derives attempts from the turn.
 
 <a id="slice-076"></a>
 ### 076 — Offscreen World Events
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/offscreen-world-events.md)).
-- Evidence: goals policy selects an actor’s current action.
-- Scope / gap: No offscreen clock-based faction plan scheduler or bounded absence advancement.
+- [x] Scheduled first-useful slice ([requirements](sprints/offscreen-world-events.md)).
+- Evidence: [`offscreen/schedule.py`](../../backend/src/grimoire/offscreen/schedule.py), [`offscreenstore/library.py`](../../backend/src/grimoire/offscreenstore/library.py) and [`OFFSCREEN.md`](../OFFSCREEN.md); [`test_offscreen.py`](../../backend/tests/test_offscreen.py)::test_rival_plan_progresses_during_twenty_days_of_travel advances a guild plan adopted under its 057 decision across a 20-day calendar advance (two steps flagged at their own due moments, one pending); [`test_offscreenstore.py`](../../backend/tests/test_offscreenstore.py) proves the native once-only skip, reopen retry, fail-closed replay and crash/I/O recovery. Budget deferral, deadline outcomes, ordering and the no-roster/no-model boundary are in `test_offscreen.py`.
+- Scope / gap: Headless first milestone: exact-duration plan steps only, director-facing developments that deliver no knowledge or accepted effect. No UI (116), model-backed or narrated developments, causal branching/hidden-consequence trees, multi-process cost measurement, plan withdrawal or persistent institutions.
 
 <a id="slice-077"></a>
 ### 077 — Quests And Commitments
