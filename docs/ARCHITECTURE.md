@@ -104,6 +104,7 @@ Historical scene dates and actor knowledge stay untouched. See [CALENDARS.md](CA
     images/, placements/              # the campaign's own image objects and placements (018)
   assets/blobs/                       # content-addressed image bytes (018)
   config/shelf/                       # the person's tags, pins and saved filters (SHELF.md); not synced yet
+  config/mechanics/                   # authored mechanics drafts and immutable revisions (MECHANICS_AUTHORING.md); not synced yet
   .txn/, .conflicts/, .sync/          # writer journal, preserved conflict versions, device-local sync state
 ```
 
