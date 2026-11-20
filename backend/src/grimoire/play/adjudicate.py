@@ -73,6 +73,8 @@ def _action(runner, chat: ChatRef, by):
     post = record.post if record is not None else None
     if post is None or post.kind != "action":
         raise _refuse("not_an_action", "only the open turn's action post is framed")
+    if record.also:  # 058: several characters' posts are no one action to adjudicate
+        raise _refuse("combined_turn", "a turn of several player characters' posts is not framed")
     if post.private:
         raise _refuse("private_action", "a withheld action is not framed: the table never saw it")
     return scene, principal, record, post

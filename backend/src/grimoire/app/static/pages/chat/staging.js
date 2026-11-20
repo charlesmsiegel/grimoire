@@ -3,7 +3,7 @@ import { chatPictures } from "./pictures.js";
 export function eligibleActors(turn) {
   if (!turn?.kept) return [];
   const actors = new Map();
-  for (const item of [turn.post, ...turn.kept.lines].filter(Boolean))
+  for (const item of [...(turn.posts || [turn.post]), ...turn.kept.lines].filter(Boolean))
     if (item.actor && !actors.has(item.actor))
       actors.set(item.actor, {
         actor: item.actor,
@@ -292,7 +292,7 @@ export function makeStaging(ctx, chat, { log }) {
     if (cue.focus && !actors.some((a) => a.actor === cue.focus))
       frame.append(el("p", {}, "Focus actor unavailable: " + cue.focus));
     body.append(frame);
-    for (const item of [turn.post, ...turn.kept.lines].filter(Boolean)) {
+    for (const item of [...(turn.posts || [turn.post]), ...turn.kept.lines].filter(Boolean)) {
       const to = item.to?.length ? " to " + item.to.join(", ") : "";
       body.append(
         el(

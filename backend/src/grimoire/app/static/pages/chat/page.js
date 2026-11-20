@@ -343,13 +343,15 @@ export async function mount(root, ctx) {
     }
     for (const turn of scene.turns) {
       const first = out.length;
-      if (turn.post) {
-        const to = turn.post.to && turn.post.to.length ? " to " + turn.post.to.join(", ") : "";
-        const mine = scene.persona && turn.post.actor === scene.persona.actor;
-        out.push(said(scene, { actor: turn.post.actor, speaker: turn.post.speaker, text: turn.post.text, kind: "chat-post", you: mine, to,
-          aside: turn.post.withheld ? "Only you know this." : turn.post.private ? "Private." : "" }));
-        attach.under(turn, out[out.length - 1]);  // the picture attached to this post, if any, under its text
-      }
+      // 058: a combined turn holds each player character's post, in order; an older view has only ``post``
+      const posts = turn.posts || (turn.post ? [turn.post] : []);
+      posts.forEach((post, index) => {
+        const to = post.to && post.to.length ? " to " + post.to.join(", ") : "";
+        const mine = scene.persona && post.actor === scene.persona.actor;
+        out.push(said(scene, { actor: post.actor, speaker: post.speaker, text: post.text, kind: "chat-post", you: mine, to,
+          aside: post.withheld ? (mine ? "Only you know this." : "Only its player knows this.") : post.private ? "Private." : "" }));
+        if (index === 0) attach.under(turn, out[out.length - 1]);  // the picture attached to this turn, under its first post
+      });
       if (turn.kept) {
         for (const item of turn.kept.lines) {
           out.push(said(scene, { actor: item.actor, speaker: speakerOf(item), text: item.text,
