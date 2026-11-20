@@ -25,12 +25,13 @@ There is no app or UI, and no model or worker is involved. The scenarios are syn
 | `changes` | 1 to 64 `RecordChange`s, at most one per entity and one per entity id. |
 | `preconditions` | Up to 64 `Precondition(kind, entity_id, revision, etag)`: unchanged records the change set relies on. A changed record is never also pinned. |
 
-`RecordChange(kind, entity_id, revision, payload, name=None, base=None, base_etag=None, evidence=())`:
+`RecordChange(kind, entity_id, revision, payload, name=None, base=None, base_etag=None, evidence=(), schema=None)`:
 
 - **Create** (`base` is `None`): a new entity, written at `revision` (usually `r1`). It must not exist.
 - **Revise**: `base` is the head revision it was drafted against and `base_etag` that file's etag. The new `revision` is written and the head moves to it.
 - `payload` (a JSON object) and `name` are the proposed content, exactly. A revision carries its base's `owner` (including none) and unknown envelope keys forward unchanged.
 - `evidence` is up to 16 lines of attribution text ("session 12 notes"). It is shown, never interpreted.
+- `schema` (at most 128 characters) is the envelope schema a **create** declares, such as `grimoire.entity/0`, so the new record is read by that schema's readers. A revise keeps its base's schema, so naming one there is `invalid_field`. It is encoded only when set, so earlier change sets decode unchanged.
 
 `ChangeSetError(reason)` refusals: `invalid_field`, `empty_changeset`, `too_many_changes`, `too_many_preconditions`, `duplicate_target`, `duplicate_precondition`, `precondition_on_target`, `unsupported_schema`.
 
@@ -43,7 +44,7 @@ There is no app or UI, and no model or worker is involved. The scenarios are syn
 | Call | Notes |
 |---|---|
 | `head(source, kind, entity_id)` | `(revision, envelope, etag)` of the entity's head: the declared head, or the only revision. Refusals: `missing_source`, `excluded_source`, `missing`, `no_head`, `unreadable`. |
-| `create(source, kind, entity_id, payload, *, name, evidence, revision="r1")` | A create change. Whether the entity exists is judged at review. |
+| `create(source, kind, entity_id, payload, *, name, evidence, revision="r1", schema=None)` | A create change. Whether the entity exists is judged at review. |
 | `revise(source, kind, entity_id, payload, *, name, evidence)` | A revise change based on the current head. `name` defaults to the head's. The new revision is the next free `r<N>` after every revision file of the entity, headed or not. |
 | `pin(source, kind, entity_id)` | A precondition on the entity's current head and bytes. |
 | `review(changeset)` | A `ChangeSetReview`. Reads under one store lock and writes nothing. Refusals: `missing_source`, `excluded_source`, and `unstorable` for content the store cannot encode (over its size limit, or a number it cannot write exactly). |
@@ -102,7 +103,7 @@ A trusted `human:` handle with a covering grant applies directly. An untrusted h
 
 | Not here | Owner |
 |---|---|
-| Milestone 3: a bounded authoring worker submits the same representation; persisted pending proposals, and who may approve auto-apply exceptions | 043 later milestones, [World Authoring Assistant](roadmap/sprints/world-authoring-assistant.md) (087) |
+| Milestone 3: a bounded authoring worker submits the same representation; persisted pending proposals, and who may approve auto-apply exceptions. 087's first slice ([AUTHORING](AUTHORING.md)) drafts accepted suggestions as change sets in trusted code; no worker submits one directly | 043 later milestones, [World Authoring Assistant](roadmap/sprints/world-authoring-assistant.md) (087) |
 | Undo. The replaced revisions are kept, so moving a head back is possible by hand, but what undo means after further outside edits is open | 043 open question |
 | Links in the manifest. A change set copies the manifest's links unchanged | 043 later milestone |
 | Campaign records (instances, relations). Play-derived changes go through [accepted turn effects](EFFECTS.md) | 021 |

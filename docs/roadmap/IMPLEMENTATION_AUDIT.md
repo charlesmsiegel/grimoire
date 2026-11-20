@@ -2,7 +2,7 @@
 
 **Historical snapshot:** [`b54b2bd898752684a2ad00b9fd7f1f02ff544326`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), branch `v2`, refreshed 2026-11-20. **62/119 scheduled slices; 4/12 scoped waves** (1, 3, 4, 5).
 
-**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
+**Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, the 070, 067, 072, 061 and 058 proofs to **76/119**, and 087's world authoring proof to **77/119**, with **4/12 scoped waves** unchanged. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
 This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 0/16 | ☐ | Scheduled domain slices and UI exit 116 are not complete. |
+| [9](#wave-9) | 1/16 | ☐ | 087 is checked; the other scheduled domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-Scheduled domain slices and UI exit 116 are not complete.
+087 meets the bounded world-authoring proof; the other scheduled domain slices and UI exit 116 are not complete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -777,9 +777,9 @@ Scheduled domain slices and UI exit 116 are not complete.
 <a id="slice-087"></a>
 ### 087 — World Authoring Assistant
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/world-authoring-assistant.md)).
-- Evidence: changesets provides reviewed proposals and selective application infrastructure.
-- Scope / gap: No authoring assistant generates three linked towns/guild and selectively accepts two without duplicates; catalog composition also missing.
+- [x] Scheduled first-useful slice ([requirements](sprints/world-authoring-assistant.md)).
+- Evidence: [`authoring`](../../backend/src/grimoire/authoring) holds bounded proposals of `location`/`organization` candidates with `individual`/`template`/`brainstorm` roles, `road`/`within` links grounded in pinned world refs, namesake keys and the metered, approved PLANNING proposer whose untrusted reply cannot invent records. [`authoringstore`](../../backend/src/grimoire/authoringstore) reviews a proposal for duplicates and broken links and writes only the accepted subset, as `grimoire.entity/0` records plus a world [topology](../TOPOLOGY.md) revision, through one reviewed [change set](../CHANGESETS.md) (which gains an optional create `schema`). [`test_authoringstore.py`](../../backend/tests/test_authoringstore.py) proves the scenario: of three suggested linked towns two are accepted and written with their road and containment links queryable both ways; the third and a brainstorm are not stored; the suggested guild is surfaced as a namesake of the existing one instead of created; stale reviews, moved endpoints, manifest races and an untrusted writer without approvals write nothing. [`test_authoring_generation.py`](../../backend/tests/test_authoring_generation.py) runs the same acceptance from a scripted provider reply over the real adapter. See [AUTHORING](../AUTHORING.md).
+- Scope / gap: Milestone 3 (seeded larger regions), campaign individuals, other record kinds, persisted pending proposals, factual canon-conflict detection, catalog-composed retrieval and the 116 UI remain.
 
 <a id="slice-116"></a>
 ### 116 — Wave 9 UI Exit: Mechanics, Authoring and Audio
