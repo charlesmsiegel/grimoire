@@ -340,6 +340,26 @@ def test_an_interrupted_billed_call_is_still_recorded(tmp_path, monkeypatch):
     assert record['status'] == 'interrupted' and record['attempts']
 
 
+def test_a_retry_that_names_no_model_is_not_vouched_for_by_the_failed_attempt(tmp_path, monkeypatch):
+    from grimoire.testing.providers import ReadFail, Reply, ScriptedTransport
+
+    monkeypatch.setenv('SYNTHETIC_JUDGE_KEY', 'sk-synthetic')
+    pins, trials, configs = jp.load_panel(panel_file(tmp_path, attempts=2))
+    case = jp.load_corpus(CORPUS)[0]
+    name = jp.alias('salt', case['id'])
+    token = jp.canary('salt', 'a', case['id'], 0)
+    messages = jp.messages_for(case, token, 'salt')
+    reply = Scripted(accurate).respond(pins[0], case, 0, messages)['reply']
+    transports = {'a': ScriptedTransport([ReadFail(1, reply=Reply(model='judge-model')),
+                                          Reply(deltas=(reply,), model='')])}
+    live = jp.LiveJudge(pins, configs, tmp_path / 'capture', 'salt', 1, spend_cap='0 USD', transports=transports)
+    record = live.respond(pins[0], case, 0, messages)
+    assert record['status'] == 'accepted' and record['served_model'] is None
+    result = jp.trial_result(record, pins[0], case, token, name)
+    assert result['state'] == 'unknown' and result['reason'] == 'model_mismatch'
+    assert result['observed_models'] == ['judge-model']
+
+
 def test_a_different_served_model_voids_every_answer(tmp_path):
     result, _ = report(tmp_path, accurate, served='judge-model-mini')
     assert result['defects']['panel']['unknown'] == 10

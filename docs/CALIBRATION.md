@@ -86,8 +86,9 @@ where `model_config` is the app's model configuration (`provider_id`, `base_url`
 judge's pin (provider, endpoint, model, temperature, output bound and its request field,
 attempts and the prompt version) is hashed into the capture; replay refuses a capture made for a
 different pin or prompt. An answer served by any model other than the pin or its dated
-snapshot is `unknown` (`model_mismatch`), and a judge served by more than one model
-during a capture (an alias moved to a new snapshot) loses every answer (`model_drift`);
+snapshot is `unknown` (`model_mismatch`); only the attempt that produced the reply can
+vouch for it, so a retry that reports no model is `unknown` too. A judge served by more than one model
+(counting every attempt, retries included) during a capture (an alias moved to a new snapshot) loses every answer (`model_drift`);
 the report lists each judge's served models. The report counts distinct models; using
 three different models is recommended for independence but not enforced.
 

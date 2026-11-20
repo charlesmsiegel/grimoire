@@ -365,8 +365,10 @@ class LiveJudge:
         finally:
             # Written even when an interrupt or crash escapes: a sent attempt may be billed.
             reports = meter.reports(call.call_id)
-            record['served_model'] = next((r.served_model for r in reversed(reports) if r.served_model), None)
+            # The reply is the final attempt's, so only that attempt's model may vouch for it.
+            record['served_model'] = (reports[-1].served_model or None) if reports else None
             record['attempts'] = [{'outcome': r.outcome, 'measurement': r.measurement.value,
+                                   'served_model': r.served_model or None,
                                    'tokens': {name: getattr(r.usage, name) for name in TOKEN_FIELDS}}
                                   for r in reports]
             _write(self.out / 'calls' / pin.judge_id / case['id'] / f'{trial}.json', record)
@@ -399,16 +401,21 @@ def trial_result(record: dict | None, pin: JudgePin, case: dict, token: str, nam
     base = {'state': 'unknown', 'lines': [], 'verdict': None}
     if record is None:
         return {**base, 'reason': 'not_captured', 'measurement': None}
-    measurement = sorted({a.get('measurement') for a in record.get('attempts', []) if a.get('outcome') != 'not_sent'})
+    attempts = record.get('attempts', [])
+    measurement = sorted({a.get('measurement') for a in attempts if a.get('outcome') != 'not_sent'})
     measured = measurement[0] if len(measurement) == 1 else ('mixed' if measurement else None)
+    served = record.get('served_model')
+    # Every model any attempt reported, kept apart from the reply's own, so drift sees them all.
+    observed = sorted({m for m in [served, *(a.get('served_model') for a in attempts)]
+                       if isinstance(m, str) and m})
     if record.get('status') != 'accepted':
-        return {**base, 'reason': f'call_{record.get("status")}', 'measurement': measured}
-    if not pin.serves(record.get('served_model')):
-        # Kept, so drift detection sees every model that answered for this judge.
+        return {**base, 'reason': f'call_{record.get("status")}', 'measurement': measured,
+                'observed_models': observed}
+    if not isinstance(served, str) or not pin.serves(served):
         return {**base, 'reason': 'model_mismatch', 'measurement': measured,
-                'served_model': record.get('served_model')}
+                'served_model': served if isinstance(served, str) else None, 'observed_models': observed}
     return {**base, **parse(record.get('reply'), case, token, name), 'measurement': measured,
-            'served_model': record.get('served_model')}
+            'served_model': served, 'observed_models': observed}
 
 
 def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: str) -> list[dict]:  # type: ignore[no-untyped-def]
@@ -438,7 +445,7 @@ def void_drift(cases: list[dict]) -> dict:
     served: dict[str, set] = {}
     for case in cases:
         for judge_id, results in case.get('judges', {}).items():
-            served.setdefault(judge_id, set()).update(r['served_model'] for r in results if r.get('served_model'))
+            served.setdefault(judge_id, set()).update(m for r in results for m in r.get('observed_models', []))
     for case in cases:
         for judge_id, results in case.get('judges', {}).items():
             if len(served[judge_id]) > 1:
