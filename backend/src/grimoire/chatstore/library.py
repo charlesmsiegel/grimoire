@@ -33,6 +33,7 @@ from grimoire.chats import (
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_from_payload, instance_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, paired_instances, validate_segment
+from grimoire.commitmentstore import commitment_party_ids
 from grimoire.decisionstore import decision_actor_ids
 from grimoire.devicetag import DeviceIdentityUnusable, device_tag
 from grimoire.effectstore import accepted_instance_ids
@@ -113,6 +114,7 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= decision_actor_ids(store, campaign_id)
     taken |= memory_actor_ids(store, campaign_id)
     taken |= rumor_actor_ids(store, campaign_id)
+    taken |= commitment_party_ids(store, campaign_id)
     taken |= roll_actor_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
         taken |= security_instance_ids(store, campaign_id, spent=spent)

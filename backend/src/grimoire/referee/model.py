@@ -3,7 +3,7 @@
 A ``ContinuityClaim`` is one atomic, labelled statement a proposed narration makes about the fiction, anchored
 to the exact characters of the prose it reads. ``Facts`` are the immutable records other sprints own, at one
 campaign sequence: 041's stage, 023's holdings, 034's possessions, 012's knowledge, 029's resolutions,
-040's obstacle states and 039's choices. A ``Finding`` is what the referee reports about one claim, with the
+040's obstacle states, 039's choices and 077's commitments. A ``Finding`` is what the referee reports about one claim, with the
 records it rests on.
 
 Nothing here reads prose by itself, calls a model, writes anything or changes the narration: the labels come
@@ -27,6 +27,7 @@ from ..holdings import Holdings
 from ..obstacles import ObstacleState
 from ..possessions import Possession
 from ..comms import CHANNELS
+from ..commitments import CommitmentState
 from ..goals import MAX_TAGS, Choice
 from ..staging import Stage
 
@@ -42,6 +43,7 @@ KINDS = {
     "knows": "knowledge",      # the actor's words or acts reveal a 012 proposition
     "resolves": "outcome",     # a 029 attempt came out a given way
     "overcomes": "outcome",    # a 040 obstacle is overcome (by a given approach)
+    "fulfills": "outcome",     # the actor completes a 077 commitment (a promise kept, a mission done)
     "acts": "intention",       # the actor does an act of the given 039 kinds (approach tags: trade, threat...)
 }
 #: How the labeller read the claim. Only a ``literal`` claim can be a contradiction.
@@ -49,17 +51,19 @@ MODES = ("literal", "figurative", "unreliable")
 #: What a finding says about a claim. Only a contradiction is material.
 CLASSIFICATIONS = ("contradiction", "uncertain", "metaphor", "unreliable")
 #: Where a finding's evidence comes from.
-SOURCES = ("stage", "holdings", "possession", "knowledge", "resolution", "obstacle", "intention", "narration")
+SOURCES = ("stage", "holdings", "possession", "knowledge", "resolution", "obstacle", "intention", "commitment",
+           "narration")
 #: The longest narration one review reads, and the most claims it takes.
 MAX_TEXT = 200_000
 MAX_CLAIMS = 256
 MAX_COUNT = 10 ** 12
 _FIELDS = ("target", "item", "count", "channel", "proposition_id", "attempt_id", "result", "obstacle_id",
-           "approach_id", "tags")
+           "approach_id", "tags", "commitment_id")
 _NEEDS = {
     "present": (), "reaches": ("target",), "sees": ("target",), "hears": ("target", "channel"),
     "spends": ("item", "count"), "wields": ("target",), "knows": ("proposition_id",),
     "resolves": ("attempt_id", "result"), "overcomes": ("obstacle_id",), "acts": ("tags",),
+    "fulfills": ("commitment_id",),
 }
 _OPTIONAL = {"overcomes": ("approach_id",)}
 
@@ -131,7 +135,8 @@ class ContinuityClaim:
     or wielded, the individual seen or the speaker heard; ``item`` and ``count`` a counted stack spent;
     ``channel`` a 032 channel; ``proposition_id`` a 012 proposition revealed; ``attempt_id`` and ``result`` a
     029 outcome; ``obstacle_id`` and ``approach_id`` a 040 obstacle overcome; ``tags`` the 039 kinds of act an
-    ``acts`` claim narrates (``trade``, ``threat``...). A field a kind does not take must be ``None``.
+    ``acts`` claim narrates (``trade``, ``threat``...); ``commitment_id`` the 077 commitment a ``fulfills`` claim
+    says the actor completed. A field a kind does not take must be ``None``.
 
     ``mode`` is how the labeller read it: ``literal`` (the narration states it as so), ``figurative`` (a
     metaphor or turn of phrase: "the news hit her like a locked door") or ``unreliable`` (deliberately false
@@ -156,6 +161,7 @@ class ContinuityClaim:
     obstacle_id: str | None = None
     approach_id: str | None = None
     tags: frozenset[str] | None = None
+    commitment_id: str | None = None
     mode: str = "literal"
     certain: bool = True
 
@@ -279,6 +285,8 @@ class Facts:
     knowledge as of ``as_of`` itself (``stale_intention`` otherwise: a choice is for one turn). With a ``stage``,
     each must be for the cast on it (``intention_cast_mismatch``); with ``knowledge``, from the very projection
     ``actor_knowledge`` gives that NPC at ``as_of`` (``intention_mismatch``), as 039's brief requires.
+    ``commitments`` are 077's folded commitment states, one per commitment id, folded as of ``as_of`` itself
+    (``stale_commitment`` otherwise), so a later step never answers for an earlier narration.
     """
 
     campaign_id: str
@@ -291,6 +299,7 @@ class Facts:
     resolutions: tuple[Resolution, ...] = ()
     obstacles: tuple[ObstacleState, ...] = ()
     intentions: tuple[Choice, ...] = ()
+    commitments: tuple[CommitmentState, ...] = ()
     _by: Mapping[str, Mapping] = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -315,6 +324,7 @@ class Facts:
         resolutions = _tuple(self.resolutions, Resolution)
         obstacles = _tuple(self.obstacles, ObstacleState)
         intentions = _tuple(self.intentions, Choice)
+        commitments = _tuple(self.commitments, CommitmentState)
         heard = _tuple(self.heard, tuple)
         for pair in heard:
             if len(pair) != 2:
@@ -325,9 +335,17 @@ class Facts:
         by_item = {p.item: p for p in possessions}
         by_obstacle = {o.obstacle.obstacle_id: o for o in obstacles}
         by_actor = {choice.actor: choice for choice in intentions}
+        by_commitment = {state.commitment_id: state for state in commitments}
         if len(by_holder) != len(holdings) or len(by_item) != len(possessions) \
-                or len(by_obstacle) != len(obstacles) or len(by_actor) != len(intentions):
+                or len(by_obstacle) != len(obstacles) or len(by_actor) != len(intentions) \
+                or len(by_commitment) != len(commitments):
             raise _fail("duplicate_id")
+        if any(state.commitment.campaign_id != campaign for state in commitments):
+            raise _fail("campaign_mismatch")
+        if any(state.as_of != self.as_of or state.moment.sequence > self.as_of
+               or any(step.operation.at.sequence > self.as_of for step in (state.offer, *state.steps))
+               for state in commitments):
+            raise _fail("stale_commitment")
         if any(choice.actor.campaign_id != campaign for choice in intentions):
             raise _fail("campaign_mismatch")
         if any(choice.as_of != self.as_of for choice in intentions):
@@ -349,10 +367,12 @@ class Facts:
             results.setdefault(resolution.attempt_id, set()).add(resolution.result)
         for name, value in (("holdings", holdings), ("possessions", possessions), ("resolutions", resolutions),
                             ("obstacles", obstacles), ("heard", frozenset(heard)),
-                            ("intentions", tuple(sorted(intentions, key=lambda c: str(c.actor))))):
+                            ("intentions", tuple(sorted(intentions, key=lambda c: str(c.actor)))),
+                            ("commitments", tuple(sorted(commitments, key=lambda c: c.commitment_id)))):
             object.__setattr__(self, name, value)
         object.__setattr__(self, "_by", {
             "holdings": by_holder, "possessions": by_item, "obstacles": by_obstacle, "intentions": by_actor,
+            "commitments": by_commitment,
             "results": {key: frozenset(value) for key, value in results.items()},
         })
 
@@ -370,6 +390,9 @@ class Facts:
 
     def intention(self, actor: InstanceRef) -> Choice | None:
         return self._by["intentions"].get(actor)
+
+    def commitment(self, commitment_id: str) -> CommitmentState | None:
+        return self._by["commitments"].get(commitment_id)
 
 
 @dataclass(frozen=True, slots=True)
