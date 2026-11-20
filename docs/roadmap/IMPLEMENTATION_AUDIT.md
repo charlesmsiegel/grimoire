@@ -42,7 +42,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [6](#wave-6) | 6/6 | ☐ | Scheduled first slices are implemented; physical-phone validation remains unverified. |
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 19/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 070 and 072 are complete at their bounded first-proof boundaries. Other domain slices and UI exit 115 remain incomplete or unverified. |
-| [9](#wave-9) | 3/16 | ☐ | 075, 076 and 082 are complete at their bounded headless first-proof boundaries. Other domain slices and UI exit 116 remain incomplete. |
+| [9](#wave-9) | 4/16 | ☐ | 075, 076, 082 and 086 meet their bounded headless first slices; the other domain slices and UI exit 116 are not complete. |
 | [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
@@ -674,7 +674,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-9"></a>
 ## Wave 9
 
-075, 076 and 082 are complete at their bounded first-proof boundaries; other scheduled domain slices and UI exit 116 are not.
+075 (recorded rolls), 076 (offscreen plan steps), 082 (read-only world audits) and 086 (validated module authoring with pinned revisions) meet their headless first slices; the other domain slices and UI exit 116 are not complete.
 
 <a id="slice-073"></a>
 ### 073 — Auxiliary Writing Tools
@@ -770,9 +770,9 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="slice-086"></a>
 ### 086 — Mechanics Module Authoring
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/mechanics-module-authoring.md)).
-- Evidence: Existing entity editor validates ordinary facets.
-- Scope / gap: No mechanics-module sheet editor, family-specific schema validation or isolated recorded check authoring.
+- [x] Scheduled first-useful slice ([requirements](sprints/mechanics-module-authoring.md)).
+- Evidence: [`mechanics/module.py`](../../backend/src/grimoire/mechanics/module.py), [`mechanics/sheet.py`](../../backend/src/grimoire/mechanics/sheet.py), [`mechanics/expr.py`](../../backend/src/grimoire/mechanics/expr.py) and [`mechanicsstore/store.py`](../../backend/src/grimoire/mechanicsstore/store.py), with [`test_mechanics_authoring.py`](../../backend/tests/test_mechanics_authoring.py), [`test_mechanicsstore.py`](../../backend/tests/test_mechanicsstore.py) and [`test_mechanicsstore_recovery.py`](../../backend/tests/test_mechanicsstore_recovery.py). An author drafts a module (sheet types, derived values, named checks) as an owned JSON file kept exactly as saved; validation lists the problems it finds by path with did-you-mean hints, checks every formula name and type statically, applies d20/pool family shapes and refuses executable hooks (007). Only a module with no problem publishes, as an immutable content-named revision; a malformed draft cannot publish, load or bind. Sheets and recorded-dice checks pin the revision: the proving scenario edits a module, a fresh check changes and the earlier record still confirms under its own revision and is never re-graded. V0.2.1's d20-basic/pool-basic ship as templates. [Contract](../MECHANICS_AUTHORING.md).
+- Scope / gap: Headless first slice. No editor page (116), campaign selection of a published revision, compatibility/migration preview (milestone 2), interactive rule tests (3), rules compilation (4) or durable roll journal (075); `ref` fields, creation pools and advancement are not yet expressible.
 
 <a id="slice-087"></a>
 ### 087 — World Authoring Assistant
