@@ -232,6 +232,38 @@ def test_a_director_only_effect_is_known_to_no_witness_and_the_tables_own_is(car
         assert seen(at, chat, mara) == seen(at, chat, tamsin) == []  # the director's
 
 
+def test_a_turn_file_changed_after_acceptance_adds_no_witness(cards, monkeypatch):
+    """The keys a perception needs are the durable 021 acceptance's, not the turn file's alone: a director-only
+    acceptance whose knowledge waits, then a turn file edited to claim a player's endorsement, still gives that
+    player's character nothing when the knowledge is written."""
+    folder, chat = cards
+    book = StageBook()
+    with table(folder, book) as at:
+        anya, mara, tamsin = cast(at, chat, tamsin_to=None)
+        book.put(chat, stage(chat, anya, mara, tamsin, tamsin_in="hall"))
+        turn = decided(at, chat)
+        at.runner.propose_effect(chat, at.owner, turn, SECRET, [Op("begin", "allied_with", tamsin, mara, tamsin,
+                                                                      None)])
+        full_disk(monkeypatch)
+        done = at.runner.approve_effect(chat, at.owner, turn, 1)
+        assert done.state == "accepted", done.reason
+        monkeypatch.undo()
+        path = folder / "campaigns" / chat.campaign_id / "turns" / f"{turn}.json"
+        data = json.loads(path.read_bytes())
+        (effect,) = data["payload"]["effects"]
+        assert effect["endorsers"] == []
+        forged = {"contribution_id": "forged", "principal": ANA}  # structurally valid; 021 never saw it
+        effect["endorsers"] = [forged]
+        effect["endorsements"] = [{**forged, "fingerprint": raw_effect(at, chat, turn).proposal.fingerprint}]
+        path.write_bytes(json.dumps(data).encode())
+        assert raw_effect(at, chat, turn).endorsers == (("forged", ANA),)
+        assert at.effects.read(AcceptedRef(chat.campaign_id, done.event_id), requested_by=DIRECTOR)[0].endorsements == ()
+        assert unbridged(at, chat) == []  # written: the event, and no perception
+        assert stored(at, chat).knowledge.events == (bridge_of(at, chat, done.event_id),)
+        assert stored(at, chat).knowledge.evidence == ()
+        assert seen(at, chat, anya) == [] and seen(at, chat, mara) == [] and seen(at, chat, tamsin) == []
+
+
 @pytest.mark.parametrize("gone", [False, True])
 def test_an_actor_seen_through_an_open_door_or_off_stage(cards, gone):
     folder, chat = cards

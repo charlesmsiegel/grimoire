@@ -213,7 +213,10 @@ def records(runner, scene, pending: Pending) -> tuple[Event | Perception, ...] |
             then = controls_at(runner, scene.chat.campaign_id, pending.effect.controls_at)
         except _FAILURES:  # control then cannot be told: nobody's perception
             return (event,)
-    return (event, *witnessed(scene, pending.record, pending.effect, event, then))
+    # The keys are the durable 021 acceptance's own endorsers, never the turn file's word alone: a turn
+    # edited after acceptance cannot hand a player a perception of what they were never shown.
+    accepted = {item.principal for item in pending.event.endorsements}
+    return (event, *witnessed(scene, pending.record, pending.effect, event, then, accepted=accepted))
 
 
 def _controller(controls, actor) -> str | None:
@@ -222,7 +225,8 @@ def _controller(controls, actor) -> str | None:
     return next(iter(found)) if len(found) == 1 else None
 
 
-def witnessed(scene, record: TurnRecord, effect: TurnEffect, event: Event, then=None) -> tuple[Perception, ...]:
+def witnessed(scene, record: TurnRecord, effect: TurnEffect, event: Event, then=None, *,
+              accepted: set[str] | frozenset[str]) -> tuple[Perception, ...]:
     """Each present cast actor's perception of ``event``, an open happening where the turn's acting character
     stands, on the chat's stage at the event's sequence; ``()`` whenever that cannot be told without a guess.
 
@@ -232,14 +236,16 @@ def witnessed(scene, record: TurnRecord, effect: TurnEffect, event: Event, then=
     neither does an NPC witness: the director may have written in the summary what no character there could
     see, and an NPC's evidence would reach whichever player is given that character later. A character handed
     over after its perception was written takes it to its new player, as a hand-over takes what that character
-    was shown; covert acts, and NPC perspectives of play, are not modelled.
+    was shown; covert acts, and NPC perspectives of play, are not modelled. A key counts only when the durable
+    021 acceptance (``accepted``, its endorsers' principals) also names it, so a turn file changed after the
+    acceptance cannot add a witness.
 
     With no stage (the cast alone decides, a world-less chat) nobody gets one: the cast says who is present, not
     who could see, and a stage lost on restart or refused reads the same way. The stage is the source's latest,
     its word that nothing physical changed since its own sequence, so it stands for the event's sequence only
     when it is not newer than the event. The percept is the event's summary: 021's neutral description of what
     the operations say, which the player who endorsed it was shown (012's sensory register; EFFECTS.md)."""
-    keys = {who for _, who in effect.endorsers}
+    keys = {who for _, who in effect.endorsers} & set(accepted)
     stage = scene.stage
     sequence = event.moment.sequence
     if not keys or stage is None or stage.as_of > sequence:
