@@ -15,11 +15,14 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from grimoire.core.identity import ChatRef, InstanceRef
-from grimoire.core.knowledge import Knowledge, KnowledgeError
+from grimoire.core.knowledge import Knowledge, KnowledgeError, Proposition
 from grimoire.core.perspective import ActorKnowledge, KnownBelief, PlayerKnowledge
 
 from .model import Entry, Summary, Thread
 from .thread import EMPTY, order, ranked, scenes_of
+
+#: the provenance a table thread's proposition carries: the table's own view of it, never canon's record
+TABLE = "table"
 
 
 def _beliefs(known: ActorKnowledge, chat_of) -> list[tuple[KnownBelief, Entry]]:  # type: ignore[no-untyped-def]
@@ -75,9 +78,11 @@ def _thread(knowledge: Knowledge, player: PlayerKnowledge, proposition_id: str, 
     # one entry per record and kind: a report one of the player's characters sent another is both a send and a
     # receipt, and the table holds both
     entries = sorted({(entry.kind, entry.record): entry for entry in entries}.values(), key=order)
-    # the proposition record carries its text and id to the view; its moment, provenance and ``about`` are the
-    # director's and are never shown in a table thread
-    return Thread(knowledge.proposition(proposition_id), player.as_of, tuple(entries), None, (), scenes_of(entries))
+    # the table's proposition is its id and its text as the table has it, first met at its first entry: canon's
+    # moment, provenance and ``about`` (which may name an actor or event the table never met) are the director's
+    canonical = knowledge.proposition(proposition_id)
+    shown = Proposition(canonical.campaign_id, proposition_id, text, entries[0].moment, TABLE)
+    return Thread(shown, player.as_of, tuple(entries), None, (), scenes_of(entries))
 
 
 def table_thread(knowledge: Knowledge, player: PlayerKnowledge, proposition_id: str, *,

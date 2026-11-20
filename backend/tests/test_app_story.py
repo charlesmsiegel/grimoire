@@ -159,3 +159,19 @@ def test_the_ops_are_served_by_the_story_adapter(op):
     (story,) = [adapter for adapter in ADAPTERS if adapter.name == "story"]
     assert story.owner == "081" and op in story.ops
     assert MARA_VELL  # the card fixtures this file plays are the play adapter's own
+
+
+def test_a_turn_number_two_live_branches_share_is_not_linked_until_the_fork_is_resolved():
+    from types import SimpleNamespace
+
+    from grimoire.app.adapters.story import _turns
+
+    def stored(turn_id: str, number: int) -> SimpleNamespace:
+        return SimpleNamespace(record=SimpleNamespace(turn_id=turn_id, number=number))
+
+    forked = SimpleNamespace(turns=(stored("t-1", 1), stored("t-2a", 2), stored("t-2b", 2)), set_aside=())
+    read = SimpleNamespace(problems=[], hub=SimpleNamespace(runner=SimpleNamespace(
+        scenes=SimpleNamespace(turns=lambda chat: forked))))
+    chat = ChatRef.parse("campaign:quay#chat/forked")
+    (numbers, set_aside), = _turns(read, {chat}).values()
+    assert numbers == {"t-1": 1, "t-2a": None, "t-2b": None} and set_aside == set() and read.problems == []

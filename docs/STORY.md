@@ -2,8 +2,10 @@
 
 **Status:** first useful slice of [081](roadmap/sprints/story-graph-and-navigation.md). The pure package
 `grimoire.story`, the app's `story` adapter ops (`backend/src/grimoire/app/adapters/story.py`) and the **Story
-threads** page (`static/pages/story/`, route `story`), linked from the campaign hub. Read-only: nothing here writes,
-and nothing calls a model.
+threads** page (`static/pages/story/`, route `story`), linked from the campaign hub. Read-only: the story writes
+nothing of its own and calls no model. Like every read that opens a chat (the hub, the knowledge view, the inbox),
+opening the chat first writes any accepted 021 effect's 020 knowledge still pending after an interrupted acceptance
+(`SceneRunner.open`, `play/witness.py`): it completes what was accepted, and never records anything new.
 
 The proving question is "what became of that promise?": a player finds an early promise, follows it through every
 scene that records it, and sees when canon says it was kept or broken, and who still believes otherwise.
@@ -55,7 +57,8 @@ Where the story disagrees with itself, named by the records that disagree:
 Each entry leads back to its source: the chat 020 recorded it from (its `origins`) and the turn its moment names.
 The app numbers each turn on that chat's line, so the page links to it (`#/chat/<ChatRef>?turn=<number>`). A turn
 a fork choice set aside is said ("From a turn set aside"), never linked as if it were played; a turn the app could
-not number is shown without a link (`turns_unread`). A record with no chat is grouped by the scene label its moment
+not number is shown without a link (`turns_unread`), and so, while a fork is unresolved, is a number two live
+branches share (028), since it could open the other branch's turn. A record with no chat is grouped by the scene label its moment
 carries. A thread's **scenes** are those places, in the order the thread first reaches each, with the turns and
 everyone each involves; filtering by a character keeps only the scenes that involve them (milestone 1).
 

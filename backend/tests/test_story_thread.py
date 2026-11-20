@@ -194,6 +194,10 @@ def test_the_table_thread_holds_only_what_the_players_character_knows():
     assert kinds(found) == [("report", "evidence:r-promise", "proposal"), ("belief", "belief:b-trust", "belief"),
                             ("belief", "belief:b-still", "belief")]
     assert found.outcome is None and found.contradictions == ()
+    # the proposition is the table's: its text as they have it, no canon provenance and nothing it is about
+    assert (found.proposition.proposition_id, found.proposition.text, found.proposition.provenance,
+            found.proposition.about, found.proposition.moment) == ("p-key", PROMISE, "table", (),
+                                                                   found.entries[0].moment)
     promise = found.entries[0]
     assert promise.sender is None and promise.attributed_to == MARA and promise.chat == CHAT
     assert [scene.scene for scene in found.scenes] == ["scene-01", "scene-01", "scene-09"]

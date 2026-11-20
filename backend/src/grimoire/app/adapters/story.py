@@ -10,7 +10,8 @@ for one audience, as the campaign hub does:
   ``player_knowledge`` over the same read). No standing, ruling, event, sender or other character's evidence, and
   a proposition none of their characters knows of is not found at all.
 
-Both read only, and call no model. Each entry carries its source: the chat 020 recorded it from and, when that
+Both read only and call no model; opening the chat (``SceneRunner.open``) settles, as every chat read does, an
+accepted effect's 020 knowledge still pending after an interrupted acceptance, and nothing else. Each entry carries its source: the chat 020 recorded it from and, when that
 turn is on the chat's line, the turn's number, so the page links to it (``#/chat/<chat>?turn=<number>``); a turn
 a fork choice set aside is said to be, never linked as if it were played. A ledger that cannot be read whole is
 said (``knowledge_damaged``), never hidden: what is shown is then a subset. See docs/STORY.md.
@@ -18,6 +19,7 @@ said (``knowledge_damaged``), never hidden: what is shown is then a subset. See 
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
 
 from grimoire.app.adapter import Adapter, AdapterContext
@@ -115,7 +117,11 @@ def _turns(read: _Read, chats: set[ChatRef]) -> dict[ChatRef, tuple[dict[str, in
         except (ValueError, LookupError, StoreError):
             found[chat] = None
             continue
-        found[chat] = ({stored.record.turn_id: stored.record.number for stored in turns.turns},
+        numbers = Counter(stored.record.number for stored in turns.turns)
+        # 028: an unresolved fork keeps every live branch, so two turns can share a number; a link by number
+        # could open the other branch's turn, so such a turn is shown without one until the fork is resolved
+        found[chat] = ({stored.record.turn_id: stored.record.number if numbers[stored.record.number] == 1 else None
+                        for stored in turns.turns},
                        {stored.record.turn_id for stored in turns.set_aside})
     if any(value is None for value in found.values()):
         read.problems.append({"code": "turns_unread", "detail": None})
