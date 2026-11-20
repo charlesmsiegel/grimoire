@@ -280,9 +280,9 @@ class SceneRunner:
         every 021 problem of the campaign (``effects``) and each acceptance cut short (``effect_unsettled``,
         ``<turn id>:<event id>:<shape>``) for ``recover_effects``, or, one another device started, for that device
         (``effect_elsewhere``, ``<turn id>:<event id>:<device tag>``), or one of unknown device for the owner's
-        word (``effect_untagged``, ``<turn id>:<event id>``), and each of this chat's accepted effects whose 020
-        event is not written yet (``unbridged``, ``<turn id>:<event id>``, ``:backdated`` when 020 can never take
-        it)."""
+        word (``effect_untagged``, ``<turn id>:<event id>``). It first writes every accepted effect's pending 020
+        knowledge it can (``play/witness.py``), and counts this chat's that stays (``unbridged``,
+        ``<count>:<reason>``, naming no effect)."""
         scene = self._context(chat).scene
         found = effect_problems(self, scene)
         try:  # 016: a configuration that cannot be read holds every narration; said, never hidden
@@ -1185,9 +1185,8 @@ class SceneRunner:
         An endorser present stands in for an endorsement the authority holds no record of (shape B only).
         An acceptance another device started is never settled here (``accepted_elsewhere``, after this device's),
         nor one that names no device and of which nothing is here, unless ``own`` says it is this library's
-        (``untagged_acceptance``). Then each of this chat's accepted effects whose 020 event and witnesses are not
-        written yet is written, oldest first (``unbridged`` when one cannot be now, ``recovery_needed`` while
-        another chat's older one waits or an earlier acceptance is still cut short)."""
+        (``untagged_acceptance``). Then, whatever stopped it, every accepted effect's pending 020 knowledge
+        is written as far as it can be now (never a refusal: ``open`` counts what stays)."""
         return recover_effects(self, chat, by, abort=abort, endorsers=endorsers, own=own)
 
     # -- the table's choices ------------------------------------------------------------------------

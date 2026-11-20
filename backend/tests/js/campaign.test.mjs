@@ -329,6 +329,19 @@ test("a cut-short acceptance is the director's to settle, and the page says what
   assert.deepEqual(notices, ["Nothing was settled."]);
 });
 
+test("knowledge not written yet is the director's to write again, and the table is only told", async () => {
+  const problems = [{ code: "unbridged", detail: "1:ledger_damaged" }];
+  const table = await mounted("table", hub("table", { problems }));
+  const shown = section(table.root, "Knowledge not written yet");
+  assert.ok(shown && !byText(shown, "button", "Write it now").length, "the table is told, and offered nothing");
+  const { root, calls, notices } = await mounted("director", hub("director", { problems }));
+  byText(section(root, "Knowledge not written yet"), "button", "Write it now")[0].click();
+  await tick();
+  assert.deepEqual(writes(calls), [["campaign.recover_effects", { chat: CHAT, audience: "director", abort: false, player_key: false, own: false }]]);
+  assert.deepEqual(notices, ["Written where it could be."]);
+  assert.equal(section(root, "Acceptance cut short"), undefined);
+});
+
 test("a problem elsewhere in the campaign's continuity offers no recovery", async () => {
   const { root } = await mounted("director", hub("director", { problems: [{ code: "effects", detail: "receipt_mismatch:e-9" },
     { code: "effects_unreadable", detail: "x" }] }));

@@ -154,7 +154,8 @@ export function when(stamp, now = new Date()) {
 export function hubSections(hub, audience) {
   const director = isDirector(hub, audience);
   const codes = new Set((hub.problems || []).map((problem) => problem.code));
-  const cut = codes.has("effect_unsettled") || codes.has("effect_untagged") || codes.has("effect_elsewhere");
+  const cut = codes.has("effect_unsettled") || codes.has("effect_untagged") || codes.has("effect_elsewhere")
+    || codes.has("unbridged");
   return ["action", ...(cut ? ["recover"] : []), "cast", "holdings", "changes", ...(hub.obstacles && hub.obstacles.length ? ["obstacles"] : []),
     ...(director ? ["truth", "goals"] : []), "knowledge", ...(director ? ["propose"] : []), "turns", "sources", "unavailable"];
 }

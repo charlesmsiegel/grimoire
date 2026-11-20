@@ -6,19 +6,23 @@ append, exactly once:
 - the effect's 012 ``Event``, 021's ``as_knowledge_event`` of its accepted event (the only event 020 stores
   under an accepted id, so the director's events file holds no witness: 020 keeps events and evidence apart);
 - one 012 ``Perception`` for each cast actor who saw it happen, judged by 041's ``perceptions`` on the chat's
-  stage at the event's own sequence, as an open happening in the area of the turn's acting character.
+  stage at the event's own sequence, as an open happening in the area of the turn's acting character, and only
+  for an effect the table itself is shown (the hub's ``turn_view`` rule: a player holds a key on it).
 
-Every id is deterministic (the bridge is the accepted event's id, a perception is 041's ``perception_id``), and
-"done" is read from 020 itself (an event under that id, stored or quarantined), so a re-run never writes twice.
-Nothing marks a bridge as pending: an accepted effect whose event 020 does not hold is pending, and is written
-by the next acceptance in its chat or by ``recover_effects`` (``bridge_chat``), oldest first; ``open`` reports it
-(``unbridged``). See docs/SCENES.md#what-an-accepted-effect-leaves-in-knowledge.
+This is best effort and never a refusal: acceptance is 021's, and 021 never depended on 020. Every id is
+deterministic (the bridge is the accepted event's id, a perception is 041's ``perception_id``), and "done" is
+read from 020 itself (an event under that id, stored or quarantined), so a re-run never writes twice. Nothing
+marks a bridge as pending: an accepted effect whose event 020 does not hold is pending, and ``settle`` writes
+every pending one of the campaign, oldest first, right after an acceptance, on ``open`` and in
+``recover_effects``; what stays pending is reported (``unbridged``), counted per chat, never named.
+See docs/SCENES.md#what-an-accepted-effect-leaves-in-knowledge.
 
-Fail closed, never on a guess: no stage (a chat played by the cast alone), a stage that changed after the event's
-sequence (``Stage.at`` cannot go back), an acting character off stage or untracked, a private post (a whisper,
-telepathy, a withheld action), an area that cannot be told, or any witness resting on assumed staging writes the
-event with **no** perception. A stage the runner
-refused (``stage`` problem) writes nothing yet: the bridge waits until the scene is staged again.
+Fail closed, never on a guess, and never waiting for a stage: no stage (a chat played by the cast alone, or one
+lost on a restart), a stage the runner refused, a stage that changed after the event's sequence (``Stage.at``
+cannot go back), an acting character off stage or untracked, a private post (a whisper, telepathy, a withheld
+action), an area that cannot be told, a witness resting on assumed staging, and an effect only the director is
+shown write the event with **no** perception. 020 never takes a backdated record, so a perception cannot be
+added later: the event alone is final.
 """
 
 from __future__ import annotations
@@ -31,22 +35,29 @@ from grimoire.core.knowledge import Event, Perception
 from grimoire.effects import AcceptedEvent, EffectCodecError, EffectError, accepted_from_payload, as_knowledge_event
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.play.scene import _latest, _refuse
-from grimoire.scene import SceneRefused, TurnRecord, turn_from_payload
+from grimoire.scene import SceneRefused, TurnEffect, TurnRecord, turn_from_payload
 from grimoire.staging import StagingRefused, perceptions, where
 from grimoire.store import StaleWrite, StoreError
 
 #: The channel of a witness's perception of an accepted effect (012's open vocabulary): it saw it happen.
 CHANNEL = "witnessed"
 
+#: 020 refusals that would hold for every later bridge too (the ledger, the accepted files, a gap in sequences
+#: or a concurrent writer): the walk stops there, and the rest wait for the next ``settle``. Any other refusal is
+#: this bridge's own (an actor or a chat gone), so later ones go on and it falls behind for good.
+_WIDE = frozenset({"ledger_damaged", "accepted_unreadable", "sequence_jump", "knowledge_changed",
+                   "knowledge_unavailable"})
+
 
 @dataclass(frozen=True)
 class Pending:
-    """An accepted effect whose bridge 020 does not hold: its 021 event, and the turn that accepted it.
+    """An accepted effect whose bridge 020 does not hold: its 021 event, its turn effect and the turn.
 
     ``behind`` is true once 020's high-water mark has passed the event's sequence: 020 refuses it as backdated
-    for good (no backdating, EVIDENCE.md), so it is reported and blocks nothing."""
+    for good (no backdating, EVIDENCE.md), so it is only counted."""
 
     event: AcceptedEvent
+    effect: TurnEffect
     record: TurnRecord
     behind: bool
 
@@ -54,9 +65,14 @@ class Pending:
     def chat(self) -> ChatRef:
         return self.record.chat
 
-    @property
-    def named(self) -> str:
-        return f"{self.record.turn_id}:{self.event.event_id}"
+
+@dataclass(frozen=True)
+class Left:
+    """A bridge still not in 020 after ``settle``, and why (``backdated``, ``acceptance_unsettled``, or 020's,
+    the store's or the effect's reason)."""
+
+    pending: Pending
+    reason: str
 
 
 def _ledger(runner, campaign_id: str):
@@ -67,6 +83,14 @@ def _ledger(runner, campaign_id: str):
     except (StoreError, ValueError) as error:
         raise _refuse("knowledge_unavailable", getattr(error, "reason", type(error).__name__)) from None
     return ledger, _latest(ledger.knowledge)
+
+
+def mark(runner, campaign_id: str) -> int:
+    """020's high-water mark, or 0 when 020 cannot be read now (then nothing is judged by it)."""
+    try:
+        return _ledger(runner, campaign_id)[1]
+    except SceneRefused:
+        return 0
 
 
 def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]:
@@ -107,36 +131,43 @@ def unbridged(runner, campaign_id: str) -> tuple[list[Pending], int, int | None]
             except EffectCodecError:
                 continue
             if event.active and event.chat == record.chat:
-                found.append(Pending(event, record, event.moment.sequence < high))
+                found.append(Pending(event, effect, record, event.moment.sequence < high))
     found.sort(key=lambda item: (item.event.moment.sequence, item.event.event_id))
     return found, high, unsettled
 
 
 def records(scene, pending: Pending) -> tuple[Event | Perception, ...] | str:
-    """The bridge of ``pending`` (its event, then each witness's perception), or why it waits: the chat's stage
-    was refused (the ``stage`` problem's detail), so who saw it cannot be told now. ``scene`` is its chat's."""
+    """The bridge of ``pending``: its event, then each witness's perception; or why there is none (revoked since
+    it was listed: an undone turn is never stored as fact). ``scene`` is its chat's, or ``None`` when that chat
+    cannot be opened now, which leaves the event alone."""
     try:
         event = as_knowledge_event(pending.event)
-    except EffectError as error:  # revoked since it was listed: an undone turn is never stored as fact
+    except EffectError as error:
         return error.reason
-    for code, detail in scene.problems:
-        if code == "stage":
-            return detail
-    return (event, *witnessed(scene, pending.record, event))
+    if scene is None:
+        return (event,)
+    return (event, *witnessed(scene, pending.record, pending.effect, event))
 
 
-def witnessed(scene, record: TurnRecord, event: Event) -> tuple[Perception, ...]:
+def witnessed(scene, record: TurnRecord, effect: TurnEffect, event: Event) -> tuple[Perception, ...]:
     """Each present cast actor's perception of ``event``, an open happening where the turn's acting character
     stands, on the chat's stage at the event's sequence; ``()`` whenever that cannot be told without a guess.
 
+    Only an effect the table is shown leaves a perception, by the hub's own rule (``turn_view``): one a player
+    holds a key on. A director-only effect (no endorser: an NPC's act the director proposed) is the director's
+    alone, and its summary is the director's own words, so no witness gets them; covert acts are not modelled.
+    A player character's perception is then its player's to read, so it goes only to one whose player holds a
+    key on this effect (what that player's turn view shows); an NPC's knowledge is the director's.
+
     With no stage (the cast alone decides, a world-less chat) nobody gets one: the cast says who is present, not
-    who could see, and a stage lost on restart reads the same way. The stage is the source's latest, its word
-    that nothing physical changed since its own sequence, so it stands for the event's sequence only when it is
-    not newer than the event. The percept is the event's summary: 021's neutral director description of what the
-    operations say, which the player who endorsed it was shown (012's sensory register; EFFECTS.md)."""
+    who could see, and a stage lost on restart or refused reads the same way. The stage is the source's latest,
+    its word that nothing physical changed since its own sequence, so it stands for the event's sequence only
+    when it is not newer than the event. The percept is the event's summary: 021's neutral description of what
+    the operations say, which the player who endorsed it was shown (012's sensory register; EFFECTS.md)."""
+    keys = {who for _, who in effect.endorsers}
     stage = scene.stage
     sequence = event.moment.sequence
-    if stage is None or stage.as_of > sequence:
+    if not keys or stage is None or stage.as_of > sequence:
         return ()
     try:
         at = stage.at(sequence)
@@ -148,7 +179,8 @@ def witnessed(scene, record: TurnRecord, event: Event) -> tuple[Perception, ...]
     except StagingRefused:  # rests on assumed staging, or the event cannot be judged on this stage: nobody
         return ()
     present = set(scene.on_stage)  # the stage's actors are the cast (check_cast); never anyone else
-    return tuple(item for item in found if item.holder in present)
+    return tuple(item for item in found if item.holder in present
+                 and (scene.controller(item.holder) == DIRECTOR or scene.controller(item.holder) in keys))
 
 
 def _area(stage, record: TurnRecord) -> str | None:
@@ -167,66 +199,98 @@ def _area(stage, record: TurnRecord) -> str | None:
     return found.area
 
 
-def write(runner, scene, pending: Pending) -> str | None:
-    """Append ``pending``'s bridge to 020 once; ``None`` when 020 holds it (now, or already), else why it waits.
-
-    One 020 append (records and one log batch, one transaction), so a crash leaves all of it or none. A
+def _append(runner, pending: Pending, found: tuple) -> tuple[str | None, bool]:
+    """One 020 append of ``found`` (records and one log batch, one transaction, so a crash leaves all of it or
+    none): ``(None, _)`` when 020 holds the bridge now or already, else why not and whether it is ``_WIDE``. A
     ``duplicate_id`` on the event means another writer stored it first: done, never written twice."""
-    found = records(scene, pending)
-    if isinstance(found, str):
-        return found
     library = EvidenceLibrary(runner.store, runner.handle, owner=runner.owner)
     name = f"event:{pending.event.event_id}"
     try:
-        library.append(scene.chat.campaign_id, found, chat=scene.chat).commit()
+        library.append(pending.chat.campaign_id, found, chat=pending.chat).commit()
     except StaleWrite:
-        return "knowledge_changed"
+        return "knowledge_changed", True
     except StoreError as error:  # possibly published in part (020's own damage report says so on the next read)
-        return type(error).__name__
+        return type(error).__name__, True
     except ValueError as error:  # 020's EvidenceWriteError, 012's KnowledgeError: refused, nothing written
-        if getattr(error, "reason", None) == "duplicate_id" and name in getattr(error, "records", ()):
-            return None
-        return getattr(error, "reason", type(error).__name__)
-    return None
+        reason = getattr(error, "reason", type(error).__name__)
+        if reason == "duplicate_id" and name in getattr(error, "records", ()):
+            return None, False
+        return reason, reason in _WIDE
+    return None, False
 
 
-def bridge_chat(runner, scene) -> int:
-    """Write every pending bridge of ``scene``'s chat, oldest first, under the caller's store lock; 020's
-    high-water mark after them.
+def write(runner, scene, pending: Pending) -> tuple[str | None, bool]:
+    """Append ``pending``'s bridge to 020 once: ``(None, False)`` when 020 holds it, else why not and whether the
+    reason holds for every later bridge too. A witness 020 will not take (an actor gone) leaves the event alone."""
+    found = records(scene, pending)
+    if isinstance(found, str):
+        return found, False
+    reason, wide = _append(runner, pending, found)
+    if reason is not None and not wide and len(found) > 1:
+        reason, wide = _append(runner, pending, found[:1])
+    return reason, wide
 
-    Bridges go to 020 in sequence order, campaign-wide, so none is ever left behind a later one (020 refuses a
-    backdated record for good): the walk stops at another chat's pending bridge (``recovery_needed``: that
-    chat's recovery or next acceptance writes it), at one no earlier than an acceptance still cut short anywhere
-    (``recovery_needed``: once settled, that one's bridge would be behind it for good), and at one of this
-    chat's that cannot be written now (``unbridged``, with 020's or the stage's reason). One that fell behind
-    020's high-water mark is skipped."""
-    pending, high, unsettled = unbridged(runner, scene.chat.campaign_id)
-    for item in pending:
-        if item.behind:
-            continue
-        if unsettled is not None and unsettled <= item.event.moment.sequence:
-            raise _refuse("recovery_needed", "recover first: an acceptance cut short comes no later than "
-                                             f"{item.named}, whose knowledge waits for it")
-        if item.chat != scene.chat:
-            later = sum(1 for other in pending if not other.behind and other.chat != scene.chat)
-            raise _refuse("recovery_needed", f"recover first: {later} accepted effect(s) elsewhere in the campaign "
-                                             "whose knowledge is not written yet")
-        reason = write(runner, scene, item)
-        if reason is not None:
-            raise _refuse("unbridged", f"the knowledge of {item.named} cannot be written yet ({reason})"[:200])
-        high = max(high, item.event.moment.sequence)
-    return high
+
+def _scene_of(runner, chat: ChatRef, opened: dict):
+    """``chat``'s scene as the runner opens it now, once per walk; ``None`` when it cannot be opened (its bridge
+    is then the event alone: who saw it cannot be told)."""
+    if chat not in opened:
+        try:
+            opened[chat] = runner._context(chat).scene
+        except (SceneRefused, StoreError, ValueError):
+            opened[chat] = None
+    return opened[chat]
+
+
+def settle(runner, scene) -> list[Left] | str:
+    """Write every pending bridge of ``scene``'s campaign, oldest first, under the store lock; what stays pending
+    and why, or why nothing could be listed. Never refuses: acceptance and recovery go on whatever 020 says.
+
+    020 never takes a backdated record, so bridges go in sequence order, campaign-wide, each with its own chat's
+    stage (``scene`` for its own chat, the runner's ``open`` of another). Stopped at an acceptance still cut short
+    no later than it (once settled, that one's bridge would be behind for good: it waits for recovery, which
+    blocks acceptance anyway) and by a reason that holds for every later bridge (``_WIDE``). A bridge refused for
+    its own reason is passed: later ones go on, and it falls behind (``backdated``) rather than stall the rest."""
+    with runner.store.lock:
+        try:
+            pending, high, unsettled = unbridged(runner, scene.chat.campaign_id)
+        except SceneRefused as error:
+            return error.reason
+        left, stop, opened = [], None, {scene.chat: scene}
+        for item in pending:
+            sequence = item.event.moment.sequence
+            if item.behind or sequence < high:
+                left.append(Left(item, "backdated"))
+                continue
+            if stop is None and unsettled is not None and unsettled <= sequence:
+                stop = "acceptance_unsettled"
+            if stop is not None:
+                left.append(Left(item, stop))
+                continue
+            reason, wide = write(runner, _scene_of(runner, item.chat, opened), item)
+            if reason is None:
+                high = max(high, sequence)
+                continue
+            left.append(Left(item, reason))
+            if wide:
+                stop = reason
+        return left
 
 
 def problems(runner, scene) -> list[tuple[str, str]]:
-    """``open``'s report: each of this chat's accepted effects whose bridge 020 does not hold, as ``unbridged``
-    (``<turn id>:<event id>``, with ``:backdated`` when 020 can never take it), or why that cannot be read."""
-    try:
-        pending, _, _ = unbridged(runner, scene.chat.campaign_id)
-    except SceneRefused as error:
-        return [("unbridged", f"unreadable:{error.reason}")]
-    return [("unbridged", item.named + (":backdated" if item.behind else "")) for item in pending
-            if item.chat == scene.chat]
+    """``open``'s report, after a ``settle``: one row for this chat's accepted effects whose bridge 020 still
+    does not hold, ``("unbridged", "<count>:<reason>")``, with the first reason that may still clear
+    (``backdated`` only when none may), or ``("unbridged", "unreadable:<reason>")``. It names no turn and no
+    event: the hub shows problems to the table, and a director-only effect's existence is the director's."""
+    left = settle(runner, scene)
+    if isinstance(left, str):
+        return [("unbridged", f"unreadable:{left}")]
+    mine = [item for item in left if item.pending.chat == scene.chat]
+    if not mine:
+        return []
+    clearing = [item.reason for item in mine if item.reason != "backdated"]
+    return [("unbridged", f"{len(mine)}:{clearing[0] if clearing else 'backdated'}")]
 
 
-__all__ = ["CHANNEL", "Pending", "bridge_chat", "problems", "records", "unbridged", "witnessed", "write"]
+__all__ = ["CHANNEL", "Left", "Pending", "mark", "problems", "records", "settle", "unbridged", "witnessed",
+           "write"]

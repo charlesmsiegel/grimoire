@@ -5,7 +5,7 @@
 - `grimoire.evidencestore`: a store-backed service;
 - an additive, create-only record family in [the native store](STORAGE.md#events-and-evidence-020).
 
-There is **no app** yet. Nothing here calls a model. Nothing here decides which narration becomes an accepted event; that is [021](roadmap/sprints/turn-effects-and-wrap-up.md). In play, 035's runner appends each accepted effect's bridge (`as_knowledge_event`) together with a `witnessed` perception for each actor who could see it on the chat's stage, once, through `append` like any writer ([SCENES](SCENES.md#what-an-accepted-effect-leaves-in-knowledge)); the event file still names no witness.
+There is **no app** yet. Nothing here calls a model. Nothing here decides which narration becomes an accepted event; that is [021](roadmap/sprints/turn-effects-and-wrap-up.md). In play, 035's runner appends each accepted effect's bridge (`as_knowledge_event`) together with a `witnessed` perception for each actor who could see it on the chat's stage (only for an effect the table is shown), once, through `append` like any writer, best effort: a refusal here never refuses an acceptance, and is reported as `unbridged` ([SCENES](SCENES.md#what-an-accepted-effect-leaves-in-knowledge)); the event file still names no witness.
 
 ## What it does
 

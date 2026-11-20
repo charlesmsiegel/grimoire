@@ -361,6 +361,37 @@ def test_an_effect_no_character_of_the_players_acts_in_is_the_directors_alone(ca
         assert len(codes) == len(set(map(repr, director["problems"])))  # each problem once
 
 
+def test_a_director_only_effect_reaches_no_characters_knowledge(cards):
+    """Everyone at the hatch, and the director's own NPC act accepted: the table's turn view hides it, and so does
+    every perspective, the table's own character's included. Its summary is the director's words."""
+    folder, chat = cards
+    book = StageBook()
+    with Hub(folder, BRIBE, stages=book) as hub:
+        turn, anya, mara = acting(hub, chat)
+        tamsin = attach_tamsin(hub.at.store, hub.api.handle, chat)
+        hub.api.runner.seat(chat, OWNER)
+        book.put(chat, Stage(chat.campaign_id, chat.chat_id, 1, (Area("hatch"),), (), (anya, mara, tamsin),
+                             tuple(Placement(actor, area="hatch") for actor in (anya, mara, tamsin))))
+        hub.call("label", chat=str(chat), obstacle="hold")
+        hub.call("confirm", chat=str(chat))
+        secret = {"kind": "begin", "predicate": "knows", "subject": str(tamsin), "object": str(mara)}
+        waive = [{"change": f"cost.chit.{n}", "reason": "Mara forgives the debt."} for n in (1, 2)]
+        summary = "Tamsin, unseen, passes Mara the Duke's letter: Tamsin is the Duke's spy."
+        effect = hub.call("propose_effect", chat=str(chat), turn=turn, summary=summary, operations=[secret],
+                          waive=waive)["done"]["effect"]
+        assert effect["endorsers"] == []
+        assert hub.call("approve_effect", chat=str(chat), turn=turn, number=1)["done"]["effect"]["state"] == "accepted"
+        assert "Duke" not in repr(hub.call("knowledge", chat=str(chat)))
+        assert "Duke" not in repr(hub.call("hub", chat=str(chat)))
+        for actor in (anya, mara, tamsin):
+            seen = hub.call("knowledge", chat=str(chat), actor=str(actor), audience="director")
+            assert seen["actors"][0]["observations"] == []
+        director = hub.call("hub", chat=str(chat), audience="director")
+        assert [event["summary"] for event in director["truth"]["events"]] == [summary]  # world truth, in 020 too
+        assert hub.api.evidence.read(chat.campaign_id, requested_by=DIRECTOR).knowledge.events[0].summary == summary
+        assert not any(p["code"] == "unbridged" for p in director["problems"])
+
+
 def test_the_table_sees_only_its_own_characters_party_standing(cards):
     folder, chat = cards
     with Hub(folder, labelling=False) as hub:

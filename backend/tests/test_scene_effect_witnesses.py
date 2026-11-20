@@ -15,12 +15,15 @@ from dataclasses import replace
 
 import pytest
 
+from chat_fixtures import Clock
 from generation_fixtures import say
-from scene_fixtures import ANA, LABEL_POLICY, Table, attach_tamsin, card_library
+from scene_fixtures import ANA, ANYA, LABEL_POLICY, MARA_VELL, Table, Tagged, attach_tamsin, card_library
 from store_helpers import OWNER
 
+from grimoire.chats import Launch
+from grimoire.chatstore import ChatLibrary
 from grimoire.core import DIRECTOR, Event, Moment
-from grimoire.core.identity import AcceptedRef
+from grimoire.core.identity import AcceptedRef, ScopeRef
 from grimoire.effects import Op, as_knowledge_event, revocation_fingerprint
 from grimoire.effectstore import EffectChange, Endorsement
 from grimoire.evidencestore import EvidenceLibrary, KnowledgeChange
@@ -30,6 +33,7 @@ from grimoire.staging import Absence, Area, Placement, Stage, Way
 
 UNOPPOSED = json.dumps({"factors": [{"fact": "f1", "bearing": "favours"}], "stakes": []})
 MET = "Anya and Mara shake hands."
+SECRET = "Tamsin, unseen, passes Mara the Duke's letter: Tamsin is the Duke's spy."
 NOW = 2**62
 
 
@@ -68,11 +72,11 @@ def restart(folder, book) -> Table:
 
 
 def stage(chat, anya, mara, tamsin, *, as_of=1, mara_in="hall", basis="established", tamsin_gone=False,
-          door="closed") -> Stage:
-    """The hall and the study, joined by the study door. Anya in the hall; Tamsin in the study or gone."""
+          door="closed", tamsin_in="study") -> Stage:
+    """The hall and the study, joined by the study door. Anya in the hall; Tamsin in the study, elsewhere or gone."""
     placed = [Placement(anya, area="hall", basis=basis), Placement(mara, area=mara_in)]
     if not tamsin_gone:
-        placed.append(Placement(tamsin, area="study"))
+        placed.append(Placement(tamsin, area=tamsin_in))
     return Stage(chat.campaign_id, chat.chat_id, as_of, (Area("hall"), Area("study")),
                  (Way("study-door", ("hall", "study"), door),), (anya, mara, tamsin), tuple(placed),
                  (Absence(tamsin),) if tamsin_gone else ())
@@ -118,7 +122,14 @@ def stored(at: Table, chat):
 
 
 def unbridged(at: Table, chat) -> list[str]:
+    """What ``open`` (which first writes whatever pending knowledge it can) still counts for this chat."""
     return [detail for code, detail in at.runner.open(chat).problems if code == "unbridged"]
+
+
+def raw_effect(at: Table, chat, turn: str):
+    """A turn's effect as its file holds it, read without ``open`` (which would write its knowledge)."""
+    (stored_turn,) = [each for each in at.runner.scenes.turns(chat).turns if each.record.turn_id == turn]
+    return stored_turn.record.effect(1)
 
 
 def bridge_of(at: Table, chat, event_id: str) -> Event:
@@ -163,6 +174,32 @@ def test_an_accepted_effect_is_known_to_who_saw_it_and_to_no_one_else(cards):
         assert unbridged(again, chat) == []
 
 
+def test_a_director_only_effect_is_known_to_no_witness_and_the_tables_own_is(cards):
+    """The director's own NPC act (no player holds a key on it, so the table's turn view hides it) leaves its event
+    in 020 and no perception: its summary is the director's words, which no witness, and so no player, may read."""
+    folder, chat = cards
+    book = StageBook()
+    with table(folder, book) as at:
+        anya, mara, tamsin = cast(at, chat)
+        book.put(chat, stage(chat, anya, mara, tamsin, tamsin_in="hall"))  # all three in the hall
+        turn = decided(at, chat)
+        secret = at.runner.propose_effect(chat, at.owner, turn, SECRET, [Op("begin", "allied_with", tamsin, mara,
+                                                                               tamsin, None)])
+        assert secret.endorsers == ()
+        done = at.runner.approve_effect(chat, at.owner, turn, 1)
+        assert done.state == "accepted", done.reason
+        assert stored(at, chat).knowledge.events == (bridge_of(at, chat, done.event_id),)
+        assert stored(at, chat).knowledge.evidence == ()
+        assert seen(at, chat, anya) == [] and seen(at, chat, mara) == [] and seen(at, chat, tamsin) == []
+        table_view = evidence(at).player_knowledge(chat.campaign_id, ANA, at.runner.open(chat).controls, as_of=NOW)
+        assert SECRET not in repr(table_view)
+        assert unbridged(at, chat) == []  # written, as the event alone: nothing waits
+        at.runner.pass_turn(chat, at.player())
+        later = accepted(at, chat, anya, mara, decided(at, chat, "*I offer Mara my hand*"))
+        assert later.state == "accepted", later.reason
+        assert seen(at, chat, anya) == seen(at, chat, mara) == seen(at, chat, tamsin) == [("witnessed", MET)]
+
+
 def test_an_actor_off_stage_or_seen_through_an_open_door(cards):
     folder, chat = cards
     book = StageBook()
@@ -174,22 +211,27 @@ def test_an_actor_off_stage_or_seen_through_an_open_door(cards):
         assert seen(at, chat, tamsin) == []  # she had left the scene
 
 
-@pytest.mark.parametrize("staging", ["assumed", "none", "newer"])
+@pytest.mark.parametrize("staging", ["assumed", "none", "newer", "refused"])
 def test_without_a_stage_to_judge_by_the_event_is_written_and_nobody_saw_it(cards, staging):
-    """Fail closed, never on a guess: an acting character placed only by assumption, a chat with no stage (the
-    cast alone says who is present, not who could see), or a stage newer than the event (``Stage.at`` cannot go
-    back to the event's sequence) leaves the event in 020 with no witness."""
+    """Fail closed, never on a guess and never waiting: an acting character placed only by assumption, a chat with
+    no stage (the cast alone says who is present, not who could see), a stage newer than the event (``Stage.at``
+    cannot go back to the event's sequence), or one the runner refused leaves the event in 020 at once, with no
+    witness."""
     folder, chat = cards
     book = StageBook()
     with table(folder, book) as at:
         anya, mara, tamsin = cast(at, chat)
-        if staging != "none":
+        if staging not in ("none", "refused"):
             book.put(chat, stage(chat, anya, mara, tamsin))
         turn = decided(at, chat)
         if staging == "assumed":
             book.put(chat, stage(chat, anya, mara, tamsin, as_of=2, basis="assumed"))
         elif staging == "newer":
             book.put(chat, stage(chat, anya, mara, tamsin, as_of=99))
+        elif staging == "refused":  # Tamsin is in the cast but not on it
+            book.put(chat, Stage(chat.campaign_id, chat.chat_id, 1, (Area("hall"),), (), (anya, mara),
+                                 (Placement(anya, area="hall"), Placement(mara, area="hall"))))
+            assert ("stage", "cast_mismatch") in at.runner.open(chat).problems
         effect = accepted(at, chat, anya, mara, turn)
         ledger = stored(at, chat)
         assert ledger.knowledge.events == (bridge_of(at, chat, effect.event_id),)
@@ -199,7 +241,7 @@ def test_without_a_stage_to_judge_by_the_event_is_written_and_nobody_saw_it(card
 
 # -- a crash between 021's commit and the 020 append ----------------------------------------------------
 
-def test_a_crash_before_the_knowledge_append_is_completed_by_recovery_exactly_once(cards, monkeypatch):
+def test_a_crash_before_the_knowledge_append_is_completed_on_open_exactly_once(cards, monkeypatch):
     folder, chat = cards
     book = StageBook()
     with table(folder, book) as at:
@@ -214,11 +256,9 @@ def test_a_crash_before_the_knowledge_append_is_completed_by_recovery_exactly_on
     restaged = StageBook()
     restaged.put(chat, first)  # the app stages the scene again after the restart
     with restart(folder, restaged) as at:
-        (effect,) = [item for record in at.runner.open(chat).records for item in record.effects]
-        assert effect.state == "accepted"  # 021 holds it; 020 does not yet
-        assert unbridged(at, chat) == [f"{turn}:{effect.event_id}"]
+        assert raw_effect(at, chat, turn).state == "accepted"  # 021 holds it; 020 does not yet
         assert stored(at, chat).knowledge.events == () and seen(at, chat, mara) == []
-        assert at.runner.recover_effects(chat, at.owner) == ()  # nothing was cut short in 021; 020 is written
+        assert unbridged(at, chat) == []  # the first open writes it, with the stage it was played on
         assert seen(at, chat, mara) == [("witnessed", MET)] and seen(at, chat, tamsin) == []
         assert unbridged(at, chat) == [] and at.runner.recover_effects(chat, at.owner) == ()
         assert len(stored(at, chat).knowledge.events) == 1 and len(stored(at, chat).knowledge.evidence) == 2
@@ -308,7 +348,7 @@ def test_knowledge_waits_for_an_earlier_acceptance_still_cut_short_on_another_de
             accepted(at, chat, anya, mara, second, "Anya offers Mara a seat.", "allied_with")
         monkeypatch.undo()
         # the first turn's acceptance arrives from another device, cut short there (as a sync brings turns)
-        (stored_first,) = [each for each in at.runner.open(chat).turns.turns if each.record.turn_id == first]
+        (stored_first,) = [each for each in at.runner.scenes.turns(chat).turns if each.record.turn_id == first]
         theirs = replace(stored_first.record.effect(1), state="accepting", approved_by=OWNER, event_id="e-elsewhere",
                          accepted_on="0badcafe")
         at.runner.scenes.write(stored_first.record.with_effect(theirs), stored_first)
@@ -316,30 +356,7 @@ def test_knowledge_waits_for_an_earlier_acceptance_still_cut_short_on_another_de
         refused("accepted_elsewhere", at.runner.recover_effects, chat, at.owner)
         # written now, the later knowledge would leave the first acceptance's own behind 020's mark for good
         assert stored(at, chat).knowledge.events == () and seen(at, chat, mara) == []
-        (pending,) = unbridged(at, chat)
-        assert pending.startswith(f"{second}:") and not pending.endswith(":backdated")
-
-
-def test_a_bridge_the_stage_cannot_judge_now_waits_until_the_scene_is_staged_again(cards):
-    folder, chat = cards
-    book = StageBook()
-    with table(folder, book, replies=2) as at:
-        anya, mara, tamsin = cast(at, chat)
-        turn = decided(at, chat)
-        effect = at.runner.propose_effect(chat, at.player(), turn, MET, [Op("begin", "has_met", anya, mara, anya,
-                                                                              turn)])
-        at.runner.endorse_effect(chat, at.player(), turn, 1, effect.proposal.fingerprint)
-        book.put(chat, Stage(chat.campaign_id, chat.chat_id, 1, (Area("hall"),), (), (anya, mara),
-                             (Placement(anya, area="hall"), Placement(mara, area="hall"))))  # Tamsin missing
-        assert ("stage", "cast_mismatch") in at.runner.open(chat).problems
-        done = at.runner.approve_effect(chat, at.owner, turn, 1)
-        assert done.state == "accepted" and stored(at, chat).knowledge.events == ()  # who saw it cannot be told
-        assert unbridged(at, chat) == [f"{turn}:{done.event_id}"]
-        refused("unbridged", at.runner.recover_effects, chat, at.owner)
-        # the scene staged again, as it stood at the event's sequence
-        book.put(chat, stage(chat, anya, mara, tamsin, as_of=effect.proposal.moment.sequence))
-        assert at.runner.recover_effects(chat, at.owner) == ()
-        assert seen(at, chat, mara) == [("witnessed", MET)] and unbridged(at, chat) == []
+        assert unbridged(at, chat) == ["1:acceptance_unsettled"]  # counted, never named
 
 
 # -- revoked, and behind the knowledge ledger -----------------------------------------------------------
@@ -355,8 +372,7 @@ def test_an_effect_revoked_before_its_bridge_is_never_written_as_fact(cards, mon
         with pytest.raises(Crash):
             accepted(at, chat, anya, mara, turn)
         monkeypatch.undo()
-        (effect,) = [item for record in at.runner.open(chat).records for item in record.effects]
-        ref = AcceptedRef(chat.campaign_id, effect.event_id)
+        ref = AcceptedRef(chat.campaign_id, raw_effect(at, chat, turn).event_id)
         event, etag = at.effects.read(ref, requested_by=DIRECTOR)
         undo = [Endorsement(item.contribution_id, at.player(), revocation_fingerprint(ref, event.fingerprint))
                 for item in event.endorsements]
@@ -387,3 +403,72 @@ def test_an_effect_behind_knowledge_written_since_its_proposal_is_proposed_again
         assert again.state == "accepted" and again.proposal.moment.sequence > later
         assert seen(at, chat, mara) == [("witnessed", MET)]
 
+
+
+def test_ordinary_play_between_a_proposal_and_its_acceptance_never_refuses_it(cards):
+    """Labelling, confirming and deciding a later turn write no 020 record, so an effect proposed before them is
+    still accepted, and its knowledge written, at its own sequence."""
+    folder, chat = cards
+    book = StageBook()
+    with table(folder, book) as at:
+        anya, mara, tamsin = cast(at, chat)
+        book.put(chat, stage(chat, anya, mara, tamsin))
+        first = decided(at, chat)
+        effect = at.runner.propose_effect(chat, at.player(), first, MET, [Op("begin", "has_met", anya, mara, anya,
+                                                                               first)])
+        at.runner.endorse_effect(chat, at.player(), first, 1, effect.proposal.fingerprint)
+        at.runner.pass_turn(chat, at.player())
+        decided(at, chat, "*I offer Mara a seat*")  # the director's label and confirmation, at later sequences
+        done = at.runner.approve_effect(chat, at.owner, first, 1)
+        assert done.state == "accepted", done.reason
+        assert seen(at, chat, mara) == [("witnessed", MET)]
+
+
+# -- 020 never holds play up ---------------------------------------------------------------------------
+
+def test_a_damaged_knowledge_ledger_holds_no_acceptance_up_and_its_knowledge_is_written_once_repaired(cards):
+    folder, chat = cards
+    book = StageBook()
+    with table(folder, book) as at:
+        anya, mara, tamsin = cast(at, chat)
+        book.put(chat, stage(chat, anya, mara, tamsin))
+        turn = decided(at, chat)
+        junk = folder / "campaigns" / chat.campaign_id / "events" / "e-junk.json"
+        junk.parent.mkdir(parents=True, exist_ok=True)
+        junk.write_text("{not json", encoding="utf-8")
+        effect = accepted(at, chat, anya, mara, turn)
+        assert effect.state == "accepted", effect.reason  # 021 never waits for 020
+        assert unbridged(at, chat) == ["1:ledger_damaged"]  # a count and a reason: no turn, no event
+        assert at.runner.recover_effects(chat, at.owner) == ()  # recovery refuses nothing over it either
+        junk.unlink()  # repaired
+        assert at.runner.recover_effects(chat, at.owner) == ()  # and now writes it
+        assert seen(at, chat, mara) == [("witnessed", MET)] and unbridged(at, chat) == []
+        assert len(stored(at, chat).knowledge.events) == 1
+
+
+def test_another_chats_unwritten_knowledge_never_stalls_this_one(cards, monkeypatch):
+    """A second chat of the campaign, played with no stage, whose acceptance died before its 020 append: this
+    chat's next acceptance goes ahead, and both events are written in sequence order, the other chat's as the
+    event alone (its stage cannot say who saw it), this one's with its witnesses."""
+    folder, chat = cards
+    book = StageBook()
+    with table(folder, book, replies=2) as at:
+        anya, mara, tamsin = cast(at, chat)
+        book.put(chat, stage(chat, anya, mara, tamsin))
+        chats = ChatLibrary(at.store, at.owner, clock=Clock(), new_id=Tagged("b"), owner=OWNER)
+        other = chats.start_chat(Launch("character", MARA_VELL), persona=ANYA, scope=ScopeRef(chat.campaign_id),
+                                 reuse_actors={("persona", ANYA.entity_key): anya,
+                                               ("character", MARA_VELL.entity_key): mara}).commit().chat
+        at.runner.seat(other, ANA)
+        elsewhere = decided(at, other)
+        no_bridge_append(monkeypatch)
+        with pytest.raises(Crash):
+            accepted(at, other, anya, mara, elsewhere)
+        monkeypatch.undo()
+        here = accepted(at, chat, anya, mara, decided(at, chat, "*I offer Mara a seat*"), "Anya offers Mara a seat.",
+                        "allied_with")
+        assert here.state == "accepted", here.reason
+        events = stored(at, chat).knowledge.events
+        assert [event.summary for event in events] == [MET, "Anya offers Mara a seat."]  # in sequence order
+        assert seen(at, chat, mara) == [("witnessed", "Anya offers Mara a seat.")]
+        assert unbridged(at, chat) == [] and unbridged(at, other) == []

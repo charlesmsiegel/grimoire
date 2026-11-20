@@ -528,21 +528,30 @@ function proposeCard(ctx, hub, chat, kept, write, made) {
 
 // What 035 reports for this chat's cut-short acceptances: unsettled ones this library settles, untagged ones only
 // on the owner's word that this library accepted them, and ones another device accepted, which that device settles.
+// Also accepted effects whose knowledge (020) is not written yet (``unbridged``, a count and a reason, never which
+// effect): play goes on, and recovery writes what it can now.
 function recoverCard({ ctx, hub, write, director }) {
   const { ui } = ctx;
   const { el } = ui;
-  const title = "Acceptance cut short";
   const codes = new Set(hub.problems.map((problem) => problem.code));
   const here = codes.has("effect_unsettled"), untagged = codes.has("effect_untagged"), elsewhere = codes.has("effect_elsewhere");
-  if (!here && !untagged && !elsewhere) return null;
-  const parts = [el("p", {}, "An effect's acceptance was cut short.")];
+  const unbridged = codes.has("unbridged"), cut = here || untagged || elsewhere;
+  if (!cut && !unbridged) return null;
+  const title = cut ? "Acceptance cut short" : "Knowledge not written yet";
+  const parts = cut ? [el("p", {}, "An effect's acceptance was cut short.")] : [];
   if (elsewhere) parts.push(el("p", {}, "One was accepted on another device: settle it there."));
+  if (unbridged) parts.push(el("p", {}, "What the characters saw of an accepted change is not in their knowledge yet."));
   if (!director) {
-    if (here || untagged) parts.push(el("p", { class: "g-muted" }, "The director settles it, in the director's view."));
+    if (here || untagged || unbridged) parts.push(el("p", { class: "g-muted" }, "The director settles it, in the director's view."));
     return card(ui, title, { kind: "alert" }, ...parts);
   }
-  if (!here && !untagged) return card(ui, title, { kind: "alert" }, ...parts);
   const can = hub.actions.find((item) => item.op === "recover_effects");
+  if (!here && !untagged) {
+    if (unbridged) parts.push(available(ctx, can, "Writing it", () => ui.actions(ui.button("Write it now", () =>
+      write("recover_effects", { abort: false, player_key: false, own: false }, () => "Written where it could be."),
+      { kind: "primary" }))));
+    return card(ui, title, { kind: "alert" }, ...parts);
+  }
   const tick = (text) => {
     const id = ui.id("campaign-tick");
     const input = el("input", { type: "checkbox", id });
