@@ -9,8 +9,8 @@ from .model import Draft, PreparedScene, Proposal, Review, Snapshot, text
 class PreparationSession:
     """Trusted adapter seam. Reader must supply current director-authorized evidence.
 
-    Proposer is a local deterministic/scripted function. Network/model integration
-    requires a separately authorized metered adapter, outside this first slice.
+    Proposer is a local deterministic/scripted function or a ``PreparationGenerator``.
+    The proposer runs under the session lock, so a slow provider call delays review.
     Callbacks must not reenter this session. All state is disposable and in memory.
     """
     def __init__(self, campaign_id: str, reader: Callable[[], Snapshot],
