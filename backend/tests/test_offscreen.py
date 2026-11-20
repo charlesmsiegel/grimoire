@@ -102,6 +102,8 @@ def test_an_adoption_id_never_shadows_a_later_calendar_advance_of_the_same_name(
     state, receipt, again = apply(C, state, Skip("day-2", 4), calendar=cal)
     assert not again and len(receipt.developments) == 2 and pending_skips(state, cal) == ()
     assert state.adoption("day-2").operation.plan.plan_id == "docks" and state.skip("day-2") is receipt
+    with pytest.raises(OffscreenError, match="invalid_field"):
+        state.receipt("day-2")  # an id alone cannot say which namespace it names
     assert state_from_payload(C, state_to_payload(state), cal) == state
     # Each kind still retries, and still refuses a changed request, within its own namespace.
     assert apply(C, state, Skip("day-2", 4), calendar=cal)[2]

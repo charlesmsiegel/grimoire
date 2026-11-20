@@ -109,5 +109,6 @@ scope record refuses new operations instead of forgetting old ids. Native recove
 
 No UI (Wave 9's exit, 116), no model-backed or narrated developments, no scheduled events other than
 plan steps, no causal branching, conditions or hidden-consequence trees (spec milestone 3), no
-multi-process cost measurement (milestone 2), no plan withdrawal or editing, no persistent
+multi-process cost measurement (milestone 2), no plan withdrawal or editing (a mistaken plan needs a
+new 057 decision, since one decision authorizes one plan), no persistent
 institutions, and no automatic delivery of developments to anyone.

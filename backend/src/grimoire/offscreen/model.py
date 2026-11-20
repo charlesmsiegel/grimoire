@@ -238,7 +238,7 @@ class OffscreenState:
             return self.adoption(operation.operation_id)
         if type(operation) is Skip:
             return self.skip(operation.operation_id)
-        return None
+        raise OffscreenError("invalid_field", "receipt lookup needs an Adopt or Skip operation")
 
     def progress(self, plan_id: str) -> PlanProgress | None:
         return next((p for p in self.plans if p.plan.plan_id == plan_id), None)

@@ -50,12 +50,12 @@ def decided_guild() -> InstitutionState:
 
 
 def rival_plan(**changes) -> FactionPlan:
-    values = dict(plan_id="docks", group=GUILD, decision_id="seize-docks", choice="Seize the docks",
-                  goal="Control the harbour",
-                  steps=(PlanStep("coin", "Gather the bribe money", 5 * DAY),
-                         PlanStep("magistrate", "Buy the harbour magistrate", 7 * DAY),
-                         PlanStep("seize", "Take the docks by force", 10 * DAY)),
-                  priority=80, deadline_id="festival")
+    values = {"plan_id": "docks", "group": GUILD, "decision_id": "seize-docks", "choice": "Seize the docks",
+              "goal": "Control the harbour",
+              "steps": (PlanStep("coin", "Gather the bribe money", 5 * DAY),
+                        PlanStep("magistrate", "Buy the harbour magistrate", 7 * DAY),
+                        PlanStep("seize", "Take the docks by force", 10 * DAY)),
+              "priority": 80, "deadline_id": "festival"}
     values.update(changes)
     if values["plan_id"] != "docks" and "decision_id" not in changes:
         values["decision_id"] = f"decide-{values['plan_id']}"
