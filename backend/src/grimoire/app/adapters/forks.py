@@ -477,8 +477,10 @@ def fork_state(here: Mapping[str, str], archive: Mapping, device: str | None) ->
     if before is None:
         return "elsewhere"
     scenes = {scene["path"] for scene in archive["scenes"]}
-    # what sync owes this device: every record the predicted ledger holds otherwise than this device did
-    owed = [path for path, tag in reconciled.items() if path not in scenes and before.get(path) != tag]
+    # what sync owes this device: every record the predicted ledger holds otherwise than this device did, a removal
+    # (a path the device held that the ledger no longer does) included
+    owed = [path for path in sorted(set(reconciled) | set(before))
+            if path not in scenes and before.get(path) != reconciled.get(path)]
     if all(here.get(path) != before.get(path) for path in owed):
         return "played_on"  # nothing owed is as it was here (or nothing was owed), and the campaign changed since
     return "waiting"

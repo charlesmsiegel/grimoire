@@ -392,3 +392,27 @@ test("a retained fork says whether it waits on sync, was reconciled, or play wen
   assert.ok(said("keep-4").textContent.includes("This fork was made between desktop and phone"));
   assert.equal(pill("keep-5"), "Reconciled here", "an answer without a state still reads");
 });
+
+test("a preview refused because the records moved on leaves no earlier report drawn as current", async () => {
+  let reads = 0, asked = 0;
+  const { root, done } = mounted({
+    scenes: () => { reads += 1; return scenesOf("c1", "sha256:" + String(reads).repeat(64)); },
+    preview: (args) => {
+      asked += 1;
+      if (asked === 2) throw Object.assign(new Error("the records changed"), { reason: "changed" });
+      return preview(args, [impact(PAID, "known")]);
+    },
+  });
+  await done;
+  tick_(root, SCENE.path);
+  button(retcon(root), "Preview").click();
+  await settle();
+  assert.ok(region(root), "the first report is drawn");
+  button(retcon(root), "Preview").click();
+  await settle();
+  assert.equal(reads, 2, "the records were read again");
+  assert.equal(region(root), undefined, "the report of the old records is gone");
+  button(retcon(root), "Preview").click();
+  await settle();
+  assert.ok(region(root), "a preview of the records now is drawn");
+});

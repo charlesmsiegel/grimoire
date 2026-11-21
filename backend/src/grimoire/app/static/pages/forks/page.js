@@ -234,6 +234,9 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
     const turn = reading.next();
     const answer = await ctx.api("forks.scenes", { campaign, audience: "director" });
     if (!reading.current(turn)) return;
+    // records read anew at another revision: a report or a declaration reviewed against the old ones is no longer
+    // of what is shown, so neither stays drawn as current
+    if (scenes && answer.etag !== scenes.etag) { previewing.bump(); result = null; review = null; }
     scenes = answer;
     for (const path of [...picked]) if (!scenes.records.some((item) => item.path === path)) picked.delete(path);
     draw();
