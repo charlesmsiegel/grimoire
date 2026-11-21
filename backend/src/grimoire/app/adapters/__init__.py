@@ -34,4 +34,8 @@ from . import forks  # noqa: E402 -- 115's divergent offline scenes (049) and fo
 
 ADAPTERS = tuple(sorted((*ADAPTERS, forks.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import story  # noqa: E402 -- 081's story explorer: threads of the ledger and their outcomes (docs/STORY.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, story.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]
