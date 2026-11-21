@@ -387,11 +387,15 @@ def _declaration(ctx: AdapterContext, args: Mapping[str, object], chats: _Chats)
 def _declared(view: dict, snap, edge, ref, already: bool) -> dict:  # type: ignore[no-untyped-def]
     """What the declaration does: the file it writes and what a change of its source would then reach, labelled
     from ``view`` (the records view of ``snap``)."""
-    before = {item.target.path for item in preview_impact(snap.pins.values(), snap.dependencies, (edge.source,)).impacts}
+    # each record a change of the source reaches, with how certainly, before the declaration and after it: a record
+    # newly reached, or reached more certainly (a potential dependence made known upgrades what follows it too)
+    before = {item.target.path: item.certainty
+              for item in preview_impact(snap.pins.values(), snap.dependencies, (edge.source,)).impacts}
     deps = snap.dependencies if already else snap.dependencies + (edge,)
     after = preview_impact(snap.pins.values(), deps, (edge.source,))
     labels = {item["path"]: item for item in view["records"]}
-    newly = [_impact(item, labels) for item in after.impacts if item.target.path not in before
+    newly = [_impact(item, labels) for item in after.impacts
+             if before.get(item.target.path) != item.certainty
              or (item.target.path == edge.dependent.path and item.certainty == "known")]
     return {"operation": ref.record_id, "already_applied": already, "source": labels.get(edge.source.path),
             "dependent": labels.get(edge.dependent.path), "reason": edge.reason, "files": [_path(ref)],
@@ -461,6 +465,25 @@ def _variant_text(path: str, text: str, chats: _Chats) -> str | None:
     return _said(turn_view(StoredTurn(turn, etag(text.encode("utf-8"))), chats.names(turn.chat.chat_id)))
 
 
+def fork_state(here: Mapping[str, str], archive: Mapping, device: str | None) -> str:
+    """Where one retained fork stands on this device, from its listing ``here`` (path to etag) and what the fork
+    recorded: ``reconciled`` (exactly the ledger the fork predicts), ``waiting`` (some of what ordinary sync brings
+    has not arrived), ``played_on`` (it all arrived, and play went on here since: a later turn or declaration is not
+    a fork still owed) or ``elsewhere`` (this device is not one of the fork's two)."""
+    reconciled = archive["reconciled"]
+    if here == reconciled:
+        return "reconciled"
+    before = archive["premises"].get(device) if device else None
+    if before is None:
+        return "elsewhere"
+    scenes = {scene["path"] for scene in archive["scenes"]}
+    # what sync owes this device: every record the predicted ledger holds otherwise than this device did
+    owed = [path for path, tag in reconciled.items() if path not in scenes and before.get(path) != tag]
+    if all(here.get(path) != before.get(path) for path in owed):
+        return "played_on"  # nothing owed is as it was here (or nothing was owed), and the campaign changed since
+    return "waiting"
+
+
 def _retained(ctx: AdapterContext, campaign: str, device: str | None, chats: _Chats) -> tuple[list, list]:
     """The campaign's retained forks, as 054 validates them, and the problems of those that do not read."""
     library = _library(ctx)
@@ -491,10 +514,11 @@ def _retained(ctx: AdapterContext, campaign: str, device: str | None, chats: _Ch
                            "variants": [{"device": name, "selected": name == archive["source_device"],
                                          "said": _variant_text(scene["path"], variant["text"], chats)}
                                         for name, variant in sorted(scene["variants"].items())]})
+        state = fork_state(here, archive, device)
         forks.append({"operation": archive["operation_id"], "source_device": archive["source_device"],
                       "devices": list(archive["devices"]), "scenes": scenes,
-                      "source_revisions": len(archive["source_revisions"]),
-                      "reconciled_here": here == archive["reconciled"]})
+                      "source_revisions": len(archive["source_revisions"]), "state": state,
+                      "reconciled_here": state in ("reconciled", "played_on")})
     return forks, problems
 
 
