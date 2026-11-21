@@ -26,7 +26,10 @@ export function fieldValue(field, text) {
   if (field.type === "whole") return /^-?\d{1,9}$/.test(raw) ? { value: Number(raw) } : { error: "Give a whole number." };
   if (field.type === "dice") {
     const parts = raw.split(/[\s,]+/).filter(Boolean);
-    if (!parts.length || !parts.every((part) => /^\d{1,3}$/.test(part))) return { error: "Give the dice as rolled, like 3, 4." };
+    // no dice of a kind (a WoD pool with Hunger 0, or all Hunger) is an empty list; a field that names an exact
+    // count (PbtA's two d6) needs its dice
+    if (!parts.length) return field.exactly ? { error: "Give the dice as rolled, like 3, 4." } : { value: [] };
+    if (!parts.every((part) => /^\d{1,3}$/.test(part))) return { error: "Give the dice as rolled, like 3, 4." };
     return { value: parts.map(Number) };
   }
   return { error: "This field cannot be read." };

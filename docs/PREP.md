@@ -43,6 +43,8 @@ proposed action and the result recorded at the table:
 - `action` and `result` take exactly the profile's fields (`invalid_field` otherwise);
 - 062's own refusal keeps its words as `invalid_proposal`: a die no d20 shows, a total that does not add up, a
   partial result with no choice left open.
+- a dice field left empty is no dice of that kind (a WoD pool with Hunger 0); one that names its count, PbtA's
+  two d6, needs them.
 
 The answer is `{valid, canonical: false, action, result, noncanonical}`. Nothing is rolled, resolved, recorded or
 applied, and no time passes; every answer and the page say so.
@@ -69,7 +71,8 @@ The director's: every op refuses `director_only` in the table's view.
 - *calendar*: the campaign clock (055) and its deadlines not yet flagged. 055 keeps the clock in the campaign's
   scope record, which no 064 source type names, so an item is labelled `campaign:<id>/clock/now` or
   `campaign:<id>/clock/<deadline id>`: a label for that entry, not a stored instance;
-- *choice*: the latest posts the chat's player characters made on kept turns.
+- *choice*: the latest posts the chat's player characters made on kept turns, oldest first, a combined turn's
+  contributions in the order they were posted.
 
 Each item has an id such as `secret-1`; the cast is the chat's cast and the places are the campaign's
 instances of kind `location` or `place`. A kind with nothing in it is 064's `missing`.
@@ -83,7 +86,8 @@ prompt (`prompt_tokens`, about a third of its bytes: not a bound), a ceiling tha
 message as a token plus a few for each message (`prompt_tokens_at_most`), the reply cap, the attempts and, when the
 model has prices, the most it can cost (`cost_at_most`, that ceiling at the higher of the prompt and the cached price, since 048 books a cached token at the cached price, and the whole reply cap; a retry to an
 unpriced fallback model is counted apart). Its `expected` token covers the brief, the evidence, the model settings
-and the estimate. `prepare` builds everything again and refuses `changed` unless the token still matches; only then
+and the estimate. `prepare` builds everything again and refuses `changed` unless the token still matches, and again,
+sending nothing, if 064's session reads evidence other than what was estimated; only then
 does it run 064's generator, under the settings' preparation policy (exactly one `planning` call when on, none when
 off: 064's own `not_budgeted`), through 013's adapter to the endpoint of the app's model settings, on an untrusted
 handle (`app:scene-preparer`) whose every attempt is approved for its exact payload. The call is one 048 trace,

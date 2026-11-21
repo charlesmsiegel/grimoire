@@ -195,16 +195,7 @@ def assemble(ctx: AdapterContext, chat: ChatRef) -> tuple[Snapshot, dict]:
                                       {"deadline": deadline.deadline_id, "deadline_kind": deadline.kind}))
 
     # choices: what the players' characters did on the turns the table kept, newest first
-    etags = scene.turns.etags()
-    for record in reversed(scene.records):
-        if record.kept is None:
-            continue
-        for post in record.posts:
-            if scene.controller(post.actor) in (None, DIRECTOR):
-                continue
-            who = names.get(post.actor) or post.actor.instance_id
-            found["choice"].append((f"{who} (turn {record.number}): {post.text}", post.actor,
-                                    etags.get(record.turn_id) or f"turn-{record.number}", {"turn": record.number}))
+    found["choice"].extend(_choices(scene.records, scene.controller, names, scene.turns.etags()))
 
     evidence: list[Evidence] = []
     shown: list[dict] = []
@@ -242,6 +233,22 @@ def assemble(ctx: AdapterContext, chat: ChatRef) -> tuple[Snapshot, dict]:
                       "locations": [{"actor": str(ref), "name": name_of(ref)} for ref in locations]}
 
 
+def _choices(records, controller, names: Mapping, etags: Mapping) -> list[tuple]:  # type: ignore[no-untyped-def]
+    """What the players' characters did on the turns the table kept, newest first: a combined turn's contributions
+    too (they are in submission order), so a cut keeps the latest and reversing the cut gives the order played."""
+    found = []
+    for record in reversed(records):
+        if record.kept is None:
+            continue
+        for post in reversed(record.posts):
+            if controller(post.actor) in (None, DIRECTOR):
+                continue
+            who = names.get(post.actor) or post.actor.instance_id
+            found.append((f"{who} (turn {record.number}): {post.text}", post.actor,
+                          etags.get(record.turn_id) or f"turn-{record.number}", {"turn": record.number}))
+    return found
+
+
 # -- the session, kept in memory per chat ---------------------------------------------------------------------
 class _Prep:
     """One chat's 064 session and what the page shows of it; in memory only."""
@@ -250,6 +257,7 @@ class _Prep:
         self.chat = chat
         self.context = AdapterContext(api)
         self.generator: PreparationGenerator | None = None
+        self.approved: Snapshot | None = None  # the snapshot the reviewed estimate was of, while its call is made
         self.session = PreparationSession(chat.campaign_id, self._read, self._propose)
         self.proposals: dict = {}  # request id -> 064 Proposal, as the session answered it
         self.outcomes: dict[str, str] = {}  # request id -> accepted / rejected
@@ -262,6 +270,10 @@ class _Prep:
     def _propose(self, snapshot: Snapshot, brief: str):  # type: ignore[no-untyped-def]
         if self.generator is None:  # only ``prepare``, after its review, sets one
             raise PreparationError("not_approved")
+        # the session reads the library again: anything new since the review (more evidence, a longer prompt) was
+        # not estimated or approved, so nothing is sent
+        if snapshot != self.approved:
+            raise ApiRefused("changed", "the evidence changed since the estimate; nothing was sent")
         return self.generator(snapshot, brief)
 
 
@@ -390,6 +402,7 @@ class _Planned(NamedTuple):
     estimate: dict
     review: str
     replay: bool
+    snapshot: Snapshot  # what the estimate was worked out from: the only snapshot its call may send
 
 
 def _planned(ctx: AdapterContext, args: Mapping[str, object]) -> _Planned:
@@ -421,7 +434,7 @@ def _planned(ctx: AdapterContext, args: Mapping[str, object]) -> _Planned:
     estimate = _estimate(config, messages)
     unkept = sum(1 for item in prep.spent if item["request"] == request and not item["kept"])
     return _Planned(chat, request, brief, prep, shown, config, blocked, estimate,
-                    _review(chat, request, brief, snapshot.revision, etag, estimate, unkept), replay)
+                    _review(chat, request, brief, snapshot.revision, etag, estimate, unkept), replay, snapshot)
 
 
 def _prepare_plan(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
@@ -473,6 +486,7 @@ def _prepare(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
         assert config is not None
         try:
             prep.generator = _generator(ctx, config, prep)
+            prep.approved = planned.snapshot
         except (ConfigError, ValueError) as error:
             raise ApiRefused("no_model", str(error)) from None
     generator, kept = prep.generator, False
@@ -497,7 +511,7 @@ def _prepare(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     except ValueError as error:
         raise ApiRefused(_reason(str(error), "invalid_preparation"), str(error)) from None
     finally:
-        prep.generator = None
+        prep.generator = prep.approved = None
         used = None if generator is None else _usage(generator, config)  # type: ignore[arg-type]
         if used is not None and used["attempts"]:  # what was spent is said, whether or not a reply was kept
             prep.spent.append({"request": request, "kept": kept, **used})

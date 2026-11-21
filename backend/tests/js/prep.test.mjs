@@ -330,3 +330,14 @@ test("a reload that shows the request already decided starts a new request", asy
   assert.notEqual(app.asked[1], app.asked[0], "the decided id is never estimated again");
   assert.ok(group(prep, "Approve this call"), "the new request is offered for approval");
 });
+
+test("no dice of a kind is an empty list, but a field that names its count needs its dice", () => {
+  const hunger = { name: "hunger", type: "dice", sides: 10, max: 5, exactly: null };
+  assert.deepEqual(logic.fieldValue(hunger, ""), { value: [] }, "a WoD pool with Hunger 0 rolls no hunger dice");
+  assert.deepEqual(logic.fieldValue(hunger, "  "), { value: [] });
+  assert.deepEqual(logic.fieldValue(hunger, "7, 10"), { value: [7, 10] });
+  assert.ok("error" in logic.fieldValue(hunger, "seven"));
+  const two = { name: "dice", type: "dice", sides: 6, max: 2, exactly: 2 };
+  assert.ok("error" in logic.fieldValue(two, ""), "PbtA's two d6 are never empty");
+  assert.deepEqual(logic.fieldValue(two, "3 4"), { value: [3, 4] });
+});
