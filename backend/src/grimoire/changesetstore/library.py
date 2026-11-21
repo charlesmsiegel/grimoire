@@ -177,13 +177,16 @@ class ChangeSetLibrary:
             return revision, record.envelope, record.etag  # type: ignore[union-attr]
 
     def create(self, source: str, kind: str, entity_id: str, payload: object, *, name: str | None = None,
-               evidence: tuple[str, ...] = (), revision: str = "r1") -> RecordChange:
-        """A change creating a new entity. Whether it already exists is judged at review."""
+               evidence: tuple[str, ...] = (), revision: str = "r1", schema: str | None = None) -> RecordChange:
+        """A change creating a new entity. Whether it already exists is judged at review. ``schema`` is
+        the envelope's payload schema id (``grimoire.entity/0`` for an entity), written as its
+        top-level ``"schema"`` key."""
         try:
             SourceRef(source, kind, entity_id, revision)
         except ValueError as error:
             raise ChangeSetError("invalid_field", str(error)) from None
-        return RecordChange(kind, entity_id, revision, payload, name=name, evidence=evidence)  # type: ignore[arg-type]
+        return RecordChange(kind, entity_id, revision, payload, name=name, evidence=evidence,  # type: ignore[arg-type]
+                            schema=schema)
 
     def revise(self, source: str, kind: str, entity_id: str, payload: object, *, name: object = _UNSET,
                evidence: tuple[str, ...] = ()) -> RecordChange:
@@ -469,7 +472,8 @@ class ChangeSetLibrary:
         ref = changeset.target(change)
         payload = thaw(change.payload)
         if change.base is None:
-            return RecordEnvelope(ref, payload, name=change.name, owner=changeset.author), None, None
+            extra = {} if change.schema is None else {"schema": change.schema}
+            return RecordEnvelope(ref, payload, name=change.name, owner=changeset.author, extra=extra), None, None
         base_ref = ref.at(change.base)
         old_path = _path(definition_parts(base_ref))
         old = self._exact(old_path)

@@ -1,114 +1,172 @@
-// What the story page works out without the app (Sprint 115): the words a record, a reason or a review is said
-// in, and the guard that keeps a late answer from drawing over a newer choice.
+// The story explorer's pure logic (081): no DOM and no calls, so it is tested by itself (tests/js/story.test.mjs).
+// What a thread's entries, outcome and contradictions say in words, how each is graded on screen, where each
+// entry leads back to, and the page's address.
 
-// A new operation id, unique enough to name one change: kept with its review so a retry reuses it.
-export function newOperationId() {
-  return "op-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
-}
+export const AUDIENCES = [{ value: "table", label: "Table view" }, { value: "director", label: "Director view" }];
 
-const KINDS = { scene: "Scene", accepted_event: "Accepted event", relationship: "Relationship", summary: "Scene summary",
-  holdings: "Holdings", evidence: "Evidence", picture: "Picture", placement: "Picture placement", bookmark: "Bookmark",
-  instance: "Character record", transcript: "Imported history", chat: "Chat", continuity: "Continuity record" };
-
-export function kindText(kind) { return KINDS[kind] || String(kind || "Record"); }
-
-// One record as a person reads it: "Scene 2: Tam says…" or "Accepted event: tam pays ines."
-export function recordText(record) {
-  if (!record) return "a record no longer in this campaign";
-  const kind = kindText(record.kind);
-  const name = record.kind === "scene" && record.number ? kind + " " + record.number : kind;
-  const said = record.label ? clip(record.label, 90) : record.id || record.path;
-  return name + ": " + said;
-}
-
-// Why a record is touched (054's reasons).
-const REASONS = {
-  scene: "it rests on this scene, exactly as recorded",
-  dialogue: "its dialogue is declared to rest on it",
-  evidence: "it is evidence drawn from it",
-  summary: "a scene summary cites it",
-  asset: "a picture or asset is declared to rest on it",
-  causal_action: "an action is declared to follow from it",
-  relationship: "a relationship it recorded",
-  possession: "what someone holds because of it",
-  accepted_event: "an accepted event follows from it",
-  chronological: "it comes later in the same chat, and may have used it",
-  recorded_source: "it was recorded from it",
+export const NOTES = {
+  table: "What your own characters heard, passed on and concluded. How it ended is the director's.",
+  director: "Every record of the story, with canon's ruling and where the story contradicts itself.",
 };
 
-export function reasonText(reason) { return REASONS[reason] || String(reason); }
-
-export function certaintyText(certainty) { return certainty === "known" ? "Known" : "Possible"; }
-
-const ACTIONS = { edit: "Edit it", cut: "Cut it", replace: "Replace it", replay: "Replay it", fork: "Fork from it" };
-export function actionText(action) { return ACTIONS[action] || action; }
-
-const DECLARED = { dialogue: "dialogue", causal_action: "an action that follows from it", asset: "a picture or asset" };
-export function declaredText(reason) { return DECLARED[reason] || reason; }
-
-// 049's semantic review reason codes, in words. `uncertain` ones say the ancestry is not recorded.
-const SEMANTIC = {
-  accepted_scene_changed: "an accepted event here rests on this scene exactly as this device has it",
-  accepted_scene_missing: "an accepted event rests on a scene that would be missing",
-  declared_scene_changed: "a declared dependency rests on this scene as this device has it",
-  stale_dependency_endpoint: "a declared dependency names a version of a record that would no longer be there",
-  missing_dependency_endpoint: "a declared dependency names a record that is missing",
-  legacy_scene_history: "an accepted event of this chat has no record of the scenes it rests on, so its ancestry is uncertain",
-  malformed_continuity_sources: "an accepted event's record of its scenes cannot be read, so its ancestry is uncertain",
-  malformed_dependency: "a declared dependency cannot be read",
-  malformed_semantic_record: "a scene or an accepted event cannot be read",
-  unreadable_semantic_sources: "some of the campaign's records cannot be read, so nothing can be shown safe",
-  potential_direct_relation_impact: "a relationship was changed directly while this scene was edited: it may depend on it",
+// Each entry's grade, so an interpretation is never read as truth: [label, pill kind].
+export const GRADES = {
+  confirmed: ["Canon", "good"],
+  belief: ["Belief", "accent"],
+  proposal: ["Proposed", ""],
+  revoked: ["Revoked", "bad"],
 };
 
-export function semanticText(code) { return SEMANTIC[code] || String(code); }
+export function grade(entry) { return GRADES[entry.grade] || [entry.grade, ""]; }
 
-// The sentence for what taking another device's version (or its deletion) here would leave unmet. With
-// `uncertain`, no recorded premise unmet is not enough to call it safe: the scene's ancestry is not on record.
-export function takingText(peer, review, { uncertain = false, deletion = false } = {}) {
-  const what = deletion ? "the deletion from " + peer : peer + "'s version";
-  if (!review) return deletion ? "Taking the deletion from " + peer + " cannot be reviewed here." : "Its version from " + peer + " cannot be read here.";
-  if (!review.reasons.length) {
-    return uncertain ? "Taking " + what + " here cannot be shown safe: what rests on this scene is not on record."
-      : "Taking " + what + " here leaves no recorded premise unmet.";
+// Canon's standing in words (012: a ruling, else reported once anyone heard it, else unasserted).
+export const STANDINGS = {
+  established: "Established",
+  refuted: "Refuted",
+  unknown: "Ruled unknown",
+  reported: "Only reported",
+  unasserted: "Not yet asserted",
+};
+
+export function standingText(standing) {
+  if (standing === null || standing === undefined) return null;
+  return STANDINGS[standing] || standing;
+}
+
+export function standingKind(standing) {
+  return standing === "established" ? "good" : standing === "refuted" ? "bad" : "";
+}
+
+const STANCES = { believed: "believes it", suspected: "suspects it", rejected: "rejects it" };
+const PAST = { believed: "believed it", suspected: "suspected it", rejected: "rejected it" };
+
+function who(actor, fallback = "Someone") {
+  return actor ? actor.name || actor.ref : fallback;
+}
+
+// One entry in words: what happened, who heard or concluded what. Its own text (the proposition or an event's
+// summary) is shown beside this line, never folded into it.
+export function entryLine(entry) {
+  switch (entry.kind) {
+    case "stated": return "First recorded";
+    case "event": return entry.grade === "revoked" ? "Happened, then revoked" : "Happened";
+    case "report": {
+      const from = entry.attributed_to ? who(entry.attributed_to) : null;
+      return who(entry.holder) + " heard it" + (from ? " from " + from : "") + (entry.confirmed === false ? " (unconfirmed)" : "");
+    }
+    case "sent": return who(entry.sender) + " passed it on" + (entry.holder ? " to " + who(entry.holder) : "");
+    case "observation": return who(entry.holder) + " saw this";
+    case "belief": {
+      const said = entry.current === false
+        ? (PAST[entry.stance] || entry.stance) + ", then changed their mind"
+        : STANCES[entry.stance] || entry.stance;
+      return who(entry.holder) + " " + said + (entry.inherited ? " (before you played them)" : "");
+    }
+    case "ruling": return "Canon ruled it " + (STANDINGS[entry.standing] || entry.standing).toLowerCase();
+    default: return entry.kind;
   }
-  return "Taking " + what + " here would break what rests on it: " + review.reasons.map(semanticText).join("; ") + ".";
 }
 
-// What one device's last sync did, from story.divergent's peers.
-export function syncText(peer) {
-  if (!peer.status) return "No sync with " + peer.peer + " since the app started.";
-  const held = peer.held.length;
-  if (peer.status === "synced") return "The last sync with " + peer.peer + " finished with nothing held.";
-  if (peer.status === "incomplete") return "The last sync with " + peer.peer + " did not finish; nothing it did not finish was changed.";
-  return "The last sync with " + peer.peer + " held " + count(held, "record") + " of this campaign for review.";
+// Where an entry leads: the turn of its chat it was recorded at, when that turn is on the chat's line. A turn a
+// fork choice set aside, or one the answer could not number, is said, never linked as if it were played.
+export function sourceOf(entry) {
+  const source = entry.source;
+  if (!source) return { link: null, text: "Recorded outside any chat" };
+  if (source.set_aside) return { link: null, text: "From a turn set aside" };
+  if (!source.number) return { link: null, text: "From a chat turn that cannot be opened here" };
+  return { link: { route: "chat", segments: [source.chat], query: { turn: source.number } }, text: "Turn " + source.number };
+}
+
+// A contradiction in words, naming the entries it is between by their own lines.
+export function contradictionText(item, entries) {
+  const byRecord = new Map(entries.map((entry) => [entry.record, entry]));
+  const named = item.records.map((record) => byRecord.get(record)).filter(Boolean);
+  switch (item.kind) {
+    case "reversed_ruling": return "Canon reversed an earlier ruling.";
+    case "belief_against_canon": {
+      const belief = named.find((entry) => entry.kind === "belief");
+      return (belief ? who(belief.holder) + " still " + (STANCES[belief.stance] || belief.stance) : "A character still disagrees")
+        + ", against canon's ruling.";
+    }
+    case "revoked_ground": return "The ruling rests on an event that was revoked.";
+    default: return item.kind;
+  }
+}
+
+// The scenes of a thread, or only those that involve one actor (the first milestone: one character, one thread).
+export function scenesWith(scenes, actor) {
+  if (!actor) return scenes;
+  return scenes.filter((scene) => scene.actors.some((member) => member.ref === actor));
+}
+
+// The page's address: `#/story/<chat>?audience=&q=&actor=&thread=`, with nothing for what is unset.
+export function address(state, change = {}) {
+  const next = { ...state, ...change };
+  return {
+    segments: [next.chat],
+    query: {
+      audience: next.audience === "director" ? "director" : undefined,
+      q: next.q || undefined,
+      actor: next.actor || undefined,
+      thread: next.thread || undefined,
+    },
+  };
+}
+
+// The address read back: the same fields, with an audience other than the director's read as the table's.
+export function readAddress(path, query) {
+  const get = (key) => (query.get(key) || "").trim() || null;
+  return { chat: path[0] || null, audience: get("audience") === "director" ? "director" : "table", q: get("q"),
+    actor: get("actor"), thread: get("thread") };
 }
 
 export function count(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
 
-export function clip(text, most = 60) {
-  const value = String(text || "");
-  return value.length > most ? value.slice(0, most - 1) + "…" : value;
+// What a thread's row says under its text: where it stands (for the director), how far it runs and who is in it.
+export function summaryLine(item) {
+  const parts = [];
+  const standing = standingText(item.standing);
+  if (standing) parts.push(standing);
+  parts.push(count(item.entries, "record"), count(item.scenes, "scene"));
+  if (item.contradictions) parts.push(count(item.contradictions, "contradiction"));
+  const names = item.actors.map((actor) => who(actor));
+  if (names.length) parts.push(names.join(", "));
+  return parts.join(" · ");
 }
 
-// A counter for requests whose answer is drawn only while nothing newer was asked: `next()` before asking,
-// `current(turn)` when the answer comes.
-export function latest() {
-  let turn = 0;
-  return { next: () => ++turn, current: (asked) => asked === turn, bump: () => { turn += 1; } };
+// A problem the answer reports, in words: shown, never hidden, so a partial thread is never taken for whole.
+export const PROBLEMS = {
+  knowledge_unreadable: "The story's ledger could not be read.",
+  knowledge_damaged: "Part of the story's ledger is damaged: what is shown may be incomplete.",
+  effects_unreadable: "Which accepted effects were revoked could not be read.",
+  turns_unread: "Some turns could not be numbered, so they cannot be opened from here.",
+  no_character: "You play no character in this campaign yet, so the table knows nothing of its story.",
+};
+
+// The problems of every answer the page drew from, each said once.
+export function problemsOf(...answers) {
+  const seen = new Map();
+  for (const answer of answers) {
+    for (const problem of (answer && answer.problems) || []) if (!seen.has(problem.code)) seen.set(problem.code, problem);
+  }
+  return [...seen.values()];
 }
 
-// The request a review of a declaration makes, from what the person picked and the records as shown.
-export function declaration(records, source, dependent, reason) {
-  const find = (path) => records.find((item) => item.path === path);
-  const from = find(source), to = find(dependent);
-  if (!from || !to) return null;
-  if (from.path === to.path) return null;
-  return { reason, source: { path: from.path, revision: from.revision }, dependent: { path: to.path, revision: to.revision } };
+export function problemText(problem) {
+  return (PROBLEMS[problem.code] || problem.code) + (problem.detail ? " (" + problem.detail + ")" : "");
 }
 
-// The sentence a declaration is reviewed in.
-export function declarationText(plan) {
-  if (plan.already_applied) return "This was already recorded: recording it again changes nothing.";
-  return "Record that " + recordText(plan.dependent) + " rests on " + recordText(plan.source) + " (" + declaredText(plan.reason) + ").";
+// One scene of a thread in words: which chat (this one, or another of the campaign's), and the turns of it the
+// thread passes through, by number where they can be opened.
+export function sceneText(scene, entries, chat) {
+  const numbers = [];
+  for (const entry of entries) {
+    if (!scene.records.includes(entry.record) || !entry.source || !entry.source.number || entry.source.set_aside) continue;
+    if (!numbers.includes(entry.source.number)) numbers.push(entry.source.number);
+  }
+  numbers.sort((a, b) => a - b);
+  const where = scene.chat === null ? (scene.scene ? "Scene " + scene.scene : "Outside any chat")
+    : scene.chat === chat ? "This chat" : "Another chat of this campaign";
+  const turns = numbers.length === 0 ? "" : numbers.length === 1 ? ", turn " + numbers[0] : ", turns " + numbers.join(", ");
+  return where + turns;
 }

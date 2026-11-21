@@ -2,11 +2,11 @@
   "contract": 1,
   "id": "story",
   "route": "story",
-  "title": "Story",
+  "title": "Story threads",
   "slot": "hidden",
-  "order": 25,
-  "owner": "115",
+  "order": 10,
+  "owner": "081",
   "entry": "page.js",
-  "requires": ["campaign.chats", "story.divergent", "story.scenes", "story.preview"],
+  "requires": ["story.threads", "story.thread"],
   "unavailable": null
 }
