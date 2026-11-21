@@ -73,6 +73,16 @@ function group(ui, label, ...children) {
   return ui.el("div", { class: "g-stack forks-group", role: "group", "aria-label": label }, ...children);
 }
 
+
+// Where a retained fork stands on this device (forks.divergent's `state`), as a pill and a sentence.
+const FORK_STATES = {
+  reconciled: ["Reconciled here", "This device holds the restored scenes and the accepted effects ordinary sync brought across, each once."],
+  played_on: ["Reconciled, played on since", "What ordinary sync owed this device is no longer as it was before the fork, and play went on here since: nothing of the fork is waiting. Sync applies each accepted effect once."],
+  waiting: ["Waiting on sync", "Ordinary sync still has to bring the accepted effects across; it applies each once."],
+  elsewhere: ["Made on other devices", ""],
+};
+const forkState = (fork) => (FORK_STATES[fork.state] ? fork.state : fork.reconciled_here ? "reconciled" : "waiting");
+
 function chatText(chatNames, chat) {
   if (!chat) return "";
   return chatNames.get(chat) || chat.split("#chat/").pop();
@@ -183,10 +193,10 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
       + "of a scene it restored. The originals stay history: none of them becomes the story or anyone's memory."),
     ...forks.map((fork) => el("article", { class: "g-stack forks-scene", "aria-label": "Retained fork: " + fork.operation },
       el("div", { class: "g-row" }, el("strong", { class: "g-grow" }, "Restored from " + fork.source_device),
-        ui.pill(fork.reconciled_here ? "Reconciled here" : "Waiting on sync", { kind: fork.reconciled_here ? "good" : "" })),
-      el("p", { class: "g-muted" }, fork.reconciled_here
-        ? "This device holds the restored scenes and the accepted effects ordinary sync brought across, each once."
-        : "Ordinary sync still has to bring the accepted effects across; it applies each once."),
+        ui.pill(FORK_STATES[forkState(fork)][0], { kind: fork.reconciled_here ? "good" : "" })),
+      el("p", { class: "g-muted" }, forkState(fork) === "elsewhere"
+        ? "This fork was made between " + (fork.devices || []).join(" and ") + "; this device keeps its record."
+        : FORK_STATES[forkState(fork)][1]),
       ...fork.scenes.map((scene) => el("div", { class: "g-stack" },
         el("div", {}, el("strong", {}, "Scene " + (scene.number || "") + (scene.chat ? " · " + chatText(chatNames, scene.chat) : "")),
           el("span", { class: "g-muted" }, " · " + (scene.here === "restored" ? "restored here" : scene.here === "original" ? "still this device's original here" : "changed since"))),

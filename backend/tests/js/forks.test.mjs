@@ -371,3 +371,24 @@ test("taking a version is said with its deletion and its uncertainty", () => {
   assert.equal(logic.takingText("tablet", null, { deletion: true }), "Taking the deletion from tablet cannot be reviewed here.");
   assert.equal(logic.takingText("tablet", { reasons: [] }, { deletion: true }), "Taking the deletion from tablet here leaves no recorded premise unmet.");
 });
+
+test("a retained fork says whether it waits on sync, was reconciled, or play went on since", async () => {
+  const fork = (operation, extra) => ({ operation, source_device: "desktop", devices: ["desktop", "phone"], source_revisions: 1,
+    scenes: [{ path: SCENE.path, number: 1, chat: SCENE.chat, here: "restored",
+      variants: [{ device: "desktop", selected: true, said: "Wren gives Tam the iron key." }, { device: "phone", selected: false, said: "The key is lost." }] }],
+    ...extra });
+  const { root, done } = mounted({ divergent: () => ({ ...NOTHING_DIVERGENT, retained: [
+    fork("keep-1", { state: "waiting", reconciled_here: false }), fork("keep-2", { state: "reconciled", reconciled_here: true }),
+    fork("keep-3", { state: "played_on", reconciled_here: true }), fork("keep-4", { state: "elsewhere", reconciled_here: false }),
+    fork("keep-5", { reconciled_here: true })] }) });
+  await done;
+  const said = (operation) => root.querySelectorAll("article").find((node) => node.getAttribute("aria-label") === "Retained fork: " + operation);
+  const pill = (operation) => said(operation).querySelector("span").textContent;
+  assert.equal(pill("keep-1"), "Waiting on sync");
+  assert.equal(pill("keep-2"), "Reconciled here");
+  assert.equal(pill("keep-3"), "Reconciled, played on since", "a later turn is never shown as a fork still waiting");
+  assert.ok(said("keep-3").textContent.includes("nothing of the fork is waiting"));
+  assert.equal(pill("keep-4"), "Made on other devices");
+  assert.ok(said("keep-4").textContent.includes("This fork was made between desktop and phone"));
+  assert.equal(pill("keep-5"), "Reconciled here", "an answer without a state still reads");
+});
