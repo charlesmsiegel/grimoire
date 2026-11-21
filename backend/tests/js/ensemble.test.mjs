@@ -37,6 +37,15 @@ test("a saved plan is read back with whatever no longer fits the cast dropped", 
   assert.deepEqual(logic.readState("", present), logic.blankState(present));
 });
 
+test("a bid saved for an NPC since handed to a player is dropped, never sent", () => {
+  const handed = present.map((item) => (item.actor === MARA ? { ...item, role: "player" } : item));
+  const saved = JSON.stringify({ initiator: ANYA, bids: { [MARA]: bid({}), [TAM]: bid({ kind: "aside" }) } });
+  assert.deepEqual(Object.keys(logic.readState(saved, handed).bids), [TAM]);
+  const kept = { ...logic.blankState(handed), bids: { [MARA]: bid({}), [TAM]: bid({ kind: "aside", heard: "1" }) } };
+  assert.deepEqual(logic.requestOf(kept, handed, "c").request.bids.map((item) => item.actor), [TAM],
+    "a bid still held in the form is not sent for a player's character either");
+});
+
 test("the form is the preview request, and each gap is named before anything is asked", () => {
   const state = { ...logic.blankState(present), addressees: [MARA], floor: MARA,
     bids: { [MARA]: bid({ addressees: [ANYA] }), [TAM]: bid({ kind: "aside", addressees: [MARA], audience: [MARA], grounding: "heard", heard: "2" }) } };

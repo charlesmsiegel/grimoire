@@ -32,13 +32,15 @@ export function blankState(present) {
 // The saved form, read back: anything that no longer fits the cast here is dropped, never sent.
 export function readState(text, present) {
   const here = new Set(present.map((item) => item.actor));
+  // Only an NPC bids: a character handed to a player since the bid was saved loses it (051 refuses `player_speaker`).
+  const npcs = new Set(present.filter((item) => item.role === "npc").map((item) => item.actor));
   let state;
   try { state = JSON.parse(text); } catch (error) { state = null; }
   if (!state || typeof state !== "object") return blankState(present);
   const keep = (list) => (Array.isArray(list) ? list.filter((actor) => here.has(actor)) : []);
   const bids = {};
   for (const [actor, bid] of Object.entries(state.bids || {})) {
-    if (!here.has(actor) || !bid || typeof bid !== "object") continue;
+    if (!npcs.has(actor) || !bid || typeof bid !== "object") continue;
     bids[actor] = { kind: String(bid.kind || ""), addressees: keep(bid.addressees), audience: keep(bid.audience),
       reason: String(bid.reason || ""), grounding: String(bid.grounding || ""), heard: String(bid.heard || ""), beat: String(bid.beat || "") };
   }
@@ -52,6 +54,7 @@ export function requestOf(state, present, chat) {
   const everyone = present.map((item) => item.actor);
   const bids = [];
   for (const member of present) {
+    if (member.role !== "npc") continue;
     const bid = state.bids[member.actor];
     if (!bid || !bid.kind) continue;
     const name = member.name || member.actor;

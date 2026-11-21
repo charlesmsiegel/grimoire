@@ -97,7 +97,8 @@ NPC) and what it rests on. `ensemble.preview` answers the floor 051's pure `sche
   no per-line audience yet, and no review owner takes an exchange into the story. The preview says how many calls
   a run would make; neither step is offered as a control.
 - The bids being written are a draft of the tab, kept across leaving the page; a change takes the old preview
-  away, and an answer to a preview asked before the change is never drawn.
+  away, and an answer to a preview asked before the change is never drawn. A bid kept for a character handed to a
+  player since (on Shared turn) is dropped when the draft is read back and is never sent (`js/ensemble.test.mjs`).
 
 ## Captured companions (050)
 
