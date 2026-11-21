@@ -72,17 +72,17 @@ person may cite for that character, newest first.
 | 067 | Voice accessibility | in a chat | `test_app_speech.py` | the browser has no speech: the controls say so |
 | 070 | Circling a spot on a sketch | in a chat | `test_reference_intent_page.py`, `js/reference.e2e.mjs` | |
 | 072 | VN cues | in a chat | `js/staging.test.mjs`, `js/staging_timeline.test.mjs` | no art: plain-text stage directions |
+| 059 | Places and routes | `world` | `test_app_world.py`, `js/world.e2e.mjs` | a missing place refuses `missing_place`; a stale review refuses `changed`; weighted routes, hazards, travel and maps are named as not available |
+| 063 | Rumors | `world` | `test_app_world.py`, `js/world.e2e.mjs` | a rumor still on its way refuses `not_delivered`; sending, delivering and faction or public spread are named as not available |
+| 057 | Faction decisions | `world` | `test_app_world.py`, `js/world.e2e.mjs` | the table's view says only that the page is the director's; a player's character refuses `npc_authority`; nothing is saved |
+| 060 | What an NPC thinks others think | `world` | `test_app_world.py`, `js/world.e2e.mjs` | evidence the NPC does not hold refuses `unavailable_evidence`; nothing is saved and nothing is inferred |
 | 049 | Reconciling divergent offline scenes | not on a screen yet | | Devices and sync keeps one side of a conflicting file and keeps the other |
 | 054 | Reviewing a fork or retcon | not on a screen yet | | |
 | 050 | Captured companions | not on a screen yet | | |
 | 051 | Several NPCs answering at once | not on a screen yet | | |
 | 056 | Source catalogs | not on a screen yet | | a campaign opts in through its chats' bindings |
-| 057 | Faction decisions | not on a screen yet | | |
 | 058 | Two players at one screen | not on a screen yet | | |
-| 059 | Places and routes | not on a screen yet | | |
-| 060 | What an NPC thinks others think | not on a screen yet | | |
 | 062 | Ruleset action contracts | not on a screen yet | | |
-| 063 | Rumors | not on a screen yet | | |
 | 064 | Scenario preparation | not on a screen yet | | |
 
 "Not on a screen yet" is said on the page, with the reason, and never offered as a control. Those rows are the

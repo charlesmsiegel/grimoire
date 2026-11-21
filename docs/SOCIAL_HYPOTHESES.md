@@ -67,3 +67,7 @@ snapshot/revision checks atomically. Existing knowledge remains owned by
 Rumor delivery, offscreen simulation, full strategic agents and the Wave 8 UI exit
 are separate work. These tests do not establish live social plausibility or
 provider cost/quality measurements.
+
+## On screen
+
+The director's World page (115) previews an NPC's hypotheses and the tactic they propose, in memory, and saves nothing; see [WORLD](WORLD.md).

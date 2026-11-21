@@ -53,7 +53,10 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   // the campaign's clock and its characters' memory (115), for the same chat and view
   const chronicle = ctx.registered("chronicle") ? ui.buttonLink("Chronicle", "chronicle", [campaign],
     { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
-  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle,
+  // the campaign's places, rumors, factions and NPC minds (115): the director's alone
+  const world = ctx.registered("world") && audience === "director" && chat
+    ? ui.buttonLink("World", "world", [campaign], { chat, audience: "director" }, { size: "small" }) : null;
+  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, world,
     chats.length ? el("span", { class: "g-muted" }, count(chats.length, "chat") + " in this campaign") : null,
     el("nav", { class: "g-chips", "aria-label": "This campaign's chats" }, chips));
   root.append(el("div", { class: "g-stack campaign-top" }, cover, nav));

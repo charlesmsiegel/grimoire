@@ -30,3 +30,7 @@ Requests and explicit attempts are stored in the hash-chained `rumors/<campaign>
 | Inferring proximity, affiliation, channel or attention; supplying delivery conditions from the world | 063 later |
 | Admitting a belief on receipt without the director's act | 063 later |
 | Any UI for authoring, tracing or delivering rumors | 115 |
+
+## On screen
+
+The director's World page (115) traces a campaign's rumors on its calendar and admits a delivered rumor's recipient's belief, reviewed first; it neither sends nor delivers one. See [WORLD](WORLD.md).

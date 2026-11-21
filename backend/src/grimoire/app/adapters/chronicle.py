@@ -342,7 +342,8 @@ def _remember(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
 
 # -- what the rest of Wave 8 offers on screen ------------------------------------------------------------------
 #: Every user-facing Wave 8 first slice (049-072), where its controls are, or what it waits on. ``here`` is this
-#: page; ``screen`` names another page's route; ``unavailable`` is said plainly, never offered as a button. The
+#: page; ``screen`` names another page's route (``campaign``: its address is this campaign's, for the same chat, in
+#: the director's view); ``unavailable`` is said plainly, never offered as a button. The
 #: purely internal and evaluation slices (066, 068, 069, 071) have no screen and are not listed. docs/CHRONICLE.md
 #: keeps the same table with each one's test.
 FEATURES = (
@@ -358,6 +359,14 @@ FEATURES = (
      "where": "in a chat: a circled spot carried with the post"},
     {"slice": "072", "title": "VN cues", "status": "screen", "route": "chats",
      "where": "in a chat: the cue timeline, its blocking, focus and transitions"},
+    {"slice": "059", "title": "Places and routes", "status": "screen", "route": "world", "campaign": True,
+     "where": "World, the director's: places, roads blocked in this campaign and routes between exact places"},
+    {"slice": "063", "title": "Rumors", "status": "screen", "route": "world", "campaign": True,
+     "where": "World, the director's: who told whom, when it arrives, and the recipient's belief admitted"},
+    {"slice": "057", "title": "Faction decisions", "status": "screen", "route": "world", "campaign": True,
+     "where": "World, the director's: a leader's choice previewed with its dissent; nothing is saved"},
+    {"slice": "060", "title": "What an NPC thinks others think", "status": "screen", "route": "world",
+     "campaign": True, "where": "World, the director's: an NPC's hypotheses and its tactic previewed; nothing is saved"},
     {"slice": "049", "title": "Reconciling divergent offline scenes", "status": "unavailable",
      "reason": "049's semantic reconciliation is headless; Devices and sync resolves a conflicting file by keeping "
                "one side, and keeps the other"},
@@ -369,18 +378,10 @@ FEATURES = (
      "reason": "051 schedules an exchange headlessly; play does not run one yet"},
     {"slice": "056", "title": "Source catalogs", "status": "unavailable",
      "reason": "056's catalog composition is headless; a campaign opts in only through its chats' bindings"},
-    {"slice": "057", "title": "Faction decisions", "status": "unavailable",
-     "reason": "057 is a pure first slice: a leader's explicit choice, with no stored institutions"},
     {"slice": "058", "title": "Two players at one screen", "status": "unavailable",
      "reason": "058 holds each local player's draft in memory; its drafting screen is not built yet"},
-    {"slice": "059", "title": "Places and routes", "status": "unavailable",
-     "reason": "059's location topology is headless and the director's"},
-    {"slice": "060", "title": "What an NPC thinks others think", "status": "unavailable",
-     "reason": "060's hypotheses are authored and in memory only, never wired into play"},
     {"slice": "062", "title": "Ruleset action contracts", "status": "unavailable",
      "reason": "062's results are noncanonical proposals; dice and durable resolution are 075"},
-    {"slice": "063", "title": "Rumors", "status": "unavailable",
-     "reason": "063's rumor ledger is headless and not synced"},
     {"slice": "064", "title": "Scenario preparation", "status": "unavailable",
      "reason": "064's generator has no store reader or app service, and each call is a billed model call"},
 )

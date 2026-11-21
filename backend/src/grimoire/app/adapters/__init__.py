@@ -22,6 +22,10 @@ from . import chronicle  # noqa: E402 -- 115's campaign clock and sourced memory
 
 ADAPTERS = tuple(sorted((*ADAPTERS, chronicle.ADAPTER, dictation.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import world  # noqa: E402 -- 115's places, rumors, faction decisions and NPC minds (docs/WORLD.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, world.ADAPTER), key=lambda adapter: adapter.name))
+
 from . import voicecast  # noqa: E402 -- 083's voice casting and character voice performance (docs/VOICE_CASTING.md)
 
 ADAPTERS = tuple(sorted((*ADAPTERS, voicecast.ADAPTER), key=lambda adapter: adapter.name))
