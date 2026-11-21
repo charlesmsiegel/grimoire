@@ -141,12 +141,15 @@ test("a campaign's clock and memory, each change reviewed before it is made", { 
   assert.ok(topic.textContent.includes("The visitor was Sister Maren in disguise.") && topic.textContent.includes("Current"));
   assert.ok(topic.textContent.includes("Rests on: The hood falls in the crypt"));
 
-  // what Wave 8 has on other screens is linked; what has none yet is named, never offered
+  // what Wave 8 has on other screens is linked, and every slice has one
   const features = section(main, "Campaign features");
   assert.ok(byText(features, "a", "Private local voice").length);
   const world = byText(features, "a", "What an NPC thinks others think").find((node) => node.getAttribute("href").startsWith("#/world/" + encodeURIComponent(campaign)));
   assert.ok(world && world.getAttribute("href").includes("chat="), "the World page is linked for this campaign and chat");
   const story = byText(features, "a", "Reviewing a fork or retcon");
   assert.ok(story.length && story[0].getAttribute("href").startsWith("#/forks/" + encodeURIComponent(campaign)), "the story review is linked");
-  assert.ok(byText(features, "strong", "Captured companions is not available yet").length, "a slice with no screen yet is named");
+  const companions = byText(features, "a", "Captured companions");
+  assert.ok(companions.length && companions[0].getAttribute("href").startsWith("#/companions/" + encodeURIComponent(campaign)),
+    "the companions screen is linked for this campaign");
+  assert.ok(!byText(features, "strong", "is not available yet").length, "every Wave 8 slice is on a screen");
 });
