@@ -275,7 +275,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 ### Wave 8 — Reliable long-term use and independent enhancements
 
-- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (19/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
+- [ ] **Wave 8 complete for its scheduled first slices and exit gate** (20/24 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-8)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
@@ -308,7 +308,7 @@ All ten first slices are merged as **headless libraries with synthetic tests**; 
 
 | # | Complete | UI exit sprint | Priority | Delivery order | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
-| 115 | [☐](IMPLEMENTATION_AUDIT.md#slice-115) | [Wave 8 UI Exit: Reliable Campaign Play](sprints/wave-8-ui-exit.md) | **P0 (wave gate)** | After 108–114 and this wave's relevant domain first slices; integrate only merged features | frontend / campaign reliability and advanced navigation | Resolve an offline fork, review a retcon, view clock/party/story state and resume the same chat; add controls for every Wave 8 user-facing first slice |
+| 115 | [☑](IMPLEMENTATION_AUDIT.md#slice-115) | [Wave 8 UI Exit: Reliable Campaign Play](sprints/wave-8-ui-exit.md) | **P0 (wave gate)** | After 108–114 and this wave's relevant domain first slices; integrate only merged features | frontend / campaign reliability and advanced navigation | Resolve an offline fork, review a retcon, view clock/party/story state and resume the same chat; add controls for every Wave 8 user-facing first slice |
 
 The wave is not **user-visible complete** until its implemented user-facing domain first slices pass the UI acceptance in [UI coverage](UI_COVERAGE.md#later-wave-ui-exit-matrix); do not block domain merges or show unavailable capabilities as working.
 
