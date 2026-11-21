@@ -56,7 +56,10 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   // the campaign's places, rumors, factions and NPC minds (115): the director's alone
   const world = ctx.registered("world") && audience === "director" && chat
     ? ui.buttonLink("World", "world", [campaign], { chat, audience: "director" }, { size: "small" }) : null;
-  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, world,
+  // its divergent offline scenes and the review of a retcon or fork (115), the director's
+  const forks = ctx.registered("forks") ? ui.buttonLink("Forks", "forks", [campaign],
+    { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
+  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, world, forks,
     chats.length ? el("span", { class: "g-muted" }, count(chats.length, "chat") + " in this campaign") : null,
     el("nav", { class: "g-chips", "aria-label": "This campaign's chats" }, chips));
   root.append(el("div", { class: "g-stack campaign-top" }, cover, nav));

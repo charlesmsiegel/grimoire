@@ -207,11 +207,10 @@ test("the director's world: places, rumors, a faction's choice and an NPC's mind
   assert.equal(input(mind, "What Mara Vell thinks they think").value, "Anya is bluffing too.");
   assert.ok(mind.textContent.includes("h2: what"), "the written hypotheses are kept until cleared");
 
-  // the chronicle links the World page for its slices; what has no screen yet is still named
+  // the chronicle links the World page for its slices (chronicle.e2e.mjs checks what has no screen yet is named)
   window.location.hash = "#/chronicle/" + encodeURIComponent(campaign) + "?chat=" + encodeURIComponent(chat) + "&audience=director";
   const features = await until(() => section(main, "Campaign features"), 15000, "the chronicle");
   const rumorLink = byText(features, "a", "Rumors").find((node) => node.getAttribute("href").startsWith("#/world/"));
   assert.ok(rumorLink && rumorLink.getAttribute("href").includes("audience=director"));
   assert.ok(byText(features, "a", "What an NPC thinks others think").length);
-  assert.ok(byText(features, "strong", "Reviewing a fork or retcon is not available yet").length);
 });
