@@ -1,4 +1,4 @@
-// Sprint 115's Story page without the app: its logic (the words a record, a review or a sync is said in, the
+// Sprint 115's Forks page without the app: its logic (the words a record, a review or a sync is said in, the
 // request a declaration makes, the guard against late answers), and the page mounted with canned answers: a late
 // preview never draws over a choice made since, an unpreviewed alternative is kept per campaign, a retried
 // declaration reuses its operation id, a stale one is reviewed again, and what is typed while a request is on
@@ -14,8 +14,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = path.join(here, "..", "..", "src", "grimoire", "app", "static");
 install("http://127.0.0.1:1");
 const ui = await import(pathToFileURL(path.join(STATIC, "shell", "ui.js")).href);
-const page = await import(pathToFileURL(path.join(STATIC, "pages", "story", "page.js")).href);
-const logic = await import(pathToFileURL(path.join(STATIC, "pages", "story", "logic.js")).href);
+const page = await import(pathToFileURL(path.join(STATIC, "pages", "forks", "page.js")).href);
+const logic = await import(pathToFileURL(path.join(STATIC, "pages", "forks", "logic.js")).href);
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const settle = async (n = 20) => { for (let i = 0; i < n; i += 1) await tick(); };
@@ -54,9 +54,9 @@ function mounted(answers, { campaign = "c1", drafts = new Map(), notes = [] } = 
     api: async (op, args) => {
       calls.push({ op, args });
       if (op === "campaign.chats") return { complete: true, campaigns: [{ campaign, chats: [{ chat: "campaign:" + campaign + "#chat/t-1" }] }] };
-      if (op === "story.divergent") return answers.divergent ? answers.divergent(args) : NOTHING_DIVERGENT;
-      if (op === "story.scenes") return answers.scenes ? answers.scenes(args) : scenesOf(campaign);
-      const name = op.replace("story.", "");
+      if (op === "forks.divergent") return answers.divergent ? answers.divergent(args) : NOTHING_DIVERGENT;
+      if (op === "forks.scenes") return answers.scenes ? answers.scenes(args) : scenesOf(campaign);
+      const name = op.replace("forks.", "");
       if (answers[name]) return answers[name](args);
       throw new Error("unexpected " + op);
     },
@@ -198,11 +198,11 @@ test("a declaration retried after a failure is made with the operation id it was
   assert.ok(review(), "a failed commit leaves the review up to retry");
   button(review(), "Make this change").click();
   await settle();
-  const made = calls.filter((call) => call.op === "story.declare_commit").map((call) => call.args);
+  const made = calls.filter((call) => call.op === "forks.declare_commit").map((call) => call.args);
   assert.equal(made.length, 2);
   assert.equal(made[0].operation_id, made[1].operation_id, "the retry names the same operation");
   assert.equal(made[0].expected, made[1].expected, "and the snapshot revision as reviewed");
-  assert.equal(made[0].operation_id, calls.find((call) => call.op === "story.declare_plan").args.operation_id);
+  assert.equal(made[0].operation_id, calls.find((call) => call.op === "forks.declare_plan").args.operation_id);
   assert.ok(notes.some((note) => note.includes("already recorded")), notes.join("|"));
   assert.ok(!review(), "the review is closed once made");
 });
@@ -225,7 +225,7 @@ test("a declaration the campaign moved past is reviewed again, never made", asyn
   await settle();
   assert.ok(form(), "the form is back, to review against what the campaign is now");
   assert.equal(reads, 2, "the records were read again");
-  assert.equal(calls.filter((call) => call.op === "story.declare_commit").length, 1);
+  assert.equal(calls.filter((call) => call.op === "forks.declare_commit").length, 1);
 });
 
 test("what is typed while a request is on its way is kept when its answer is drawn", async () => {
@@ -262,7 +262,7 @@ test("a divergent scene's card picks it for a preview, and keeping one side is r
   button(article, "Preview a retcon of this scene").click();
   await settle();
   assert.ok(box(root, SCENE.path).checked, "the scene is shown picked");
-  const asked = calls.filter((call) => call.op === "story.preview").map((call) => call.args);
+  const asked = calls.filter((call) => call.op === "forks.preview").map((call) => call.args);
   assert.deepEqual(asked.at(-1).roots, [{ path: SCENE.path, revision: SCENE.revision }]);
   assert.ok(region(root).textContent.includes("Accepted event: tam pays ines."));
   for (const item of UNAVAILABLE) assert.ok(root.textContent.includes(item.what + " is not available yet."), item.what);
@@ -285,7 +285,7 @@ test("a review that cannot be read says why, and the divergent scenes are still 
   assert.ok(box(root, SCENE.path), "read again, the records are offered");
 });
 
-// A kept scene as story.divergent answers it; `extra` overrides.
+// A kept scene as forks.divergent answers it; `extra` overrides.
 const divergentScene = (path_, number, extra = {}) => ({ path: path_, kind: "scene", chat: SCENE.chat, number, keep_one: "refused",
   detected: ["phone"], peers: ["phone"], their_deletion: false, deleted_by: [], taking_deletion: null, uncertain: false, continues: null,
   mine: { etag: "a", deleted: false, peers: [], said: "mine", set_aside: false, unreadable: false },
@@ -294,7 +294,7 @@ const divergentScene = (path_, number, extra = {}) => ({ path: path_, kind: "sce
 const article = (root, label) => root.querySelectorAll("article").find((node) => node.getAttribute("aria-label") === label);
 
 test("uncertain ancestry and a divergent continuation are shown as refused, with why", async () => {
-  // the real server's shape for a legacy payment (test_app_story.py): 049's admission check sees nothing unmet,
+  // the real server's shape for a legacy payment (test_app_forks.py): 049's admission check sees nothing unmet,
   // and the uncertainty is the snapshot's, in `uncertain` and `ancestry`
   const ANCESTRY = "campaigns/c1/accepted/e-1.json: incomplete scene provenance: invalid or unsupported continuity_sources";
   const { root, done } = mounted({ divergent: () => ({ ...NOTHING_DIVERGENT, ancestry: [ANCESTRY],
@@ -330,14 +330,14 @@ test("a deletion is shown under the devices that deleted it, with what taking it
     divergentScene(LATER.path, 2, { mine: { etag: null, deleted: true, peers: [], said: null, set_aside: false, unreadable: false } })] }) });
   await done;
   const deleted = article(root, "Divergent: Scene 1 · t-1");
-  const sides = deleted.querySelectorAll("div").filter((node) => node.classList.contains("story-side"));
+  const sides = deleted.querySelectorAll("div").filter((node) => node.classList.contains("forks-side"));
   assert.deepEqual(sides.map((node) => node.querySelector("div").textContent), ["This device", "tablet"], "titled by who deleted it, not every peer");
   assert.equal(sides[1].querySelector("p").textContent, "Deleted on tablet.");
   assert.ok(deleted.textContent.includes("Taking the deletion from tablet here would break what rests on it: an accepted event rests on a scene that would be missing."));
   assert.ok(deleted.textContent.includes("Refused: it would leave a recorded premise missing."), "a deletion leaving an event without its scene is refused");
   assert.ok(!deleted.textContent.includes("ancestry is uncertain") && !deleted.textContent.includes("not on record"),
     "what rests on it is on record: it is never called uncertain");
-  const mine = article(root, "Divergent: Scene 2 · t-1").querySelectorAll("div").filter((node) => node.classList.contains("story-side"))[0];
+  const mine = article(root, "Divergent: Scene 2 · t-1").querySelectorAll("div").filter((node) => node.classList.contains("forks-side"))[0];
   assert.equal(mine.querySelector("p").textContent, "Deleted on this device.");
 });
 
@@ -360,7 +360,7 @@ test("a review refused because the records moved on reads them again, and the ne
   assert.equal(reads, 2, "the records were read again");
   button(form(), "Review").click();  // the picks are kept across the reload
   await settle();
-  const sent = calls.filter((call) => call.op === "story.declare_plan").map((call) => call.args.expected);
+  const sent = calls.filter((call) => call.op === "forks.declare_plan").map((call) => call.args.expected);
   assert.deepEqual(sent, ["sha256:" + "1".repeat(64), "sha256:" + "2".repeat(64)], "the second review names the revision read since");
   assert.ok(retcon(root).querySelectorAll("div").find((node) => node.getAttribute("aria-label") === "Review this change"));
 });

@@ -75,7 +75,7 @@ export function takingText(peer, review, { uncertain = false, deletion = false }
   return "Taking " + what + " here would break what rests on it: " + review.reasons.map(semanticText).join("; ") + ".";
 }
 
-// What one device's last sync did, from story.divergent's peers.
+// What one device's last sync did, from forks.divergent's peers.
 export function syncText(peer) {
   if (!peer.status) return "No sync with " + peer.peer + " since the app started.";
   const held = peer.held.length;

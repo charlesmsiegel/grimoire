@@ -1,4 +1,4 @@
-"""Sprint 115's Story page and its ``story.*`` adapter ops, through 108's shell contract.
+"""Sprint 115's Forks page and its ``forks.*`` adapter ops, through 108's shell contract.
 
 The adapter serves 049's semantic reconciliation and 054's continuity review over the app's open library. The
 proving scenario runs as a screen would, on two synthetic paired devices with their own durable authorities: the
@@ -8,7 +8,7 @@ keeps both versions; the director sees both, sees that keeping one side is refus
 of the scene would touch, and records (reviewed first, made once) that the dialogue rests on the payment. The
 scene is then restored as a retained fork by 054's owner operation, which needs both libraries open on one
 machine and so runs outside the app; the next sync from the app brings the payment across exactly once, and the
-page shows the fork reconciled. The page itself runs end to end under Node (``js/story.e2e.mjs``). Synthetic
+page shows the fork reconciled. The page itself runs end to end under Node (``js/forks.e2e.mjs``). Synthetic
 libraries; no model is called.
 """
 
@@ -31,7 +31,7 @@ from test_effect_continuity import write_turn
 from test_peersync_ledger import _accept
 
 from grimoire.app import AppServer
-from grimoire.app.adapters import story as story_adapter
+from grimoire.app.adapters import forks as forks_adapter
 from grimoire.app.adapters.chronicle import FEATURES
 from grimoire.app.appapi import AppApi
 from grimoire.app.pages import load_pages
@@ -110,7 +110,7 @@ def accepted(device) -> int:
 
 
 def scenes(app: AppApi) -> dict:
-    return app.call("story.scenes", {"campaign": "c", **DIRECTOR})
+    return app.call("forks.scenes", {"campaign": "c", **DIRECTOR})
 
 
 def pin(view: dict, path: str) -> dict:
@@ -124,34 +124,34 @@ def payment(view: dict) -> str:
 
 def test_the_page_registers_hidden_on_its_own_route_and_the_chronicle_links_it():
     pages = {page.id: page for page in load_pages(STATIC)}
-    page = pages["story"]
-    assert (page.route, page.slot, page.owner) == ("story", "hidden", "115")
-    assert set(page.requires) == {"campaign.chats", "story.divergent", "story.scenes", "story.preview"}
+    page = pages["forks"]
+    assert (page.route, page.slot, page.owner) == ("forks", "hidden", "115")
+    assert set(page.requires) == {"campaign.chats", "forks.divergent", "forks.scenes", "forks.preview"}
     rows = {item["slice"]: item for item in FEATURES}
     assert rows["049"]["status"] == rows["054"]["status"] == "screen"
-    assert rows["049"]["route"] == rows["054"]["route"] == "story"
+    assert rows["049"]["route"] == rows["054"]["route"] == "forks"
 
 
 def test_every_op_is_the_directors(desktop):
     before = snapshot(desktop.api.store.root)
-    for op, args in (("story.divergent", {}), ("story.scenes", {}),
-                     ("story.preview", {"action": "edit", "roots": [{"path": SCENE, "revision": "sha256:" + "0" * 64}]}),
-                     ("story.declare_plan", {"operation_id": "x"}), ("story.declare_commit", {"operation_id": "x"})):
+    for op, args in (("forks.divergent", {}), ("forks.scenes", {}),
+                     ("forks.preview", {"action": "edit", "roots": [{"path": SCENE, "revision": "sha256:" + "0" * 64}]}),
+                     ("forks.declare_plan", {"operation_id": "x"}), ("forks.declare_commit", {"operation_id": "x"})):
         assert refused(desktop, op, campaign="c", **args).reason == "director_only"
         assert refused(desktop, op, campaign="c", audience="table", **args).reason == "director_only"
         assert refused(desktop, op, campaign="c", audience="everyone", **args).reason == "invalid_field"
-    assert refused(desktop, "story.scenes", campaign="nowhere", **DIRECTOR).reason == "no_campaign"
-    assert refused(desktop, "story.scenes", campaign="../c", **DIRECTOR).reason == "invalid_field"
+    assert refused(desktop, "forks.scenes", campaign="nowhere", **DIRECTOR).reason == "no_campaign"
+    assert refused(desktop, "forks.scenes", campaign="../c", **DIRECTOR).reason == "invalid_field"
     assert snapshot(desktop.api.store.root) == before
 
 
 def test_a_divergent_scene_keeps_both_versions_and_keeping_one_side_is_refused(pair, desktop):
-    quiet = desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})
+    quiet = desktop.call("forks.divergent", {"campaign": "c", **DIRECTOR})
     assert quiet["scenes"] == [] and quiet["peers"] == [] and quiet["retained"] == []
     report = desktop.call("media.sync", {"peer": PHONE})
     assert report["status"] == "conflicts"
     before = snapshot(pair[DESKTOP].store.root)
-    found = desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})
+    found = desktop.call("forks.divergent", {"campaign": "c", **DIRECTOR})
     assert snapshot(pair[DESKTOP].store.root) == before  # reading writes nothing
     (scene,) = found["scenes"]
     assert scene["path"] == SCENE and scene["number"] == 1 and scene["chat"] == "campaign:c#chat/t-1"
@@ -173,7 +173,7 @@ def test_a_divergent_scene_keeps_both_versions_and_keeping_one_side_is_refused(p
     result = desktop.call("media.resolve", {"peer": PHONE, "path": SCENE, "keep": "mine", "mine": conflict["mine"]["etag"],
                                             "theirs": [item["etag"] for item in conflict["theirs"]]})
     assert result["status"] == "refused"
-    assert len(desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["scenes"]) == 1
+    assert len(desktop.call("forks.divergent", {"campaign": "c", **DIRECTOR})["scenes"]) == 1
 
 
 def legacy_history(pair) -> None:
@@ -193,7 +193,7 @@ def legacy_history(pair) -> None:
 def test_a_divergent_continuation_and_an_uncertain_ancestry_show_as_refused(pair, desktop):
     legacy_history(pair)
     assert desktop.call("media.sync", {"peer": PHONE})["status"] == "conflicts"
-    found = {item["path"]: item for item in desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["scenes"]}
+    found = {item["path"]: item for item in desktop.call("forks.divergent", {"campaign": "c", **DIRECTOR})["scenes"]}
     assert set(found) == {SCENE, LATER}
     assert found[LATER]["continues"] == SCENE and found[SCENE]["continues"] is None
     assert found[LATER]["mine"]["said"] == DIALOGUE and found[LATER]["theirs"][0]["said"] == "Tam mourns the key."
@@ -203,7 +203,7 @@ def test_a_divergent_continuation_and_an_uncertain_ancestry_show_as_refused(pair
         # 049's admission check sees nothing unmet: the uncertainty is the snapshot's, so the page must read
         # `uncertain` (and `ancestry`), never the per-version review alone (the e2e "uncertain" phase shows it)
         assert [(review["reasons"], review["uncertain"]) for review in item["taking_theirs"]] == [([], False)]
-    (problem,) = desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["ancestry"]
+    (problem,) = desktop.call("forks.divergent", {"campaign": "c", **DIRECTOR})["ancestry"]
     assert "/accepted/" in problem and "scene provenance" in problem
 
 
@@ -211,7 +211,7 @@ def test_taking_another_devices_deletion_is_reviewed_and_titled_by_who_deleted(p
     """A kept deletion is listed under the devices that deleted it, and taking it here is 049's own admission
     check with the file removed. (A turn cannot be deleted in this store, so the conflict is listed as Devices
     and sync would list one for a deleted record; the review runs over the real library.)"""
-    real = story_adapter.media_of
+    real = forks_adapter.media_of
 
     class Listed:
         def __init__(self, api):
@@ -227,9 +227,9 @@ def test_taking_another_devices_deletion_is_reviewed_and_titled_by_who_deleted(p
                     "peers": [{"peer": PHONE, "versions": [], "deleted": True}]}
             return {**answer, "conflicts": [*answer["conflicts"], item]}
 
-    monkeypatch.setattr(story_adapter, "media_of", Listed)
+    monkeypatch.setattr(forks_adapter, "media_of", Listed)
     before = snapshot(pair[DESKTOP].store.root)
-    (scene,) = desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["scenes"]
+    (scene,) = desktop.call("forks.divergent", {"campaign": "c", **DIRECTOR})["scenes"]
     assert scene["their_deletion"] is True and scene["deleted_by"] == [PHONE] and scene["theirs"] == []
     review = scene["taking_deletion"]
     assert "accepted_scene_missing" in review["reasons"]
@@ -259,13 +259,13 @@ def test_each_op_opens_each_chat_at_most_once(pair, desktop):
         assert len(opened) == len(set(opened)), (op, opened)
         return answer, list(opened)
 
-    shown, read = opens("story.scenes")
+    shown, read = opens("forks.scenes")
     assert read, "the records are labelled from their chats"
     request = {"operation_id": "once", "expected": shown["etag"], "reason": "dialogue",
                "source": pin(shown, payment(shown)), "dependent": pin(shown, LATER)}
-    for op in ("story.declare_plan", "story.declare_commit", "story.declare_commit"):  # the last is a retry
+    for op in ("forks.declare_plan", "forks.declare_commit", "forks.declare_commit"):  # the last is a retry
         assert sorted(map(str, opens(op, **request)[1])) == sorted(map(str, read)), op
-    assert sorted(map(str, opens("story.preview", action="edit", roots=[pin(shown, SCENE)])[1])) == sorted(map(str, read))
+    assert sorted(map(str, opens("forks.preview", action="edit", roots=[pin(shown, SCENE)])[1])) == sorted(map(str, read))
 
 
 def test_the_revision_shown_is_of_the_records_once_the_chats_are_open(pair, desktop):
@@ -284,7 +284,7 @@ def test_the_revision_shown_is_of_the_records_once_the_chats_are_open(pair, desk
     runner.open = opening
     shown = scenes(desktop)
     assert wrote and "campaigns/c/turns/t-2.000001.json" in {item["path"] for item in shown["records"]}
-    plan = desktop.call("story.declare_plan", {"campaign": "c", **DIRECTOR, "operation_id": "first",
+    plan = desktop.call("forks.declare_plan", {"campaign": "c", **DIRECTOR, "operation_id": "first",
                                                 "expected": shown["etag"], "reason": "dialogue",
                                                 "source": pin(shown, payment(shown)), "dependent": pin(shown, LATER)})
     assert plan["plan"]["already_applied"] is False
@@ -298,23 +298,23 @@ def test_a_retcon_preview_names_what_rests_on_the_scene_and_writes_nothing(pair,
     assert labels[SCENE] == GIVEN and labels[LATER] == DIALOGUE and labels[payment(view)] == "tam pays ines."
     before = snapshot(pair[DESKTOP].store.root)
     for action in ("edit", "cut", "replace", "replay", "fork"):
-        answer = desktop.call("story.preview", {"campaign": "c", **DIRECTOR, "action": action, "roots": [pin(view, SCENE)]})
+        answer = desktop.call("forks.preview", {"campaign": "c", **DIRECTOR, "action": action, "roots": [pin(view, SCENE)]})
         assert answer["complete"] and answer["written"] is False
         touched = {item["target"]["path"]: (item["reason"], item["certainty"]) for item in answer["impacts"]}
         assert touched[payment(view)] == ("scene", "known")
         assert touched["campaigns/c/holdings/character/tam.json"] == ("possession", "known")
         assert touched[LATER] == ("chronological", "potential")  # later in the chat: only possibly used it
         assert {item["dependent"] for item in answer["corrections"]} == set(touched)
-    rehearsed = desktop.call("story.preview", {"campaign": "c", **DIRECTOR, "action": "replace", "roots": [pin(view, SCENE)],
+    rehearsed = desktop.call("forks.preview", {"campaign": "c", **DIRECTOR, "action": "replace", "roots": [pin(view, SCENE)],
                                                "alternative": "Wren keeps the key."})
     assert rehearsed["rehearsal"] == {"status": "speculative", "model_cost": 0, "alternatives": ["Wren keeps the key."]}
     assert snapshot(pair[DESKTOP].store.root) == before
     # a record shown before it changed is refused, never previewed as it is now
     shown = pin(view, SCENE)
     write_turn(pair[DESKTOP].store, SimpleNamespace(app=pair[DESKTOP].handle), text="Wren gives Tam a key.")
-    assert refused(desktop, "story.preview", campaign="c", **DIRECTOR, action="edit", roots=[shown]).reason == "changed"
+    assert refused(desktop, "forks.preview", campaign="c", **DIRECTOR, action="edit", roots=[shown]).reason == "changed"
     gone = {"path": "campaigns/c/turns/t-1.000009.json", "revision": shown["revision"]}
-    assert refused(desktop, "story.preview", campaign="c", **DIRECTOR, action="edit", roots=[gone]).reason == "missing_record"
+    assert refused(desktop, "forks.preview", campaign="c", **DIRECTOR, action="edit", roots=[gone]).reason == "missing_record"
     for bad in ({"action": "rewrite", "roots": [shown]}, {"action": "edit", "roots": []},
                 {"action": "edit", "roots": [{"path": SCENE}]}, {"action": "edit", "roots": [shown, shown]},
                 {"action": "edit", "roots": [shown], "alternative": " "}, {"action": "edit", "roots": "everything"},
@@ -324,7 +324,7 @@ def test_a_retcon_preview_names_what_rests_on_the_scene_and_writes_nothing(pair,
                 {"action": "edit", "roots": [shown], "alternative": "x" * 16385},
                 {"action": "edit", "roots": [{"path": "campaigns/c/turns/../../d/turns/t-1.000001.json", "revision": shown["revision"]}]},
                 {"action": "edit", "roots": [{"path": "campaigns/other/turns/t-1.000001.json", "revision": shown["revision"]}]}):
-        assert refused(desktop, "story.preview", campaign="c", **DIRECTOR, **bad).reason == "invalid_field", bad
+        assert refused(desktop, "forks.preview", campaign="c", **DIRECTOR, **bad).reason == "invalid_field", bad
 
 
 def test_an_incomplete_snapshot_previews_with_its_problems_and_exports_no_correction(pair, desktop):
@@ -334,42 +334,42 @@ def test_an_incomplete_snapshot_previews_with_its_problems_and_exports_no_correc
     txn.commit(pair[DESKTOP].handle)
     view = scenes(desktop)
     assert any("unsupported" in problem for problem in view["problems"])
-    answer = desktop.call("story.preview", {"campaign": "c", **DIRECTOR, "action": "edit", "roots": [pin(view, SCENE)]})
+    answer = desktop.call("forks.preview", {"campaign": "c", **DIRECTOR, "action": "edit", "roots": [pin(view, SCENE)]})
     assert answer["complete"] is False and answer["corrections"] is None and "incomplete" in answer["corrections_refused"]
     plan = {"campaign": "c", **DIRECTOR, "operation_id": "dialogue-1", "reason": "dialogue", "expected": view["etag"],
             "source": pin(view, payment(view)), "dependent": pin(view, LATER)}
-    assert refused(desktop, "story.declare_plan", **plan).reason == "incomplete_snapshot"
+    assert refused(desktop, "forks.declare_plan", **plan).reason == "incomplete_snapshot"
     # an unreadable continuity file is a problem of the answer, never a server error
     (store.root / "campaigns/c/continuity/newer.json").write_text("{broken")
     assert scenes(desktop)["problems"]
-    assert desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["problems"]
+    assert desktop.call("forks.divergent", {"campaign": "c", **DIRECTOR})["problems"]
 
 
 def test_a_declaration_is_reviewed_then_made_once_and_a_stale_review_is_refused(pair, desktop):
     view = scenes(desktop)
     request = {"campaign": "c", **DIRECTOR, "operation_id": "dialogue-1", "reason": "dialogue", "expected": view["etag"],
                "source": pin(view, payment(view)), "dependent": pin(view, LATER)}
-    assert refused(desktop, "story.declare_commit", **{**request, "expected": None}).reason == "review_required"
+    assert refused(desktop, "forks.declare_commit", **{**request, "expected": None}).reason == "review_required"
     before = snapshot(pair[DESKTOP].store.root)
-    plan = desktop.call("story.declare_plan", request)["plan"]
+    plan = desktop.call("forks.declare_plan", request)["plan"]
     assert snapshot(pair[DESKTOP].store.root) == before
     assert plan["files"] == ["campaigns/c/continuity/dialogue-1.json"] and plan["already_applied"] is False
     assert [(item["target"]["path"], item["certainty"]) for item in plan["reaches"]] == [(LATER, "known")]
 
-    done = desktop.call("story.declare_commit", request)
+    done = desktop.call("forks.declare_commit", request)
     assert done["done"]["already_applied"] is False
     assert {(item["source"], item["dependent"], item["reason"]) for item in done["scenes"]["dependencies"]} >= {
         (payment(view), LATER, "dialogue")}
     written = snapshot(pair[DESKTOP].store.root)
     # a commit retried after a lost answer finds its own record and writes nothing again
-    again = desktop.call("story.declare_commit", request)
+    again = desktop.call("forks.declare_commit", request)
     assert again["done"]["already_applied"] is True and snapshot(pair[DESKTOP].store.root) == written
-    assert desktop.call("story.declare_plan", request)["plan"]["already_applied"] is True
+    assert desktop.call("forks.declare_plan", request)["plan"]["already_applied"] is True
     # the same id for another declaration is refused
     other = {**request, "reason": "causal_action"}
-    assert refused(desktop, "story.declare_commit", **other).reason == "operation_conflict"
+    assert refused(desktop, "forks.declare_commit", **other).reason == "operation_conflict"
     # a retcon of the scene now flags the dialogue as known, by way of the payment
-    answer = desktop.call("story.preview", {"campaign": "c", **DIRECTOR, "action": "edit",
+    answer = desktop.call("forks.preview", {"campaign": "c", **DIRECTOR, "action": "edit",
                                             "roots": [pin(done["scenes"], SCENE)]})
     later = next(item for item in answer["impacts"] if item["target"]["path"] == LATER)
     assert (later["reason"], later["certainty"]) == ("dialogue", "known")
@@ -378,20 +378,20 @@ def test_a_declaration_is_reviewed_then_made_once_and_a_stale_review_is_refused(
     fresh = scenes(desktop)
     stale = {**request, "operation_id": "dialogue-2", "reason": "asset", "expected": fresh["etag"],
              "source": pin(fresh, SCENE), "dependent": pin(fresh, LATER)}
-    desktop.call("story.declare_plan", stale)
+    desktop.call("forks.declare_plan", stale)
     write_turn(pair[DESKTOP].store, SimpleNamespace(app=pair[DESKTOP].handle), number=3, text="Clouds gather.")
     moved = snapshot(pair[DESKTOP].store.root)
-    assert refused(desktop, "story.declare_commit", **stale).reason == "changed"
+    assert refused(desktop, "forks.declare_commit", **stale).reason == "changed"
     assert snapshot(pair[DESKTOP].store.root) == moved
     # one that would make the dependence circular is refused by 054's own check
     now = scenes(desktop)
     circle = {**request, "operation_id": "circle", "expected": now["etag"], "source": pin(now, LATER),
               "dependent": pin(now, payment(now))}
-    assert refused(desktop, "story.declare_plan", **circle).reason == "invalid_dependency"
+    assert refused(desktop, "forks.declare_plan", **circle).reason == "invalid_dependency"
     for bad in ({"reason": "chronological"}, {"reason": "scene"}, {"operation_id": "Not An Id"},
                 {"dependent": request["source"]}, {"source": {"path": LATER}}):
-        assert refused(desktop, "story.declare_plan", **{**request, **bad}).reason == "invalid_field", bad
-    assert refused(desktop, "story.declare_plan", **{**request, "operation_id": "dup", "expected": now["etag"],
+        assert refused(desktop, "forks.declare_plan", **{**request, **bad}).reason == "invalid_field", bad
+    assert refused(desktop, "forks.declare_plan", **{**request, "operation_id": "dup", "expected": now["etag"],
                                                      "source": pin(now, payment(now)), "dependent": pin(now, LATER)}).reason \
         == "already_declared"
 
@@ -413,11 +413,11 @@ def test_a_retained_fork_shows_both_originals_and_its_effects_reach_the_phone_on
     result, token = restore(pair)
     assert result.status == "pending_sync"
     # the desktop already holds what the fork predicts: its own scene, and the payment
-    (fork,) = desktop.call("story.divergent", {"campaign": "c", **DIRECTOR})["retained"]
+    (fork,) = desktop.call("forks.divergent", {"campaign": "c", **DIRECTOR})["retained"]
     assert fork["operation"] == "keep-desktop" and fork["source_device"] == DESKTOP and fork["reconciled_here"] is True
     with serving(pair[DESKTOP]) as server:
         phone = AppApi(TextApi(pair[PHONE].store, pair[PHONE].authority, owner=OWNER, peers={DESKTOP: server.address}))
-        found = phone.call("story.divergent", {"campaign": "c", **DIRECTOR})
+        found = phone.call("forks.divergent", {"campaign": "c", **DIRECTOR})
         (fork,) = found["retained"]
         assert fork["reconciled_here"] is False  # the phone still waits for ordinary sync to bring the payment
         (scene,) = fork["scenes"]
@@ -427,7 +427,7 @@ def test_a_retained_fork_shows_both_originals_and_its_effects_reach_the_phone_on
         assert accepted(pair[PHONE]) == 0
         report = phone.call("media.sync", {"peer": DESKTOP})
         assert report["status"] == "synced", report
-        after = phone.call("story.divergent", {"campaign": "c", **DIRECTOR})
+        after = phone.call("forks.divergent", {"campaign": "c", **DIRECTOR})
         assert after["scenes"] == [] and after["retained"][0]["reconciled_here"] is True
     assert accepted(pair[DESKTOP]) == accepted(pair[PHONE]) == 1
     assert restore(pair, token=token)[0].status == "already_applied"
@@ -456,20 +456,20 @@ def app_of(pair, name: str, peer: str):
 
 
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")
-def test_the_story_page_shows_an_uncertain_ancestry_as_refused(pair):
+def test_the_forks_page_shows_an_uncertain_ancestry_as_refused(pair):
     # the real server's answer for a legacy payment and a divergent continuation, drawn by the real page
     legacy_history(pair)
     with app_of(pair, DESKTOP, PHONE) as env:
-        ran = _node("story.e2e.mjs", {**env, "GRIMOIRE_PHASE": "uncertain"})
+        ran = _node("forks.e2e.mjs", {**env, "GRIMOIRE_PHASE": "uncertain"})
     assert ran.returncode == 0, ran.stdout[-6000:] + ran.stderr[-3000:]
     assert "# pass 1" in ran.stdout
 
 
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")
-def test_the_story_page_end_to_end(pair):
+def test_the_forks_page_end_to_end(pair):
     # the desktop's app: sync, see both versions kept and why, preview the retcon, record what rests on what
     with app_of(pair, DESKTOP, PHONE) as env:
-        first = _node("story.e2e.mjs", {**env, "GRIMOIRE_PHASE": "review"})
+        first = _node("forks.e2e.mjs", {**env, "GRIMOIRE_PHASE": "review"})
     assert first.returncode == 0, first.stdout[-6000:] + first.stderr[-3000:]
     assert "# pass 1" in first.stdout
     assert accepted(pair[DESKTOP]) == 1 and accepted(pair[PHONE]) == 0  # held: neither applied twice nor lost
@@ -477,7 +477,7 @@ def test_the_story_page_end_to_end(pair):
     assert restore(pair)[0].status == "pending_sync"
     # the phone's app: the retained fork waits on sync; one sync from the app brings the payment across, once
     with app_of(pair, PHONE, DESKTOP) as env:
-        second = _node("story.e2e.mjs", {**env, "GRIMOIRE_PHASE": "restored"})
+        second = _node("forks.e2e.mjs", {**env, "GRIMOIRE_PHASE": "restored"})
     assert second.returncode == 0, second.stdout[-6000:] + second.stderr[-3000:]
     assert "# pass 1" in second.stdout
     assert accepted(pair[DESKTOP]) == accepted(pair[PHONE]) == 1

@@ -1,13 +1,13 @@
 // A campaign's story continuity (Sprint 115): the scenes two devices changed apart offline (049) and the review of
-// a fork or retcon (054), as the director sees them (docs/STORY.md). Addresses:
-//   #/story/<campaign id>                         the table's view: this is the director's, and nothing is offered
-//   #/story/<campaign id>?audience=director       the director's view
+// a fork or retcon (054), as the director sees them (docs/FORKS.md). Addresses:
+//   #/forks/<campaign id>                         the table's view: this is the director's, and nothing is offered
+//   #/forks/<campaign id>?audience=director       the director's view
 //   ...&chat=<ChatRef>                            the chat the campaign hub and the chronicle were opened for
-// Everything is read from, and written through, the story.* ops. Both versions of a divergent scene stay kept
+// Everything is read from, and written through, the forks.* ops. Both versions of a divergent scene stay kept
 // until the person resolves it: this page resolves nothing itself, says why keeping one side is refused where it
 // is, and links to Devices and sync and to Needs you, which keep one side where that is allowed. A preview
-// writes no story change. The one write, recording what rests on what, is reviewed first (story.declare_plan) and made as
-// reviewed (story.declare_commit, with the same operation id and the snapshot revision as reviewed).
+// writes no story change. The one write, recording what rests on what, is reviewed first (forks.declare_plan) and made as
+// reviewed (forks.declare_commit, with the same operation id and the snapshot revision as reviewed).
 
 import { campaignName } from "../campaign/logic.js";
 import {
@@ -40,22 +40,22 @@ export async function mount(root, ctx) {
   const chat = asked || (chats.length ? chats[0].chat : null);
   const name = found ? campaignName(found) : campaign;
   const chatNames = new Map(chats.map((item) => [item.chat, item.label || item.title || null]));
-  ctx.setTitle("Story");
-  ctx.setCrumb(ui.link("Campaigns", "campaign"), " / ", ui.link(name, "campaign", [campaign], chat ? { chat } : undefined), " / Story");
+  ctx.setTitle("Forks and retcons");
+  ctx.setCrumb(ui.link("Campaigns", "campaign"), " / ", ui.link(name, "campaign", [campaign], chat ? { chat } : undefined), " / Forks and retcons");
   const query = (view) => ({ chat: chat || undefined, audience: view === "director" ? "director" : undefined });
-  const views = ui.segments("Whose view", AUDIENCES, { value: audience, onchange: (value) => ctx.navigate(ctx.href("story", [campaign], query(value))) });
-  root.append(el("div", { class: "g-row story-views" }, views.node, el("span", { class: "g-grow g-muted" },
+  const views = ui.segments("Whose view", AUDIENCES, { value: audience, onchange: (value) => ctx.navigate(ctx.href("forks", [campaign], query(value))) });
+  root.append(el("div", { class: "g-row forks-views" }, views.node, el("span", { class: "g-grow g-muted" },
     audience === "director" ? "Scenes your devices changed apart, and what a retcon would touch." : "A story's continuity is the director's."),
   ctx.registered("campaign") ? ui.buttonLink("Campaign hub", "campaign", [campaign], query(audience)) : null,
   ctx.registered("chronicle") ? ui.buttonLink("Chronicle", "chronicle", [campaign], query(audience)) : null));
 
   if (audience !== "director") {
-    root.append(card(ui, "Story continuity", el("p", { class: "g-muted" },
+    root.append(card(ui, "Forks and retcons", el("p", { class: "g-muted" },
       "Scenes two devices changed apart offline, and what a retcon or fork would touch, are the director's: they show the exact "
       + "versions every device kept. Switch to the director view to review them.")));
     return;
   }
-  const cards = el("div", { class: "story-cards" });
+  const cards = el("div", { class: "forks-cards" });
   root.append(cards);
   const divergentSlot = el("div", {}), retconSlot = el("div", {});
   cards.append(divergentSlot, retconSlot);
@@ -65,12 +65,12 @@ export async function mount(root, ctx) {
 
 function card(ui, title, ...children) {
   const node = ui.card({ tag: "section", label: title }, ui.el("h2", { class: "g-heading" }, title), ...children);
-  node.classList.add("story-card");
+  node.classList.add("forks-card");
   return node;
 }
 
 function group(ui, label, ...children) {
-  return ui.el("div", { class: "g-stack story-group", role: "group", "aria-label": label }, ...children);
+  return ui.el("div", { class: "g-stack forks-group", role: "group", "aria-label": label }, ...children);
 }
 
 function chatText(chatNames, chat) {
@@ -94,7 +94,7 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
     const turn = reading.next();
     body.replaceChildren(el("p", { class: "g-muted" }, "Reading…"));
     try {
-      const answer = await ctx.api("story.divergent", { campaign, audience: "director" });
+      const answer = await ctx.api("forks.divergent", { campaign, audience: "director" });
       if (reading.current(turn)) draw(answer);
     } catch (error) {
       if (error && error.reason === "left") return;
@@ -104,19 +104,19 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
 
   function draw(answer) {
     const parts = [];
-    if (answer.peers.length) parts.push(el("ul", { class: "story-lines" }, answer.peers.map((peer) => el("li", {}, syncText(peer)))));
+    if (answer.peers.length) parts.push(el("ul", { class: "forks-lines" }, answer.peers.map((peer) => el("li", {}, syncText(peer)))));
     else parts.push(el("p", { class: "g-muted" }, "No sync with another device since the app started: what earlier syncs kept is listed below."));
     if (answer.unknown) parts.push(ui.notice("Some of this campaign's sync records cannot be read here, so any of its files may be in conflict.", { kind: "bad" }));
     if (answer.ancestry.length) {  // 054 cannot establish these scenes' ancestry: no restoration can be shown safe
       parts.push(el("div", { class: "g-stack", role: "group", "aria-label": "Uncertain ancestry" },
         el("p", {}, el("strong", {}, "Uncertain ancestry: "), "the campaign's records cannot establish which scenes these rest on, "
           + "so neither version of a scene can be shown to fit what follows from it."),
-        el("ul", { class: "story-lines" }, answer.ancestry.map((problem) => el("li", { class: "story-said" }, problem)))));
+        el("ul", { class: "forks-lines" }, answer.ancestry.map((problem) => el("li", { class: "forks-said" }, problem)))));
     }
     if (!answer.scenes.length) parts.push(ui.empty("No scene of this campaign is kept in two versions on this device."));
     for (const scene of answer.scenes) parts.push(divergentScene(scene));
     if (answer.held.length) {
-      parts.push(el("div", { class: "g-stack" }, el("h3", { class: "story-sub" }, "Held with them"),
+      parts.push(el("div", { class: "g-stack" }, el("h3", { class: "forks-sub" }, "Held with them"),
         el("p", { class: "g-muted" }, "The last sync did not bring these across either, so no accepted effect is applied twice or lost: "
           + answer.held.map((item) => kindText(item.kind).toLowerCase() + " " + item.path.split("/").pop().replace(/\.json$/, "")).join(", ") + ".")));
     }
@@ -126,8 +126,8 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
     }
     parts.push(retained(answer.retained, answer.device));
     for (const problem of answer.problems) parts.push(ui.notice(problem.path + ": " + problem.code, { kind: "bad" }));
-    parts.push(el("div", { class: "g-stack" }, el("h3", { class: "story-sub" }, "Not offered here"),
-      el("ul", { class: "story-lines" }, answer.unavailable.map((item) => el("li", {}, ui.unavailable(item.what, item.why))))));
+    parts.push(el("div", { class: "g-stack" }, el("h3", { class: "forks-sub" }, "Not offered here"),
+      el("ul", { class: "forks-lines" }, answer.unavailable.map((item) => el("li", {}, ui.unavailable(item.what, item.why))))));
     parts.push(ui.actions(
       ctx.registered("sync") ? ui.buttonLink("Devices and sync", "sync") : null,
       ui.button("Read again", () => ctx.act(async () => { await load(); return true; }))));
@@ -138,8 +138,8 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
   function side(title, candidate, where) {
     const said = candidate.deleted ? "Deleted on " + where + "." : candidate.set_aside ? "Set aside by a fork choice: heard by no one."
       : candidate.unreadable ? "This version cannot be read here." : candidate.said || "(no words)";
-    return el("div", { class: "g-stack story-side" }, el("div", { class: "g-eyebrow" }, title),
-      el("p", { class: "story-said" }, said));
+    return el("div", { class: "g-stack forks-side" }, el("div", { class: "g-eyebrow" }, title),
+      el("p", { class: "forks-said" }, said));
   }
 
   function divergentScene(scene) {
@@ -157,11 +157,11 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
     // what rests on it is recorded exactly, and a version taken would leave that recorded premise missing
     const reviews = [...scene.taking_theirs, ...(scene.their_deletion ? [scene.taking_deletion] : [])];
     const breaks = Boolean(scene.breaks_recorded) || reviews.some((review) => review && review.breaks_recorded);
-    const article = el("article", { class: "g-stack story-scene", "aria-label": "Divergent: " + title },
+    const article = el("article", { class: "g-stack forks-scene", "aria-label": "Divergent: " + title },
       el("div", { class: "g-row" }, el("strong", { class: "g-grow" }, title), ui.pill("Both kept", { kind: "accent" }),
         scene.detected.length ? ui.pill("Held for review", { kind: "bad" }) : null),
-      el("div", { class: "story-sides" }, sides),
-      why.length ? el("ul", { class: "story-lines" }, why) : null,
+      el("div", { class: "forks-sides" }, sides),
+      why.length ? el("ul", { class: "forks-lines" }, why) : null,
       uncertain ? el("p", {}, el("strong", {}, "Refused: "), "its ancestry is uncertain, so neither version can be shown to fit what rests on it.") : null,
       breaks ? el("p", {}, el("strong", {}, "Refused: "), "it would leave a recorded premise missing. What rests on this scene is on record, "
         + "and taking that version would leave it without what it rests on.") : null,
@@ -177,11 +177,11 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
   }
 
   function retained(forks, device) {
-    const head = el("h3", { class: "story-sub" }, "Retained forks");
+    const head = el("h3", { class: "forks-sub" }, "Retained forks");
     if (!forks.length) return el("div", { class: "g-stack" }, head, ui.empty("No scene of this campaign was restored as a retained fork."));
     return el("div", { class: "g-stack" }, head, el("p", { class: "g-muted" }, "A retained fork keeps every device's exact original "
       + "of a scene it restored. The originals stay history: none of them becomes the story or anyone's memory."),
-    ...forks.map((fork) => el("article", { class: "g-stack story-scene", "aria-label": "Retained fork: " + fork.operation },
+    ...forks.map((fork) => el("article", { class: "g-stack forks-scene", "aria-label": "Retained fork: " + fork.operation },
       el("div", { class: "g-row" }, el("strong", { class: "g-grow" }, "Restored from " + fork.source_device),
         ui.pill(fork.reconciled_here ? "Reconciled here" : "Waiting on sync", { kind: fork.reconciled_here ? "good" : "" })),
       el("p", { class: "g-muted" }, fork.reconciled_here
@@ -190,9 +190,9 @@ async function showDivergent(slot, ctx, campaign, chatNames, retcon) {
       ...fork.scenes.map((scene) => el("div", { class: "g-stack" },
         el("div", {}, el("strong", {}, "Scene " + (scene.number || "") + (scene.chat ? " · " + chatText(chatNames, scene.chat) : "")),
           el("span", { class: "g-muted" }, " · " + (scene.here === "restored" ? "restored here" : scene.here === "original" ? "still this device's original here" : "changed since"))),
-        el("div", { class: "story-sides" }, scene.variants.map((variant) => el("div", { class: "g-stack story-side" },
+        el("div", { class: "forks-sides" }, scene.variants.map((variant) => el("div", { class: "g-stack forks-side" },
           el("div", { class: "g-eyebrow" }, (variant.device === device ? "This device" : variant.device) + (variant.selected ? " · restored" : " · original kept")),
-          el("p", { class: "story-said" }, variant.said || "(no words)")))))))));
+          el("p", { class: "forks-said" }, variant.said || "(no words)")))))))));
   }
 
   await load();
@@ -215,14 +215,14 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
   let review = null;  // the declaration under review: { args, plan }
   const previewing = latest();
   const reading = latest();
-  const ALTERNATIVE = "story:" + campaign + ":alternative";
+  const ALTERNATIVE = "forks:" + campaign + ":alternative";
   const alternative = ui.field("Your alternative, in your own words (optional)", { draft: ctx.draft(ALTERNATIVE), multiline: true,
-    hint: "A rehearsal: it is not saved and becomes nothing in the story." });
+    hint: "A rehearsal: it is not saved and becomes nothing in the forks." });
   let source = "", dependent = "", reason = "dialogue";
 
   const load = async () => {
     const turn = reading.next();
-    const answer = await ctx.api("story.scenes", { campaign, audience: "director" });
+    const answer = await ctx.api("forks.scenes", { campaign, audience: "director" });
     if (!reading.current(turn)) return;
     scenes = answer;
     for (const path of [...picked]) if (!scenes.records.some((item) => item.path === path)) picked.delete(path);
@@ -240,7 +240,7 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
     if (alternative.value.trim()) request.alternative = alternative.value;
     const turn = previewing.next();
     try {
-      const answer = await ctx.api("story.preview", request);
+      const answer = await ctx.api("forks.preview", request);
       if (!previewing.current(turn)) return true;
       result = { request, answer };
       drawResult();
@@ -255,7 +255,7 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
     const full = { campaign, audience: "director", operation_id: newOperationId(), expected: scenes.etag, ...args };
     let answer;
     try {
-      answer = await ctx.api("story.declare_plan", full);
+      answer = await ctx.api("forks.declare_plan", full);
     } catch (error) {  // the records moved on since they were shown: read them again, so the next review is of now
       if (error && (error.reason === "changed" || error.reason === "missing_record")) await load();
       throw error;
@@ -267,7 +267,7 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
   });
   const commit = () => ctx.act(async () => {
     try {
-      const answer = await ctx.api("story.declare_commit", review.args);
+      const answer = await ctx.api("forks.declare_commit", review.args);
       review = null;
       scenes = answer.scenes;
       result = null;
@@ -307,33 +307,33 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
     const order = ["scene", "accepted_event", "relationship", "holdings", "summary", "evidence"];
     const kinds = [...new Set(scenes.records.map((item) => item.kind))].sort((a, b) => rank(a) - rank(b));
     function rank(kind) { const at = order.indexOf(kind); return at < 0 ? order.length : at; }
-    const lists = kinds.map((kind) => el("fieldset", { class: "story-records" }, el("legend", {}, kindText(kind)),
-      el("ul", { class: "story-lines" }, scenes.records.filter((item) => item.kind === kind).map((item) => {
-        const box = el("input", { type: "checkbox", value: item.path, "data-focus-key": "story:root:" + item.path });
+    const lists = kinds.map((kind) => el("fieldset", { class: "forks-records" }, el("legend", {}, kindText(kind)),
+      el("ul", { class: "forks-lines" }, scenes.records.filter((item) => item.kind === kind).map((item) => {
+        const box = el("input", { type: "checkbox", value: item.path, "data-focus-key": "forks:root:" + item.path });
         box.checked = picked.has(item.path);
         box.addEventListener("change", () => { if (box.checked) picked.add(item.path); else picked.delete(item.path); changed(); });
-        return el("li", {}, el("label", { class: "g-row story-pick" }, box,
-          el("span", { class: "g-grow story-said" }, recordText(item)),
+        return el("li", {}, el("label", { class: "g-row forks-pick" }, box,
+          el("span", { class: "g-grow forks-said" }, recordText(item)),
           item.chat && item.kind === "scene" ? el("span", { class: "g-muted" }, chatText(chatNames, item.chat)) : null));
       }))));
     const how = ui.choice("How", scenes.actions.map((value) => ({ value, label: actionText(value) })),
       { value: action, onchange: (value) => { action = value; changed(); } });
-    return group(ui, "What would change", el("h3", { class: "story-sub" }, "What would change"), ...lists, how.node,
+    return group(ui, "What would change", el("h3", { class: "forks-sub" }, "What would change"), ...lists, how.node,
       alternative.node, ui.actions(ui.button("Preview", preview, { kind: "primary" })));
   }
 
   function resultBox() {
     const { answer } = result;
-    const impacts = answer.impacts.map((item) => el("li", { class: "g-stack story-impact" },
-      el("div", { class: "g-row" }, el("span", { class: "g-grow story-said" }, recordText(item.target)),
+    const impacts = answer.impacts.map((item) => el("li", { class: "g-stack forks-impact" },
+      el("div", { class: "g-row" }, el("span", { class: "g-grow forks-said" }, recordText(item.target)),
         ui.pill(certaintyText(item.certainty), { kind: item.certainty === "known" ? "bad" : "" })),
       el("div", { class: "g-muted" }, "Because " + reasonText(item.reason) + (item.chain.length > 2 ? " (by way of " + count(item.chain.length - 2, "record") + ")" : "") + ".")));
-    const box = ui.card({ kind: "accent", tag: "div" }, el("h3", { class: "story-sub" }, "What " + actionText(answer.action).toLowerCase() + " would touch"),
+    const box = ui.card({ kind: "accent", tag: "div" }, el("h3", { class: "forks-sub" }, "What " + actionText(answer.action).toLowerCase() + " would touch"),
       answer.complete ? null : ui.notice("This report is incomplete, so do not rely on it: " + answer.problems.join("; "), { kind: "bad" }),
-      impacts.length ? el("ul", { class: "story-lines" }, impacts) : ui.empty("Nothing the campaign records rests on it."),
+      impacts.length ? el("ul", { class: "forks-lines" }, impacts) : ui.empty("Nothing the campaign records rests on it."),
       answer.rehearsal ? el("p", { class: "g-muted" }, "A rehearsal: your alternative is " + answer.rehearsal.status + ", not saved, and no model was called.") : null,
-      answer.corrections ? el("details", { class: "story-details" }, el("summary", {}, "What a memory correction would cite (053): " + count(answer.corrections.length, "reference")),
-        el("ul", { class: "story-lines" }, answer.corrections.map((item) => el("li", {},
+      answer.corrections ? el("details", { class: "forks-details" }, el("summary", {}, "What a memory correction would cite (053): " + count(answer.corrections.length, "reference")),
+        el("ul", { class: "forks-lines" }, answer.corrections.map((item) => el("li", {},
           recordText(scenes.records.find((record) => record.path === item.dependent)) + " ← " + recordText(scenes.records.find((record) => record.path === item.source))
           + " · " + certaintyText(item.certainty))))) : el("p", { class: "g-muted" }, answer.corrections_refused || ""),
       el("p", { class: "g-muted" }, "No story change was made: the scene, its accepted effects and what follows stay as they are."));
@@ -354,7 +354,7 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
       status.textContent = request ? "" : "Pick two different records.";
       if (request) plan(request);
     };
-    return group(ui, "Record what rests on what", el("h3", { class: "story-sub" }, "Record what rests on what"),
+    return group(ui, "Record what rests on what", el("h3", { class: "forks-sub" }, "Record what rests on what"),
       el("p", { class: "g-muted" }, "The campaign records which scene an accepted event rests on, but not which later line of dialogue "
         + "uses it. Say so here, and a retcon of the first will flag the second as known."),
       from.node, to.node, why.node, status, ui.actions(ui.button("Review", go)));
@@ -362,7 +362,7 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
 
   function reviewBox() {
     const plan = review.plan;
-    const box = ui.card({ kind: "accent", tag: "div" }, el("h3", { class: "story-sub" }, "Review this change"),
+    const box = ui.card({ kind: "accent", tag: "div" }, el("h3", { class: "forks-sub" }, "Review this change"),
       el("p", {}, declarationText(plan)),
       plan.reaches.length ? el("p", {}, "A retcon of the first would then flag: " + plan.reaches.map((item) => recordText(item.target) + " (" + certaintyText(item.certainty).toLowerCase() + ")").join("; ") + ".") : null,
       el("p", { class: "g-muted" }, "It writes " + count(plan.files.length, "file") + ": " + plan.files.join(", ") + ". Once written it is never rewritten."),
@@ -373,8 +373,8 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
   }
 
   function notOffered() {
-    return el("div", { class: "g-stack" }, el("h3", { class: "story-sub" }, "Not offered here"),
-      el("ul", { class: "story-lines" }, scenes.unavailable.slice(2).map((item) => el("li", {}, ui.unavailable(item.what, item.why)))));
+    return el("div", { class: "g-stack" }, el("h3", { class: "forks-sub" }, "Not offered here"),
+      el("ul", { class: "forks-lines" }, scenes.unavailable.slice(2).map((item) => el("li", {}, ui.unavailable(item.what, item.why)))));
   }
 
   try {

@@ -2,7 +2,7 @@
 or retcon (054). Called as ``story.<op>``.
 
 Only Sprint 115 edits this module. Each op is ``handler(ctx, args) -> dict`` over an existing domain service; see
-``grimoire.app.adapter`` and docs/STORY.md. Nothing here keeps a record of its own: every answer is read again from
+``grimoire.app.adapter`` and docs/FORKS.md. Nothing here keeps a record of its own: every answer is read again from
 the library each time, and the one write is 054's own.
 
 Continuity review is the director's (``ContinuityLibrary`` checks ``requested_by='director'`` on every read and
@@ -572,6 +572,6 @@ _OPS: dict[str, Callable[[AdapterContext, Mapping[str, object]], dict]] = {
     "declare_plan": _declare_plan, "declare_commit": _declare_commit,
 }
 
-ADAPTER = Adapter("story", owner="115", ops={name: _guarded(op) for name, op in _OPS.items()})
+ADAPTER = Adapter("forks", owner="115", ops={name: _guarded(op) for name, op in _OPS.items()})
 
 __all__ = ["ACTIONS", "ADAPTER", "DECLARABLE", "MISSING", "UNAVAILABLE", "UNCERTAIN"]

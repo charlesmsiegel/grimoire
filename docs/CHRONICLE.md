@@ -6,8 +6,8 @@ character remembers, with the evidence each account rests on (053). It also list
 slice of Wave 8, and either links the screen it is on or says plainly that it is not on a screen yet. A
 campaign's hub (113) links to it, for the same chat and view.
 
-The director's review of divergent offline scenes (049) and of a fork or retcon (054) is on the **Story** page
-([STORY](STORY.md)), which the hub and this page's feature list link.
+The director's review of divergent offline scenes (049) and of a fork or retcon (054) is on the **Forks and retcons** page
+([FORKS](FORKS.md)), which the hub and this page's feature list link.
 
 The page is served by the `chronicle` adapter (`grimoire.app.adapters.chronicle`, owner 115). Like every adapter,
 it works only over the existing domain services: `CalendarLibrary` for the clock and `MemoryLibrary` for memory,
@@ -79,8 +79,8 @@ person may cite for that character, newest first.
 | 063 | Rumors | `world` | `test_app_world.py`, `js/world.e2e.mjs` | a rumor still on its way refuses `not_delivered`; sending, delivering and faction or public spread are named as not available |
 | 057 | Faction decisions | `world` | `test_app_world.py`, `js/world.e2e.mjs` | the table's view says only that the page is the director's; a player's character refuses `npc_authority`; nothing is saved |
 | 060 | What an NPC thinks others think | `world` | `test_app_world.py`, `js/world.e2e.mjs` | evidence the NPC does not hold refuses `unavailable_evidence`; nothing is saved and nothing is inferred |
-| 049 | Reconciling divergent offline scenes | `story` ([STORY](STORY.md)) | `test_app_story.py`, `js/story.e2e.mjs` | the table sees that it is the director's; keeping one side of a scene held for semantic review is refused (`semantic_review`) with the reason; restoring a retained fork needs both libraries on one machine and is named as not available |
-| 054 | Reviewing a fork or retcon | `story` ([STORY](STORY.md)) | `test_app_story.py`, `js/story.e2e.mjs` | every op in the table's view refuses `director_only`; a stale review refuses `changed`; an incomplete snapshot previews with its problems and exports no correction; repair, generated continuations and promotion are named as not available |
+| 049 | Reconciling divergent offline scenes | `story` ([FORKS](FORKS.md)) | `test_app_forks.py`, `js/forks.e2e.mjs` | the table sees that it is the director's; keeping one side of a scene held for semantic review is refused (`semantic_review`) with the reason; restoring a retained fork needs both libraries on one machine and is named as not available |
+| 054 | Reviewing a fork or retcon | `story` ([FORKS](FORKS.md)) | `test_app_forks.py`, `js/forks.e2e.mjs` | every op in the table's view refuses `director_only`; a stale review refuses `changed`; an incomplete snapshot previews with its problems and exports no correction; repair, generated continuations and promotion are named as not available |
 | 050 | Captured companions | not on a screen yet | | |
 | 051 | Several NPCs answering at once | not on a screen yet | | |
 | 056 | Source catalogs | not on a screen yet | | a campaign opts in through its chats' bindings |

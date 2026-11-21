@@ -30,8 +30,8 @@ from . import voicecast  # noqa: E402 -- 083's voice casting and character voice
 
 ADAPTERS = tuple(sorted((*ADAPTERS, voicecast.ADAPTER), key=lambda adapter: adapter.name))
 
-from . import story  # noqa: E402 -- 115's divergent offline scenes (049) and fork/retcon review (054) (docs/STORY.md)
+from . import forks  # noqa: E402 -- 115's divergent offline scenes (049) and fork/retcon review (054) (docs/FORKS.md)
 
-ADAPTERS = tuple(sorted((*ADAPTERS, story.ADAPTER), key=lambda adapter: adapter.name))
+ADAPTERS = tuple(sorted((*ADAPTERS, forks.ADAPTER), key=lambda adapter: adapter.name))
 
 __all__ = ["ADAPTERS"]

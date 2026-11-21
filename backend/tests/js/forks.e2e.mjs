@@ -1,4 +1,4 @@
-// Sprint 115's Story page end to end, in fakedom against a real app server, in three runs (GRIMOIRE_PHASE).
+// Sprint 115's Forks page end to end, in fakedom against a real app server, in three runs (GRIMOIRE_PHASE).
 //   review (the desktop's app, with the phone served to it): from the campaign hub to its story; the table sees
 //     that it is the director's; the director syncs from Devices and sync, sees the scene both devices changed
 //     apart kept in both versions, keeping one side refused with the reason, the accepted payment and holdings
@@ -11,7 +11,7 @@
 //   uncertain (the desktop's app, its payment with no record of the scenes it rests on and the phone's chat
 //     continued offline): both divergent scenes are refused for their uncertain ancestry, the later one as a
 //     divergent continuation, and the ancestry problem is listed.
-// Run by test_app_story.py, which passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHAT, GRIMOIRE_CAMPAIGN,
+// Run by test_app_forks.py, which passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHAT, GRIMOIRE_CAMPAIGN,
 // GRIMOIRE_PEER, GRIMOIRE_DEVICE and GRIMOIRE_PHASE.
 import assert from "node:assert/strict";
 import { register } from "node:module";
@@ -83,7 +83,7 @@ async function syncNow(window, main) {
   await idle();
 }
 
-const storyHash = () => "#/story/" + encodeURIComponent(campaign) + "?chat=" + encodeURIComponent(chat) + "&audience=director";
+const forksHash = () => "#/forks/" + encodeURIComponent(campaign) + "?chat=" + encodeURIComponent(chat) + "&audience=director";
 
 test("divergent offline scenes and a reviewed retcon, on the desktop", { skip: !base || phase !== "review" }, async () => {
   const { window, main } = await start();
@@ -91,10 +91,10 @@ test("divergent offline scenes and a reviewed retcon, on the desktop", { skip: !
   // the campaign hub links to its story, for the same chat; the table's view offers nothing
   window.location.hash = "#/campaign/" + encodeURIComponent(campaign) + "?chat=" + encodeURIComponent(chat);
   await until(() => section(main, "Cast and stage"), 15000, "the hub");
-  const link = byText(main, "a", "Story").find((node) => node.getAttribute("href").startsWith("#/story/"));
-  assert.ok(link, "the hub links to the story");
+  const link = byText(main, "a", "Forks").find((node) => node.getAttribute("href").startsWith("#/forks/"));
+  assert.ok(link, "the hub links to the forks page");
   link.click();
-  const table = await until(() => section(main, "Story continuity"), 15000, "the table's view");
+  const table = await until(() => section(main, "Forks and retcons"), 15000, "the table's view");
   assert.equal(view(main, "Table view").getAttribute("aria-pressed"), "true");
   assert.ok(table.textContent.includes("director's"));
   assert.equal(table.querySelectorAll("button").length, 0, "the table is offered nothing");
@@ -109,7 +109,7 @@ test("divergent offline scenes and a reviewed retcon, on the desktop", { skip: !
 
   // a sync from Devices and sync: the scene both devices changed apart is kept in both versions
   await syncNow(window, main);
-  window.location.hash = storyHash();
+  window.location.hash = forksHash();
   const divergent = await until(() => {
     const found = section(main, "Divergent offline scenes");
     return found && sceneOf(found) && found;
@@ -147,7 +147,7 @@ test("divergent offline scenes and a reviewed retcon, on the desktop", { skip: !
   alternative.dispatchEvent({ type: "input" });
   window.location.hash = "#/campaign/" + encodeURIComponent(campaign);
   await until(() => section(main, "Cast and stage"), 15000, "the hub again");
-  window.location.hash = storyHash();
+  window.location.hash = forksHash();
   const again = await until(() => {
     const found = section(main, "Review a retcon or fork");
     return found && found.querySelector("textarea") && found;
@@ -182,7 +182,7 @@ test("divergent offline scenes and a reviewed retcon, on the desktop", { skip: !
 test("an uncertain ancestry and a divergent continuation are refused, on the desktop", { skip: !base || phase !== "uncertain" }, async () => {
   const { window, main } = await start();
   await syncNow(window, main);
-  window.location.hash = storyHash();
+  window.location.hash = forksHash();
   const divergent = await until(() => {
     const found = section(main, "Divergent offline scenes");
     return found && found.querySelectorAll("article").filter((node) => (node.getAttribute("aria-label") || "").startsWith("Divergent: Scene ")).length === 2 && found;
@@ -201,7 +201,7 @@ test("an uncertain ancestry and a divergent continuation are refused, on the des
 
 test("a retained fork waits on sync, then is reconciled once, on the phone", { skip: !base || phase !== "restored" }, async () => {
   const { window, main } = await start();
-  window.location.hash = storyHash();
+  window.location.hash = forksHash();
   const forkOf = () => {
     const found = section(main, "Divergent offline scenes");
     return found && found.querySelectorAll("article").find((node) => (node.getAttribute("aria-label") || "").startsWith("Retained fork: "));
@@ -213,7 +213,7 @@ test("a retained fork waits on sync, then is reconciled once, on the phone", { s
   assert.ok(fork.textContent.includes(peer + " · restored") && fork.textContent.includes("This device · original kept"));
 
   await syncNow(window, main);
-  window.location.hash = storyHash();
+  window.location.hash = forksHash();
   const reconciled = await until(() => {
     const found = forkOf();
     return found && byText(found, "span", "Reconciled here").length && found;

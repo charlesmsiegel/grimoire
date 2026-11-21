@@ -1,11 +1,11 @@
-# A campaign's story continuity (115)
+# Forks and retcons (115)
 
-The **Story** page (`#/story/<campaign id>?chat=<ChatRef>&audience=director`) is the director's screen for two
+The **Forks and retcons** page (`#/forks/<campaign id>?chat=<ChatRef>&audience=director`) is the director's screen for two
 Wave 8 slices: the scenes two devices changed apart offline (049) and the review of a retcon or fork (054). The
 campaign hub (113) and the Chronicle's feature list ([CHRONICLE](CHRONICLE.md)) link it, for the same chat and
 view.
 
-It is served by the `story` adapter (`grimoire.app.adapters.story`, owner 115), over the existing domain services
+It is served by the `story` adapter (`grimoire.app.adapters.forks`, owner 115), over the existing domain services
 only: 019/028's keep-both conflict records and the last sync reports (as Devices and sync reads them), 049's
 `semantic` review (`resolution_risk`, `validate_transition`), and 054's `ContinuityLibrary` (`snapshot`,
 `preview`, `rehearse`, `corrections`, `declare_dependency`, `inspect_fork`). It keeps no store of its own and
@@ -20,7 +20,7 @@ view the page says so, shows no scene text and offers nothing. A campaign that i
 
 | Op | Args | Answer |
 |---|---|---|
-| `story.divergent` | `campaign`, `audience` | `{campaign, device, peers[], scenes[], ancestry[], held[], unknown, retained[], problems[], fork_choices[], unavailable[]}` |
+| `forks.divergent` | `campaign`, `audience` | `{campaign, device, peers[], scenes[], ancestry[], held[], unknown, retained[], problems[], fork_choices[], unavailable[]}` |
 
 Each entry of `scenes` is a file the sync kept in two versions here: `mine` and every `theirs` (both stay until a
 person resolves the file), `keep_one` (`refused` where 049's semantic review holds the file, so the ordinary
@@ -48,14 +48,14 @@ and sync (`pages/sync`), which the page links rather than repeats.
 
 | Op | Args | Answer |
 |---|---|---|
-| `story.scenes` | `campaign`, `audience` | `{campaign, etag, coverage, records[], dependencies[], problems[], declarable[], actions[], unavailable[]}` |
-| `story.preview` | `action` (edit, cut, replace, replay, fork), `roots[]` (`{path, revision}` as shown, at most 64), optional `alternative` | `{complete, problems[], impacts[], corrections, corrections_refused, rehearsal, written: false}` |
-| `story.declare_plan` | `source`, `dependent` (`{path, revision}`), `reason` (dialogue, causal_action, asset), `operation_id`, `expected` (the `etag` shown) | `{plan: {operation, already_applied, source, dependent, reason, files[], reaches[]}, scenes}`; no story change is written |
-| `story.declare_commit` | the same args as the plan | `{done, scenes}` |
+| `forks.scenes` | `campaign`, `audience` | `{campaign, etag, coverage, records[], dependencies[], problems[], declarable[], actions[], unavailable[]}` |
+| `forks.preview` | `action` (edit, cut, replace, replay, fork), `roots[]` (`{path, revision}` as shown, at most 64), optional `alternative` | `{complete, problems[], impacts[], corrections, corrections_refused, rehearsal, written: false}` |
+| `forks.declare_plan` | `source`, `dependent` (`{path, revision}`), `reason` (dialogue, causal_action, asset), `operation_id`, `expected` (the `etag` shown) | `{plan: {operation, already_applied, source, dependent, reason, files[], reaches[]}, scenes}`; no story change is written |
+| `forks.declare_commit` | the same args as the plan | `{done, scenes}` |
 
 Opening a chat may write an accepted effect's pending 020 knowledge, which 054 pins, so every revision these ops
 show or check (`etag`, a root's revision) is of the snapshot taken once the campaign's chats are open. That is the
-settling every read that opens a chat does (the hub, the inbox); apart from it, only `story.declare_commit` writes,
+settling every read that opens a chat does (the hub, the inbox); apart from it, only `forks.declare_commit` writes,
 and it writes the one declaration. Each op opens each of the campaign's chats at most once. A review
 refused `changed` or `missing_record` reads the records again, and the next review is of what they are now.
 
@@ -94,7 +94,7 @@ Named on the page with the reason, never offered as a control:
 
 ## Not proved here
 
-Tests: `test_app_story.py` (ops, refusals, privacy, stale review, idempotent retry, a retained fork reaching the
-second device once), `js/story.test.mjs` (page logic, late answers, drafts) and `js/story.e2e.mjs` (fakedom
+Tests: `test_app_forks.py` (ops, refusals, privacy, stale review, idempotent retry, a retained fork reaching the
+second device once), `js/forks.test.mjs` (page logic, late answers, drafts) and `js/forks.e2e.mjs` (fakedom
 against a real app server on both devices). The restoration between the two runs is made by 054's owner operation
 outside the app. The page has not been used in a real browser, with a screen reader or on a phone.
