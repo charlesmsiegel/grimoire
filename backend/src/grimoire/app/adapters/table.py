@@ -101,7 +101,8 @@ class _Receipts:
     LIMIT = 256
 
     def __init__(self) -> None:
-        self.lock = threading.Lock()  # a check and its post are one step: two tabs never post one review twice
+        self.lock = threading.Lock()  # guards the receipts themselves; what serializes a check and its post is the
+        # text API's own lock, which every op not marked unlocked runs under (two tabs never post one review twice)
         self._by_api: weakref.WeakKeyDictionary[object, OrderedDict[tuple[str, str, str | None], str]] = (
             weakref.WeakKeyDictionary())
 

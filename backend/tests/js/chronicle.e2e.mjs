@@ -147,7 +147,9 @@ test("a campaign's clock and memory, each change reviewed before it is made", { 
   const world = byText(features, "a", "What an NPC thinks others think").find((node) => node.getAttribute("href").startsWith("#/world/" + encodeURIComponent(campaign)));
   assert.ok(world && world.getAttribute("href").includes("chat="), "the World page is linked for this campaign and chat");
   const story = byText(features, "a", "Reviewing a fork or retcon");
-  assert.ok(story.length && story[0].getAttribute("href").startsWith("#/story/" + encodeURIComponent(campaign)), "the story review is linked");
-  assert.ok(byText(features, "a", "Captured companions").length, "the companions screen is linked too");
+  assert.ok(story.length && story[0].getAttribute("href").startsWith("#/forks/" + encodeURIComponent(campaign)), "the story review is linked");
+  const companions = byText(features, "a", "Captured companions");
+  assert.ok(companions.length && companions[0].getAttribute("href").startsWith("#/companions/" + encodeURIComponent(campaign)),
+    "the companions screen is linked for this campaign");
   assert.ok(!byText(features, "strong", "is not available yet").length, "every Wave 8 slice is on a screen");
 });

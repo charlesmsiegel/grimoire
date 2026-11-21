@@ -54,6 +54,12 @@ Persistent source-qualified hierarchy and paths, with campaign-local path overri
 director-only deterministic queries, live in `grimoire.topology` and `grimoire.topologystore`.
 See [TOPOLOGY](TOPOLOGY.md) for ownership, failure behavior and separate map/travel/UI consumers.
 
+### World authoring proposals (087 headless first slice: `grimoire.authoring`, `grimoire.authoringstore`)
+
+A bounded proposal of suggested places and groups, from a person or one metered PLANNING call, is reviewed against
+the world for namesakes and broken links. Only the candidates an author accepts are written, with their links in the
+world topology, as one reviewed change set; brainstorms and rejected ideas leave nothing. See [AUTHORING](AUTHORING.md).
+
 ### Device sync (first slice implemented: `grimoire.sync`)
 
 Two libraries exchange records directly, three-way against the last state both agreed on, and every overlapping edit becomes a named conflict kept on both devices rather than a silent overwrite. Families whose merge rules are not written yet are held back and reported. See [SYNC.md](SYNC.md).

@@ -36,9 +36,10 @@ has more than one character a person plays, or this device was started for more 
   keep it or pass first, and offers neither a review nor **Post this turn**. A review on show is dropped as soon
   as the chat moves past it: other parts held, another turn posted, a take open or play paused. The table then
   answers the turn once.
-- A redraw keeps the person's place: the boxes, the keyboard choice and **Who plays whom** stay the same
-  controls while the same parts are shown (the seating stays open or shut as it was left, and a choice not yet
-  handed over is kept), and a control that had to be rebuilt takes the focus back by its `data-focus-key`. A
+- A redraw keeps the person's place: the boxes and the keyboard choice stay the same controls while the same
+  parts are shown; **Who plays whom** stays open or shut as it was left and keeps a choice not yet handed over,
+  though its pickers are drawn again (one open while an action finishes closes, its choice kept); and a control
+  that had to be rebuilt takes the focus back by its `data-focus-key`. A
   move that takes a part to the top or the bottom leaves it no button for that way: the focus goes to its other
   move button, or to the part itself.
 - **Who plays whom** (the library owner) hands a character to someone at this device, or back to the director,

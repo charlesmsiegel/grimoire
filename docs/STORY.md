@@ -1,100 +1,114 @@
-# A campaign's story continuity (115)
+# Story threads
 
-The **Story** page (`#/story/<campaign id>?chat=<ChatRef>&audience=director`) is the director's screen for two
-Wave 8 slices: the scenes two devices changed apart offline (049) and the review of a retcon or fork (054). The
-campaign hub (113) and the Chronicle's feature list ([CHRONICLE](CHRONICLE.md)) link it, for the same chat and
-view.
+**Status:** first useful slice of [081](roadmap/sprints/story-graph-and-navigation.md). The pure package
+`grimoire.story`, the app's `story` adapter ops (`backend/src/grimoire/app/adapters/story.py`) and the **Story
+threads** page (`static/pages/story/`, route `story`), linked from the campaign hub. Read-only: the story writes
+nothing of its own and calls no model. Like every read that opens a chat (the hub, the knowledge view, the inbox),
+opening the chat first writes any accepted 021 effect's 020 knowledge still pending after an interrupted acceptance
+(`SceneRunner.open`, `play/witness.py`): it completes what was accepted, and never records anything new.
 
-It is served by the `story` adapter (`grimoire.app.adapters.story`, owner 115), over the existing domain services
-only: 019/028's keep-both conflict records and the last sync reports (as Devices and sync reads them), 049's
-`semantic` review (`resolution_risk`, `validate_transition`), and 054's `ContinuityLibrary` (`snapshot`,
-`preview`, `rehearse`, `corrections`, `declare_dependency`, `inspect_fork`). It keeps no store of its own and
-answers from the library each time.
+The proving question is "what became of that promise?": a player finds an early promise, follows it through every
+scene that records it, and sees when canon says it was kept or broken, and who still believes otherwise.
 
-Continuity is the director's: every op refuses `director_only` unless `audience` is `director`, and in the table's
-view the page says so, shows no scene text and offers nothing. A campaign that is not in the library refuses
-`no_campaign`; a bad argument refuses `invalid_field`. Domain refusals keep a reason (`changed`,
-`not_authorized`, `unreadable`, `continuity_refused`) and never answer HTTP 500.
+## What a thread is
 
-## Divergent offline scenes (049)
+A thread is one 012 **proposition** of the campaign's ledger (020), and every record the ledger links to it
+**explicitly**. Nothing is inferred from text: two records are in one thread only because the ledger names one
+from the other.
 
-| Op | Args | Answer |
+| Entry | What it is | Grade |
 |---|---|---|
-| `story.divergent` | `campaign`, `audience` | `{campaign, device, peers[], scenes[], ancestry[], held[], unknown, retained[], problems[], fork_choices[], unavailable[]}` |
+| `stated` | the proposition itself, when it was recorded | proposal |
+| `report` | a character received it (as they have it: who they take the source to be) | proposal |
+| `sent` | a character passed it on (`sender`) to another (`holder`): the table's own sends; for the director, also a report sent by now but received later, and a 063 rumour queued but not yet delivered | proposal |
+| `observation` | what a character saw that their belief about it cites: their own percept, never the event as canon has it | proposal |
+| `belief` | a character's own conclusion: believed, suspected or rejected; current or since changed | belief |
+| `ruling` | canon ruled on its standing | confirmed |
+| `event` | an event a ruling rests on, the proposition is overtly about, or a belief's perception cites | confirmed, or revoked |
 
-Each entry of `scenes` is a file the sync kept in two versions here: `mine` and every `theirs` (both stay until a
-person resolves the file), `keep_one` (`refused` where 049's semantic review holds the file, so the ordinary
-keep-one resolver would take one version over what rests on the other; `needs_you` otherwise), `detected` (the
-peers whose last sync held it), `taking_theirs` (049's reason codes for what taking each other version here would
-leave unmet, from `semantic.validate_transition`; null for a version that cannot be read here), `deleted_by` and
-`taking_deletion` (the devices whose kept side is a deletion, and the same check with the file removed),
-`uncertain` (its ancestry is not recorded: a campaign-wide `ancestry` problem such as a legacy or unreadable
-accepted event, or a review that cannot be made or names an uncertain reason), `breaks_recorded` (what rests on it
-is recorded exactly, and taking a version would leave that recorded premise missing: `accepted_scene_missing` or
-`missing_dependency_endpoint`) and `continues` (an earlier scene of the same chat differs too: a divergent
-continuation). `uncertain` is the scene's own verdict: 049's admission check can find nothing unmet for a legacy
-history, and the page never calls such a version safe. The page shows uncertain ancestry, a missing recorded
-premise and divergent continuations as **refused**, each with its own reason, and lists `ancestry`. `held` lists
-the accepted events and holdings the last sync held with them, so no effect is applied twice or lost.
+So a commitment is a proposition ("Mara will bring the harbour key back before the thaw"), and its **outcome** is
+canon's standing as of the read (012: the latest ruling; else `reported` once anyone received it; else
+`unasserted`), with the ruling that decided it and the events it rests on. A dedicated commitment record is
+077's (Quests and Commitments, [COMMITMENTS](COMMITMENTS.md)); the story does not read that ledger yet, so here a
+promise is a proposition like any other claim.
 
-`retained` lists the retained forks the campaign holds: each scene's exact original from every device, which one
-was restored, and `reconciled_here` (this device holds the restored scenes and the ledger the fork predicts).
-Ordinary sync brings the accepted effects across and applies each once.
+### Grades
 
-The page decides nothing here: keeping one side, where it is allowed, is in Needs you, and syncing is on Devices
-and sync (`pages/sync`), which the page links rather than repeats.
+Every entry carries one grade, so an interpretation is never read as truth:
 
-## Reviewing a retcon or fork (054)
+- **confirmed** (shown as *Canon*): an accepted event, or a ruling.
+- **belief**: one character's conclusion, whatever its stance. Never the standing.
+- **proposal** (shown as *Proposed*): an assertion only, or what a character saw. Receiving, repeating, seeing or
+  believing it never establishes it.
+- **revoked**: an event whose 021 accepted effect was revoked. Its 020 bridge is still stored
+  (`revoked_but_bridged`), so it stays in the thread, struck through, and a ruling resting on it says so.
 
-| Op | Args | Answer |
+### Contradictions
+
+Where the story disagrees with itself, named by the records that disagree:
+
+- `reversed_ruling`: canon ruled it established, then refuted (or the other way round). Rulings of `unknown`
+  reverse nothing.
+- `belief_against_canon`: a character's **current** belief goes against canon's standing now (believed or
+  suspected while refuted, rejected while established), as the hub's contested claim reads it.
+- `revoked_ground`: the deciding ruling rests on an event whose effect was revoked.
+
+### Scenes and sources
+
+Each entry leads back to its source: the chat 020 recorded it from (its `origins`) and the turn its moment names.
+The app numbers each turn on that chat's line, so the page links to it (`#/chat/<ChatRef>?turn=<number>`). A turn
+a fork choice set aside is said ("From a turn set aside"), never linked as if it were played; a turn the app could
+not number is shown without a link (`turns_unread`), and so, while a fork is unresolved, is a number two live
+branches share (028), since it could open the other branch's turn. A record with no chat is grouped by the scene label its moment
+carries. A thread's **scenes** are those places, in the order the thread first reaches each, with the turns and
+everyone each involves; filtering by a character keeps only the scenes that involve them (milestone 1).
+
+Every read is **as of** a campaign sequence: nothing later is shown. The app reads the story as it stands now.
+
+## Who sees what
+
+Spoiler exposure is controlled by **building** the table's thread from 012's `player_knowledge`, never by hiding
+parts of the director's:
+
+- **director** (`audience: director`): every entry, the outcome, the senders behind attributions and every
+  contradiction. Ledger damage is said with its counts (`knowledge_damaged`).
+- **table** (the default): only what the library owner's own characters received, passed on, saw (when their
+  belief cites it) and concluded. A report one of their characters passed to another is both a send and a receipt. An
+  NPC-era belief the present player did not author is kept and marked inherited. There is no outcome, no ruling, no
+  event, no sender and no other character's evidence. A proposition none of their characters knows of has no table
+  thread at all: `story.thread` refuses it `no_thread` exactly as it refuses an id the ledger lacks, and a search
+  for how canon says it ended finds nothing. Damage is said without its counts. An owner who plays no character in
+  the campaign is told so (`no_character`).
+
+## Search
+
+`story.threads` lists the threads that match, oldest first (by when each first entered the story):
+
+- `query` (at most 200 characters, case-insensitive) is found in the proposition's text, **in the summary of an
+  event of its thread** or in what a character observed of it, so a search for how a promise ended finds the
+  promise. At the table only the text as the
+  table has it is searched.
+- `actor` (an instance of the chat's campaign) keeps only threads that involve them.
+- `limit` (1 to 200, default 50): at most this many are listed, and `total` says how many matched.
+
+## Ops
+
+Both take `chat` (a `ChatRef`: its cast names the actors, its controls say whose characters are the table's) and
+`audience` (`table` or `director`), and answer the chat, its cast, the filter's actor and `problems`.
+
+| Op | Arguments | Answer |
 |---|---|---|
-| `story.scenes` | `campaign`, `audience` | `{campaign, etag, coverage, records[], dependencies[], problems[], declarable[], actions[], unavailable[]}` |
-| `story.preview` | `action` (edit, cut, replace, replay, fork), `roots[]` (`{path, revision}` as shown, at most 64), optional `alternative` | `{complete, problems[], impacts[], corrections, corrections_refused, rehearsal, written: false}` |
-| `story.declare_plan` | `source`, `dependent` (`{path, revision}`), `reason` (dialogue, causal_action, asset), `operation_id`, `expected` (the `etag` shown) | `{plan: {operation, already_applied, source, dependent, reason, files[], reaches[]}, scenes}`; no story change is written |
-| `story.declare_commit` | the same args as the plan | `{done, scenes}` |
+| `story.threads` | `query?`, `actor?`, `limit?` | `threads` (each: id, text, first moment, last sequence, standing and when it was decided for the director, counts, actors), `total` |
+| `story.thread` | `proposition`, `actor?` | `thread`: entries (kind, record, grade, moment, text, actors, source, and what each kind adds), scenes, actors, outcome, contradictions |
 
-Opening a chat may write an accepted effect's pending 020 knowledge, which 054 pins, so every revision these ops
-show or check (`etag`, a root's revision) is of the snapshot taken once the campaign's chats are open. That is the
-settling every read that opens a chat does (the hub, the inbox); apart from it, only `story.declare_commit` writes,
-and it writes the one declaration. Each op opens each of the campaign's chats at most once. A review
-refused `changed` or `missing_record` reads the records again, and the next review is of what they are now.
+Refusals: `invalid_field` for a malformed argument (an audience, a limit, a query, an actor of another campaign, a
+proposition id), and `no_thread` (see above).
 
-A preview names each record that rests on the roots, why (`reason`) and whether that is `known` or only
-`potential`, with the references a memory correction (053) would cite. An incomplete snapshot previews with its
-problems and exports no correction. An authored alternative is rehearsed (no model, not saved). A root whose
-revision moved refuses `changed`; one no longer there refuses `missing_record`.
+Problems, shown on the page and never hidden: `knowledge_unreadable`, `knowledge_damaged`, `effects_unreadable`
+(which effects were revoked could not be read: nothing is graded revoked), `turns_unread` (more than 32 chats, or
+one whose turns could not be read), `no_character`.
 
-A declaration records what 054's native records cannot see, such as a later line of dialogue that rests on an
-accepted event. The page shows the plan, then writes it only on **Make this change**, with the same operation id
-and the snapshot revision as reviewed:
+## Not yet
 
-- a snapshot changed since the review refuses `changed`, and the page reads it again;
-- the same declaration made again with its operation id is `already_applied` and writes no declaration again; the id reused
-  for another one refuses `operation_conflict`;
-- an edge already recorded refuses `already_declared`; one that would make a circle refuses `invalid_dependency`;
-  an incomplete snapshot refuses `incomplete_snapshot`; a review not made refuses `review_required`.
-
-## Not available
-
-Named on the page with the reason, never offered as a control:
-
-- **Restore one device's scene as a retained fork.** `continuitystore.resolve_fork` needs both devices'
-  libraries open on one machine, each with its own authority; this app serves one library and reaches the other
-  only through sync. Its result (a retained fork) is shown once it exists. A stand-in for the other library
-  (a copy built from the keep-both record's bytes) would not do: the review token is over both devices' whole
-  campaign premises and sync bases, which the record does not hold; the other device's owner check would be
-  forged; and the other device's half of the restoration would land in the copy, so the real device keeps its
-  version and the fork never reconciles. What the domain lacks is a peer-sync step for the other half: the serving
-  device rechecks the token against its own library and writes its half (the receipt and the restored scene)
-  under its own authority, resumably; or a one-sided restoration whose receipt ordinary sync admits on the other
-  device.
-- **Merge both versions of a scene.** 049 keeps both versions; it never merges their text.
-- **Repair what depends on a changed scene**, **write a continuation** and **promote an alternative into the
-  story.** 054 flags what a change touches, calls no model and keeps alternatives historical.
-
-## Not proved here
-
-Tests: `test_app_story.py` (ops, refusals, privacy, stale review, idempotent retry, a retained fork reaching the
-second device once), `js/story.test.mjs` (page logic, late answers, drafts) and `js/story.e2e.mjs` (fakedom
-against a real app server on both devices). The restoration between the two runs is made by 054's owner operation
-outside the app. The page has not been used in a real browser, with a screen reader or on a phone.
+Milestone 2 (branch differences and contradictory claims across forks with source links) and milestone 3 (an
+interactive timeline of causal and relationship change), annotations, and any association inferred from text.
