@@ -1,0 +1,29 @@
+.prep-views { flex-wrap: wrap; gap: 12px; margin: 0 0 20px; }
+.prep-chat { max-width: 420px; margin: 0 0 20px; }
+.prep-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 20px; align-items: start; }
+.prep-card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 14px; min-width: 0; }
+.prep-card > p, .prep-card .g-empty, .prep-card .g-actions, .prep-card .g-field, .prep-card .g-unavailable { margin: 0; }
+.prep-card p { margin: 0; overflow-wrap: anywhere; }
+.prep-sub { font: 600 15px/1.3 var(--g-sans); margin: 4px 0 0; }
+.prep-label { font-weight: 600; margin: 4px 0 0; }
+.prep-group { padding-top: 12px; border-top: 1px solid var(--g-line); min-width: 0; }
+.prep-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.prep-lines > li { padding: 8px 0; border-top: 1px solid var(--g-line); min-width: 0; }
+.prep-lines > li:first-child { border-top: 0; padding-top: 0; }
+.prep-fields { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.prep-fields > legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.prep-ref { font-size: 13px; overflow-wrap: anywhere; word-break: break-all; }
+.prep-id { display: inline-block; font: 600 12px/1.6 var(--g-mono, monospace); padding: 0 6px; border: 1px solid var(--g-line); border-radius: 6px; margin-right: 4px; }
+.prep-text { font-family: var(--g-serif); overflow-wrap: anywhere; }
+.prep-source { font-size: 13px; overflow-wrap: anywhere; }
+.prep-grounds { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 13px; }
+.prep-note { gap: 4px; }
+.prep-catalog, .prep-binding { gap: 4px; min-width: 0; }
+.prep-binding { padding: 8px 0; border-top: 1px solid var(--g-line); }
+.prep-chat-bindings { gap: 6px; min-width: 0; }
+.prep-more > summary { cursor: pointer; padding: 6px 0; min-height: 44px; display: flex; align-items: center; }
+.prep-proposal { padding: 12px; border: 1px solid var(--g-line); border-radius: 10px; gap: 8px; min-width: 0; }
+.prep-proposal:focus { outline: 2px solid var(--g-focus); outline-offset: 2px; }
+.prep-mark { align-items: flex-start; gap: 10px; min-height: 44px; cursor: pointer; }
+.prep-mark > input { width: 22px; height: 22px; flex: 0 0 auto; margin-top: 2px; }
+.prep-card .g-row { flex-wrap: wrap; min-width: 0; }
