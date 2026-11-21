@@ -396,6 +396,43 @@ def test_a_declaration_is_reviewed_then_made_once_and_a_stale_review_is_refused(
         == "already_declared"
 
 
+def test_a_declaration_review_lists_what_it_makes_known_downstream_too(pair, desktop):
+    # the scene reaches the later lines only potentially (by chronology); the third line is known to rest on the second
+    write_turn(pair[DESKTOP].store, SimpleNamespace(app=pair[DESKTOP].handle), number=3, text="Clouds gather.")
+    third = "campaigns/c/turns/t-1.000003.json"
+    view = scenes(desktop)
+    desktop.call("forks.declare_commit", {"campaign": "c", **DIRECTOR, "operation_id": "dialogue-1", "reason": "dialogue",
+                                          "expected": view["etag"], "source": pin(view, LATER),
+                                          "dependent": pin(view, third)})
+    view = scenes(desktop)
+    before = desktop.call("forks.preview", {"campaign": "c", **DIRECTOR, "action": "edit", "roots": [pin(view, SCENE)]})
+    assert {(item["target"]["path"], item["certainty"]) for item in before["impacts"]} >= {
+        (LATER, "potential"), (third, "potential")}
+    # declaring the second line known upgrades the third with it, and the review says so
+    plan = desktop.call("forks.declare_plan", {"campaign": "c", **DIRECTOR, "operation_id": "asset-1", "reason": "asset",
+                                               "expected": view["etag"], "source": pin(view, SCENE),
+                                               "dependent": pin(view, LATER)})["plan"]
+    assert [(item["target"]["path"], item["certainty"]) for item in plan["reaches"]] == [
+        (LATER, "known"), (third, "known")]
+
+
+def test_a_forks_state_tells_waiting_from_played_on_since():
+    scene, paid, later = "turns/1", "accepted/pay", "turns/2"
+    archive = {"scenes": [{"path": scene}], "reconciled": {scene: "kept", paid: "p1"},
+               "premises": {"desktop": {scene: "kept", paid: "p1"}, "phone": {scene: "theirs"}}}
+    assert forks_adapter.fork_state({scene: "kept", paid: "p1"}, archive, "phone") == "reconciled"
+    assert forks_adapter.fork_state({scene: "kept"}, archive, "phone") == "waiting"  # the payment has not arrived
+    # it arrived and play went on: a later turn, or the payment's file changed again since
+    assert forks_adapter.fork_state({scene: "kept", paid: "p1", later: "l1"}, archive, "phone") == "played_on"
+    assert forks_adapter.fork_state({scene: "kept", paid: "p2"}, archive, "phone") == "played_on"
+    # nothing was owed to the device the fork kept; any change there is play since
+    assert forks_adapter.fork_state({scene: "kept", paid: "p1", later: "l1"}, archive, "desktop") == "played_on"
+    assert forks_adapter.fork_state({scene: "edited", paid: "p1"}, archive, "desktop") == "played_on"
+    # a third device, or one not identified, holds only the record
+    assert forks_adapter.fork_state({scene: "kept"}, archive, "tablet") == "elsewhere"
+    assert forks_adapter.fork_state({scene: "kept"}, archive, None) == "elsewhere"
+
+
 def restore(pair, operation: str = "keep-desktop", token: str | None = None):
     """054's owner operation, run with both libraries open on this machine (the app cannot: it serves one), as
     ``(result, token)``. A retry names the review token the first run was made under."""
@@ -415,11 +452,13 @@ def test_a_retained_fork_shows_both_originals_and_its_effects_reach_the_phone_on
     # the desktop already holds what the fork predicts: its own scene, and the payment
     (fork,) = desktop.call("forks.divergent", {"campaign": "c", **DIRECTOR})["retained"]
     assert fork["operation"] == "keep-desktop" and fork["source_device"] == DESKTOP and fork["reconciled_here"] is True
+    assert fork["state"] == "reconciled"
     with serving(pair[DESKTOP]) as server:
         phone = AppApi(TextApi(pair[PHONE].store, pair[PHONE].authority, owner=OWNER, peers={DESKTOP: server.address}))
         found = phone.call("forks.divergent", {"campaign": "c", **DIRECTOR})
         (fork,) = found["retained"]
         assert fork["reconciled_here"] is False  # the phone still waits for ordinary sync to bring the payment
+        assert fork["state"] == "waiting"
         (scene,) = fork["scenes"]
         assert scene["path"] == SCENE and scene["here"] == "restored"
         assert {(item["device"], item["said"], item["selected"]) for item in scene["variants"]} == {
@@ -429,9 +468,16 @@ def test_a_retained_fork_shows_both_originals_and_its_effects_reach_the_phone_on
         assert report["status"] == "synced", report
         after = phone.call("forks.divergent", {"campaign": "c", **DIRECTOR})
         assert after["scenes"] == [] and after["retained"][0]["reconciled_here"] is True
+        assert after["retained"][0]["state"] == "reconciled"
     assert accepted(pair[DESKTOP]) == accepted(pair[PHONE]) == 1
     assert restore(pair, token=token)[0].status == "already_applied"
     assert accepted(pair[DESKTOP]) == accepted(pair[PHONE]) == 1
+    # play goes on on the phone: the fork is no longer waiting on anything, though the ledger moved past it
+    write_turn(pair[PHONE].store, SimpleNamespace(app=pair[PHONE].handle), number=3, text="Clouds gather.")
+    with serving(pair[DESKTOP]) as server:
+        phone = AppApi(TextApi(pair[PHONE].store, pair[PHONE].authority, owner=OWNER, peers={DESKTOP: server.address}))
+        (later,) = phone.call("forks.divergent", {"campaign": "c", **DIRECTOR})["retained"]
+    assert later["state"] == "played_on" and later["reconciled_here"] is True
 
 
 def _node(script: str, env: dict) -> subprocess.CompletedProcess:
