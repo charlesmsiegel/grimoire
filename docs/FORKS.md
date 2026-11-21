@@ -1,11 +1,11 @@
 # Forks and retcons (115)
 
-The **Forks and retcons** page (`#/forks/<campaign id>?chat=<ChatRef>&audience=director`) is the director's screen for two
-Wave 8 slices: the scenes two devices changed apart offline (049) and the review of a retcon or fork (054). The
-campaign hub (113) and the Chronicle's feature list ([CHRONICLE](CHRONICLE.md)) link it, for the same chat and
-view.
+The **Forks and retcons** page (`#/forks/<campaign id>?chat=<ChatRef>&audience=director`) is the director's screen
+for two Wave 8 slices: the scenes two devices changed apart offline (049) and the review of a retcon or fork (054).
+The campaign hub (113) links it as **Forks**, and the Chronicle's feature list ([CHRONICLE](CHRONICLE.md)) links it
+too, for the same chat and view. (081's story threads, a chat's **Story**, are another page: [STORY](STORY.md).)
 
-It is served by the `story` adapter (`grimoire.app.adapters.forks`, owner 115), over the existing domain services
+It is served by the `forks` adapter (`grimoire.app.adapters.forks`, owner 115), over the existing domain services
 only: 019/028's keep-both conflict records and the last sync reports (as Devices and sync reads them), 049's
 `semantic` review (`resolution_risk`, `validate_transition`), and 054's `ContinuityLibrary` (`snapshot`,
 `preview`, `rehearse`, `corrections`, `declare_dependency`, `inspect_fork`). It keeps no store of its own and
