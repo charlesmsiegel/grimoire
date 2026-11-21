@@ -30,3 +30,42 @@ The [Wave 1 audit](../README.md#wave-1-status) left these with this sprint. *Obl
 - Should drafts survive restart?
 - How is ordering determined?
 - When is one versus multiple narrator responses appropriate?
+
+## Follow-up TODOs after the first useful slice
+
+[PR #711](https://github.com/charlesmsiegel/grimoire/pull/711) landed milestone 1:
+independent local controllers, editable/reorderable drafts and one attributed combined
+turn. The overlapping implementation in [PR #699](https://github.com/charlesmsiegel/grimoire/pull/699)
+is superseded. These unchecked follow-ups do not reopen the completed 058 first-useful
+roadmap row or change completion totals. They record work, not implemented behavior.
+
+### Verified defect
+
+- [ ] Include secondary `also` posts in `continuitywire.projection.scene_revision`.
+  At `21cddd665`, changing only a secondary post's text leaves the semantic hash
+  unchanged because `TURN_FIELDS` omits `also`; `continuitystore.snapshot` uses that
+  hash for turn source pins. Add regressions proving secondary text, author, audience
+  and order changes invalidate pins, while inference-call bookkeeping remains excluded.
+
+### Consent and recovery enhancements
+
+- [ ] Add explicit per-controller approval of the final draft revision and order,
+  including consent to share unpublished text. Invalidate approval on edits, reorder,
+  participant changes and control-history changes, including control away and back.
+  The landed shared-screen API currently submits drafts without this approval step;
+  this is a same-device consent boundary, not multiplayer authentication.
+- [ ] Persist device-private drafts with guarded writes and restart recovery
+  (milestone 2). Define who may read each unpublished draft and explicitly consent
+  to sharing; preserve replication exclusions and require fresh approval after restart.
+  Landed drafts are in memory and visible in the owner's shared-screen view.
+- [ ] Add durable submission receipts for lost acknowledgements and restart-safe
+  retries (milestone 2). A matching retry must recover the original accepted turn
+  without duplicate posts, generation or effects; a conflicting retry must refuse.
+  Current retry support is limited to the matching open turn before generation.
+
+Implement follow-ups against the landed `grimoire.scene-turn/2` / `also` contract,
+`post_together`, and existing local-player API and renderers. Do not replay #699's
+incompatible `/1` / `extra_posts` schema: the landed decoder does not recognize its
+secondary contributions as posts. Review any migration and consent adapter before
+changing persisted state or the shared-device trust model. Drafting UI and physical
+device acceptance remain separate work; no enhancement above is claimed complete.
