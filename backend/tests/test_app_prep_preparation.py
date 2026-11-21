@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from prep_app_fixtures import (
@@ -31,6 +32,7 @@ from store_helpers import OWNER
 from textapi_fixtures import Device, desktop_library, say
 
 from grimoire.app.adapters import providers
+from grimoire.app.adapters.prep import preparation
 from grimoire.app.appapi import AppApi
 from grimoire.app.config import ConfigError, config_json, parse_model_config, preparation_policy
 from grimoire.core import Moment, Proposition, Ruling
@@ -221,6 +223,57 @@ def test_evidence_that_changed_after_the_estimate_refuses_and_sends_nothing(desk
         table.transport._steps.pop(0)  # the first scripted reply was for the old evidence's ids, which still hold
         table.prepare("r1", fresh["expected"])
         assert len(table.transport.sends) == 1
+
+
+def test_evidence_that_changes_while_the_approved_call_is_made_sends_nothing(desk, tmp_path, monkeypatch):
+    # the approval is checked, then the session reads the library again before the call: new evidence landing in
+    # between was never estimated, so the call is refused and nothing is sent
+    folder, chat = desk
+    with Device(folder, [say("Mara pockets it.")]) as device:
+        table = Table(device, chat, tmp_path)
+        table.answer(table.good())
+        plan = table.plan("r1")
+        assemble, reads = preparation.assemble, []
+
+        def late(ctx, of):  # type: ignore[no-untyped-def]
+            reads.append(of)
+            if len(reads) == 2:  # the session's own read, once the approval was checked against the first
+                EvidenceLibrary(device.table.store, device.table.owner, owner=OWNER).append(chat.campaign_id, [
+                    Proposition(chat.campaign_id, "late-truth", "The lighthouse keeper is awake.",
+                                Moment(4, "quay", "t1"), "director")]).commit()
+            return assemble(ctx, of)
+
+        monkeypatch.setattr(preparation, "assemble", late)
+        with pytest.raises(ApiRefused) as caught:
+            table.prepare("r1", plan["expected"])
+        assert caught.value.reason == "changed" and not table.transport.sends and len(reads) == 2
+        monkeypatch.setattr(preparation, "assemble", assemble)
+        assert table.view()["proposals"] == []
+        # estimated again, the new evidence is shown and the call sends
+        fresh = table.plan("r2")
+        table.prepare("r2", fresh["expected"])
+        assert len(table.transport.sends) == 1
+        assert "The lighthouse keeper is awake." in "\n".join(m["content"] for m in table.sent()[0]["messages"])
+
+
+def test_a_combined_turns_contributions_are_choices_in_the_order_played():
+    anya, tamsin, mara = (InstanceRef("c", "character", name) for name in ("anya", "tamsin", "mara"))
+    def post(actor, text):  # type: ignore[no-untyped-def]
+        return SimpleNamespace(actor=actor, text=text)
+
+    records = [SimpleNamespace(kept=1, number=1, turn_id="t1", posts=[post(anya, "I light the lamp.")]),
+               SimpleNamespace(kept=None, number=2, turn_id="t2", posts=[post(anya, "Not kept.")]),
+               SimpleNamespace(kept=1, number=3, turn_id="t3", posts=[post(anya, "Is the lighthouse dark?"),
+                                                                      post(mara, "The director's line."),
+                                                                      post(tamsin, "And who keeps its lamp?")])]
+    controller = {anya: "human:ana", tamsin: "human:bob", mara: preparation.DIRECTOR}.get
+    found = preparation._choices(records, controller, {anya: "Anya", tamsin: "Tamsin"}, {})
+    # newest first, a combined turn's latest contribution first, so a cut keeps the latest
+    assert [text for text, *_ in found] == ["Tamsin (turn 3): And who keeps its lamp?",
+                                            "Anya (turn 3): Is the lighthouse dark?", "Anya (turn 1): I light the lamp."]
+    # what the prompt gets: the cut, oldest first, each turn's contributions in the order they were posted
+    assert [text for text, *_ in reversed(found[:2])] == ["Anya (turn 3): Is the lighthouse dark?",
+                                                          "Tamsin (turn 3): And who keeps its lamp?"]
 
 
 def test_a_refused_reply_keeps_nothing_and_its_approval_is_spent(desk, tmp_path):
