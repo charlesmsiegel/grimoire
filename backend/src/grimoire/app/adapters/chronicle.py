@@ -377,14 +377,14 @@ FEATURES = (
      "reason": "050's capture and trainer links are headless; the party roster does not show them yet"},
     {"slice": "051", "title": "Several NPCs answering at once", "status": "unavailable",
      "reason": "051 schedules an exchange headlessly; play does not run one yet"},
-    {"slice": "056", "title": "Source catalogs", "status": "unavailable",
-     "reason": "056's catalog composition is headless; a campaign opts in only through its chats' bindings"},
+    {"slice": "056", "title": "Source catalogs", "status": "screen", "route": "prep", "campaign": True,
+     "where": "Prep, in the director's view: the catalogs, each chat's pinned bindings and their context cost"},
     {"slice": "058", "title": "Two players at one screen", "status": "unavailable",
      "reason": "058 holds each local player's draft in memory; its drafting screen is not built yet"},
-    {"slice": "062", "title": "Ruleset action contracts", "status": "unavailable",
-     "reason": "062's results are noncanonical proposals; dice and durable resolution are 075"},
-    {"slice": "064", "title": "Scenario preparation", "status": "unavailable",
-     "reason": "064's generator has no store reader or app service, and each call is a billed model call"},
+    {"slice": "062", "title": "Ruleset action contracts", "status": "screen", "route": "prep", "campaign": True,
+     "where": "Prep: the four reference contracts, and an action checked as a proposal only"},
+    {"slice": "064", "title": "Scenario preparation", "status": "screen", "route": "prep", "campaign": True,
+     "where": "Prep, in the director's view: one scene prepared from the library's evidence, after an approved estimate"},
 )
 
 
