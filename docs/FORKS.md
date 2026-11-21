@@ -39,7 +39,7 @@ the accepted events and holdings the last sync held with them, so no effect is a
 
 `retained` lists the retained forks the campaign holds: each scene's exact original from every device, which one
 was restored, and `state`: `reconciled` (this device holds exactly the restored scenes and the ledger the fork
-predicts), `waiting` (some of what ordinary sync owes this device since the fork is still as it was before it),
+predicts), `waiting` (some of what ordinary sync owes this device since the fork, a removal included, is still as it was before it),
 `played_on` (nothing owed is as it was: it arrived, and play went on here since, so a later turn or declaration is
 never shown as a fork still waiting) or `elsewhere` (this device is not one of the fork's two). `reconciled_here` is
 true for `reconciled` and `played_on`. Ordinary sync brings the accepted effects across and applies each once.

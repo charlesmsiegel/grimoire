@@ -428,6 +428,11 @@ def test_a_forks_state_tells_waiting_from_played_on_since():
     # nothing was owed to the device the fork kept; any change there is play since
     assert forks_adapter.fork_state({scene: "kept", paid: "p1", later: "l1"}, archive, "desktop") == "played_on"
     assert forks_adapter.fork_state({scene: "edited", paid: "p1"}, archive, "desktop") == "played_on"
+    # a removal sync still owes keeps the fork waiting, though the rest arrived and play went on
+    mark = "bookmarks/old"
+    owing = {**archive, "premises": {**archive["premises"], "phone": {scene: "theirs", mark: "m1"}}}
+    assert forks_adapter.fork_state({scene: "kept", paid: "p1", mark: "m1", later: "l1"}, owing, "phone") == "waiting"
+    assert forks_adapter.fork_state({scene: "kept", paid: "p1", later: "l1"}, owing, "phone") == "played_on"
     # a third device, or one not identified, holds only the record
     assert forks_adapter.fork_state({scene: "kept"}, archive, "tablet") == "elsewhere"
     assert forks_adapter.fork_state({scene: "kept"}, archive, None) == "elsewhere"
