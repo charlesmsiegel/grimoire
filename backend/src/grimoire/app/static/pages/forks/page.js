@@ -258,7 +258,8 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
       result = { request, answer };
       drawResult();
     } catch (error) {
-      if (error && error.reason === "changed" && previewing.current(turn)) await load();
+      // the records moved on, or one picked is gone: read them again, so the picks and any report are of now
+      if (error && (error.reason === "changed" || error.reason === "missing_record") && previewing.current(turn)) await load();
       throw error;
     }
     return true;
@@ -287,7 +288,7 @@ async function showRetcon(slot, ctx, campaign, chatNames) {
       ctx.notify(answer.done.already_applied ? "That was already recorded; nothing was changed again." : "Recorded.");
       draw();
     } catch (error) {
-      if (error && error.reason === "changed") {  // the campaign moved on after the review: review it again
+      if (error && (error.reason === "changed" || error.reason === "missing_record")) {  // the campaign moved on after the review: review it again
         review = null;
         await load();
       }

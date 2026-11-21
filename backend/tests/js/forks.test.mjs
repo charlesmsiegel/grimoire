@@ -416,3 +416,29 @@ test("a preview refused because the records moved on leaves no earlier report dr
   await settle();
   assert.ok(region(root), "a preview of the records now is drawn");
 });
+
+test("a preview refused because a picked record is gone reads the records again and drops the pick", async () => {
+  let reads = 0, asked = 0;
+  const { root, done } = mounted({
+    scenes: () => {
+      reads += 1;
+      const now = scenesOf("c1", "sha256:" + String(reads).repeat(64));
+      return reads === 1 ? now : { ...now, records: [PAID, LATER] };
+    },
+    preview: (args) => {
+      asked += 1;
+      if (asked === 2) throw Object.assign(new Error("a record is gone"), { reason: "missing_record" });
+      return preview(args, [impact(PAID, "known")]);
+    },
+  });
+  await done;
+  tick_(root, SCENE.path);
+  button(retcon(root), "Preview").click();
+  await settle();
+  assert.ok(region(root), "the first report is drawn");
+  button(retcon(root), "Preview").click();
+  await settle();
+  assert.equal(reads, 2, "the records were read again");
+  assert.equal(region(root), undefined, "the report of the old records is gone");
+  assert.equal(box(root, SCENE.path), undefined, "the record that is gone is no longer offered");
+});
