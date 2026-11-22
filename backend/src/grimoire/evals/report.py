@@ -205,9 +205,19 @@ def _findings(findings) -> list[str]:
     return lines
 
 
-def _sample_table(title: str, ids, cards) -> list[str]:
+#: Under a reader's labels, the per-sample rows that come from the run's own record and from phrase
+#: markers are renamed, so a table does not read as contradicting the labelled verdict.
+LABELLED_ROWS = {
+    "choices negated by label": "choices negated in the run's own record",
+    "choices unrealized": "choices unrealized by phrase markers (not used)",
+    "choices unlabelled": "choices unlabelled in the run's own record",
+}
+
+
+def _sample_table(title: str, ids, cards, *, labelled: bool = False) -> list[str]:
     columns = [[value for _, value in _rows_v2(card)] for card in cards]
-    labels = [label for label, _ in _rows_v2(cards[0])]
+    labels = [LABELLED_ROWS.get(label, label) if labelled else label
+              for label, _ in _rows_v2(cards[0])]
     heads = [f"sample {index}" for index in range(1, len(cards) + 1)]
     width = max(len(label) for label in [*labels, "metric"])
     widths = [max(len(head), *(len(value) for value in column)) for head, column in zip(heads, columns)]
@@ -234,6 +244,10 @@ def render_samples(report: SampledReport) -> str:
         "strict majority of each side's samples; voice compares mean cast distinguishability, "
         f"allowing {NOISE_STANDARD_ERRORS} standard errors of the difference for sampling noise "
         f"when both sides have at least {MIN_SAMPLES_FOR_NOISE} samples; cost and latency compare means.",
+        ("choices: decided by a reader's labels (honored or complicated gives effect, ignored does "
+         "not, negated is a hard finding); phrase markers decide nothing"
+         if report.choice_basis == "labels" else
+         "choices: decided by phrase markers in the model text"),
         "", *_findings(report.findings), "",
         "choices given effect (samples realizing it, baseline / candidate):"]
     for choice_id, (base, cand) in sorted(report.realized.items()):
@@ -248,7 +262,10 @@ def render_samples(report: SampledReport) -> str:
                  f"{'n/a (usage incomplete)' if report.baseline_cost is None else _fmt(report.baseline_cost)}, "
                  f"candidate "
                  f"{'n/a (usage incomplete)' if report.candidate_cost is None else _fmt(report.candidate_cost)}")
-    lines += ["", *_sample_table("baseline samples", report.baseline_ids, report.baselines), "",
-              *_sample_table("candidate samples", report.candidate_ids, report.candidates),
+    labelled = report.choice_basis == "labels"
+    lines += ["", *_sample_table("baseline samples", report.baseline_ids, report.baselines,
+                                 labelled=labelled), "",
+              *_sample_table("candidate samples", report.candidate_ids, report.candidates,
+                             labelled=labelled),
               "judge scores never decide the verdict."]
     return "\n".join(lines) + "\n"
