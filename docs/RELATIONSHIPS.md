@@ -1,6 +1,6 @@
 # Relationships and reputation (first slice of sprint 078)
 
-**Status:** first slice of [Relationships And Reputation](roadmap/sprints/relationships-and-reputation.md): milestone 1 (a meaningful interaction and its consequences for each person who has evidence of it) and the opposing-perspectives half of milestone 2. The code is the pure package `grimoire.relationships`: headless and in memory, with no persistence, provider call, UI or runtime wiring. Public reputation held by a community (milestone 3) is not built.
+**Status:** first slice of [Relationships And Reputation](roadmap/sprints/relationships-and-reputation.md): milestone 1 (a meaningful interaction and its consequences for each person who has evidence of it) and the opposing-perspectives half of milestone 2. The code is the pure package `grimoire.relationships`: headless and in memory, with no persistence, provider call or runtime wiring. The director checks an NPC's attitude against its own evidence on the **Attitudes** page (116, [ATTITUDES_PAGE](ATTITUDES_PAGE.md)): a check only, nothing is saved. Public reputation held by a community (milestone 3) is not built.
 
 ## The rule
 
@@ -65,4 +65,4 @@ Grounds prove access and relevance, not that the account is a fair reading: the 
 | Rendering dispositions in the per-NPC brief, and goals reading them | 027 / 039 consumers |
 | Debts and obligations as commitments with deadlines | [Quests and commitments](roadmap/sprints/quests-and-commitments.md) (077) |
 | Rumor transport between members | 063 ([RUMORS](RUMORS.md)) |
-| A relationship panel | 116 |
+| A relationship panel that saves attitudes (the Attitudes page only checks them: [ATTITUDES_PAGE](ATTITUDES_PAGE.md)) | 078 later / 116 |

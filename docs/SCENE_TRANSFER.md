@@ -86,4 +86,4 @@ The sprint's later milestones are not covered yet:
 - a chronology mapping beyond "the copy's history comes before its first turn";
 - presenting missing art.
 
-There is also no app route or UI yet ([UI coverage](roadmap/UI_COVERAGE.md)). A copy into the origin's own campaign is refused; a fork is 028's.
+The director reviews and makes a copy on the **Copy into another campaign** page (116, [TRANSFER_PAGE](TRANSFER_PAGE.md)), linked from a chat's Details; it shows a plan, writes nothing, and commits only what was reviewed. A copy into the origin's own campaign is refused; a fork is 028's.

@@ -47,4 +47,8 @@ from . import companions, ensemble, table  # noqa: E402 -- 115's play at the tab
 ADAPTERS = tuple(sorted((*ADAPTERS, companions.ADAPTER, ensemble.ADAPTER, table.ADAPTER),
                         key=lambda adapter: adapter.name))
 
+from . import attitudes, transfer  # noqa: E402 -- 116: a chat copied into another campaign (084), an NPC attitude (078)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, attitudes.ADAPTER, transfer.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]

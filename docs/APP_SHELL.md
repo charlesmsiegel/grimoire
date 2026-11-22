@@ -29,6 +29,8 @@ backend/src/grimoire/app/
                                campaign's catalog bindings, ruleset contracts and scene preparation
                                ([PREP](PREP.md)); table, ensemble and companions 115, a shared turn at one
                                screen, a previewed NPC exchange and reviewed captures ([TABLE](TABLE.md))
+                               transfer 116, a chat copied into another campaign ([TRANSFER_PAGE](TRANSFER_PAGE.md));
+                               attitudes 116, an NPC's attitude checked, never saved ([ATTITUDES_PAGE](ATTITUDES_PAGE.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -185,6 +187,8 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `art` | 114 | `?scope=<scope>&subject=<subject>&limit=<n>` |
 | `sync` | 114 | |
 | `story` | 081 | `/<ChatRef>?audience=director&q=<words>&actor=<InstanceRef>&thread=<proposition id>` (one chat's story threads; see [STORY.md](STORY.md)) |
+| `transfer` | 116 | `/<ChatRef>?audience=director` (copy this chat into another campaign; see [TRANSFER_PAGE.md](TRANSFER_PAGE.md)) |
+| `attitudes` | 116 | `/<ChatRef>?audience=director` (an NPC's attitude, checked; see [ATTITUDES_PAGE.md](ATTITUDES_PAGE.md)) |
 
 A sprint may register other routes of its own (prefix them with its area, such as `source-history`).
 
