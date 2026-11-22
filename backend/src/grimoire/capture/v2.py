@@ -17,7 +17,12 @@ the scenario's own ``known_from`` turn, and its text is never shown to anyone.
 Explicitly opt-in, as the 0.2.1 capture is. ``--dry-run`` sends nothing anywhere: a scripted transport
 answers with the scenario's dry-run replies and every number is synthetic. ``--live`` is billed and
 needs ``--confirm-billing`` and the *name* of an environment variable holding the key; it is refused
-against a dry-run baseline, and at most ``(calls planned) x (attempts per call)`` requests are sent.
+against a dry-run baseline, and at most ``(calls planned) x (attempts per call) x (samples)`` requests
+are sent.
+
+``--samples N`` plays V2 N times (and, with planning, N more times), and ``--baseline`` may be
+repeated with other 0.2.1 captures of the same play. With more than one sample on a side the report
+gates all of them together (:mod:`grimoire.evals.sampled`), so one noisy reply cannot decide it.
 Exit status: 0 written, 1 run failed, 2 refused or bad usage. On any failure nothing is left in
 ``--out``.
 
@@ -65,8 +70,9 @@ from grimoire.evals.loader import (
     load_scenario,
 )
 from grimoire.evals.policy import GatePolicy
-from grimoire.evals.report import render_v2
+from grimoire.evals.report import render_samples, render_v2
 from grimoire.evals.runtime_record import record_runtime_run
+from grimoire.evals.sampled import compare_samples
 from grimoire.evals.v021 import verify_evidence
 from grimoire.generation import (
     GenerationError,
@@ -125,17 +131,27 @@ DRY_RUN_SUGGESTION = "Stay in your own voice: keep to how you usually speak."
 DRY_RUN_SUGGESTION_USAGE = {"prompt_tokens": 600, "completion_tokens": 20,
                             "prompt_tokens_details": {"cached_tokens": 0}}
 _BUDGET = re.compile(r"max_tokens=(unset|[1-9][0-9]{0,6})")
+#: Most V2 plays of each kind one command may make; each is billed in full on --live.
+MAX_SAMPLES = 10
 WORLD, CAMPAIGN = "world:capture", "c-capture"
 
 
 @dataclass(frozen=True)
 class CompareOptions:
     scenario: str
-    baseline: Path
+    #: One 0.2.1 capture directory, or several captures of the same play (one sample each).
+    baseline: Path | tuple[Path, ...]
     out: Path
     mode: str  # "dry_run" or "live"
     api_key_env: str | None = None
     with_planning: bool = False
+    #: How many times V2 plays the scenario (and, with planning, plays it planned).
+    samples: int = 1
+
+    @property
+    def baselines(self) -> tuple[Path, ...]:
+        return (Path(self.baseline),) if isinstance(self.baseline, (str, Path)) else tuple(
+            Path(directory) for directory in self.baseline)
 
 
 @dataclass(frozen=True)
@@ -183,6 +199,26 @@ def load_baseline(directory: Path, scenario: Scenario) -> Baseline:
         raise CaptureRefused("--baseline conditions must name a model and a budget of max_tokens=N")
     cap = None if budget.group(1) == "unset" else int(budget.group(1))
     return Baseline(run, bundle, provider, model, cap, run.policy.max_attempts_per_call)
+
+
+def load_baselines(directories: Sequence[Path], scenario: Scenario) -> tuple[Baseline, ...]:
+    """Every capture in ``directories``; they must be distinct captures of the same play."""
+    if not directories:
+        raise CaptureRefused("--baseline is required")
+    loaded = tuple(load_baseline(directory, scenario) for directory in directories)
+    first = loaded[0]
+    digests = [each.run.source.evidence_sha256 for each in loaded]
+    if len(set(digests)) != len(digests):
+        raise CaptureRefused("--baseline names the same capture more than once")
+    for directory, each in zip(directories[1:], loaded[1:]):
+        same = ((each.provider, each.model, each.max_tokens, each.attempts, each.run.conditions,
+                 each.run.source.mode)
+                == (first.provider, first.model, first.max_tokens, first.attempts,
+                    first.run.conditions, first.run.source.mode))
+        if not same:
+            raise CaptureRefused(f"--baseline {directory}: its provider, model, budget, attempts, "
+                                 f"conditions or mode differ from the first capture's")
+    return loaded
 
 
 def _setup(name: str, scenario: Scenario) -> dict:
@@ -363,11 +399,13 @@ def _runtime(options: CompareOptions, baseline: Baseline, setup: Mapping, scenar
                              max_output_tokens=baseline.sent_max_tokens)
 
 
-def planned_requests(scenario: Scenario, baseline: Baseline, *, with_planning: bool) -> int:
-    """The most provider requests one comparison can send: every planned call at every attempt."""
+def planned_requests(scenario: Scenario, baseline: Baseline, *, with_planning: bool,
+                     samples: int = 1) -> int:
+    """The most provider requests one comparison can send: every planned call of every sample at
+    every attempt."""
     speaking = sum(len(script.speakers) for script in scenario.script)
     calls = speaking + (2 * speaking if with_planning else 0)  # the planning run plans and speaks
-    return calls * baseline.attempts
+    return calls * baseline.attempts * samples
 
 
 def spent(meters: Sequence[TurnMeter]) -> str:
@@ -393,7 +431,7 @@ def served_model(meters: Sequence[TurnMeter], requested: str) -> str:
 
 
 def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup: Mapping, *,
-         planning: bool, meters: list[TurnMeter] | None = None) -> dict:
+         planning: bool, meters: list[TurnMeter] | None = None, sample: int | None = None) -> dict:
     """The V2 run, as a ``/2`` run dict with the baseline's conditions."""
     cast = _cast(scenario, setup)
     runtime = _runtime(options, baseline, setup, scenario, planning)
@@ -425,9 +463,11 @@ def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup:
         heard.append(said)
         heard.extend(HeardLine(line.speaker, line.text, line.actor) for line in outcome.lines)
     name = "planning" if planning else "baseline"
+    suffix = "" if sample is None else f"-{sample}"
     document = record_runtime_run(
-        scenario, recorded, run_id=f"v2-{options.mode.replace('_', '-')}-{name}",
-        label=f"V2 runtime ({options.mode}, {baseline.provider}, {name})",
+        scenario, recorded, run_id=f"v2-{options.mode.replace('_', '-')}-{name}{suffix}",
+        label=(f"V2 runtime ({options.mode}, {baseline.provider}, {name}"
+               + ("" if sample is None else f", sample {sample}") + ")"),
         conditions={**baseline.conditions, "model": served_model(own, baseline.model)}, harness=HARNESS,
         route=f"{baseline.provider}:{baseline.model}",
         choice_outcomes={choice.choice_id: "unlabelled" for choice in scenario.choices})
@@ -442,27 +482,42 @@ def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup:
     return document
 
 
-def _report(options: CompareOptions, baseline: Baseline, scenario: Scenario, runs: Mapping[str, dict]) -> str:
-    evidence = verify_evidence(baseline.run, baseline.bundle, evidence_digest(baseline.bundle), scenario)
-    parts = [(f"V2 against the 0.2.1 capture: {options.mode}, provider {baseline.provider}, "
-              f"model {baseline.model}, V2 max_tokens={baseline.sent_max_tokens}, "
-              f"baseline evidence sha256 {baseline.run.source.evidence_sha256}")]
+def _report(options: CompareOptions, baselines: Sequence[Baseline], scenario: Scenario,
+            runs: Mapping[str, Sequence[dict]]) -> str:
+    first = baselines[0]
+    evidence = [verify_evidence(each.run, each.bundle, evidence_digest(each.bundle), scenario)
+                for each in baselines]
+    digests = ", ".join(each.run.source.evidence_sha256 for each in baselines)
+    parts = [(f"V2 against the 0.2.1 capture{'s' if len(baselines) > 1 else ''}: {options.mode}, "
+              f"provider {first.provider}, model {first.model}, V2 max_tokens={first.sent_max_tokens}, "
+              f"baseline evidence sha256 {digests}")]
+    sampled = options.samples > 1 or len(baselines) > 1
+    if sampled:
+        parts.append(f"Samples: {len(baselines)} 0.2.1 capture{'s' if len(baselines) > 1 else ''}, "
+                     f"{options.samples} V2 play{'s' if options.samples > 1 else ''} of each kind. "
+                     "One reply is one draw from the model, so each side is read over all its samples.")
     if options.mode == "dry_run":
         parts.append("Dry run: scripted replies and synthetic numbers; nothing was sent.")
-    if baseline.max_tokens is None:
+    if first.max_tokens is None:
         parts.append("0.2.1 sent no output cap (max_tokens=unset) and V2 always sends one, so the "
                      "budgets differ and the gate reports the runs as incomparable.")
-    if baseline.provider in PROTOCOL_NOTES and options.mode == "live":
-        parts.append(PROTOCOL_NOTES[baseline.provider])
-    v2 = parse_run_v2(runs["baseline"], scenario)
-    parts.append("== V2 (one call per speaking NPC) against 0.2.1 ==\n"
-                 + render_v2(compare_v2(scenario, baseline.run, v2, baseline_evidence=evidence)))
+    if first.provider in PROTOCOL_NOTES and options.mode == "live":
+        parts.append(PROTOCOL_NOTES[first.provider])
+    plain = [parse_run_v2(raw, scenario) for raw in runs["baseline"]]
+    title = "== V2 (one call per speaking NPC) against 0.2.1 ==\n"
+    if sampled:
+        parts.append(title + render_samples(compare_samples(
+            scenario, [each.run for each in baselines], plain, baseline_evidence=evidence)))
+    else:
+        parts.append(title + render_v2(compare_v2(scenario, first.run, plain[0],
+                                                  baseline_evidence=evidence[0])))
     if "planning" in runs:
         parts.append(VERDICT_NOTE)
-        planned = parse_run_v2(runs["planning"], scenario)
+        planned = [parse_run_v2(raw, scenario) for raw in runs["planning"]]
         policy = GatePolicy(allowed_flags=frozenset({InferenceStage.PLANNING.value}))
-        parts.append("== V2 with optional planning against plain V2 (an opt-in billed extra) ==\n"
-                     + render_v2(compare_v2(scenario, v2, planned, policy)))
+        title = "== V2 with optional planning against plain V2 (an opt-in billed extra) ==\n"
+        parts.append(title + (render_samples(compare_samples(scenario, plain, planned, policy)) if sampled
+                              else render_v2(compare_v2(scenario, plain[0], planned[0], policy))))
     return "\n\n".join(parts) + "\n"
 
 
@@ -471,11 +526,16 @@ def run_compare(options: CompareOptions) -> Path:
         scenario = load_scenario(benchmark_file(options.scenario, "scenario.json"))
     except BenchmarkFormatError as error:
         raise CaptureRefused(f"scenario {options.scenario!r}: {error}") from None
+    if isinstance(options.samples, bool) or not isinstance(options.samples, int) or not (
+            1 <= options.samples <= MAX_SAMPLES):
+        raise CaptureRefused(f"--samples must be a whole number from 1 to {MAX_SAMPLES}")
     setup = _setup(options.scenario, scenario)
-    baseline = load_baseline(options.baseline, scenario)
+    directories = options.baselines
+    baselines = load_baselines(directories, scenario)
+    first = baselines[0]
     key = None
     if options.mode == "live":
-        if baseline.run.source.mode != "live":
+        if first.run.source.mode != "live":
             raise CaptureRefused("--live needs a live 0.2.1 baseline; this one is a dry run")
         if not options.api_key_env:
             raise CaptureRefused("--live needs --api-key-env")
@@ -483,22 +543,32 @@ def run_compare(options: CompareOptions) -> Path:
         key = os.environ.get(options.api_key_env) or None
         if key is None:
             raise CaptureRefused(f"the environment variable {options.api_key_env} is not set")
-    out = check_out_dir(options.out, forbidden=forbidden_roots(Path(options.baseline).resolve()))
+    forbidden = [*forbidden_roots(directories[0].resolve()),
+                 *(Path(os.path.realpath(directory)) for directory in directories[1:])]
+    out = check_out_dir(options.out, forbidden=forbidden)
     if options.mode == "live":
-        print(f"live: at most {planned_requests(scenario, baseline, with_planning=options.with_planning)} "
-              f"billed requests to {baseline.provider} ({baseline.model})", file=sys.stderr)
+        ceiling = planned_requests(scenario, first, with_planning=options.with_planning,
+                                   samples=options.samples)
+        print(f"live: at most {ceiling} billed requests to {first.provider} ({first.model}) "
+              f"over {options.samples} sample{'s' if options.samples > 1 else ''}", file=sys.stderr)
     meters: list[TurnMeter] = []
+    numbered = options.samples > 1
+    kinds = [False, True] if options.with_planning else [False]
+    runs: dict[str, list[dict]] = {}
     try:
-        runs = {"baseline": play(options, baseline, scenario, setup, planning=False, meters=meters)}
-        if options.with_planning:
-            runs["planning"] = play(options, baseline, scenario, setup, planning=True, meters=meters)
+        for planning in kinds:
+            runs["planning" if planning else "baseline"] = [
+                play(options, first, scenario, setup, planning=planning, meters=meters,
+                     sample=sample if numbered else None)
+                for sample in range(1, options.samples + 1)]
     except BaseException:  # failed or interrupted: nothing is written, but say what was already sent
         if options.mode == "live" and meters:
             print(f"stopped after billed calls: {spent(meters)}", file=sys.stderr)
         raise
-    files = {f"v2-{name}.run.json": json.dumps(raw, indent=2, ensure_ascii=False) + "\n"
-             for name, raw in runs.items()}
-    files["comparison-report.txt"] = _report(options, baseline, scenario, runs)
+    files = {f"v2-{name}{f'-{index}' if numbered else ''}.run.json":
+             json.dumps(raw, indent=2, ensure_ascii=False) + "\n"
+             for name, samples in runs.items() for index, raw in enumerate(samples, start=1)}
+    files["comparison-report.txt"] = _report(options, baselines, scenario, runs)
     if key and any(key in text for text in files.values()):
         raise CaptureFailed("an output contains the provider key; nothing was written")
     _write(out, files)
@@ -511,14 +581,17 @@ def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="python -m grimoire.capture.v2",
                      description="Play a 0.2.1 capture's scenario on V2 and compare usage and voice.")
     parser.add_argument("--scenario", required=True)
-    parser.add_argument("--baseline", required=True, type=Path,
-                        help="the 0.2.1 capture directory (run.json and evidence.json)")
+    parser.add_argument("--baseline", required=True, type=Path, action="append",
+                        help="a 0.2.1 capture directory (run.json and evidence.json); repeat it "
+                             "for several captures of the same play, one sample each")
     parser.add_argument("--out", required=True, type=Path)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="no network; synthetic numbers")
     mode.add_argument("--live", action="store_true", help="real provider calls; billed")
     parser.add_argument("--with-planning", action="store_true",
                         help="also play V2 with optional presentation planning (more billed calls)")
+    parser.add_argument("--samples", type=int, default=1, metavar="N",
+                        help=f"V2 plays of each kind, 1 to {MAX_SAMPLES} (each billed on --live)")
     parser.add_argument("--api-key-env", metavar="VAR",
                         help="name of the environment variable holding the key (live)")
     parser.add_argument("--confirm-billing", action="store_true",
@@ -538,8 +611,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise CaptureRefused("--live needs --api-key-env naming the key's variable")
         if args.api_key_env:
             check_key_env(args.api_key_env)
-        options = CompareOptions(args.scenario, args.baseline, args.out, "live" if args.live else "dry_run",
-                                 args.api_key_env, args.with_planning)
+        options = CompareOptions(args.scenario, tuple(args.baseline), args.out,
+                                 "live" if args.live else "dry_run", args.api_key_env,
+                                 args.with_planning, args.samples)
         out = run_compare(options)
     except CaptureRefused as error:
         print(f"refused: {error}", file=sys.stderr)

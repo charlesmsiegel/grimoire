@@ -139,14 +139,18 @@ class GateReportV2:
     policy: GatePolicy
 
 
-def compare_v2(scenario: Scenario, baseline: RunV2, candidate: RunV2,
-               policy: GatePolicy = GatePolicy(), *,
-               baseline_evidence: EvidenceCheck | None = None,
-               candidate_evidence: EvidenceCheck | None = None) -> GateReportV2:
-    """Gate ``candidate`` against ``baseline``; both must be ``/2`` or both ``/3``.
+def baseline_invalid(finding: Finding) -> Finding:
+    """A hard-check finding on the baseline, as the comparison's own rejection of it."""
+    return Finding("baseline_invalid", "comparison", "the baseline itself violates a hard invariant",
+                   finding.turn, finding.check, finding.subject)
 
-    Mixing them is refused (``ValueError``), as mixing ``/1`` and ``/2`` is: a ``/2`` run cannot
-    hold a director reply, so its costs and lines are not comparable with one that can.
+
+def pair_findings(scenario: Scenario, baseline: RunV2, candidate: RunV2, policy: GatePolicy, *,
+                  baseline_evidence: EvidenceCheck | None = None,
+                  candidate_evidence: EvidenceCheck | None = None) -> list[Finding]:
+    """Whether two runs can be compared at all: scenario, conditions, opted-in stages, evidence.
+
+    Mixing ``/2`` and ``/3`` is refused (``ValueError``).
     """
     if baseline.format != candidate.format:
         raise ValueError(f"baseline and candidate must have the same run format "
@@ -168,11 +172,24 @@ def compare_v2(scenario: Scenario, baseline: RunV2, candidate: RunV2,
             findings.append(Finding("evidence_unverified", "comparison",
                                     f"supplied evidence does not verify: {evidence.reason}",
                                     subject=who))
+    return findings
+
+
+def compare_v2(scenario: Scenario, baseline: RunV2, candidate: RunV2,
+               policy: GatePolicy = GatePolicy(), *,
+               baseline_evidence: EvidenceCheck | None = None,
+               candidate_evidence: EvidenceCheck | None = None) -> GateReportV2:
+    """Gate ``candidate`` against ``baseline``; both must be ``/2`` or both ``/3``.
+
+    Mixing them is refused (``ValueError``), as mixing ``/1`` and ``/2`` is: a ``/2`` run cannot
+    hold a director reply, so its costs and lines are not comparable with one that can.
+    """
+    findings = pair_findings(scenario, baseline, candidate, policy,
+                             baseline_evidence=baseline_evidence,
+                             candidate_evidence=candidate_evidence)
     for finding in hard_findings(scenario, baseline.scoring_view(),
                                  director_narration=baseline.format == FORMAT_V3):
-        findings.append(Finding("baseline_invalid", "comparison",
-                                "the baseline itself violates a hard invariant", finding.turn,
-                                finding.check, finding.subject))
+        findings.append(baseline_invalid(finding))
     findings.extend(hard_findings(scenario, candidate.scoring_view(),
                                   director_narration=candidate.format == FORMAT_V3))
 

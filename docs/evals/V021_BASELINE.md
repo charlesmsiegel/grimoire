@@ -148,6 +148,8 @@ provider, served model, output budget and attempt limit from the verified captur
 their recording conditions (a reply from another model is recorded as served and makes the runs
 incomparable). `--live --confirm-billing --api-key-env VAR` makes it billed and is refused
 against a dry-run capture; `--with-planning` adds a second V2 run with 068's optional planning stage.
+`--samples N` plays V2 N times and `--baseline` may be repeated with other captures of the same play,
+so both sides are gated over all their samples.
 Against an `anthropic` capture V2 calls the Messages API, as 0.2.1 did, so cache reads are reported
 and the cost can be compared.
 See [ACTOR_INFERENCE](../ACTOR_INFERENCE.md#the-v2-against-021-comparison) for what it does and does

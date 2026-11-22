@@ -8,6 +8,7 @@ from .checks import Scorecard
 from .format3 import FORMAT_V3
 from .gate import GateReport
 from .gate2 import GateReportV2, ScorecardV2
+from .sampled import MIN_SAMPLES_FOR_NOISE, NOISE_STANDARD_ERRORS, SampledReport
 
 SYNTHETIC_NOTICE = ("no regression against a synthetic baseline — not a cost/quality "
                     "certification")
@@ -177,4 +178,78 @@ def render_v2(report: GateReportV2) -> str:
     for (label, before), (_, after) in zip(base, cand):
         lines.append(f"{label:<{width}}  {before:<{column}}  {after}")
     lines.append("judge scores never decide the verdict.")
+    return "\n".join(lines) + "\n"
+
+
+def _status_note(statuses: set[str], passed: bool) -> list[str]:
+    notes = []
+    if statuses == {"measured"}:
+        notes.append(f"note: {MEASURED_NOTICE}")
+    elif passed:
+        notes.append(f"note: {SYNTHETIC_NOTICE if 'synthetic' in statuses else NOT_VERIFIED_NOTICE}")
+    else:
+        notes.append("note: at least one run is not a verified measurement")
+    if "provider_reported_unverified" in statuses:
+        notes.append(f"note: {UNVERIFIED_NOTICE}")
+    return notes
+
+
+def _findings(findings) -> list[str]:
+    lines = [f"findings ({len(findings)}):"]
+    for finding in findings:
+        where = " ".join(part for part in (
+            f"turn {finding.turn}" if finding.turn is not None else "",
+            finding.subject or "", f"[{finding.evidence}]" if finding.evidence else "") if part)
+        lines.append(f"  - {finding.check} ({finding.basis}){' ' + where if where else ''}: "
+                     f"{finding.message}")
+    return lines
+
+
+def _sample_table(title: str, ids, cards) -> list[str]:
+    columns = [[value if label != "usage status" else card.status for label, value in _rows_v2(card)]
+               for card in cards]
+    labels = [label for label, _ in _rows_v2(cards[0])]
+    heads = [f"sample {index}" for index in range(1, len(cards) + 1)]
+    width = max(len(label) for label in [*labels, "metric"])
+    widths = [max(len(head), *(len(value) for value in column)) for head, column in zip(heads, columns)]
+    lines = [f"{title}: " + ", ".join(f"{head}={run_id}" for head, run_id in zip(heads, ids)),
+             f"{'metric':<{width}}  " + "  ".join(f"{head:<{w}}" for head, w in zip(heads, widths)).rstrip()]
+    for row, label in enumerate(labels):
+        cells = "  ".join(f"{column[row]:<{w}}" for column, w in zip(columns, widths))
+        lines.append(f"{label:<{width}}  {cells}".rstrip())
+    return lines
+
+
+def render_samples(report: SampledReport) -> str:
+    """A sampled comparison: the verdict, its rule, the aggregates, then every sample's metrics."""
+    voice = report.voice
+    lines = [f"story-quality gate: {'PASS' if report.passed else 'FAIL'}",
+             f"samples: {len(report.baselines)} baseline, {len(report.candidates)} candidate",
+             *_status_note({card.status for card in (*report.baselines, *report.candidates)},
+                           report.passed)]
+    loosened = report.policy.non_defaults()
+    if loosened:
+        lines.append(f"policy (non-default): {_mapping(loosened)}")
+    lines += [
+        "rule: every hard invariant must hold in every sample; a choice must be given effect in a "
+        "strict majority of each side's samples; voice compares mean cast distinguishability, "
+        f"allowing {NOISE_STANDARD_ERRORS} standard errors of the difference for sampling noise "
+        f"when both sides have at least {MIN_SAMPLES_FOR_NOISE} samples; cost compares means.",
+        "", *_findings(report.findings), "",
+        "choices given effect (samples realizing it, baseline / candidate):"]
+    for choice_id, (base, cand) in sorted(report.realized.items()):
+        lines.append(f"  - {choice_id}: {base}/{len(report.baselines)} / "
+                     f"{cand}/{len(report.candidates)}")
+    lines.append("cast distinguishability: baseline mean "
+                 f"{_fmt(voice.baseline_mean)} ({', '.join(_fmt(v) for v in voice.baseline) or 'n/a'}), "
+                 f"candidate mean {_fmt(voice.candidate_mean)} "
+                 f"({', '.join(_fmt(v) for v in voice.candidate) or 'n/a'}); allowed drop "
+                 f"{report.policy.max_voice_drop:.3f}, noise allowance {voice.noise_allowance:.3f}")
+    lines.append(f"weighted billed tokens (mean): baseline "
+                 f"{'n/a (usage incomplete)' if report.baseline_cost is None else _fmt(report.baseline_cost)}, "
+                 f"candidate "
+                 f"{'n/a (usage incomplete)' if report.candidate_cost is None else _fmt(report.candidate_cost)}")
+    lines += ["", *_sample_table("baseline samples", report.baseline_ids, report.baselines), "",
+              *_sample_table("candidate samples", report.candidate_ids, report.candidates),
+              "judge scores never decide the verdict."]
     return "\n".join(lines) + "\n"

@@ -26,15 +26,18 @@ FIXTURES = Path(__file__).parent / "fixtures" / "v021"
 SCENARIO = load_scenario(benchmark_file("guild_betrayal", "scenario.json"))
 
 
-def baseline(tmp_path, provider="anthropic", *, live=False, tamper=None) -> Path:
+def baseline(tmp_path, provider="anthropic", *, live=False, tamper=None, vary=None, name="") -> Path:
     bundle = load_json(FIXTURES / f"guild_betrayal_dry_run_{provider}.evidence.json")
     if live:  # a live capture's choices are never labelled by the harness
         bundle = {**bundle, "mode": "live",
                   "choice_outcomes": {key: "unlabelled" for key in bundle["choice_outcomes"]}}
-    raw = convert(bundle, SCENARIO, digest=evidence_digest(bundle), run_id=f"v021-{provider}", label="0.2.1")
+    if vary:  # another capture of the same play: its evidence still verifies
+        vary(bundle)
+    raw = convert(bundle, SCENARIO, digest=evidence_digest(bundle), run_id=f"v021-{provider}{name}",
+                  label="0.2.1")
     if tamper:
         tamper(bundle)
-    directory = tmp_path / f"base-{provider}{'-live' if live else ''}"
+    directory = tmp_path / f"base-{provider}{'-live' if live else ''}{name}"
     directory.mkdir()
     (directory / "run.json").write_text(json.dumps(raw), "utf-8")
     (directory / "evidence.json").write_text(json.dumps(bundle), "utf-8")
@@ -203,3 +206,84 @@ def test_a_reply_from_another_model_is_recorded_as_served_and_never_compared_as_
     assert json.loads(files["v2-baseline.run.json"])["conditions"]["model"] == "entirely-different-model"
     report = files["comparison-report.txt"]
     assert "incomparable (comparison) model: recording condition differs from the baseline" in report
+
+
+def another_reply(bundle):
+    bundle["turns"][0]["responses"][0]["text"] += " Mind the coin."
+
+
+def test_several_captures_and_samples_are_gated_together_with_the_ceiling_multiplied(tmp_path):
+    first = baseline(tmp_path)
+    second = baseline(tmp_path, vary=another_reply, name="-2")
+    out = tmp_path / "out"
+    assert run("--baseline", first, "--baseline", second, "--out", out, "--dry-run",
+               "--samples", 3, "--with-planning") == 0
+    files = outputs(out)
+    assert set(files) == {"comparison-report.txt",
+                          *(f"v2-{kind}-{i}.run.json" for kind in ("baseline", "planning") for i in (1, 2, 3))}
+    assert [json.loads(files[f"v2-baseline-{i}.run.json"])["run_id"] for i in (1, 2, 3)] == [
+        f"v2-dry-run-baseline-{i}" for i in (1, 2, 3)]
+    report = files["comparison-report.txt"]
+    assert "Samples: 2 0.2.1 captures, 3 V2 plays of each kind." in report
+    assert "== V2 (one call per speaking NPC) against 0.2.1 ==\nstory-quality gate: PASS\n" \
+           "samples: 2 baseline, 3 candidate" in report
+    assert "samples: 3 baseline, 3 candidate" in report  # planning against the plain samples
+    digests = [load_json(directory / "run.json")["source"]["evidence_sha256"] for directory in (first, second)]
+    assert f"baseline evidence sha256 {digests[0]}, {digests[1]}" in report
+    loaded = v2.load_baseline(first, SCENARIO)
+    assert v2.planned_requests(SCENARIO, loaded, with_planning=True, samples=3) == (6 + 12) * 3 * 3
+
+
+def test_one_sample_of_one_capture_keeps_the_one_run_report(tmp_path):
+    out = tmp_path / "out"
+    assert run("--baseline", baseline(tmp_path), "--out", out, "--dry-run", "--samples", 1) == 0
+    report = outputs(out)["comparison-report.txt"]
+    assert "Samples:" not in report and "strict majority" not in report
+
+
+@pytest.mark.parametrize("samples", [0, 11, -1])
+def test_a_sample_count_out_of_range_is_refused(tmp_path, capsys, samples):
+    out = tmp_path / "out"
+    assert run("--baseline", baseline(tmp_path), "--out", out, "--dry-run", "--samples", samples) == 2
+    assert "--samples must be a whole number from 1 to 10" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_captures_that_are_the_same_or_of_different_plays_are_refused(tmp_path, capsys):
+    first = baseline(tmp_path)
+    out = tmp_path / "out"
+    assert run("--baseline", first, "--baseline", first, "--out", out, "--dry-run") == 2
+    assert "the same capture more than once" in capsys.readouterr().err
+
+    def other_budget(bundle):
+        bundle["budget"] = "max_tokens=8000"
+
+    other = baseline(tmp_path, vary=other_budget, name="-other")
+    assert run("--baseline", first, "--baseline", other, "--out", out, "--dry-run") == 2
+    assert "differ from the first capture's" in capsys.readouterr().err
+    live = baseline(tmp_path, live=True)
+    assert run("--baseline", first, "--baseline", live, "--out", out, "--dry-run") == 2
+    assert "differ from the first capture's" in capsys.readouterr().err
+    assert run("--baseline", first, "--baseline", other, "--out", other / "out", "--dry-run") == 2
+    assert not out.exists()
+
+
+def test_no_output_goes_inside_any_baseline(tmp_path, capsys):
+    first, second = baseline(tmp_path), baseline(tmp_path, vary=another_reply, name="-2")
+    assert run("--baseline", first, "--baseline", second, "--out", second / "out", "--dry-run") == 2
+    assert "is inside" in capsys.readouterr().err
+
+
+def test_a_live_sampled_run_sends_each_sample_and_prints_the_multiplied_ceiling(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("CAPTURE_TEST_KEY", "sk-loopback-only-0003")
+    reply = stream(messages_lines(deltas=("Hm, a quiet evening at the hall.",), model="synthetic-rp-model"))
+    out = tmp_path / "out"
+    with sse_server(reply) as server:
+        monkeypatch.setitem(v2.ENDPOINTS, "anthropic", base_url(server))
+        assert run("--baseline", baseline(tmp_path, live=True), "--out", out, "--live", "--samples", 2,
+                   "--confirm-billing", "--api-key-env", "CAPTURE_TEST_KEY") == 0
+    assert "at most 36 billed requests to anthropic (synthetic-rp-model) over 2 samples" in capsys.readouterr().err
+    assert len(server.requests) == 12
+    files = outputs(out)
+    assert {"v2-baseline-1.run.json", "v2-baseline-2.run.json"} <= set(files)
+    assert "samples: 1 baseline, 2 candidate" in files["comparison-report.txt"]
