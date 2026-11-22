@@ -100,7 +100,8 @@ def test_negation_label_and_evidence_are_independent_signals(bench):
     "Oda flips the guest book open and taps a line.",
     "Oda slides the ledger across the counter without a word.",
     "Oda hands Wren the ledger.",
-    "Oda handed the ledger over.",
+    "Oda handed over the ledger.",
+    "Oda gave the ledger to Wren.",
     "Oda runs a thumb down the guest-ledger.",
     "Oda checks the guests’ ledger.",
     "Oda turns the ledger toward Wren.",
@@ -123,6 +124,12 @@ def test_the_ledger_choice_is_realized_by_its_other_forms(bench, narration):
     "Oda never opens the ledger for strangers.",
     "Oda keeps the ledger open only for her counts.",
     "Bellamy laughs that the guest list is full of rogues.",
+    "Oda refuses to show the ledger to Wren.",
+    "Oda says nothing about the ledger to Wren.",
+    "Oda drags the ledger across the counter, out of Wren's reach.",
+    "Oda keeps the ledger across the room.",
+    "Bellamy eyes the ledger across the counter.",
+    "Oda hands the ledger over to Quill and turns away.",
 ])
 def test_a_reply_that_does_not_produce_the_guest_ledger_does_not_realize_the_choice(bench, narration):
     scenario, run = bench

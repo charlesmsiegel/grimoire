@@ -449,13 +449,15 @@ What the numbers leave out:
   which Oda slid the ledger across, opened it, took the coin or handed over the guest book counted as
   unrealized. Its effect markers now also take the other names of the same book (`guest book`,
   `guestbook`, `guest-ledger`, `guests' ledger`, `guest register`, `ledger of guests` and the like,
-  with plurals), and the acts that hand it to Wren (`hands over the ledger`, `hands Wren the ledger`,
-  `the ledger across`, `the ledger toward Wren` and the like, present and past). Like `guest ledger`
-  itself, a name of the book counts wherever it appears after Wren's line. Acts that a refusal uses
-  as readily (`takes the coin`, `opens the ledger`, `turns the ledger`, `pushes the ledger`) and a
-  bare `ledger` ("Ledger's closed tonight") do not count, and neither does a `guest list`, which is
-  another thing. Matching is a phrase search with no sense of negation, so a marker is kept only if a
-  refusal would rarely use it. Negation markers are unchanged, so no reply that passed before can
+  with plurals), and the acts that hand it to Wren, each tied to its giving verb (`hands over the
+  ledger`, `hands Wren the ledger`, `gives the ledger to Wren`, `slides the ledger across`, `turns the
+  ledger toward Wren` and the like, present and past). Acts that a refusal uses as readily (`takes
+  the coin`, `opens the ledger`, `turns the ledger`, a bare `the ledger across` or `the ledger to
+  Wren`) and a bare `ledger` ("Ledger's closed tonight") do not count, and neither does a `guest
+  list`, which is another thing. Matching is a phrase search with no sense of negation, so an act is
+  kept only if a refusal would rarely use it. A name of the book still counts wherever it appears
+  after Wren's line, as `guest ledger` always did, so a flat refusal that names it ("No guest book
+  for strangers") counts too; with more names that is now more likely. Negation markers are unchanged, so no reply that passed before can
   fail now. The full list is in the scenario file, and `backend/tests/test_evals_checks.py` holds
   the forms that must and must not realize the choice.
 - **Why it looked like the markers.** 0.2.1 itself realized the choice in 2 of 5 samples, and V2 with
