@@ -322,7 +322,7 @@ def test_rejected_replies_count_transport_retries_and_unreported_counts():
     assert spent["cache_read_tokens_unreported"] == 1
     from grimoire.evals.v021 import describe_rejected
     assert describe_rejected(spent).endswith(
-        "; 1 earlier transport attempt left no usage (unreported)")
+        "; 1 earlier transport attempt whose usage 0.2.1 did not record (unreported)")
 
 
 @pytest.mark.parametrize("change", [
@@ -334,6 +334,10 @@ def test_a_rejected_row_s_counts_are_checked_like_a_kept_row_s(change):
 
 
 def test_a_rejected_row_from_another_model_is_refused():
+    data = retried_bundle(rows=[v021_row("r-1"), v021_row("r-1", model="other-model")])
+    with pytest.raises(CaptureConversionError, match="usage row 1 ") as error:
+        convert(data, SCENARIO, digest=evidence_digest(data), run_id="cap", label="capture")
+    assert error.value.code == "model_mismatch"
     refused(retried_bundle(rows=[v021_row("r-1", model="other-model"), v021_row("r-1")]),
             "model_mismatch")
 

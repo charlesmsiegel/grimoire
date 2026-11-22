@@ -228,7 +228,7 @@ def describe_rejected(spent: Mapping[str, int]) -> str:
                             ("cache_read_tokens", "cache reads")))
     earlier = spent["attempts_unreported"]
     return (f"{plural(spent['requests'], 'request')}, {counts}"
-            + (f"; {plural(earlier, 'earlier transport attempt')} left no usage (unreported)"
+            + (f"; {plural(earlier, 'earlier transport attempt')} whose usage 0.2.1 did not record (unreported)"
                if earlier else ""))
 
 
@@ -241,7 +241,7 @@ def convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
         raise _malformed(f"unexpected structure ({type(error).__name__})") from None
 
 
-def _served_model(rows: list[Mapping], requested: str) -> str:
+def _served_model(rows: list[tuple[int, Mapping]], requested: str) -> str:
     """The one model that answered every call, recorded as served.
 
     A row is accepted when it names the requested model or 0.2.1 recorded the request as the
@@ -249,7 +249,7 @@ def _served_model(rows: list[Mapping], requested: str) -> str:
     been served by the same model.
     """
     served = set()
-    for index, row in enumerate(rows):
+    for index, row in rows:  # index: the row's place in the ledger
         model = row.get("model")
         if not isinstance(model, str) or not model or (
                 model != requested and row.get("requested_model") != requested):
@@ -306,6 +306,7 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
     retried = _retries(bundle, responses)
     rows_by_response: dict[str, Mapping] = {}
     rows_of: dict[str, list[Mapping]] = {}
+    served_rows: list[tuple[int, Mapping]] = []
     seen: dict[str, int] = {}
     for index, row in enumerate(bundle["usage_rows"]):
         if not isinstance(row, Mapping):
@@ -333,6 +334,7 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
                                          f"response {response_id} took more than one call")
         _attempts(row, mode, route)  # every row's counts are checked, kept or rejected
         rows_of.setdefault(response_id, []).append(row)
+        served_rows.append((index, row))
         rows_by_response[response_id] = row  # in ledger order: the last is the reply kept
     for response_id, count in retried.items():
         if seen.get(response_id, 0) != 1 + count:
@@ -367,8 +369,7 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
         "source": {"kind": "v0.2.1-capture", "mode": mode, "v1_commit": bundle["v1_commit"],
                    "harness": HARNESS, "evidence_sha256": digest, "profile": PROFILE,
                    "llm_retries": bundle["llm_retries"], "route": route},
-        "conditions": {"model": _served_model([row for rows in rows_of.values() for row in rows],
-                                              bundle["model"]),
+        "conditions": {"model": _served_model(served_rows, bundle["model"]),
                        "budget": bundle["budget"]},
         "policy": {"per_turn_call_caps": {}, "max_attempts_per_call": 1 + bundle["llm_retries"]},
         "turns": turns,
