@@ -182,9 +182,10 @@ cannot verify the provider's own billing receipt. The report says both.
   invents a label.
 - **Rolls.** A 0.2.1 reply that pauses for a roll is a second call for one contribution, which
   fails the capture (`multi_call_contribution`).
-- **Live captures can fail.** Three of four live attempts failed; see
-  [earlier attempts](#earlier-attempts-the-same-day) and the
-  [2026-11-22 attempt](#sampled-capture-attempt-2026-11-22). The two with
+- **Live captures usually fail.** Twelve of fourteen live attempts failed; see
+  [earlier attempts](#earlier-attempts-the-same-day), the
+  [2026-11-22 attempt](#sampled-capture-attempt-2026-11-22) and the
+  [ten attempts with the failure report](#capture-attempts-2026-11-22-with-the-failure-report). The two with
   `claude-sonnet-4-5-20250929` match what 0.2.1's own empty-response check produces, which is
   reproduced offline but not confirmed live; the Sonnet 5.5 one was the prefill 400
   ([why](#why-turn-1-fails-offline-2026-11-22)). The driver now reports a failed turn by 0.2.1's
@@ -320,6 +321,48 @@ the same way) whenever that reply keeps no text of its own, and that retrying a 
 0.02 USD in turn 1). The comparison can only use captures that finish, so its baseline is 0.2.1's
 completed plays; how often 0.2.1 fails a play is a separate measurement of 0.2.1, to be recorded
 with the captures.
+
+## Capture attempts (2026-11-22, with the failure report)
+
+068's sampled comparison needs four more captures. Up to 10 attempts were approved, to stop at
+four successes and to carry on after a failure only when 0.2.1 named it `empty_response`. All
+10 were used and **one succeeded**, so the comparison was not run. Same command, model
+(`claude-sonnet-4-5-20250929`) and stock driver for every attempt; every failure was HTTP 200
+with 0.2.1 error `empty_response`, and each call that completed was billed.
+
+| Attempt | Result | Failed turn | Calls completed | Input tokens | Output tokens | Failure line labels |
+|---:|---|---:|---:|---:|---:|---|
+| 1 | `empty_response` | 1 | 2 | 4,739 | 231 | second speaker: 0 characters of prose, handoff fence only |
+| 2 | `empty_response` | 1 | 2 | 4,748 | 228 | same |
+| 3 | `empty_response` | 1 | 2 | 4,722 | 201 | same |
+| 4 | **success** | none | 6 | 15,254 | 978 | none |
+| 5 | `empty_response` | 1 | 2 | 4,743 | 250 | same |
+| 6 | `empty_response` | 1 | 2 | 4,725 | 232 | same |
+| 7 | `empty_response` | 3 | 5 | 12,859 | 1,152 | first speaker: prose under the other speaker's label |
+| 8 | `empty_response` | 1 | 2 | 4,723 | 216 | same as attempt 1 |
+| 9 | `empty_response` | 1 | 2 | 4,724 | 208 | same |
+| 10 | `empty_response` | 2 | 4 | 9,845 | 613 | same |
+
+- **Failure rate, as a 0.2.1 measurement:** 9 of 10 attempts failed here, and 11 of 13 across
+  every live attempt with this model. In 8 of the 9 the second speaker's provider reply held
+  no prose at all, only a handoff fence (29 to 42 characters, 15 to 20 output tokens), which
+  confirms live what was [found offline](#why-turn-1-fails-offline-2026-11-22). In the ninth
+  (attempt 7) the first speaker's reply put its prose under the other speaker's label. Unmodified
+  0.2.1 on this route usually cannot finish a three-turn, two-speaker scene.
+- **The one success (attempt 4):** evidence sha256
+  `1651c8a727962f814d1bb70545ed5d15893e625630561cc4a8d83e5c3171948d`, usage status measured,
+  6 calls, 15,254 input and 978 output tokens, no cache tokens, cast distinguishability 0.667,
+  leak rate 0, usage by actor `npc-oda` 7,442 in / 662 out and `npc-bellamy` 7,812 in / 316 out.
+  Its self-comparison gate is FAIL: `choice_negated` on turn 1 (`ask-ledger`, unrealized), with
+  `baseline_invalid` for the same finding. The evidence verifies, and that FAIL is the
+  single-run reading. As one of five baseline samples it remains a valid completed sample: the
+  sampled gate settles an unrealized choice by strict majority across the side, so its effect
+  depends on the other samples.
+- **Tokens and cost:** 29 billed calls in all, 71,082 input and 4,309 output tokens. At an
+  assumed list price of 3 USD input and 15 USD output per million tokens that is about
+  0.28 USD, as an estimate.
+
+The measured baseline of 2026-11-20 is still the only capture with no single-run finding.
 
 ## Privacy
 
