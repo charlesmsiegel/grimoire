@@ -183,7 +183,7 @@ FRAMES = {
 
 
 @pytest.mark.parametrize("provider", sorted(FRAMES))
-@pytest.mark.parametrize("encoding", ["", "identity", "gzip", "deflate"])
+@pytest.mark.parametrize("encoding", ["", "identity", "gzip", "deflate", "raw-deflate"])
 def test_provider_text_reads_the_streamed_reply(provider, encoding):
     d = driver()
     body = ("".join(f"data: {json.dumps(f)}\n\n" for f in FRAMES[provider])
@@ -192,6 +192,9 @@ def test_provider_text_reads_the_streamed_reply(provider, encoding):
         body = gzip.compress(body)
     elif encoding == "deflate":
         body = zlib.compress(body)
+    elif encoding == "raw-deflate":
+        packer = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+        body, encoding = packer.compress(body) + packer.flush(), "deflate"
     assert d.provider_text({"body": bytearray(body), "encoding": encoding}, provider) == "ab"
 
 

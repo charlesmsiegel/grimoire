@@ -95,9 +95,13 @@ def provider_text(reply: dict, provider: str) -> str | None:
     if body is None:
         return None
     try:
-        if encoding in ("gzip", "deflate"):
-            body = zlib.decompressobj(47 if encoding == "gzip" else zlib.MAX_WBITS).decompress(
-                bytes(body))
+        if encoding == "gzip":
+            body = zlib.decompressobj(47).decompress(bytes(body))
+        elif encoding == "deflate":  # zlib-wrapped, or raw as some servers send (as httpx does)
+            try:
+                body = zlib.decompressobj(zlib.MAX_WBITS).decompress(bytes(body))
+            except zlib.error:
+                body = zlib.decompressobj(-zlib.MAX_WBITS).decompress(bytes(body))
         elif encoding != "identity":
             return None
     except zlib.error:
@@ -208,7 +212,8 @@ def _args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--model")
     parser.add_argument("--key-env")
     # Test-only fault injection for dry runs (the capture CLI never passes it).
-    parser.add_argument("--fault", choices=("retry-first", "second-speaks-as-pc"))
+    parser.add_argument("--fault", choices=("retry-first", "second-speaks-as-pc",
+                                                "second-only-fences"))
     return parser.parse_args(argv)
 
 
@@ -344,6 +349,11 @@ def main(argv: list[str]) -> int:
             first = turns[0]["turn"]
             reply = dict(replies[str(first)][speakers[1]])
             reply["text"] = f"\n\n**{setup['pc']['name']}:** I take the ledger and read it."
+            bodies[1] = _sse(llm_fakes, args.provider, reply)
+        if args.fault == "second-only-fences":  # turn 1's second reply holds no prose at all
+            reply = dict(replies[str(turns[0]["turn"])][speakers[1]])
+            reply["text"] = ("```perception\nThe ledger is on the hook.\n```\n\n"
+                             "```handoff\n{\"next\": null}\n```")
             bodies[1] = _sse(llm_fakes, args.provider, reply)
         if args.fault == "retry-first":  # the first call fails once and 0.2.1 retries it
             bodies.insert(0, (429, "synthetic rate limit"))  # 0.2.1 retries rate limits

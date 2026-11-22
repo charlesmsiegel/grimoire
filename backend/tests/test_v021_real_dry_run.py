@@ -78,3 +78,19 @@ def test_real_dry_run_names_why_a_turn_failed(kind, tmp_path, monkeypatch):
             "pc-wren") in message
     assert "ledger" not in message.split("partial ledger")[0]  # no reply text
     assert not out.exists() or not any(out.iterdir())
+
+
+@pytest.mark.parametrize("kind", ["openrouter", "anthropic"])
+def test_real_dry_run_reads_a_fenced_reply_as_0_2_1_does(kind, tmp_path, monkeypatch):
+    # Turn 1's second reply holds only the perception block and the handoff fence 0.2.1's prompt
+    # asks for: 0.2.1 hides both, keeps no prose and fails the turn, and the report says so.
+    monkeypatch.setattr(capture, "DRIVER_EXTRA_ARGS", ("--fault", "second-only-fences"))
+    with pytest.raises(capture.CaptureFailed) as failed:
+        capture.run_capture(capture.CaptureOptions(
+            scenario="guild_betrayal", v1_checkout=Path(CHECKOUT), v1_python=Path(PYTHON),
+            mode="dry_run", provider=kind, out=tmp_path / "out"))
+    message = str(failed.value)
+    assert "0.2.1 error empty_response" in message
+    assert "provider reply 2: " in message
+    assert "0 of prose, fences perception, handoff, prose under no label" in message
+    assert "ledger is on the hook" not in message
