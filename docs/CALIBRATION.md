@@ -1,8 +1,8 @@
-# Coding-skills calibration (069, partial)
+# Coding-skills calibration (069)
 
 Two offline-safe tools: deterministic specialist calibration (below) and an
-[independent judge panel](#independent-judge-panel) whose five live captures
-did not establish the proof ([2026-11-20](#live-capture-2026-11-20), [2026-11-22](#live-capture-2026-11-22),
+[independent judge panel](#independent-judge-panel) whose sixth live capture
+[established the proof](#live-capture-2026-11-22-parser-6) after five that did not ([2026-11-20](#live-capture-2026-11-20), [2026-11-22](#live-capture-2026-11-22),
 [2026-11-22 under parser 3](#live-capture-2026-11-22-parser-3),
 [2026-11-22 under parser 4](#live-capture-2026-11-22-parser-4),
 [2026-11-22 under parser 5](#live-capture-2026-11-22-parser-5)).
@@ -118,7 +118,8 @@ object (even a broken one) or the object inside another (even one left unclosed)
 judge may have changed its mind or is quoting an example, so the answer is `ambiguous`
 (`parsing.ambiguous`), never the first or the last. So is an answer whose prose leaves a
 bracket open before the object.
-The prompts are unchanged, so a capture made under version 1 still replays.
+The prompts did not change in version 2, so under versions 2 to 5 a version 1 capture still
+replayed.
 
 **Theory citations.** A citation that is not `<alias>:<line>` on a listed line supports
 nothing, so it is dropped (`parsing.citations_dropped`), never repaired or moved. The
@@ -129,8 +130,12 @@ costs nothing. Evidence that is not a list is `citation` too. Defect findings ar
 treated this way: a finding's line is the verdict itself, so a finding on a line that does
 not exist stays `malformed`.
 
-This check is stricter than the pinned rubric, which takes any non-empty evidence string. The
-report gives each dropped citation's shape, never its text, per judge in
+This check is stricter than the pinned rubric, which takes any non-empty evidence string.
+A range of lines is never a citation, however short: CMS chose on 2026-11-22 to keep one line
+per citation rather than accept ranges. Since
+parser version 6 the theory prompt says so up front: one line number per citation, a range
+such as `"<file>:<first>-<last>"` is not a citation, and several lines are listed one by one.
+The report gives each dropped citation's shape, never its text, per judge in
 `parsing.<judge>.dropped_shapes`:
 - `unlisted_line`: the right file and a whole number outside the listing.
 - `spacing`: the right file and a listed line, with a space around the file or the number.
@@ -143,7 +148,7 @@ report gives each dropped citation's shape, never its text, per judge in
 Only these counts give shapes. A verdict kept in the report keeps the citations it was
 given, because the pinned rubric scores the raw evidence.
 
-**Re-asks (parser versions 3 to 5).** The pinned rubric refuses a verdict whose step is
+**Re-asks (parser versions 3 to 6).** The pinned rubric refuses a verdict whose step is
 not on its ladder (1.0, 0.5, 0.25, 0.0), so one such step leaves the whole trial's panel
 unscored. When a theory answer puts any step off the ladder (`step not in LADDER`, the
 rubric's own test), the harness asks that judge once more, in the same conversation. The
@@ -165,7 +170,7 @@ rubric would accept. The 2026-11-22 parser 3 capture lost a cohesive trial that 
 message names those dimensions and restates the citation form, `"<alias>:<line>"`, with
 `<line>` one line number the listing shows, never which line to cite. An answer with both
 faults gets one re-ask that restates both rules. A re-ask for the ladder alone is word for
-word what version 3 sent, so a version 3 capture still replays. The re-asked answer must
+word what version 3 sent, so under versions 4 and 5 a version 3 capture still replayed. The re-asked answer must
 then pass every check on its own. A lowered step still uncited after it is `unknown`
 (`citation`). `parsing.uncited` counts every trial whose final answer has a rubric dimension
 graded other than 1.0 that cited something and kept no listed line, whether or not it was
@@ -189,7 +194,16 @@ must. `parsing.malformed` counts, per judge, the theory trials whose final answe
 readable object, whether or not it was re-asked, and a re-asked trial's `reasked` is
 `["malformed"]`. This is still at most one re-ask per answer, so the
 plan and `max_calls` are unchanged. The ladder and citation messages are word for word
-what version 4 sent, so a version 4 capture still replays.
+what version 4 sent, so under version 5 a version 4 capture still replayed.
+
+Parser version 6 changes words, not checks. The 2026-11-22 parser 5 capture lost a cohesive
+trial because `haiku` cited line ranges, was re-asked, and cited line ranges again. The theory
+prompt now says that a range is not a citation (see Theory citations), and the citation
+re-ask adds one sentence: `A range such as "<alias>:<first>-<last>" is not a citation; list
+each line on its own.` It still names no line. What counts as a citation, the re-ask rules,
+the plan and `max_calls` are unchanged. The ladder re-ask is word for word what version 3
+sent. The prompts are part of every judge's pin, so a capture taken before version 6 no
+longer replays: scoring refuses it as made with a different pin.
 
 Apart from a `malformed` answer, only an answer whose other checks passed is re-asked: the unit and the coverage canary, and
 for the ladder alone, the citations too. An answer that also fails one of those keeps that
@@ -257,7 +271,8 @@ inconsistent case), every theory unit scored with `ledger_cohesive` above
 `ledger_scrambled` in every trial, and every answer provider-reported. Scripted and replayed test captures meet the first three
 and the fourth with the pinned rubric, but are synthetic, so `established` is false.
 `established` also needs `captured_for_this_parser`: the capture's manifest must name the
-parser version that scores it. A capture taken before a parser change replays and is
+parser version that scores it. A capture taken before a prompt change, such as version 6's,
+does not replay at all. One taken before a parser change that kept the prompts replays and is
 re-read, but it shaped that change, so it can never establish the proof; each parser change
 needs a fresh capture.
 
@@ -636,3 +651,87 @@ time the re-ask added for it did not help: `haiku` cited line ranges both
 times, a shape the check does not accept. The cohesive unit's scored trials also ranged from
 62.5 to 87.5 here, wider than in earlier captures. Closing the proof needs another capture
 with its own approval.
+
+**After this capture.** [Parser version 6](#independent-judge-panel) keeps one line per
+citation and has the theory prompt and the citation re-ask say up front that a range is
+not a citation. It changes the prompts, so this capture no longer replays under it.
+
+### Live capture (2026-11-22, parser 6)
+
+A sixth capture, approved by CMS under a cap of 12 USD and at most 126 calls, run once under
+parser version 6 with the same panel. **109 billed calls**: the 108 planned and 1 re-ask,
+none retried, all accepted and provider-reported, each served by its pinned model.
+`capture_parser_version` is 6 and `captured_for_this_parser` is true.
+**`proof.established` is true: every proof key holds, so 069's proving scenario is established.**
+
+| Judge | Pinned and served model | Calls | Input tokens | Output tokens |
+|---|---|---:|---:|---:|
+| `opus` | `claude-opus-5-5` | 36 | 20,714 | 14,573 |
+| `sonnet` | `claude-sonnet-5-5` | 37 | 23,213 | 13,751 |
+| `haiku` | `claude-haiku-5-5` | 36 | 20,700 | 24,952 |
+
+No reasoning or cache token counts were reported and no cost is in the capture. At list
+prices of 2026-11-03 these counts (64,627 input and 53,276 output tokens) come to about
+0.57 USD; that is an estimate, not a receipt.
+
+| Key | Result |
+|---|---|
+| `compatibility_facade_not_penalized` | true |
+| `planted_defect_found` | true |
+| `missing_analysis_not_perfect` | true |
+| `provider_reported_only` | true |
+| `captured_for_this_parser` | true |
+| `defect_panel_complete` | true |
+| `theory_panel_scored_and_discriminates` | true |
+| `established` | **true** |
+
+**Defects (10 cases).** The panel settled every case: 5 of 5 real defects found on a
+labelled line and 5 of 5 correct cases cleared. False-positive rate 0.0 and false-negative
+rate 0.0, for the panel and for each judge. All three judges agreed on all 10 cases.
+
+| Judge | Repeatable | Unknown | Inconsistent | False positives | False negatives |
+|---|---|---|---|---|---|
+| `opus` | 10 of 10 | 0 | 0 | 0 | 0 |
+| `sonnet` | 10 of 10 | 0 | 0 | 0 | 0 |
+| `haiku` | 10 of 10 | 0 | 0 | 0 | 0 |
+
+**Parsing.** `citations_dropped` and `dropped_shapes` count citations; the other columns
+count answers.
+
+| Judge | Answers | `text_outside_json` | `ambiguous` | `citations_dropped` | `dropped_shapes` | `reasked` | `off_ladder` | `uncited` | `malformed` |
+|---|---:|---:|---:|---:|---|---:|---:|---:|---:|
+| `opus` | 36 | 4 | 0 | 0 | none | 0 | 0 | 0 | 0 |
+| `sonnet` | 37 | 12 | 0 | 0 | none | 1 | 0 | 0 | 0 |
+| `haiku` | 36 | 0 | 0 | 0 | none | 0 | 0 | 0 | 0 |
+
+- Re-asked: `sonnet` only, once, on `ledger_cohesive` trial 2 of 3
+  (`theory.units.ledger_cohesive.trials[1].reasked`), for two steps off the ladder. It answered
+  on the ladder and the trial was scored. No other trial was re-asked.
+- No judge is still off the ladder, uncited or malformed.
+- No judge had most of its answers affected. `sonnet` put text outside the JSON in 12 of 37
+  answers.
+- `haiku` no longer cited line ranges: it had no dropped citation and none of its answers
+  holds a range, against 10 dropped ranges in the parser 5 capture.
+
+**Theory.** Both units were scored in all three trials, for the first time in one capture.
+`ledger_cohesive`: 72.5 (C-), 95.0 (A) and 67.5 (D+), a score range of 27.5; its grade does
+not repeat. `ledger_scrambled`: 32.5, 30.0 and 32.5, grade F each time, a score range of 2.5
+with a repeating grade. Every cohesive trial is above every scrambled trial, by at least 35
+points, so `discriminates` is true. No trial has a reason. The missing-analysis probe again
+read upstream 100.0 with the profile score withheld.
+
+What this pass does and does not show:
+
+- It meets the proof as written, on a capture made under the parser it is scored with.
+- It is the sixth capture. Between captures the answer reader and the judge prompt were
+  revised in response to each failure, on this same 13-case synthetic corpus: prose before
+  the JSON, off-ladder steps, uncited lowered steps, unreadable answers, and finally a prompt
+  line saying a line range is not a citation. The five earlier captures stay recorded as not
+  established. A pass reached this way is weaker evidence than a pass on a first capture or
+  on cases the changes were not tuned against.
+- The panel separates a cohesive unit from its scrambled twin, but it does not grade the
+  cohesive unit steadily: 67.5 to 95.0, D+ to A, within one capture. Grade repeatability is
+  reported, is not a proof key, and is not established.
+- One capture of three trials is a single sample. The corpus is small, synthetic and
+  Python only, and a canary shows a listing was read, not that the reasoning was sound.
+- No blocking grader is activated by this; gate 101 stays inactive.

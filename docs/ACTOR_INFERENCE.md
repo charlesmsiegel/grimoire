@@ -472,3 +472,38 @@ What the numbers leave out:
   captures again with the new markers, at no cost. That rescore shows whether the markers explain the
   failure. A fresh billed comparison then decides 068, so its verdict does not rest on a run read
   after the markers changed.
+<<<<<<< HEAD
+=======
+
+### Billed comparison (2026-11-22, sampled, wider ask-ledger markers)
+
+After the sampled comparison failed on `ask-ledger` alone, the scenario's markers for that choice
+were widened to the book's other names and the acts of handing it over. The plan was a free
+rescore of the saved comparison, then one fresh billed comparison only if 0.2.1 now realized
+`ask-ledger` in 3 or more of its 5 samples. **It did not, so the billed comparison was not run
+and 068 is still not established.** Nothing was sent or billed for 068.
+
+The rescore read the saved V2 runs back and scored them again against the same five 0.2.1
+captures in the same order, with the scenario and gate as they are now.
+
+| Choice | 0.2.1 | Plain V2 | V2 with planning |
+|---|---:|---:|---:|
+| `ask-ledger` (turn 1) | 2 of 5 (was 2) | 2 of 5 (was 1) | 4 of 5 (was 4) |
+| `follow-bellamy` (turn 2) | 4 of 5 | 5 of 5 | 5 of 5 |
+| `ask-song` (turn 3) | 4 of 5 | 5 of 5 | 4 of 5 |
+
+- **V2 (one call per speaking NPC) against 0.2.1: FAIL**, two findings, both `ask-ledger` on
+  turn 1: `baseline_invalid` (0.2.1 gives effect to the choice in 2 of 5 samples, not a majority)
+  and `choice_negated`, unrealized (V2 in 2 of 5, not a majority).
+- **V2 with planning against plain V2: FAIL**, two findings: `baseline_invalid` on `ask-ledger`
+  (plain V2 in 2 of 5) and `cost_regression` (mean weighted billed tokens 4,324.6 to 8,553.6).
+- Voice, tokens and every other figure are those of the
+  [comparison as run](#billed-comparison-2026-11-22-sampled): the rescore changes only how
+  choices are read. The 0.2.1 side's cost and latency still leave out its rejected replies, so
+  they are a lower bound on what its player paid.
+
+The wider markers moved one V2 sample and no 0.2.1 sample. So the markers do not explain the
+failure: in three of five 0.2.1 plays, and in three of five plain V2 plays, no reply is read as
+giving effect to the request for the ledger under either set of markers. Whether those replies
+truly ignore the request has not been checked by a person. Planning realizes it in 4 of 5.
+>>>>>>> origin/v2
