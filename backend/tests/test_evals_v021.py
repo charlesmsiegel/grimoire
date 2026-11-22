@@ -282,3 +282,92 @@ def test_standalone_continuation_row_is_refused():
     # The two-call profile has no continuations; one without its chat row hides the first call.
     refused(live_bundle(usage_rows=[v021_row("r-1", task="continuation")]),
             "multi_call_contribution")
+
+
+# --- /2: 0.2.1's own Retry on a reply it rejected as empty ------------------------------------
+
+def retried_bundle(retries=1, *, rows=None, **overrides) -> dict:
+    """``bundle()`` where 0.2.1 rejected r-1 ``retries`` times before keeping a reply."""
+    rejected = [v021_row("r-1", 90 + n, 3, cache_read=10) for n in range(retries)]
+    data = bundle(format="grimoire.v021-capture-evidence/2",
+                  usage_rows=rows if rows is not None else [*rejected, v021_row("r-1")],
+                  retries=[{"turn": 1, "response_id": "r-1", "kind": "empty_response"}] * retries)
+    data.update(overrides)
+    return data
+
+
+def test_retried_reply_books_only_the_kept_row():
+    from grimoire.evals.v021 import EVIDENCE_FORMAT_RETRIES, rejected_replies
+    data = retried_bundle(2)
+    assert data["format"] == EVIDENCE_FORMAT_RETRIES
+    raw, run = run_of(data)
+    assert len(run.calls) == 1
+    (call,) = raw["calls"]
+    assert [a["outcome"] for a in call["attempts"]] == ["completed"]
+    assert call["attempts"][0]["usage"]["input_tokens"] == 100  # the last row, the kept reply
+    assert rejected_replies(data) == {
+        "replies": 2, "requests": 2, "prompt_tokens": 181, "completion_tokens": 6,
+        "cache_read_tokens": 20, "prompt_tokens_unreported": 0,
+        "completion_tokens_unreported": 0, "cache_read_tokens_unreported": 0}
+    assert verify_evidence(run, data, evidence_digest(data), SCENARIO).ok
+
+
+def test_rejected_replies_count_transport_retries_and_unreported_counts():
+    from grimoire.evals.v021 import rejected_replies
+    data = retried_bundle(rows=[v021_row("r-1", attempts=2, cache_read_tokens=None),
+                                v021_row("r-1")])
+    run_of(data)
+    spent = rejected_replies(data)
+    assert spent["requests"] == 2 and spent["cache_read_tokens_unreported"] == 1
+
+
+def test_a_v2_bundle_with_no_retries_is_a_v1_play():
+    data = retried_bundle(0)
+    assert data["retries"] == []
+    raw, _ = run_of(data)
+    v1 = bundle()
+    assert raw["calls"] == convert(v1, SCENARIO, digest=evidence_digest(v1), run_id="cap",
+                                   label="capture")["calls"]
+
+
+def test_a_retry_with_no_extra_row_is_refused():
+    refused(retried_bundle(rows=[v021_row("r-1")]), "retry_unaccounted")
+
+
+def test_an_extra_row_no_retry_accounts_for_is_still_multi_call():
+    refused(retried_bundle(rows=[v021_row("r-1")] * 3), "multi_call_contribution")
+
+
+def test_a_v1_bundle_cannot_carry_retries():
+    data = bundle(retries=[])
+    refused(data, "malformed_evidence")
+
+
+def test_a_v2_bundle_needs_its_retries():
+    data = retried_bundle()
+    del data["retries"]
+    refused(data, "malformed_evidence")
+
+
+@pytest.mark.parametrize("entry, code", [
+    ({"turn": 1, "response_id": "r-1", "kind": "rate_limited"}, "unplanned_retry"),
+    ({"turn": 2, "response_id": "r-1", "kind": "empty_response"}, "unknown_response"),
+    ({"turn": 1, "response_id": "r-9", "kind": "empty_response"}, "unknown_response"),
+    ({"turn": 1, "response_id": "r-1"}, "malformed_evidence"),
+    ({"turn": 1, "response_id": "r-1", "kind": "empty_response", "text": "x"},
+     "malformed_evidence"),
+])
+def test_retry_entries_are_checked(entry, code):
+    data = retried_bundle()
+    data["retries"] = [entry]
+    refused(data, code)
+
+
+def test_retries_must_be_a_list():
+    data = retried_bundle()
+    data["retries"] = {"r-1": 1}
+    refused(data, "malformed_evidence")
+
+
+def test_unknown_format_is_refused():
+    refused(bundle(format="grimoire.v021-capture-evidence/3"), "malformed_evidence")

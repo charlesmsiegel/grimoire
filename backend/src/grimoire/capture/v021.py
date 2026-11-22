@@ -9,6 +9,10 @@ from its test transport, and every number is synthetic. ``--live`` is billed and
 ``--confirm-billing`` and the *name* of an environment variable holding the key, which only the
 child process reads. Exit status: 0 written, 1 capture failed, 2 refused or bad usage. On any
 failure nothing is left in ``--out`` and the temporary library (which holds the key) is gone.
+
+``--retry-empty-replies`` presses 0.2.1's own Retry whenever 0.2.1 rejects a reply as empty
+(``empty_response``), as a player would, within the same request ceiling; the evidence lists
+every Retry and the report says what the rejected replies cost. They stay out of the run.
 """
 
 from __future__ import annotations
@@ -33,7 +37,8 @@ from grimoire.evals.gate2 import compare_v2
 from grimoire.evals.loader import benchmark_file, evidence_digest, load_json, load_scenario, loads_strict
 from grimoire.evals.report import render_v2
 from grimoire.evals.v021 import (
-    PINNED_V021_COMMIT, PROVIDER_KINDS, convert, partial_ledger, verify_evidence,
+    PINNED_V021_COMMIT, PROVIDER_KINDS, convert, partial_ledger, rejected_replies,
+    verify_evidence,
 )
 from grimoire.library import (
     DEFAULT_DIRNAME, V1_DEFAULT_DIRNAME, V1_HOME_ENV, V2_HOME_ENV, LibraryPathError,
@@ -79,6 +84,8 @@ class CaptureOptions:
     provider: str
     model: str | None = None
     api_key_env: str | None = None
+    #: Press 0.2.1's own Retry on a reply it rejects as empty (``empty_response``).
+    retry_empty: bool = False
 
 
 # --- checks -------------------------------------------------------------------------------------
@@ -219,6 +226,8 @@ def _run_driver(options: CaptureOptions, checkout: Path, setup: Path, temp: Path
         command += ["--model", options.model]
     if options.api_key_env and options.mode == "live":
         command += ["--key-env", options.api_key_env]
+    if options.retry_empty:
+        command += ["--retry-empty"]
     command += list(DRIVER_EXTRA_ARGS)
     try:
         child = subprocess.Popen(command, env=_child_env(temp, options, key), cwd=temp,
@@ -292,12 +301,30 @@ def _outputs(options: CaptureOptions, scenario: Scenario, stdout: str) -> dict[s
                         candidate_evidence=evidence)
     header = (f"0.2.1 capture: {options.mode}, provider {options.provider}, "
               f"commit {bundle.get('v1_commit', '?')[:12]}, evidence sha256 {digest}\n"
+              + _rejected_line(bundle) +
               "self-comparison of the captured run (hard findings and usage):\n\n")
     return {
         "run.json": json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
         "evidence.json": json.dumps(bundle, indent=2, ensure_ascii=False) + "\n",
         "capture-report.txt": header + render_v2(report),
     }
+
+
+def _rejected_line(bundle: Mapping) -> str:
+    """The report's line on replies 0.2.1 rejected as empty and Retried (``/2`` only)."""
+    if "retries" not in bundle:
+        return ""
+    spent = rejected_replies(bundle)
+    if not spent["replies"]:
+        return "0.2.1 rejected no reply as empty; no Retry was pressed\n"
+    counts = ", ".join(
+        f"{label} {spent[name]}" + (f" ({spent[name + '_unreported']} unreported)"
+                                    if spent[name + "_unreported"] else "")
+        for name, label in (("prompt_tokens", "input tokens"),
+                            ("completion_tokens", "output tokens"),
+                            ("cache_read_tokens", "cache reads")))
+    return (f"0.2.1 rejected {spent['replies']} replies as empty and Retry asked again: "
+            f"{spent['requests']} requests, {counts}; not in the run below\n")
 
 
 def _write(out: Path, files: Mapping[str, str]) -> None:
@@ -382,6 +409,9 @@ def _parser() -> argparse.ArgumentParser:
                         help="name of the environment variable holding the key (live)")
     parser.add_argument("--confirm-billing", action="store_true",
                         help="required with --live: real calls are billed")
+    parser.add_argument("--retry-empty-replies", action="store_true",
+                        help="press 0.2.1's own Retry when it rejects a reply as empty, within "
+                             "the same request ceiling (the rejected replies stay out of the run)")
     return parser
 
 
@@ -418,7 +448,7 @@ def _main(args: argparse.Namespace) -> int:
             check_key_env(args.api_key_env)
         options = CaptureOptions(args.scenario, args.v1_checkout, args.v1_python, args.out,
                                  "live" if args.live else "dry_run", args.provider, args.model,
-                                 args.api_key_env)
+                                 args.api_key_env, retry_empty=args.retry_empty_replies)
         out = run_capture(options)
     except CaptureRefused as error:
         print(f"refused: {error}", file=sys.stderr)

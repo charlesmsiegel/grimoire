@@ -9,6 +9,13 @@ speaking NPC's generation, so any other row (tracker, decide, summary, embedding
 unplanned call, not something to drop. 0.2.1 records only the attempt that served a call, so
 its earlier attempts are booked as failed with unreported usage: missing, never free.
 
+A ``/2`` bundle also lists ``retries``: each time 0.2.1 rejected a reply as empty
+(``empty_response``) and the harness pressed 0.2.1's own Retry, which asks the same prompt again
+under the same response id. Such a response has one usage row per reply 0.2.1 received, in
+ledger order: exactly one more than its listed Retries. The last is the reply 0.2.1 kept and
+the run's call; the rejected ones are reported (``rejected_replies``) but kept out of the run,
+so the run is the cost of the play 0.2.1 produced, a lower bound on what its player paid.
+
 Pure: the evidence digest is computed by the file edge (``loader.evidence_digest``).
 """
 
@@ -21,6 +28,11 @@ from .format import Scenario
 from .format2 import FORMAT_V2, RunV2, parse_run_v2
 
 EVIDENCE_FORMAT = "grimoire.v021-capture-evidence/1"
+#: ``/1`` plus ``retries``: the 0.2.1 Retries the harness pressed on rejected (empty) replies.
+EVIDENCE_FORMAT_RETRIES = "grimoire.v021-capture-evidence/2"
+EVIDENCE_FORMATS = (EVIDENCE_FORMAT, EVIDENCE_FORMAT_RETRIES)
+#: The one rejection a Retry may follow: a reply 0.2.1 kept no prose of.
+RETRIED_KIND = "empty_response"
 PINNED_V021_COMMIT = "e4c4ec4abacd0beb87fc9f1cdd06e6787d5a88ce"
 HARNESS = "grimoire.capture/1"
 PROFILE = "two-call"
@@ -38,6 +50,7 @@ GENERATION_PURPOSE = "speaking NPC contribution"
 BUNDLE_KEYS = ("format", "scenario_id", "mode", "provider_kind", "v1_commit", "profile",
                "llm_retries", "model", "budget", "campaign", "scene", "actor_map",
                "choice_outcomes", "turns", "usage_rows")
+BUNDLE_KEYS_RETRIES = (*BUNDLE_KEYS, "retries")
 
 
 class CaptureConversionError(ValueError):
@@ -75,12 +88,13 @@ def _count(value: object, label: str) -> int | None:
 def _check_bundle(bundle: Mapping, scenario: Scenario) -> None:
     if not isinstance(bundle, Mapping):
         raise _malformed("the bundle must be an object")
+    if bundle.get("format") not in EVIDENCE_FORMATS:
+        raise _malformed(f"format must be one of {', '.join(map(repr, EVIDENCE_FORMATS))}")
+    expected = set(BUNDLE_KEYS if bundle["format"] == EVIDENCE_FORMAT else BUNDLE_KEYS_RETRIES)
     keys = set(bundle)
-    if keys != set(BUNDLE_KEYS):
-        extra, missing = sorted(keys - set(BUNDLE_KEYS)), sorted(set(BUNDLE_KEYS) - keys)
+    if keys != expected:
+        extra, missing = sorted(keys - expected), sorted(expected - keys)
         raise _malformed(f"unknown keys {extra}" if extra else f"missing keys {missing}")
-    if bundle["format"] != EVIDENCE_FORMAT:
-        raise _malformed(f"format must be {EVIDENCE_FORMAT!r}")
     if bundle["scenario_id"] != scenario.scenario_id:
         raise _malformed("scenario_id does not match the scenario")
     if bundle["mode"] not in MODES:
@@ -110,6 +124,59 @@ def _check_bundle(bundle: Mapping, scenario: Scenario) -> None:
                                      "a live capture's choices are never labelled by the harness")
     if not isinstance(bundle["turns"], list) or not isinstance(bundle["usage_rows"], list):
         raise _malformed("turns and usage_rows must be lists")
+    if not isinstance(bundle.get("retries", []), list):
+        raise _malformed("retries must be a list")
+
+
+def _retries(bundle: Mapping, responses: Mapping[str, tuple[int, str]]) -> dict[str, int]:
+    """How many times each response was rejected as empty and retried (``/2``; none in ``/1``)."""
+    counts: dict[str, int] = {}
+    for entry in bundle.get("retries", []):
+        if not isinstance(entry, Mapping) or set(entry) != {"turn", "response_id", "kind"}:
+            raise _malformed("a retry needs exactly turn, response_id and kind")
+        if entry["kind"] != RETRIED_KIND:
+            raise CaptureConversionError("unplanned_retry",
+                                         f"a retry follows {RETRIED_KIND} only")
+        response_id = _text(entry["response_id"], "response_id")
+        if response_id not in responses or responses[response_id][0] != _count(
+                entry["turn"], "turn"):
+            raise CaptureConversionError("unknown_response",
+                                         f"retry of {response_id} names no captured response "
+                                         "of that turn")
+        counts[response_id] = counts.get(response_id, 0) + 1
+    return counts
+
+
+def rejected_replies(bundle: Mapping) -> dict[str, int]:
+    """What the replies 0.2.1 rejected and retried cost, summed: counts only, never text.
+
+    Valid only for a bundle ``convert`` accepts. Keys: ``replies``, ``requests`` (their
+    transport attempts) and the token fields, each summed over the reported counts, with
+    ``*_unreported`` counting the replies that left one out.
+    """
+    retried: dict[str, int] = {}
+    for entry in bundle.get("retries", []):
+        retried[entry["response_id"]] = retried.get(entry["response_id"], 0) + 1
+    totals = {"replies": 0, "requests": 0}
+    fields = ("prompt_tokens", "completion_tokens", "cache_read_tokens")
+    for name in fields:
+        totals[name] = totals[f"{name}_unreported"] = 0
+    seen: dict[str, int] = {}
+    for row in bundle["usage_rows"]:
+        response_id = row.get("response_id")
+        if row.get("kind") != "llm" or response_id not in retried:
+            continue
+        seen[response_id] = seen.get(response_id, 0) + 1
+        if seen[response_id] > retried[response_id]:
+            continue  # the last row is the reply 0.2.1 kept
+        totals["replies"] += 1
+        totals["requests"] += row.get("attempts", 1)
+        for name in fields:
+            if row.get(name) is None:
+                totals[f"{name}_unreported"] += 1
+            else:
+                totals[name] += row[name]
+    return totals
 
 
 def _attempts(row: Mapping, mode: str, route: str) -> list[dict]:
@@ -217,7 +284,9 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
                                   "call_id": f"t{turn}-{actor_id}"})
         turns.append({"turn": turn, "contributions": contributions})
 
+    retried = _retries(bundle, responses)
     rows_by_response: dict[str, Mapping] = {}
+    seen: dict[str, int] = {}
     for index, row in enumerate(bundle["usage_rows"]):
         if not isinstance(row, Mapping):
             raise _malformed(f"usage row {index} is not an object")
@@ -238,10 +307,16 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
         if response_id not in responses:
             raise CaptureConversionError("unknown_response",
                                          f"usage row {index} names no captured response")
-        if response_id in rows_by_response:
+        seen[response_id] = seen.get(response_id, 0) + 1
+        if seen[response_id] > 1 + retried.get(response_id, 0):
             raise CaptureConversionError("multi_call_contribution",
                                          f"response {response_id} took more than one call")
-        rows_by_response[response_id] = row
+        rows_by_response[response_id] = row  # in ledger order: the last is the reply kept
+    for response_id, count in retried.items():
+        if seen.get(response_id, 0) != 1 + count:
+            raise CaptureConversionError("retry_unaccounted",
+                                         f"response {response_id} was retried {count} times but "
+                                         f"has {seen.get(response_id, 0)} usage rows")
 
     calls = []
     for response_id, (turn, actor_id) in responses.items():

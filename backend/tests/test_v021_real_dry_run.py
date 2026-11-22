@@ -94,3 +94,58 @@ def test_real_dry_run_reads_a_fenced_reply_as_0_2_1_does(kind, tmp_path, monkeyp
     assert "provider reply 2: " in message
     assert "0 of prose, fences perception, handoff, prose under no label" in message
     assert "ledger is on the hook" not in message
+
+
+def capture_with(tmp_path, monkeypatch, fault, *, kind="openrouter", retry=True):
+    monkeypatch.setattr(capture, "DRIVER_EXTRA_ARGS", ("--fault", fault) if fault else ())
+    out = tmp_path / "out"
+    capture.run_capture(capture.CaptureOptions(
+        scenario="guild_betrayal", v1_checkout=Path(CHECKOUT), v1_python=Path(PYTHON),
+        mode="dry_run", provider=kind, out=out, retry_empty=retry))
+    return out
+
+
+@pytest.mark.parametrize("kind", ["openrouter", "anthropic"])
+def test_real_dry_run_retries_a_rejected_reply_with_0_2_1_s_own_retry(kind, tmp_path,
+                                                                       monkeypatch):
+    # Turn 1's second reply holds only fences; 0.2.1 rejects it, the driver presses 0.2.1's
+    # Retry, 0.2.1 asks the same prompt again under the same response id and keeps the reply.
+    out = capture_with(tmp_path, monkeypatch, "second-rejected-once", kind=kind)
+    evidence = json.loads((out / "evidence.json").read_text())
+    assert evidence["format"] == "grimoire.v021-capture-evidence/2"
+    (retry,) = evidence["retries"]
+    assert retry["turn"] == 1 and retry["kind"] == "empty_response"
+    rows = [r for r in evidence["usage_rows"] if r.get("kind") == "llm"]
+    assert len(rows) == 7 and sum(r["response_id"] == retry["response_id"] for r in rows) == 2
+    scenario = load_scenario(benchmark_file("guild_betrayal", "scenario.json"))
+    run = parse_run_v2(json.loads((out / "run.json").read_text()), scenario)
+    assert len(run.calls) == 6 and run.usage.total.attempts == 6 and run.usage.complete
+    report = (out / "capture-report.txt").read_text()
+    assert "0.2.1 rejected 1 replies as empty and Retry asked again: 1 requests" in report
+    assert "findings (0):" in report
+    kept = [c.text for t in run.turns for c in t.contributions if c.call_id == "t1-npc-bellamy"]
+    assert kept and "ledger is on the hook" not in kept[0]
+
+
+def test_real_dry_run_with_retry_and_nothing_rejected_is_a_v1_play(tmp_path, monkeypatch):
+    out = capture_with(tmp_path, monkeypatch, None)
+    evidence = json.loads((out / "evidence.json").read_text())
+    assert evidence["format"] == "grimoire.v021-capture-evidence/2" and evidence["retries"] == []
+    assert "rejected no reply as empty" in (out / "capture-report.txt").read_text()
+
+
+def test_real_dry_run_retries_stop_at_the_request_ceiling(tmp_path, monkeypatch):
+    # Every Retry is rejected too: the driver stops while one request is left for each of the
+    # five replies still owed (18 requests in all), and nothing is written.
+    with pytest.raises(capture.CaptureFailed) as failed:
+        capture_with(tmp_path, monkeypatch, "second-always-rejected")
+    message = str(failed.value)
+    assert "turn 1 failed after 12 Retries: HTTP 200; 0.2.1 error empty_response" in message
+    assert "no Retry left: 14 of 18 requests sent and 5 replies still owed" in message
+    assert "ledger is on the hook" not in message
+    assert not (tmp_path / "out").exists() or not any((tmp_path / "out").iterdir())
+
+
+def test_real_dry_run_without_the_flag_still_fails_a_rejected_reply(tmp_path, monkeypatch):
+    with pytest.raises(capture.CaptureFailed, match="0.2.1 error empty_response"):
+        capture_with(tmp_path, monkeypatch, "second-rejected-once", retry=False)

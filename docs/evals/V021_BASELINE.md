@@ -54,6 +54,8 @@ in-process through FastAPI's `TestClient` (lifespan entered, as 0.2.1's own test
   `tests/llm_fakes.SSEProvider` (dry run);
 - in a dry run only, forces 0.2.1's token counter onto its offline heuristic
   (`store.tokens._encoder`), so a `[desktop]` install does not download a tokenizer.
+- with `--retry-empty-replies` only, presses 0.2.1's own Retry when 0.2.1 rejects a reply as
+  empty, as a player would ([retrying a rejected reply](#retrying-a-rejected-reply-offline-2026-11-22)).
 
 The counting transport also keeps each provider reply in memory (never written or printed). When
 a turn fails, the driver reports 0.2.1's error kind and each reply's shape: its status, its
@@ -125,6 +127,10 @@ python -m grimoire.capture.v021 --scenario guild_betrayal --v1-checkout ../grimo
     --v1-python ../v021-venv/bin/python --live --provider openrouter --model MODEL \
     --api-key-env OPENROUTER_API_KEY --confirm-billing --out ../capture-live
 ```
+
+Add `--retry-empty-replies` to either command to press 0.2.1's own Retry whenever 0.2.1 rejects a
+reply as empty, within the same request ceiling; see
+[retrying a rejected reply](#retrying-a-rejected-reply-offline-2026-11-22).
 
 `--out` must be a new or empty directory outside this repository, the 0.2.1 checkout, 0.2.1's
 machine-local state directory and every Grimoire library. `--api-key-env` must name an ordinary
@@ -363,6 +369,57 @@ with 0.2.1 error `empty_response`, and each call that completed was billed.
   0.28 USD, as an estimate.
 
 The measured baseline of 2026-11-20 is still the only capture with no single-run finding.
+
+## Retrying a rejected reply (offline, 2026-11-22)
+
+Restarting a whole capture after every `empty_response` repeats calls that already succeeded,
+and on this route a whole play finished 1 time in 10. 0.2.1 has its own answer to that error: its
+client shows a Retry button on it, which calls `POST /campaigns/{cid}/scenes/{sid}/retry`. That
+route (`character_turns.retry`) asks the model again for the one reply 0.2.1 rejected, from the
+same saved prompt snapshot and under the same response id, and then carries the round on to any
+speaker still to come. Nothing else in the scene is asked again.
+
+`--retry-empty-replies` has the driver press it. After each turn, while 0.2.1's stream ends with
+exactly one error and that error is `empty_response` on a reply it had started, the driver waits
+for the run to finish and calls that route, as a player would. It stops pressing when one more
+Retry would not leave one request for every reply the scene still owes, inside the same ceiling
+as before (`planned calls × (1 + llm_retries)`, 18 requests here); then the turn fails and the
+failure line says `after N Retries` and `no Retry left`. Any other error, an HTTP status of 400
+or more, or more than one error is reported as before, never retried. The flag is off by
+default; without it the capture behaves exactly as before.
+
+What is recorded:
+
+- The evidence is `grimoire.v021-capture-evidence/2`: the `/1` bundle plus `retries`, one entry
+  (turn, response id, `empty_response`) per Retry pressed. `/1` bundles still convert unchanged.
+- 0.2.1 books one usage row per reply it received, so a retried response has one row more than
+  its Retries, in ledger order; conversion refuses any other count (`retry_unaccounted`,
+  `multi_call_contribution`). The last row is the reply 0.2.1 kept and becomes the run's call;
+  the earlier rows are replies 0.2.1 rejected.
+- **Rejected replies stay out of the run.** The run's calls, cost and latency are those of the
+  play 0.2.1 kept, so as a baseline it is a lower bound on what its player paid, and the gates
+  that compare V2 against it (cost, latency) stay conservative for V2. The rejected replies are
+  not hidden: `capture-report.txt` gives their number, requests and token counts, and the
+  comparison report of `python -m grimoire.capture.v2` gives them summed over its baselines.
+- How often 0.2.1 rejects a reply stays a 0.2.1 measurement: rejected replies over all replies
+  received, per turn and per speaker, from the evidence.
+
+What kind of sample this is: a capture with Retries is the play a 0.2.1 player gets by pressing
+Retry until a reply is kept. It is not the same distribution as restarting the whole play until
+every reply is kept, which favours openings that later replies tend to accept; pressing Retry is
+how 0.2.1 itself recovers, so it is the closer reading of a 0.2.1 player's play. Both kinds are
+plays 0.2.1 completed under the same conditions, and the comparison accepts them side by side.
+
+Proved offline on the pinned commit, with no provider request: in a dry run whose turn-1 second
+reply holds only fences, 0.2.1 rejects it, the Retry asks the same prompt under the same response
+id, 0.2.1 keeps the scripted reply and the capture writes a complete six-call run (seven usage rows,
+one Retry listed); when every Retry is rejected too, the driver stops at the ceiling after 12
+Retries with 14 of 18 requests sent and nothing is written
+([`test_v021_real_dry_run.py`](../../backend/tests/test_v021_real_dry_run.py)).
+
+At the per-turn rejection rates measured above (small samples: 7 of 10 in turn 1, 1 of 3 in turn 2,
+1 of 2 in turn 3), a capture needs about three to four Retries on average, each about the cost of one call, instead of restarting the play about ten times. It has
+not been run live.
 
 ## Privacy
 
