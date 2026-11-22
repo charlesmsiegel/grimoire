@@ -443,10 +443,107 @@ def test_a_step_still_off_the_ladder_after_one_reask_is_unknown_and_never_asked_
     assert not result['proof']['theory_panel_scored_and_discriminates']
 
 
-def test_defect_answers_are_never_reasked(tmp_path):
-    result, judge = report(tmp_path, accurate)
+class Reasked(Scripted):
+    """Judge ``b`` answers the cohesive unit in trial 0 with honest_limits at 0.75, shaped by ``first``;
+    its re-ask is the accurate answer, shaped by ``again`` (a function of the record)."""
+
+    def __init__(self, decide, first=None, again=None, measurement='synthetic'):
+        super().__init__(decide)
+        self.first, self.again, self.measurement = first, again, measurement
+
+    def respond(self, pin, case, trial, messages, reask=False):
+        record = super().respond(pin, case, trial, messages, reask)
+        record['attempts'] = [{'outcome': 'ok', 'measurement': self.measurement}]
+        if pin.judge_id != 'b' or case['id'] != 'ledger_cohesive' or trial != 0:
+            return record
+        if reask:
+            return self.again(record) if self.again else record
+        reply = json.loads(record['reply'])
+        reply['dimensions']['honest_limits'].update(step=0.75, evidence=[jp.alias('salt', case['id']) + ':2'])
+        record['reply'] = self.first(reply) if self.first else json.dumps(reply)
+        return record
+
+
+def cohesive_b(result):
+    return next(c for c in result['cases'] if c['id'] == 'ledger_cohesive')['judges']['b'][0]
+
+
+def run_reasked(tmp_path, judge, checkout=None):
+    pins, trials, _ = jp.load_panel(panel_file(tmp_path))
+    return jp.run(CORPUS, pins, trials, judge, 'salt', checkout)
+
+
+def test_the_reask_names_the_dimensions_and_restates_the_ladder_without_choosing_a_rung():
+    assert jp.REASK_PROMPT.format(dimensions='abstraction, honest_limits') == (
+        'Your answer gave abstraction, honest_limits a step that is not on the ladder. Every step must be\n'
+        'exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between\n'
+        'them. Answer again with one complete JSON object in the same format, and nothing else.')
+
+
+@pytest.mark.parametrize('fault, reason', [
+    (lambda reply: {**reply, 'files': [{**reply['files'][0], 'canary': 'skipped'}]}, 'coverage'),
+    (lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
+        'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}, 'citation'),
+])
+def test_an_answer_with_another_fault_is_never_reasked_even_off_the_ladder(tmp_path, fault, reason):
+    judge = Reasked(accurate, first=lambda reply: json.dumps(fault(reply)))
+    result = run_reasked(tmp_path, judge)
     assert not any(call[-1] == 'reask' for call in judge.calls)
-    assert all(row['reasked'] == 0 for row in result['parsing'].values())
+    trial = cohesive_b(result)
+    assert trial['reason'] == reason and trial['off_ladder'] == ['honest_limits'] and 'reasked' not in trial
+    assert result['parsing']['b']['off_ladder'] == 1 and result['parsing']['b']['reasked'] == 0
+
+
+def test_a_reasked_trial_still_reports_what_its_first_answer_needed(tmp_path):
+    def messy(reply):
+        reply['dimensions']['absorption']['evidence'] = ['elsewhere.py:1']  # dropped; 1.0 needs none
+        return 'Reading it through first.\n' + json.dumps(reply)
+    result = run_reasked(tmp_path, Reasked(accurate, first=messy))
+    trial = cohesive_b(result)
+    assert trial['state'] == 'verdict' and trial['reasked'] == ['honest_limits']
+    assert trial['first_answer'] == {'text_outside_json': True, 'ambiguous': False, 'citations_dropped': 1}
+    row = result['parsing']['b']
+    assert row['answers'] == 37 and row['text_outside_json'] == 1 and row['citations_dropped'] == 1
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reasked'] == ['b']
+    assert result['theory']['units']['ledger_cohesive']['trials'][1]['reasked'] == []
+
+
+def test_a_reask_with_no_answer_leaves_the_trial_off_the_ladder(tmp_path):
+    def refused(record):
+        return {**record, 'status': 'refused', 'reply': None}
+    result = run_reasked(tmp_path, Reasked(accurate, again=refused))
+    trial = cohesive_b(result)
+    assert trial['reason'] == 'call_refused' and trial['off_ladder'] == ['honest_limits']
+    assert result['parsing']['b']['reasked'] == 1 and result['parsing']['b']['off_ladder'] == 1
+    assert result['parsing']['b']['answers'] == 37  # the first answer was read; the re-ask gave none
+
+
+def test_a_reask_is_measured_and_watched_for_drift_with_its_trial(tmp_path):
+    reported = run_reasked(tmp_path, Reasked(accurate, measurement='provider_reported'))
+    assert cohesive_b(reported)['measurement'] == 'provider_reported'
+    assert reported['proof']['provider_reported_only']
+
+    class Estimated(Reasked):
+        def respond(self, pin, case, trial, messages, reask=False):
+            record = super().respond(pin, case, trial, messages, reask)
+            if reask:
+                record['attempts'] = [{'outcome': 'ok', 'measurement': 'estimated'}]
+            return record
+    estimated = run_reasked(tmp_path, Estimated(accurate, measurement='provider_reported'))
+    assert cohesive_b(estimated)['measurement'] == 'mixed'
+    assert not estimated['proof']['provider_reported_only']
+
+    class Moved(Reasked):
+        """The first answer alone was served by another snapshot; the re-ask by the usual one."""
+        def respond(self, pin, case, trial, messages, reask=False):
+            record = super().respond(pin, case, trial, messages, reask)
+            if (pin.judge_id, case['id'], trial, reask) == ('b', 'ledger_cohesive', 0, False):
+                record['served_model'] = 'judge-model-2026-01-01'
+            return record
+    for again in (None, lambda r: {**r, 'served_model': 'judge-model-2026-01-01'}):
+        moved = run_reasked(tmp_path, (Moved if again is None else Reasked)(accurate, again=again))
+        assert moved['served_models']['b'] == ['judge-model', 'judge-model-2026-01-01']
+        assert all(t['reason'] == 'model_drift' for c in moved['cases'] for t in c.get('judges', {}).get('b', []))
 
 
 def test_a_penalized_facade_is_a_false_positive(tmp_path):

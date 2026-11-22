@@ -76,7 +76,7 @@ in at least three fresh trials, through the 013 provider adapter. It is report-o
 ```sh
 python -m grimoire.judgepanel plan    --corpus backend/tests/fixtures/calibration/panel --panel panel.json
 python -m grimoire.judgepanel capture --corpus ... --panel panel.json --out capture \
-    --confirm-billing --spend-cap "5 USD" --max-calls 108
+    --confirm-billing --spend-cap "5 USD" --max-calls 126
 python -m grimoire.judgepanel score   --corpus ... --panel panel.json --capture capture \
     --coding-skills /path/to/pinned/coding-skills
 ```
@@ -142,6 +142,22 @@ re-ask). Each re-ask is a billed call, written to its own capture record
 wording is refused as stale. The plan counts every theory answer as possibly re-asked:
 `max_calls` is 126 for the default corpus, and `capture` refuses a `--max-calls` below it.
 
+Only an answer whose every other check passed is re-asked: the unit, the citations and the
+coverage canary. An answer that also fails one of those keeps that reason (`coverage`,
+`citation`), is never re-asked, and still counts in `parsing.off_ladder`. So a re-ask cures
+one fault, a step between rungs, and never gives an unread or ungrounded answer a second
+draw. A re-ask that brings back no readable answer (refused, interrupted, or served by
+another model) leaves the trial `unknown` and still off the ladder. A re-asked trial keeps
+its first answer's parse counts (`first_answer`), and both answers count in `parsing`.
+
+A re-asked answer counts as that judge's answer for the trial. The judge's first answer
+cannot be scored at all, and the second comes from the same judge in the same fresh
+conversation, with no other judge's work and no rung suggested. Its call is measured and
+watched for model drift with the trial. It is not a rerun for a better result: the second
+answer stands whatever it says. The proof keys are unchanged. Each theory trial in the report
+lists the judges whose answer came from a re-ask (`theory.units.<unit>.trials[].reasked`),
+and the audit names them.
+
 **Defects.** A judge's verdict on a case is settled only when all trials agree;
 otherwise it is `inconsistent` and excluded, and counted. A defect counts as found
 only when the flagged lines include a labelled defect line. Per trial, the panel says
@@ -186,9 +202,12 @@ needs a fresh capture.
 ### Spending approval
 
 The default corpus plans **108 calls** (12 sent cases × 3 judges ×
-3 trials; the unparseable case is never sent) and at most **18 re-asks** (one per theory
-answer, if every one put a step off the ladder), so `capture` needs `--max-calls 126`, about 17,000 prompt characters per
-judge per trial round, with each reply bounded by the judge's `max_output_tokens`.
+3 trials; the unparseable case is never sent), about 17,000 prompt characters per judge per
+trial round, with each reply bounded by the judge's `max_output_tokens`. It also allows at
+most **18 re-asks**, one per theory answer if every one put a step off the ladder. Each
+re-ask sends the first prompt again with the judge's own answer, up to its
+`max_output_tokens`, so `capture` needs `--max-calls 126`. The `plan` command's
+`prompt_characters_per_judge_trial` counts the first prompts only.
 The operator needs explicitly approved providers and exact models, credentials in
 named environment variables (never pasted anywhere), and an approved maximum spend
 backed by a provider-enforced limit. `--spend-cap` only records that approval and
@@ -317,8 +336,8 @@ score withheld.
 
 Still unproven: theory discrimination, and a score range and repeating grade for the
 cohesive unit. The requirement is unchanged. An off-ladder step is a judge's answer the
-rubric will not score, not a reading fault, and the harness does not flag it before the
-rubric does. Closing the proof needs another capture with its own approval.
+rubric will not score, not a reading fault, and parser version 2 did not flag it before the
+rubric did. Closing the proof needs another capture with its own approval.
 
 **After this capture.** [Parser version 3](#independent-judge-panel) re-asks a judge once
 when a theory step is off the ladder, so an answer like `sonnet`'s two would get one more

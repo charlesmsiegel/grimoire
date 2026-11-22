@@ -376,16 +376,18 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
     verdict['unit'] = case['id']
     count = len(case['source'].splitlines())
     dimensions = data.get('dimensions')
-    if off := off_ladder(dimensions):
-        # Never rounded onto the ladder: that would be the harness choosing the judge's step.
-        return {**result('unknown', 'off_ladder', None), 'off_ladder': off}
+    # Checked, never rounded onto the ladder: that would be the harness choosing the judge's step.
+    off = {'off_ladder': off_ladder(dimensions)} if off_ladder(dimensions) else {}
     grounded, dropped = _grounded(dimensions, name, count) if isinstance(dimensions, dict) else (None, 0)
     if grounded is None:
-        return result('unknown', 'citation', verdict, dropped)
+        return {**result('unknown', 'citation', verdict, dropped), **off}
     verdict['dimensions'] = grounded
     if not covered(data, name, token):
         # Kept, so the report can show what an uncovered verdict would have been awarded.
-        return result('unknown', 'coverage', verdict, dropped)
+        return {**result('unknown', 'coverage', verdict, dropped), **off}
+    if off:
+        # The only fault left, so the one a re-ask may cure: every other check already passed.
+        return {**result('unknown', 'off_ladder', None, dropped), **off}
     return result('verdict', None, verdict, dropped)
 
 
@@ -535,6 +537,15 @@ def trial_result(record: dict | None, pin: JudgePin, case: dict, token: str, nam
             'served_model': served, 'observed_models': observed}
 
 
+# What ``parsing`` counts for each answer read, the first of a re-asked trial included.
+ANSWER_COUNTS = ('text_outside_json', 'ambiguous', 'citations_dropped')
+
+
+def _read(result: dict) -> bool:
+    """Whether an answer reached the parser: an accepted call, served by the pinned model."""
+    return 'text_outside_json' in result
+
+
 def _measured(first: str | None, second: str | None) -> str | None:
     """One trial's measurement across its two calls: both must agree, as within one call."""
     kinds = {kind for kind in (first, second) if kind is not None}
@@ -566,9 +577,13 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
                         first = result
                         result = trial_result(again, pin, case, token, name)
                         result.update(reasked=first['off_ladder'],
+                                      first_answer={key: first[key] for key in ANSWER_COUNTS},
                                       observed_models=sorted({*first.get('observed_models', []),
                                                               *result.get('observed_models', [])}),
                                       measurement=_measured(first['measurement'], result['measurement']))
+                        if not _read(result):
+                            # No second answer was read, so the trial's only answer is still off.
+                            result['off_ladder'] = first['off_ladder']
                 results.append(result)
             entry['judges'][pin.judge_id] = results
         out.append(entry)
@@ -597,10 +612,13 @@ def parsing(cases: list[dict]) -> dict:
             row = out.setdefault(judge_id, {'answers': 0, 'text_outside_json': 0, 'ambiguous': 0,
                                               'citations_dropped': 0, 'reasked': 0, 'off_ladder': 0})
             for result in results:
-                row['answers'] += 1
-                row['text_outside_json'] += bool(result.get('text_outside_json'))
-                row['ambiguous'] += bool(result.get('ambiguous'))  # kept apart: drift rewrites reason
-                row['citations_dropped'] += result.get('citations_dropped', 0)
+                for answer in (result.get('first_answer'), result):
+                    if answer is None:
+                        continue
+                    row['answers'] += 1
+                    row['text_outside_json'] += bool(answer.get('text_outside_json'))
+                    row['ambiguous'] += bool(answer.get('ambiguous'))  # kept apart: drift rewrites reason
+                    row['citations_dropped'] += answer.get('citations_dropped', 0)
                 row['reasked'] += bool(result.get('reasked'))
                 row['off_ladder'] += bool(result.get('off_ladder'))  # still off after any re-ask
     return out
@@ -749,7 +767,10 @@ def score_theory(cases: list[dict], trials: int, checkout: Path | None) -> dict:
                                  'reason': case['reason']}
             continue
         size = {'files': 1, 'loc': len(case['source_lines'])}
-        trial_scores = [_score_trial([results[trial] for results in case['judges'].values()], size, checkout)
+        trial_scores = [{**_score_trial([results[trial] for results in case['judges'].values()], size, checkout),
+                         # Whose answer in this trial came from a re-ask, so the audit can name it.
+                         'reasked': sorted(judge_id for judge_id, results in case['judges'].items()
+                                           if results[trial].get('reasked'))}
                         for trial in range(trials)]
         scores = [t['profile_score'] for t in trial_scores]
         known = None not in scores
