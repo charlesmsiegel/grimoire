@@ -356,6 +356,19 @@ def off_ladder(dimensions: object) -> list[str]:
             if isinstance(dimensions.get(key), dict) and dimensions[key].get('step') not in LADDER]
 
 
+def laddered(verdict: dict) -> dict:
+    """``verdict`` with each off-ladder step read as the rung the rubric checks most: 0.5, a lowered
+    step that still needs evidence, or 1.0 for a number at or above it. Only to ask the pinned
+    rubric what else it would refuse in a first answer; never scored, never shown as a grade."""
+    dimensions = {key: dict(entry) if isinstance(entry, dict) else entry
+                  for key, entry in verdict['dimensions'].items()}
+    for key in off_ladder(dimensions):
+        step = dimensions[key].get('step')
+        number = type(step) in (int, float) and step >= 1.0
+        dimensions[key]['step'] = 1.0 if number else 0.5
+    return {**verdict, 'dimensions': dimensions}
+
+
 def reask_messages(messages: list[tuple[str, str]], reply: str, keys: list[str]) -> list[tuple[str, str]]:
     """The first conversation, the judge's own answer, and the ladder restated for ``keys``."""
     return [*messages, ('assistant', reply), ('user', REASK_PROMPT.format(dimensions=', '.join(keys)))]
@@ -386,8 +399,9 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
         # Kept, so the report can show what an uncovered verdict would have been awarded.
         return {**result('unknown', 'coverage', verdict, dropped), **off}
     if off:
-        # The only fault left, so the one a re-ask may cure: every other check already passed.
-        return {**result('unknown', 'off_ladder', None, dropped), **off}
+        # The only fault found here, so the one a re-ask may cure. The verdict is kept: scoring asks
+        # the pinned rubric whether anything else in it would have been refused.
+        return {**result('unknown', 'off_ladder', verdict, dropped), **off}
     return result('verdict', None, verdict, dropped)
 
 
@@ -577,7 +591,8 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
                         first = result
                         result = trial_result(again, pin, case, token, name)
                         result.update(reasked=first['off_ladder'],
-                                      first_answer={key: first[key] for key in ANSWER_COUNTS},
+                                      first_answer={**{key: first[key] for key in ANSWER_COUNTS},
+                                                    'verdict': first['verdict']},
                                       observed_models=sorted({*first.get('observed_models', []),
                                                               *result.get('observed_models', [])}),
                                       measurement=_measured(first['measurement'], result['measurement']))
@@ -744,6 +759,8 @@ def _score_trial(results: list[dict], size: dict, checkout: Path | None) -> dict
     """Profile rule: a panel is scored only when all three judges are covered and valid.
 
     ``upstream_score`` is what the pinned rubric alone would award the same verdicts, coverage aside.
+    A re-asked answer counts only if its judge's first answer had no fault but the ladder: the
+    pinned rubric must accept that first answer once its off-ladder steps are read as rungs.
     """
     verdicts = [r['verdict'] for r in results]
     upstream = upstream_score(checkout, verdicts, size) if checkout is not None and all(verdicts) else None
@@ -752,6 +769,10 @@ def _score_trial(results: list[dict], size: dict, checkout: Path | None) -> dict
         reason = 'no_pinned_rubric'
     elif reason is None and 'error' in upstream:
         reason = 'invalid_verdict'
+    elif reason is None and checkout is not None and any(
+            'error' in upstream_score(checkout, [laddered(r['first_answer']['verdict'])] * PANEL_SIZE, size)
+            for r in results if r.get('first_answer')):
+        reason = 'first_answer_invalid'
     scored = reason is None
     return {'profile_score': upstream['score'] if scored else None,
             'upstream_score': (upstream or {}).get('score'),
@@ -770,7 +791,7 @@ def score_theory(cases: list[dict], trials: int, checkout: Path | None) -> dict:
         trial_scores = [{**_score_trial([results[trial] for results in case['judges'].values()], size, checkout),
                          # Whose answer in this trial came from a re-ask, so the audit can name it.
                          'reasked': sorted(judge_id for judge_id, results in case['judges'].items()
-                                           if results[trial].get('reasked'))}
+                                           if results[trial].get('reasked') and _read(results[trial]))}
                         for trial in range(trials)]
         scores = [t['profile_score'] for t in trial_scores]
         known = None not in scores

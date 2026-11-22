@@ -148,14 +148,23 @@ coverage canary. An answer that also fails one of those keeps that reason (`cove
 one fault, a step between rungs, and never gives an unread or ungrounded answer a second
 draw. A re-ask that brings back no readable answer (refused, interrupted, or served by
 another model) leaves the trial `unknown` and still off the ladder. A re-asked trial keeps
-its first answer's parse counts (`first_answer`), and both answers count in `parsing`.
+its first answer's parse counts and verdict (`first_answer`), and both answers count in
+`parsing`.
+
+The rubric checks more than the ladder: a lowered step needs evidence, a verdict needs at
+least three rehearsals, and the theory fields must not be empty. So, when the report is
+scored, each re-asked trial's first answer is also put through the pinned rubric, with each
+off-ladder step read as a rung (1.0 at or above the top, 0.5 otherwise) for that check only.
+If the rubric refuses it for any other fault, the trial is `first_answer_invalid` and its
+panel is unscored, whatever the re-ask said. That check never scores anything: the profile
+comes from the re-asked answer alone.
 
 A re-asked answer counts as that judge's answer for the trial. The judge's first answer
 cannot be scored at all, and the second comes from the same judge in the same fresh
 conversation, with no other judge's work and no rung suggested. Its call is measured and
 watched for model drift with the trial. It is not a rerun for a better result: the second
 answer stands whatever it says. The proof keys are unchanged. Each theory trial in the report
-lists the judges whose answer came from a re-ask (`theory.units.<unit>.trials[].reasked`),
+lists the judges whose answer came from a re-ask that was read (`theory.units.<unit>.trials[].reasked`),
 and the audit names them.
 
 **Defects.** A judge's verdict on a case is settled only when all trials agree;

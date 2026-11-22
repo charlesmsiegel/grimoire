@@ -436,7 +436,8 @@ def test_a_step_still_off_the_ladder_after_one_reask_is_unknown_and_never_asked_
     result = jp.run(CORPUS, pins, trials, judge, 'salt', stub_checkout)
     assert sum(call[-1] == 'reask' for call in judge.calls) == 2
     trial = result['cases'][[c['id'] for c in result['cases']].index('ledger_cohesive')]['judges']['b'][0]
-    assert trial['state'] == 'unknown' and trial['reason'] == 'off_ladder' and trial['verdict'] is None
+    assert trial['state'] == 'unknown' and trial['reason'] == 'off_ladder'
+    assert trial['verdict']['dimensions']['honest_limits']['step'] == 0.75  # kept as answered, never rounded
     assert result['parsing']['b'] == {**result['parsing']['b'], 'reasked': 2, 'off_ladder': 2}
     unit = result['theory']['units']['ledger_cohesive']
     assert not unit['scored'] and unit['trials'][0]['reason'] == 'off_ladder'
@@ -501,7 +502,9 @@ def test_a_reasked_trial_still_reports_what_its_first_answer_needed(tmp_path):
     result = run_reasked(tmp_path, Reasked(accurate, first=messy))
     trial = cohesive_b(result)
     assert trial['state'] == 'verdict' and trial['reasked'] == ['honest_limits']
-    assert trial['first_answer'] == {'text_outside_json': True, 'ambiguous': False, 'citations_dropped': 1}
+    assert {k: v for k, v in trial['first_answer'].items() if k != 'verdict'} == {
+        'text_outside_json': True, 'ambiguous': False, 'citations_dropped': 1}
+    assert trial['first_answer']['verdict']['dimensions']['honest_limits']['step'] == 0.75
     row = result['parsing']['b']
     assert row['answers'] == 37 and row['text_outside_json'] == 1 and row['citations_dropped'] == 1
     assert result['theory']['units']['ledger_cohesive']['trials'][0]['reasked'] == ['b']
@@ -516,6 +519,59 @@ def test_a_reask_with_no_answer_leaves_the_trial_off_the_ladder(tmp_path):
     assert trial['reason'] == 'call_refused' and trial['off_ladder'] == ['honest_limits']
     assert result['parsing']['b']['reasked'] == 1 and result['parsing']['b']['off_ladder'] == 1
     assert result['parsing']['b']['answers'] == 37  # the first answer was read; the re-ask gave none
+    # Asked again, but no answer came from the re-ask, so the trial names no re-asked judge.
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reasked'] == []
+
+
+def test_off_ladder_steps_are_read_as_the_rung_the_rubric_checks_most():
+    entry = {'rationale': 'r', 'evidence': []}
+    verdict = {'unit': 'u', 'dimensions': {'absorption': {**entry, 'step': 0.75}, 'world_mapping': {**entry, 'step': 1.5},
+                                           'abstraction': {**entry, 'step': '1.0'},
+                                           'justification': {**entry, 'step': float('nan')},
+                                           'honest_limits': {**entry, 'step': 0.25}}}
+    steps = {key: e['step'] for key, e in jp.laddered(verdict)['dimensions'].items()}
+    assert steps == {'absorption': 0.5, 'world_mapping': 1.0, 'abstraction': 0.5, 'justification': 0.5,
+                     'honest_limits': 0.25}
+    assert verdict['dimensions']['absorption']['step'] == 0.75  # the answer itself is never changed
+
+
+def test_a_reask_counts_only_if_the_pinned_rubric_accepts_the_first_answer(tmp_path, stub_checkout, monkeypatch):
+    real, seen = jp.upstream_score, []
+
+    def refuses_two_rehearsals(checkout, verdicts, size):
+        seen.append(verdicts)
+        if any(len(v.get('rehearsals', [])) < 3 for v in verdicts):
+            return {'error': 'absorption needs at least 3 rehearsal(s)'}
+        return real(checkout, verdicts, size)
+    monkeypatch.setattr(jp, 'upstream_score', refuses_two_rehearsals)
+
+    def two_rehearsals(reply):
+        return json.dumps({**reply, 'rehearsals': reply['rehearsals'][:2]})
+    result = run_reasked(tmp_path, Reasked(accurate, first=two_rehearsals), stub_checkout)
+    assert cohesive_b(result)['state'] == 'verdict'  # the re-asked answer itself is fine
+    trial = result['theory']['units']['ledger_cohesive']['trials'][0]
+    assert trial['reason'] == 'first_answer_invalid' and trial['profile_score'] is None
+    assert not result['proof']['theory_panel_scored_and_discriminates']
+    checked = [v for v in seen if v[0].get('rehearsals') and len(v[0]['rehearsals']) == 2]
+    assert checked and checked[0][0]['dimensions']['honest_limits']['step'] == 0.5  # read as a rung
+
+    clean = run_reasked(tmp_path, Reasked(accurate), stub_checkout)
+    assert clean['theory']['units']['ledger_cohesive']['trials'][0]['reason'] is None
+
+
+@pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
+                    reason='set GRIMOIRE_CODING_SKILLS to a clean checkout at the calibration pin')
+@pytest.mark.parametrize('fault', [
+    lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
+        'step': 0.5, 'rationale': 'r', 'evidence': []}}},
+    lambda reply: {**reply, 'rehearsals': reply['rehearsals'][:2]},
+    lambda reply: {**reply, 'theory': ''},
+])
+def test_the_pinned_rubric_refuses_a_reask_whose_first_answer_had_another_fault(tmp_path, fault):
+    checkout = Path(os.environ['GRIMOIRE_CODING_SKILLS'])
+    result = run_reasked(tmp_path, Reasked(accurate, first=lambda reply: json.dumps(fault(reply))), checkout)
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reason'] == 'first_answer_invalid'
+    assert not result['proof']['theory_panel_scored_and_discriminates']
 
 
 def test_a_reask_is_measured_and_watched_for_drift_with_its_trial(tmp_path):
