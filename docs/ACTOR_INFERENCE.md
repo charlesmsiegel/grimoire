@@ -201,11 +201,15 @@ findings and token usage, reported apart), then V2 with planning against plain V
   live run is multiplied by N, and the files are numbered (`v2-baseline-1.run.json` and so on).
 - `--rescore DIR` scores an earlier comparison's V2 runs again, read back from its output `DIR`,
   against the same `--baseline` captures in the same order (their evidence digests must match the
-  ones `DIR`'s report names), with the scenario as it is now. It sends nothing and bills nothing,
-  takes none of `--samples`, `--with-planning`, `--api-key-env` or `--confirm-billing` (the sample
-  count and planning come from `DIR`'s files), and writes only a new `comparison-report.txt`, which
-  says it is a rescore. It is how a change to a scenario's markers is measured on a run already
-  made: the replies are read again, never played again.
+  ones `DIR`'s report names, and their mode must be the one it names), with the scenario and the
+  gate as they are now. It sends nothing and bills nothing, takes none of `--samples`,
+  `--with-planning`, `--api-key-env` or `--confirm-billing` (the sample count and planning come from
+  `DIR`'s files), and writes only a new `comparison-report.txt`. That report copies the earlier
+  report's paragraphs about its run word for word, says it is a rescore, and gives new verdicts. It
+  is how a change to a scenario's markers is measured on a run already made: the replies are read
+  again, never played again. Any change to the gate since that run is applied too, and nothing binds
+  the run files to the earlier report beyond their names, so a rescore is a measurement, not a
+  verdict.
 - The first comparison (V2 against 0.2.1) is 068's proving scenario. The second, with planning, is
   an experiment: a failure there rejects the optional stage, not V2, and the report says so.
 - The V2 run has no capture evidence of its own, so its usage is provider-reported and unverified,
@@ -443,15 +447,17 @@ What the numbers leave out:
 
 - **Choices.** `ask-ledger` was judged on one phrase, `guest ledger`, and nothing else: a reply in
   which Oda slid the ledger across, opened it, took the coin or handed over the guest book counted as
-  unrealized. Its effect markers now take the forms that name the same book (`guest book`,
-  `guestbook`, `guest-ledger`, `guests' ledger`, `guest register`, `guest list`, `ledger of guests`
-  and the like), the acts of producing it (`opens the ledger`, `slides the ledger`, `the ledger
-  across`, `hands over the ledger`, `pages of the ledger` and the like) and the coin being accepted
-  (`takes the coin`, `pockets the coin`, `takes the silver`, `pockets the silver`). A bare `ledger`
-  still does not count, so a refusal such as "Ledger's closed tonight" stays unrealized. Negation
-  markers are unchanged, so no reply that passed before can fail now. The full list is in the
-  scenario file, and `backend/tests/test_evals_checks.py` holds the forms that must and must not
-  realize the choice.
+  unrealized. Its effect markers now also take the other names of the same book (`guest book`,
+  `guestbook`, `guest-ledger`, `guests' ledger`, `guest register`, `ledger of guests` and the like,
+  with plurals), and the acts that hand it to Wren (`hands over the ledger`, `hands Wren the ledger`,
+  `the ledger across`, `the ledger toward Wren` and the like, present and past). Like `guest ledger`
+  itself, a name of the book counts wherever it appears after Wren's line. Acts that a refusal uses
+  as readily (`takes the coin`, `opens the ledger`, `turns the ledger`, `pushes the ledger`) and a
+  bare `ledger` ("Ledger's closed tonight") do not count, and neither does a `guest list`, which is
+  another thing. Matching is a phrase search with no sense of negation, so a marker is kept only if a
+  refusal would rarely use it. Negation markers are unchanged, so no reply that passed before can
+  fail now. The full list is in the scenario file, and `backend/tests/test_evals_checks.py` holds
+  the forms that must and must not realize the choice.
 - **Why it looked like the markers.** 0.2.1 itself realized the choice in 2 of 5 samples, and V2 with
   planning in 4 of 5 against 1 of 5 without it. Nothing in the gate changed between those runs but
   the wording of the replies. That fits replies that do give effect to the request in other words,

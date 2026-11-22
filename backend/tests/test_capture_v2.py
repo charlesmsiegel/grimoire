@@ -405,3 +405,28 @@ def test_a_rescore_refuses_what_is_not_a_comparison_and_writes_nowhere_inside_it
     assert run(*flags, "--rescore", earlier, "--out", tmp_path / "rescored") == 2
     assert "names no 0.2.1 baselines" in capsys.readouterr().err
     assert not (tmp_path / "rescored").exists()
+
+
+def test_a_rescore_copies_the_earlier_reports_account_of_its_run(tmp_path, capsys):
+    first, second, earlier = compared(tmp_path, samples=2)
+    report = earlier / "comparison-report.txt"
+    flags = ["--baseline", first, "--baseline", second, "--rescore", earlier]
+    text = report.read_text("utf-8")
+    report.write_text(text.replace("Dry run: scripted", "Dry run, as written then: scripted"), "utf-8")
+    assert run(*flags, "--out", tmp_path / "rescored") == 0
+    rescored = outputs(tmp_path / "rescored")["comparison-report.txt"]
+    assert "Dry run, as written then: scripted" in rescored  # copied, never regenerated
+    report.write_text(text.replace(": dry_run, provider", ": live, provider", 1), "utf-8")
+    assert run(*flags, "--out", tmp_path / "again") == 2
+    assert "its report says live, but the captures are dry_run" in capsys.readouterr().err
+    assert not (tmp_path / "again").exists()
+
+
+def test_a_rescore_reads_no_linked_files(tmp_path, capsys):
+    first, second, earlier = compared(tmp_path, samples=2)
+    elsewhere = tmp_path / "elsewhere.run.json"
+    (earlier / "v2-baseline-2.run.json").rename(elsewhere)
+    (earlier / "v2-baseline-2.run.json").symlink_to(elsewhere)
+    assert run("--baseline", first, "--baseline", second, "--rescore", earlier,
+               "--out", tmp_path / "rescored") == 2
+    assert "v2-baseline-2.run.json is a link" in capsys.readouterr().err

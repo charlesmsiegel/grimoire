@@ -99,10 +99,11 @@ def test_negation_label_and_evidence_are_independent_signals(bench):
 @pytest.mark.parametrize("narration", [
     "Oda flips the guest book open and taps a line.",
     "Oda slides the ledger across the counter without a word.",
-    "Oda pockets the coin and turns the ledger toward Wren.",
+    "Oda hands Wren the ledger.",
+    "Oda handed the ledger over.",
     "Oda runs a thumb down the guest-ledger.",
-    "Oda checks the list of guests.",
-    "Oda opens the ledger to tonight's page.",
+    "Oda checks the guests’ ledger.",
+    "Oda turns the ledger toward Wren.",
 ])
 def test_the_ledger_choice_is_realized_by_its_other_forms(bench, narration):
     scenario, run = bench
@@ -111,14 +112,22 @@ def test_the_ledger_choice_is_realized_by_its_other_forms(bench, narration):
     assert found == ()
 
 
-@pytest.mark.parametrize("oda", [
-    "Ledger's closed tonight. Come back at dawn.",  # a refusal: a bare ledger is not the effect
+@pytest.mark.parametrize("narration", [
+    "Ledger's closed tonight. Come back at dawn.",  # a bare ledger is not the effect
     "No. Rules are rules. Keep your silver.",
+    "Oda never takes the coin.",  # nothing about the coin counts: taking it is not giving the book
+    "Oda takes the coin and the ledger stays shut.",
+    "Oda pockets the silver and shakes her head.",
+    "Oda pushes the ledger away and slides the coin back.",
+    "Oda turns the ledger face down.",
+    "Oda never opens the ledger for strangers.",
+    "Oda keeps the ledger open only for her counts.",
+    "Bellamy laughs that the guest list is full of rogues.",
 ])
-def test_a_refusal_that_only_names_a_ledger_does_not_realize_the_choice(bench, oda):
+def test_a_reply_that_does_not_produce_the_guest_ledger_does_not_realize_the_choice(bench, narration):
     scenario, run = bench
     found = findings_for(scenario, mutate(run, both(
-        set_text(1, "npc-oda", oda), set_text(1, None, "The sealed vault door gleams."))))
+        set_text(1, "npc-oda", "Hm."), set_text(1, None, narration + " The sealed vault door gleams."))))
     assert [(f.check, f.subject, f.evidence) for f in found] == [
         ("choice_negated", "ask-ledger", "unrealized")]
 
