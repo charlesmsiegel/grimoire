@@ -22,6 +22,8 @@ Live run: [judge panel live run](../../evals/JUDGE_PANEL_LIVE_RUN.md) gives the 
 
 Live run (2026-11-20): one 108-call capture did not establish the proof; see [the results](../../CALIBRATION.md#live-capture-2026-11-20).
 
+Live run (2026-11-22, parser 6): the sixth capture established the proof, after four more that did not; see [the results](../../CALIBRATION.md#live-capture-2026-11-22-parser-6) and their limits.
+
 ## Independence and interfaces
 Standalone tool-quality sprint; the blocking gate is a separate consumer and must not activate prematurely.
 

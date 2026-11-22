@@ -1,14 +1,16 @@
 # Judge panel live run (Slice 069)
 
-**Status:** run five times, with `claude-opus-5-5` as the Opus judge; the proof is
-**not established**. CMS approved one live capture on 2026-11-20 and four on 2026-11-22, and
-all five have been used: [2026-11-20](../CALIBRATION.md#live-capture-2026-11-20),
+**Status:** run six times, with `claude-opus-5-5` as the Opus judge; **the proof was
+established on the sixth capture** (2026-11-22, parser 6:
+[results](../CALIBRATION.md#live-capture-2026-11-22-parser-6)), 109 billed calls of at most
+126 under a **$12 USD** cap. The five earlier captures, one on 2026-11-20 and four on
+2026-11-22, did not establish it and stay on record:
+[2026-11-20](../CALIBRATION.md#live-capture-2026-11-20),
 [2026-11-22](../CALIBRATION.md#live-capture-2026-11-22),
-[2026-11-22 under parser 3](../CALIBRATION.md#live-capture-2026-11-22-parser-3),
-[2026-11-22 under parser 4](../CALIBRATION.md#live-capture-2026-11-22-parser-4) and
-[2026-11-22 under parser 5](../CALIBRATION.md#live-capture-2026-11-22-parser-5). The fifth
-(111 billed calls of at most 126, under a **$12 USD** cap) completed the defect panel and
-failed only `theory_panel_scored_and_discriminates`. Another capture needs a new approval.
+[parser 3](../CALIBRATION.md#live-capture-2026-11-22-parser-3),
+[parser 4](../CALIBRATION.md#live-capture-2026-11-22-parser-4) and
+[parser 5](../CALIBRATION.md#live-capture-2026-11-22-parser-5). Every approved capture has
+been used; another needs a new approval.
 The harness and its offline proof are described in
 [CALIBRATION.md](../CALIBRATION.md#independent-judge-panel).
 
