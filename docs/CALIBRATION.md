@@ -175,18 +175,21 @@ faults together, so the plan and `max_calls` are unchanged.
 
 Parser version 5 also re-asks a theory answer that is `malformed`: it holds no JSON object
 tagged `"schema": "theory-verdict/1"` that could be read, such as prose alone, broken JSON
-or another schema tag. The 2026-11-22 parser 4 capture lost a scrambled trial that way. The
+or another schema tag. An object that holds the tagged one inside it, such as a wrapper or a
+draft and a final answer, is `ambiguous` instead. The 2026-11-22 parser 4 capture lost a scrambled trial that way. The
 message says only that no such object could be read, never what the answer should say. It
 carries the judge's own answer back, so an empty answer is never re-asked. Nor is an
-`ambiguous` one, whose second object may be the judge changing its mind. Defect answers are
-never re-asked. Since no object was read, there was no canary to check. So the re-asked
+`ambiguous` one, whose second object may be the judge changing its mind, nor one holding an
+object that names files without copying the canary: that answer was not read, so it gets no
+second draw. Defect answers are never re-asked. Since no object was read, there was no canary to check. So the re-asked
 answer must copy the canary itself, and pass every other check on its own, as any answer
-must. `parsing.malformed` counts the trials whose final answer is still unreadable, and the
-trial's `reasked` is `["malformed"]`. This is still at most one re-ask per answer, so the
+must. `parsing.malformed` counts, per judge, the theory trials whose final answer held no
+readable object, whether or not it was re-asked, and a re-asked trial's `reasked` is
+`["malformed"]`. This is still at most one re-ask per answer, so the
 plan and `max_calls` are unchanged. The ladder and citation messages are word for word
 what version 4 sent, so a version 4 capture still replays.
 
-Only an answer whose other checks passed is re-asked: the unit and the coverage canary, and
+Apart from a `malformed` answer, only an answer whose other checks passed is re-asked: the unit and the coverage canary, and
 for the ladder alone, the citations too. An answer that also fails one of those keeps that
 reason (`coverage`, `citation`), is never re-asked, and still counts in `parsing.off_ladder`.
 Evidence that is not a list of citations is never re-asked either, nor is a lowered step whose
@@ -551,5 +554,5 @@ with its own approval.
 
 **After this capture.** [Parser version 5](#independent-judge-panel) re-asks a theory
 answer once when it holds no readable object. Re-scoring this capture under version 5 makes
-no calls and changes nothing: it holds no such re-ask, and its manifest names parser
+no calls and changes no trial's state, reason or score: it holds no such re-ask, and its manifest names parser
 version 4, so `captured_for_this_parser` is false.

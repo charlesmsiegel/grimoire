@@ -107,12 +107,12 @@ change. A new capture needs:
 - The score report's `proof.captured_for_this_parser` to be true: a capture taken by this
   code records parser version 5 in its manifest. Check `parsing` per judge too. Name in the
   audit any judge that was re-asked (`reasked`), was still off the ladder, uncited or
-  unreadable after a re-ask (`off_ladder`, `uncited`, `malformed`), or had most of its
+  unreadable (`off_ladder`, `uncited`, `malformed`), or had most of its
   answers read out of prose, `ambiguous` or missing citations, and give each judge's
   `dropped_shapes`.
 
-Re-scoring the 2026-11-22 parser 4 capture under version 5 makes no calls and changes
-nothing: it holds no re-ask for the unreadable answer, and its manifest names parser
+Re-scoring the 2026-11-22 parser 4 capture under version 5 makes no calls and changes no
+trial's state, reason or score: it holds no re-ask for the unreadable answer, and its manifest names parser
 version 4.
 
 ### Parser version 4 (2026-11-22)

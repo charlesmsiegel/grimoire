@@ -813,6 +813,12 @@ def test_a_reasked_malformed_answer_must_pass_every_check_on_its_own(tmp_path, s
     (lambda reply: ' \n ', 'malformed'),
     # A second object, or the answer inside another: the judge may have changed its mind.
     (lambda reply: json.dumps(reply) + '\n' + json.dumps(reply), 'ambiguous'),
+    (lambda reply: json.dumps({'answer': reply}), 'ambiguous'),
+    (lambda reply: json.dumps({'draft': reply, 'final': reply}), 'ambiguous'),
+    (lambda reply: '```json\n' + json.dumps({'answer': reply}) + '\n```', 'ambiguous'),
+    # A mis-tagged object that names files without the canary: unread, so no second draw.
+    (lambda reply: json.dumps(uncovered({**reply, 'schema': 'theory_verdict/1'})), 'malformed'),
+    (lambda reply: 'Here: ' + json.dumps(uncovered({**reply, 'schema': 'theory_verdict/1'})), 'malformed'),
 ])
 def test_an_empty_or_ambiguous_answer_is_never_reasked(tmp_path, first, reason):
     judge = Reasked(accurate, first=first)

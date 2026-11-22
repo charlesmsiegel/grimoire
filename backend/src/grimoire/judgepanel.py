@@ -75,9 +75,10 @@ copy its token exactly. Answer with one JSON object and nothing else:
 PROMPT_VERSION = hashlib.sha256((DEFECT_PROMPT + '\0' + THEORY_PROMPT).encode()).hexdigest()
 
 # Sent once, in the same conversation, to a theory judge whose answer had only these faults: a step
-# off the ladder, or a lowered step none of whose citations is a listed line. It names the dimensions
-# and restates the rule, never which rung or line to pick. The text is in each re-ask record's prompt
-# digest, so a capture made with other wording is refused as stale. A re-ask for the ladder alone is
+# off the ladder, a lowered step none of whose citations is a listed line, or no readable object at
+# all. It names the dimensions and restates the rule, never which rung or line to pick. The text
+# is in each re-ask record's prompt digest, so a capture made with other wording is refused as
+# stale. A re-ask for the ladder alone is
 # word for word what parser version 3 sent, so its captures still replay.
 REASK_LADDER = """Your answer gave {dimensions} a step that is not on the ladder. Every step must be
 exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between
@@ -261,8 +262,9 @@ def extract(text: object, schema: str) -> tuple[dict | None, str | None, bool]:
     if not isinstance(text, str):
         return None, 'malformed', False
     whole = _decoded(text)
-    if whole is not None:
+    if whole is not None and (whole.get('schema') == schema or schema not in text):
         return (whole, None, False) if whole.get('schema') == schema else (None, 'malformed', False)
+    # An object holding the schema's object inside it is read by the scan below: ``ambiguous``.
     decoder, found, at = json.JSONDecoder(), [], text.find('{')
     while at != -1:
         try:
@@ -293,6 +295,30 @@ def _opens(text: str) -> bool:
         elif char in '}]' and depth:
             depth -= 1
     return depth > 0
+
+
+def _objects(text: str) -> list[dict]:
+    """Every JSON object in ``text`` that is not inside another, whatever its tag."""
+    whole = _decoded(text)
+    if whole is not None:
+        return [whole]
+    decoder, found, at = json.JSONDecoder(), [], text.find('{')
+    while at != -1:
+        try:
+            value, end = decoder.raw_decode(text, at)
+        except ValueError:
+            at = text.find('{', at + 1)
+            continue
+        if isinstance(value, dict):
+            found.append(value)
+        at = text.find('{', end)
+    return found
+
+
+def _uncovered_object(text: str, name: str, token: str) -> bool:
+    """Whether an object in an unreadable answer gives files but none of them copied the canary."""
+    objects = [o for o in _objects(text) if 'files' in o]
+    return bool(objects) and not any(covered(o, name, token) for o in objects)
 
 
 def covered(data: dict, name: str, token: str) -> bool:
@@ -458,9 +484,11 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
                 'dropped_shapes': shapes or {}}
     if data is None and failure != 'ambiguous':
         # No object could be read, so nothing in it was judged: a fault of form alone. Re-askable
-        # only with a reply to show the judge, since a re-ask carries the judge's own answer back.
-        fault = {'malformed': True, 'reaskable': True} if isinstance(text, str) and text.strip() else {
-            'malformed': True}
+        # only with a reply to show the judge, since a re-ask carries the judge's own answer back,
+        # and never when an object in it names files without the canary: that answer was unread.
+        fault = {'malformed': True}
+        if isinstance(text, str) and text.strip() and not _uncovered_object(text, name, token):
+            fault['reaskable'] = True
         return {**result('unknown', 'malformed', None), **fault}
     if data is None:
         return result('unknown', 'ambiguous', None)
@@ -476,7 +504,8 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
         _grounded(dimensions, name, count) if isinstance(dimensions, dict) else (None, 0, [], False, {}))
     if grounded is None:
         # Re-askable only when the canary was copied too, so a re-ask never gives an unread answer
-        # a second draw. With the ladder, an uncited lowered step is the only fault a re-ask cures.
+        # a second draw. Besides the ladder and an unreadable answer, an uncited lowered step is
+        # the only fault a re-ask cures.
         fault = {'uncited': uncited} if uncited else {}
         if curable and covered(data, name, token):
             fault['reaskable'] = True
