@@ -234,6 +234,10 @@ def render_samples(report: SampledReport) -> str:
         "strict majority of each side's samples; voice compares mean cast distinguishability, "
         f"allowing {NOISE_STANDARD_ERRORS} standard errors of the difference for sampling noise "
         f"when both sides have at least {MIN_SAMPLES_FOR_NOISE} samples; cost and latency compare means.",
+        ("choices: decided by a reader's labels (honored or complicated gives effect, ignored does "
+         "not, negated is a hard finding); phrase markers decide nothing"
+         if report.choice_basis == "labels" else
+         "choices: decided by phrase markers in the model text"),
         "", *_findings(report.findings), "",
         "choices given effect (samples realizing it, baseline / candidate):"]
     for choice_id, (base, cand) in sorted(report.realized.items()):

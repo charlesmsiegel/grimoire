@@ -41,6 +41,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -63,6 +64,7 @@ from grimoire.core.model import ActorView
 from grimoire.evals.format import BenchmarkFormatError, Scenario
 from grimoire.evals.format2 import FORMAT_V2, RunV2, parse_run_v2
 from grimoire.evals.gate2 import compare_v2
+from grimoire.evals.labels import Play, label_sheet, parse_labels
 from grimoire.evals.loader import (
     benchmark_file,
     evidence_digest,
@@ -149,6 +151,10 @@ class CompareOptions:
     samples: int = 1
     #: An earlier comparison's output, whose V2 runs are scored again instead of played (no calls).
     rescore_of: Path | None = None
+    #: On a rescore: run digest -> choice id -> outcome, from a filled-in label sheet.
+    labels: Mapping[str, Mapping[str, str]] | None = None
+    #: The label file the labels came from, for the report.
+    labels_from: Path | None = None
 
     @property
     def baselines(self) -> tuple[Path, ...]:
@@ -532,11 +538,20 @@ def _report(options: CompareOptions, baselines: Sequence[Baseline], scenario: Sc
         parts = [*preamble, RESCORE_NOTE.format(directory=options.rescore_of, mode=options.mode)]
     else:
         parts.extend(_run_notes(options, baselines, sampled))
+    labels = options.labels
+    if labels is not None:
+        parts.append(LABELS_NOTE.format(file=options.labels_from))
+        sampled = True  # labels are read by the sampled gate, which with one sample is the one-run rule
+    def outcomes(raws: Sequence[Mapping]) -> list[Mapping[str, str]] | None:
+        return None if labels is None else [labels[evidence_digest(raw)] for raw in raws]
+    base_labels = (None if labels is None
+                   else [labels[each.run.source.evidence_sha256] for each in baselines])
     plain = [parse_run_v2(raw, scenario) for raw in runs["baseline"]]
     title = "== V2 (one call per speaking NPC) against 0.2.1 ==\n"
     if sampled:
         parts.append(title + render_samples(compare_samples(
-            scenario, [each.run for each in baselines], plain, baseline_evidence=evidence)))
+            scenario, [each.run for each in baselines], plain, baseline_evidence=evidence,
+            baseline_labels=base_labels, candidate_labels=outcomes(runs["baseline"]))))
     else:
         parts.append(title + render_v2(compare_v2(scenario, first.run, plain[0],
                                                   baseline_evidence=evidence[0])))
@@ -545,7 +560,9 @@ def _report(options: CompareOptions, baselines: Sequence[Baseline], scenario: Sc
         planned = [parse_run_v2(raw, scenario) for raw in runs["planning"]]
         policy = GatePolicy(allowed_flags=frozenset({InferenceStage.PLANNING.value}))
         title = "== V2 with optional planning against plain V2 (an opt-in billed extra) ==\n"
-        parts.append(title + (render_samples(compare_samples(scenario, plain, planned, policy)) if sampled
+        parts.append(title + (render_samples(compare_samples(
+            scenario, plain, planned, policy, baseline_labels=outcomes(runs["baseline"]),
+            candidate_labels=outcomes(runs["planning"]))) if sampled
                               else render_v2(compare_v2(scenario, plain[0], planned[0], policy))))
     return "\n\n".join(parts) + "\n"
 
@@ -614,73 +631,131 @@ _SAVED_HEADER = re.compile(r"V2 against the 0\.2\.1 captures?: (dry_run|live), .
                            r"sha256 ([0-9a-f]{64}(?:, [0-9a-f]{64})*)\n")
 
 
-def saved_comparison(directory: Path) -> tuple[str, tuple[str, ...], tuple[str, ...], dict[str, list[dict]]]:
+def saved_comparison(directory: Path, flag: str = "--rescore",
+                     ) -> tuple[str, tuple[str, ...], tuple[str, ...], dict[str, list[dict]]]:
     """An earlier comparison's mode, baseline evidence digests, the paragraphs its report wrote before
     its verdicts, and its V2 runs, read back from its output."""
     if not directory.is_dir():
-        raise CaptureRefused(f"--rescore {directory}: not a comparison's output directory")
+        raise CaptureRefused(f"{flag} {directory}: not a comparison's output directory")
     report = directory / "comparison-report.txt"
     if report.is_symlink():
-        raise CaptureRefused(f"--rescore {directory}: its comparison-report.txt is a link")
+        raise CaptureRefused(f"{flag} {directory}: its comparison-report.txt is a link")
     try:
         header = report.read_text("utf-8")
     except (OSError, UnicodeDecodeError):
-        raise CaptureRefused(f"--rescore {directory}: no readable comparison-report.txt") from None
+        raise CaptureRefused(f"{flag} {directory}: no readable comparison-report.txt") from None
     match = _SAVED_HEADER.match(header)
     if match is None:
-        raise CaptureRefused(f"--rescore {directory}: comparison-report.txt names no 0.2.1 baselines")
+        raise CaptureRefused(f"{flag} {directory}: comparison-report.txt names no 0.2.1 baselines")
     found: dict[str, dict[int, Path]] = {}
     for path in directory.iterdir():
         if (name := _SAVED_RUN.fullmatch(path.name)) is not None:
             if path.is_symlink():
-                raise CaptureRefused(f"--rescore {directory}: {path.name} is a link")
+                raise CaptureRefused(f"{flag} {directory}: {path.name} is a link")
             found.setdefault(name[1], {})[int(name[2] or 0)] = path
     if "baseline" not in found:
-        raise CaptureRefused(f"--rescore {directory}: holds no V2 run")
+        raise CaptureRefused(f"{flag} {directory}: holds no V2 run")
     numbers = sorted(found["baseline"])
     if numbers != [0] and numbers != list(range(1, len(numbers) + 1)):
-        raise CaptureRefused(f"--rescore {directory}: its V2 runs are not numbered 1 to {len(numbers)}")
+        raise CaptureRefused(f"{flag} {directory}: its V2 runs are not numbered 1 to {len(numbers)}")
     if "planning" in found and sorted(found["planning"]) != numbers:
-        raise CaptureRefused(f"--rescore {directory}: its planned and plain V2 runs do not pair up")
+        raise CaptureRefused(f"{flag} {directory}: its planned and plain V2 runs do not pair up")
     runs: dict[str, list[dict]] = {}
     for kind, paths in found.items():
         try:
             runs[kind] = [load_json(paths[number]) for number in numbers]  # type: ignore[misc]
         except BenchmarkFormatError as error:
-            raise CaptureRefused(f"--rescore {directory}: {error}") from None
+            raise CaptureRefused(f"{flag} {directory}: {error}") from None
     preamble = tuple(header.split("\n\n== ", 1)[0].split("\n\n"))
     return match[1], tuple(match[2].split(", ")), preamble, runs
 
 
-def run_rescore(scenario_name: str, baselines: Sequence[Path], rescore: Path, out: Path) -> Path:
-    """Score an earlier comparison's V2 runs again, against the same captures, with the current
-    scenario. Nothing is sent: the runs are read back from ``rescore``."""
+LABELS_NOTE = ("Choice outcomes: every choice in every play was decided by a reader's label from "
+               "{file}, made on a blind sheet (shuffled plays, no side or kind shown), not by phrase "
+               "markers. honored or complicated gives a choice effect; ignored does not; negated is "
+               "a hard finding.")
+
+
+def _saved(scenario_name: str, baselines: Sequence[Path], rescore: Path, flag: str):
+    """The scenario, an earlier comparison's mode, preamble and V2 runs, and its captures, checked
+    to be the ones it used."""
     try:
         scenario = load_scenario(benchmark_file(scenario_name, "scenario.json"))
     except BenchmarkFormatError as error:
         raise CaptureRefused(f"scenario {scenario_name!r}: {error}") from None
     rescore = Path(os.path.realpath(rescore))
-    mode, digests, preamble, runs = saved_comparison(rescore)
+    mode, digests, preamble, runs = saved_comparison(rescore, flag)
     loaded = load_baselines(baselines, scenario)
     if tuple(each.run.source.evidence_sha256 for each in loaded) != digests:
         raise CaptureRefused("--baseline must name the captures the earlier comparison used, in "
                              "the same order")
     if loaded[0].run.source.mode != mode:
-        raise CaptureRefused(f"--rescore {rescore}: its report says {mode}, but the captures are "
+        raise CaptureRefused(f"{flag} {rescore}: its report says {mode}, but the captures are "
                              f"{loaded[0].run.source.mode}")
     for kind, samples in runs.items():
         for raw in samples:
             try:
                 parse_run_v2(raw, scenario)
             except BenchmarkFormatError as error:
-                raise CaptureRefused(f"--rescore {rescore}: a {kind} V2 run: {error}") from None
+                raise CaptureRefused(f"{flag} {rescore}: a {kind} V2 run: {error}") from None
     forbidden = [*forbidden_roots(Path(baselines[0]).resolve()), rescore,
                  *(Path(os.path.realpath(directory)) for directory in baselines[1:])]
+    return scenario, rescore, mode, preamble, runs, loaded, forbidden
+
+
+def _plays(loaded: Sequence[Baseline], runs: Mapping[str, Sequence[dict]],
+           scenario: Scenario) -> list[Play]:
+    """Every play of a comparison, each bound to its run: a capture by its evidence digest, a V2
+    run by the digest of its document."""
+    plays = [Play(each.run.source.evidence_sha256, each.run.scoring_view()) for each in loaded]
+    for kind in ("baseline", "planning"):
+        plays += [Play(evidence_digest(raw), parse_run_v2(raw, scenario).scoring_view())
+                  for raw in runs.get(kind, ())]
+    return plays
+
+
+def _read_labels(path: Path, scenario: Scenario, plays: Sequence[Play]) -> dict[str, dict[str, str]]:
+    if path.is_symlink():
+        raise CaptureRefused(f"--labels {path}: is a link")
+    try:
+        labels = parse_labels(load_json(path), scenario)
+    except BenchmarkFormatError as error:
+        raise CaptureRefused(f"--labels {path}: {error}") from None
+    wanted = {play.digest for play in plays}
+    if set(labels) != wanted:
+        missing, extra = len(wanted - set(labels)), len(set(labels) - wanted)
+        raise CaptureRefused(f"--labels {path}: not this comparison's sheet ({missing} of its "
+                             f"{len(wanted)} plays unlabelled, {extra} labelled plays not in it)")
+    return labels
+
+
+def run_rescore(scenario_name: str, baselines: Sequence[Path], rescore: Path, out: Path,
+                labels: Path | None = None) -> Path:
+    """Score an earlier comparison's V2 runs again, against the same captures, with the current
+    scenario, and with ``labels`` deciding every choice when given. Nothing is sent: the runs are
+    read back from ``rescore``."""
+    scenario, rescore, mode, preamble, runs, loaded, forbidden = _saved(
+        scenario_name, baselines, rescore, "--rescore")
+    outcomes = None
+    if labels is not None:
+        labels = Path(os.path.abspath(labels))
+        outcomes = _read_labels(labels, scenario, _plays(loaded, runs, scenario))
     out = check_out_dir(out, forbidden=forbidden)
     options = CompareOptions(scenario_name, tuple(baselines), out, mode,
                              with_planning="planning" in runs, samples=len(runs["baseline"]),
-                             rescore_of=rescore)
+                             rescore_of=rescore, labels=outcomes, labels_from=labels)
     _write(out, {"comparison-report.txt": _report(options, loaded, scenario, runs, preamble)})
+    return out
+
+
+def run_label_sheet(scenario_name: str, baselines: Sequence[Path], directory: Path, out: Path) -> Path:
+    """Write a blind labelling sheet for an earlier comparison's plays and its captures, to be
+    filled in and given back with ``--rescore DIR --labels``. Nothing is sent."""
+    scenario, directory, _mode, _preamble, runs, loaded, forbidden = _saved(
+        scenario_name, baselines, directory, "--label-sheet")
+    out = check_out_dir(out, forbidden=forbidden)
+    sheet = label_sheet(scenario, _plays(loaded, runs, scenario), salt=secrets.token_hex(16))
+    _write(out, {"label-sheet.json": json.dumps(sheet, indent=2, ensure_ascii=False) + "\n"})
     return out
 
 
@@ -700,6 +775,13 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--rescore", type=Path, metavar="DIR",
                       help="score an earlier comparison's V2 runs in DIR again with the current "
                            "scenario, against the same --baseline captures; no calls, nothing billed")
+    mode.add_argument("--label-sheet", type=Path, metavar="DIR",
+                      help="write a blind sheet of the plays of the comparison in DIR and its "
+                           "--baseline captures, for a reader to label each choice's outcome; "
+                           "no calls, nothing billed")
+    parser.add_argument("--labels", type=Path, metavar="FILE",
+                        help="with --rescore: a filled-in label sheet; its outcomes decide every "
+                             "choice instead of phrase markers")
     parser.add_argument("--with-planning", action="store_true",
                         help="also play V2 with optional presentation planning (more billed calls)")
     parser.add_argument("--samples", type=int, default=None, metavar="N",
@@ -717,15 +799,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as error:
         return int(error.code or 0)
     try:
-        if args.rescore is not None:
-            given = [flag for flag, value in (("--with-planning", args.with_planning),
+        if args.labels is not None and args.rescore is None:
+            raise CaptureRefused("--labels is read by --rescore only")
+        if args.rescore is not None or args.label_sheet is not None:
+            flag = "--rescore" if args.rescore is not None else "--label-sheet"
+            given = [name for name, value in (("--with-planning", args.with_planning),
                                               ("--samples", args.samples is not None),
                                               ("--api-key-env", args.api_key_env),
                                               ("--confirm-billing", args.confirm_billing)) if value]
             if given:
-                raise CaptureRefused(f"--rescore makes no calls and reads its runs from DIR; "
+                raise CaptureRefused(f"{flag} makes no calls and reads its runs from DIR; "
                                      f"drop {', '.join(given)}")
-            out = run_rescore(args.scenario, tuple(args.baseline), args.rescore, args.out)
+            if args.label_sheet is not None:
+                out = run_label_sheet(args.scenario, tuple(args.baseline), args.label_sheet, args.out)
+                print(f"label sheet written to {out}")
+                return 0
+            out = run_rescore(args.scenario, tuple(args.baseline), args.rescore, args.out,
+                              args.labels)
             print(f"rescored comparison written to {out}")
             return 0
         if args.live and not args.confirm_billing:

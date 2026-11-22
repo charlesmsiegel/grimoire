@@ -430,3 +430,89 @@ def test_a_rescore_reads_no_linked_files(tmp_path, capsys):
     assert run("--baseline", first, "--baseline", second, "--rescore", earlier,
                "--out", tmp_path / "rescored") == 2
     assert "v2-baseline-2.run.json is a link" in capsys.readouterr().err
+
+
+def sheet_of(tmp_path, first, second, earlier):
+    out = tmp_path / "sheet"
+    assert run("--baseline", first, "--baseline", second, "--label-sheet", earlier, "--out", out) == 0
+    return json.loads((out / "label-sheet.json").read_text("utf-8"))
+
+
+def fill(sheet, path, **outcomes):
+    for play in sheet["plays"]:
+        for choice_id, entry in play["choices"].items():
+            entry["outcome"] = outcomes.get(choice_id.replace("-", "_"), "honored")
+    path.write_text(json.dumps(sheet), "utf-8")
+    return path
+
+
+def test_a_label_sheet_lists_every_play_of_a_comparison_blind_and_sends_nothing(tmp_path, capsys,
+                                                                               monkeypatch):
+    first, second, earlier = compared(tmp_path)
+    monkeypatch.setattr(v2, "play", lambda *a, **k: pytest.fail("a label sheet must not play"))
+    sheet = sheet_of(tmp_path, first, second, earlier)
+    assert "label sheet written to" in capsys.readouterr().out
+    assert len(sheet["plays"]) == 2 + 3 + 3  # two captures, three plain and three planned plays
+    digests = {evidence_digest(load_json(earlier / f"v2-{kind}-{n}.run.json"))
+               for kind in ("baseline", "planning") for n in (1, 2, 3)}
+    digests |= {load_json(path / "run.json")["source"]["evidence_sha256"] for path in (first, second)}
+    assert {play["run_sha256"] for play in sheet["plays"]} == digests
+    for play in sheet["plays"]:
+        assert set(play) == {"play", "run_sha256", "choices"}  # no side, kind, sample or run id
+        assert all(entry["outcome"] is None and all(set(line) == {"turn", "speaker", "text"}
+                                                    for line in entry["text"])
+                   for entry in play["choices"].values())
+    assert not (tmp_path / "sheet" / "comparison-report.txt").exists()
+
+
+def test_labels_decide_every_choice_of_a_rescore_on_both_sides(tmp_path):
+    first, second, earlier = compared(tmp_path)
+    sheet = sheet_of(tmp_path, first, second, earlier)
+    out = tmp_path / "answered"
+    labels = fill(sheet, tmp_path / "labels.json", ask_ledger="complicated")
+    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", labels,
+               "--out", out) == 0
+    report = outputs(out)["comparison-report.txt"]
+    assert "Choice outcomes: every choice in every play was decided by a reader's label" in report
+    plain = report.split("== V2 with optional planning")[0]
+    assert "story-quality gate: PASS" in plain and "  - ask-ledger: 2/2 / 3/3" in plain
+    assert "  - ask-ledger: 3/3 / 3/3" in report  # planned against plain, by the same labels
+    out = tmp_path / "ignored"
+    labels = fill(sheet, tmp_path / "ignored.json", ask_ledger="ignored")
+    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", labels,
+               "--out", out) == 0
+    report = outputs(out)["comparison-report.txt"]
+    assert "story-quality gate: FAIL" in report and "  - ask-ledger: 0/2 / 0/3" in report
+    assert "the labels give effect to the choice in 0 of 2 samples" in report
+
+
+def test_labels_must_be_this_comparisons_sheet_whole(tmp_path, capsys):
+    first, second, earlier = compared(tmp_path, samples=2)
+    sheet = sheet_of(tmp_path, first, second, earlier)
+    short = dict(sheet, plays=sheet["plays"][1:])
+    labels = fill(short, tmp_path / "short.json")
+    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", labels,
+               "--out", tmp_path / "out") == 2
+    assert "not this comparison's sheet (1 of its 6 plays unlabelled" in capsys.readouterr().err
+    unfilled = tmp_path / "unfilled.json"
+    unfilled.write_text(json.dumps(sheet), "utf-8")
+    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", unfilled,
+               "--out", tmp_path / "out") == 2
+    assert "outcome" in capsys.readouterr().err
+    linked = tmp_path / "linked.json"
+    linked.symlink_to(fill(sheet, tmp_path / "whole.json"))
+    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", linked,
+               "--out", tmp_path / "out") == 2
+    assert "is a link" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("extra", [["--dry-run", "--labels", "x.json"],
+                                   ["--label-sheet", "DIR", "--samples", "2"],
+                                   ["--label-sheet", "DIR", "--confirm-billing"]])
+def test_labels_are_read_only_by_a_rescore_and_a_sheet_takes_no_play_flags(tmp_path, capsys, extra):
+    first, second, earlier = compared(tmp_path, samples=2)
+    extra = [str(earlier) if part == "DIR" else part for part in extra]
+    assert run("--baseline", first, "--baseline", second, *extra, "--out", tmp_path / "out") == 2
+    assert "refused" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()

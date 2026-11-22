@@ -10,7 +10,10 @@ to name a choice's effect fails the choice. This gate reads the same requirement
 * every hard invariant holds in **every** sample: a leak, a model line that negates a choice, a
   missing scripted speaker or any other invariant in any one sample fails the gate (on the baseline
   side the baseline is invalid);
-* a choice is given effect when model text realizes it in a strict majority of a side's samples;
+* a choice is given effect when model text realizes it in a strict majority of a side's samples.
+  With labels (:mod:`grimoire.evals.labels`), every choice in every sample is decided by its label
+  instead of by phrase markers, on both sides alike: ``honored`` and ``complicated`` give it effect,
+  ``ignored`` does not, and ``negated`` is a hard finding in that sample;
 * voice regresses when the candidate's mean distinguishability is below the baseline's mean by more
   than ``max_voice_drop`` plus a noise allowance of twice the standard error of the difference of
   the two means. The allowance is computed only when both sides have at least
@@ -24,7 +27,7 @@ With one sample on each side every rule is the one-run rule, so the verdict is `
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -34,6 +37,7 @@ from .format2 import RunV2
 from .format3 import FORMAT_V3
 from .gate import _increase_exceeds
 from .gate2 import ScorecardV2, baseline_invalid, pair_findings, scorecard_v2
+from .labels import GIVEN, LABELS
 from .policy import GatePolicy
 from .v021 import EvidenceCheck
 
@@ -65,6 +69,8 @@ class SampledReport:
     candidates: tuple[ScorecardV2, ...]
     #: choice id -> (baseline samples realizing it, candidate samples realizing it)
     realized: dict[str, tuple[int, int]]
+    #: How choices were decided: ``"markers"`` (phrase markers) or ``"labels"``.
+    choice_basis: str
     voice: VoiceSummary
     baseline_cost: Fraction | None
     candidate_cost: Fraction | None
@@ -98,14 +104,30 @@ def _mean(values: Sequence[Fraction]) -> Fraction:
 def compare_samples(scenario: Scenario, baselines: Sequence[RunV2], candidates: Sequence[RunV2],
                     policy: GatePolicy = GatePolicy(), *,
                     baseline_evidence: Sequence[EvidenceCheck | None] = (),
-                    candidate_evidence: Sequence[EvidenceCheck | None] = ()) -> SampledReport:
+                    candidate_evidence: Sequence[EvidenceCheck | None] = (),
+                    baseline_labels: Sequence[Mapping[str, str]] | None = None,
+                    candidate_labels: Sequence[Mapping[str, str]] | None = None) -> SampledReport:
     """Gate ``candidates`` against ``baselines``, each one or more samples of the same play.
 
     ``baseline_evidence`` and ``candidate_evidence``, when given, hold one check per sample, in
-    order. Runs of different formats are refused (``ValueError``), as ``compare_v2`` refuses them.
+    order. ``baseline_labels`` and ``candidate_labels``, given together or not at all, hold one
+    choice id -> outcome mapping per sample, in order; they then decide every choice. Runs of
+    different formats are refused (``ValueError``), as ``compare_v2`` refuses them.
     """
     if not baselines or not candidates:
         raise ValueError("each side needs at least one sample")
+    if (baseline_labels is None) != (candidate_labels is None):
+        raise ValueError("labels decide choices on both sides or on neither")
+    for side, runs, labels in (("baseline", baselines, baseline_labels),
+                               ("candidate", candidates, candidate_labels)):
+        if labels is None:
+            continue
+        if len(labels) != len(runs):
+            raise ValueError(f"{side} labels must hold one mapping per sample")
+        for outcomes in labels:
+            if (sorted(outcomes) != sorted(c.choice_id for c in scenario.choices)
+                    or any(outcome not in LABELS for outcome in outcomes.values())):
+                raise ValueError(f"{side} labels must give every choice one of {', '.join(LABELS)}")
     for side, runs, evidence in (("baseline", baselines, baseline_evidence),
                                  ("candidate", candidates, candidate_evidence)):
         if evidence and len(evidence) != len(runs):
@@ -128,25 +150,43 @@ def compare_samples(scenario: Scenario, baselines: Sequence[RunV2], candidates: 
                                         f"{evidence.reason}", subject=side))
 
     realized = {choice.choice_id: [0, 0] for choice in scenario.choices}
-    for index, (side, runs) in enumerate((("baseline", baselines), ("candidate", candidates))):
+    by_label = baseline_labels is not None
+    for index, (side, runs, labels) in enumerate((("baseline", baselines, baseline_labels),
+                                                  ("candidate", candidates, candidate_labels))):
         missed: dict[str, Finding] = {}
         for sample, run in enumerate(runs, start=1):
             seen: set[str] = set()
             for finding in hard_findings(scenario, run.scoring_view(),
                                          director_narration=run.format == FORMAT_V3):
                 if finding.check == "choice_negated" and finding.evidence == UNREALIZED:
-                    seen.add(finding.subject or "")
-                    missed.setdefault(finding.subject or "", finding)
+                    if not by_label:  # labels decide realization: a missing phrase decides nothing
+                        seen.add(finding.subject or "")
+                        missed.setdefault(finding.subject or "", finding)
                     continue
                 findings.append(_in(sample, baseline_invalid(finding)) if side == "baseline"
                                 else _in(sample, finding))
+            if labels is not None:
+                for choice in scenario.choices:
+                    outcome = labels[sample - 1][choice.choice_id]
+                    if outcome == "negated":
+                        finding = Finding("choice_negated", "label",
+                                          "labelled negated: the scene contradicts or undoes the act",
+                                          choice.turn, choice.choice_id, "labelled")
+                        findings.append(_in(sample, baseline_invalid(finding)) if side == "baseline"
+                                        else _in(sample, finding))
+                    if outcome not in GIVEN:
+                        seen.add(choice.choice_id)
+                        missed.setdefault(choice.choice_id, Finding(
+                            "choice_negated", "label", "labelled as not given effect", choice.turn,
+                            choice.choice_id, UNREALIZED))
             for choice_id, counts in realized.items():
                 counts[index] += choice_id not in seen
         for choice_id, finding in missed.items():
             given = realized[choice_id][index]
             if 2 * given > len(runs):
                 continue
-            share = f"model text gives effect to the choice in {given} of {len(runs)} samples"
+            share = (f"{'the labels give' if by_label else 'model text gives'} effect to the choice "
+                     f"in {given} of {len(runs)} samples")
             if side == "baseline":
                 findings.append(Finding("baseline_invalid", "comparison",
                                         f"the baseline's {share}, not a majority", finding.turn,
@@ -170,6 +210,7 @@ def compare_samples(scenario: Scenario, baselines: Sequence[RunV2], candidates: 
         candidate_ids=tuple(run.run_id for run in candidates),
         baselines=base_cards, candidates=cand_cards,
         realized={choice_id: (counts[0], counts[1]) for choice_id, counts in realized.items()},
+        choice_basis="labels" if by_label else "markers",
         voice=voice, baseline_cost=base_cost, candidate_cost=cand_cost, policy=policy)
 
 
