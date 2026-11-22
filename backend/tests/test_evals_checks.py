@@ -96,6 +96,33 @@ def test_negation_label_and_evidence_are_independent_signals(bench):
     assert [(f.check, f.evidence) for f in negated] == [("choice_negated", "negation#0")]
 
 
+@pytest.mark.parametrize("narration", [
+    "Oda flips the guest book open and taps a line.",
+    "Oda slides the ledger across the counter without a word.",
+    "Oda pockets the coin and turns the ledger toward Wren.",
+    "Oda runs a thumb down the guest-ledger.",
+    "Oda checks the list of guests.",
+    "Oda opens the ledger to tonight's page.",
+])
+def test_the_ledger_choice_is_realized_by_its_other_forms(bench, narration):
+    scenario, run = bench
+    found = findings_for(scenario, mutate(run, both(
+        set_text(1, "npc-oda", "Fine."), set_text(1, None, narration + " The sealed vault door gleams."))))
+    assert found == ()
+
+
+@pytest.mark.parametrize("oda", [
+    "Ledger's closed tonight. Come back at dawn.",  # a refusal: a bare ledger is not the effect
+    "No. Rules are rules. Keep your silver.",
+])
+def test_a_refusal_that_only_names_a_ledger_does_not_realize_the_choice(bench, oda):
+    scenario, run = bench
+    found = findings_for(scenario, mutate(run, both(
+        set_text(1, "npc-oda", oda), set_text(1, None, "The sealed vault door gleams."))))
+    assert [(f.check, f.subject, f.evidence) for f in found] == [
+        ("choice_negated", "ask-ledger", "unrealized")]
+
+
 def test_effect_text_before_the_players_line_is_not_evidence(bench):
     scenario, run = bench
 

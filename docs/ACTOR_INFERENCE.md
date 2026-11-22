@@ -199,6 +199,13 @@ findings and token usage, reported apart), then V2 with planning against plain V
   conditions; the same capture twice is refused). With more than one sample on either side the
   report gates [every sample together](#sampled-comparison). The request ceiling printed before a
   live run is multiplied by N, and the files are numbered (`v2-baseline-1.run.json` and so on).
+- `--rescore DIR` scores an earlier comparison's V2 runs again, read back from its output `DIR`,
+  against the same `--baseline` captures in the same order (their evidence digests must match the
+  ones `DIR`'s report names), with the scenario as it is now. It sends nothing and bills nothing,
+  takes none of `--samples`, `--with-planning`, `--api-key-env` or `--confirm-billing` (the sample
+  count and planning come from `DIR`'s files), and writes only a new `comparison-report.txt`, which
+  says it is a rescore. It is how a change to a scenario's markers is measured on a run already
+  made: the replies are read again, never played again.
 - The first comparison (V2 against 0.2.1) is 068's proving scenario. The second, with planning, is
   an experiment: a failure there rejects the optional stage, not V2, and the report says so.
 - The V2 run has no capture evidence of its own, so its usage is provider-reported and unverified,
@@ -431,3 +438,28 @@ What the numbers leave out:
 - No cost is in any run. At an assumed list price of 3 USD input and 15 USD output per million
   tokens the 90 V2 calls (52,389 input and 12,002 output tokens) come to about 0.34 USD, and
   the whole rerun with its captures to about 0.61 USD, as estimates.
+
+### What changed after the sampled run (2026-11-22)
+
+- **Choices.** `ask-ledger` was judged on one phrase, `guest ledger`, and nothing else: a reply in
+  which Oda slid the ledger across, opened it, took the coin or handed over the guest book counted as
+  unrealized. Its effect markers now take the forms that name the same book (`guest book`,
+  `guestbook`, `guest-ledger`, `guests' ledger`, `guest register`, `guest list`, `ledger of guests`
+  and the like), the acts of producing it (`opens the ledger`, `slides the ledger`, `the ledger
+  across`, `hands over the ledger`, `pages of the ledger` and the like) and the coin being accepted
+  (`takes the coin`, `pockets the coin`, `takes the silver`, `pockets the silver`). A bare `ledger`
+  still does not count, so a refusal such as "Ledger's closed tonight" stays unrealized. Negation
+  markers are unchanged, so no reply that passed before can fail now. The full list is in the
+  scenario file, and `backend/tests/test_evals_checks.py` holds the forms that must and must not
+  realize the choice.
+- **Why it looked like the markers.** 0.2.1 itself realized the choice in 2 of 5 samples, and V2 with
+  planning in 4 of 5 against 1 of 5 without it. Nothing in the gate changed between those runs but
+  the wording of the replies. That fits replies that do give effect to the request in other words,
+  but it does not show it.
+- **How it is chosen.** The markers were written from the scenario's own text and the forms a reply
+  would use, without reading the run's replies, which are not in this repository. They were not fitted
+  to that run.
+- **Measured without a new play.** `--rescore` reads the sampled run's saved V2 runs and its 0.2.1
+  captures again with the new markers, at no cost. That rescore shows whether the markers explain the
+  failure. A fresh billed comparison then decides 068, so its verdict does not rest on a run read
+  after the markers changed.

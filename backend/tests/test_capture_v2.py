@@ -316,3 +316,92 @@ def test_captures_without_retries_say_nothing_about_them(tmp_path):
     out = tmp_path / "out"
     assert run("--baseline", baseline(tmp_path), "--out", out, "--dry-run") == 0
     assert "Retry" not in outputs(out)["comparison-report.txt"]
+
+
+def compared(tmp_path, *, samples=3):
+    first = baseline(tmp_path)
+    second = baseline(tmp_path, vary=another_reply, name="-2")
+    earlier = tmp_path / "earlier"
+    assert run("--baseline", first, "--baseline", second, "--out", earlier, "--dry-run",
+               "--samples", samples, "--with-planning") == 0
+    return first, second, earlier
+
+
+def test_a_rescore_reads_an_earlier_comparison_back_and_sends_nothing(tmp_path, capsys, monkeypatch):
+    first, second, earlier = compared(tmp_path)
+    monkeypatch.setattr(v2, "play", lambda *a, **k: pytest.fail("a rescore must not play"))
+    out = tmp_path / "rescored"
+    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--out", out) == 0
+    assert "rescored comparison written to" in capsys.readouterr().out
+    files = outputs(out)
+    assert set(files) == {"comparison-report.txt"}
+    before = outputs(earlier)["comparison-report.txt"]
+    after = files["comparison-report.txt"]
+    note = next(part for part in after.split("\n\n") if part.startswith("Rescored: "))
+    assert "Nothing was sent and nothing was billed." in note and "earlier dry_run comparison" in note
+    assert after.replace(note + "\n\n", "") == before  # same runs, same scenario: same verdict
+
+
+def test_a_rescore_scores_with_the_current_markers(tmp_path, monkeypatch):
+    import dataclasses
+    first, second, earlier = compared(tmp_path)
+    narrower = dataclasses.replace(SCENARIO, choices=tuple(
+        dataclasses.replace(choice, effect_markers=("no reply says this",))
+        if choice.choice_id == "ask-ledger" else choice for choice in SCENARIO.choices))
+    monkeypatch.setattr(v2, "load_scenario", lambda _source: narrower)
+    out = tmp_path / "rescored"
+    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--out", out) == 0
+    report = outputs(out)["comparison-report.txt"]
+    assert "story-quality gate: FAIL" in report
+    assert "  - ask-ledger: 0/2 / 0/3" in report
+
+
+def test_a_single_sample_comparison_can_be_rescored(tmp_path):
+    first = baseline(tmp_path)
+    earlier = tmp_path / "earlier"
+    assert run("--baseline", first, "--out", earlier, "--dry-run") == 0
+    out = tmp_path / "rescored"
+    assert run("--baseline", first, "--rescore", earlier, "--out", out) == 0
+    assert "story-quality gate: PASS" in outputs(out)["comparison-report.txt"]
+
+
+@pytest.mark.parametrize("extra, message", [
+    (["--samples", 3], "drop --samples"),
+    (["--with-planning"], "drop --with-planning"),
+    (["--api-key-env", "ANTHROPIC_API_KEY", "--confirm-billing"], "drop --api-key-env, --confirm-billing"),
+])
+def test_a_rescore_takes_nothing_a_play_would(tmp_path, capsys, extra, message):
+    first, second, earlier = compared(tmp_path, samples=2)
+    assert run("--baseline", first, "--baseline", second, "--rescore", earlier,
+               "--out", tmp_path / "rescored", *extra) == 2
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "rescored").exists()
+
+
+def test_a_rescore_needs_the_same_captures_in_the_same_order(tmp_path, capsys):
+    first, second, earlier = compared(tmp_path, samples=2)
+    for baselines in ([second, first], [first], [first, baseline(tmp_path, name="-3", vary=lambda b: b[
+            "turns"][1]["responses"][0].__setitem__("text", b["turns"][1]["responses"][0]["text"] + " Hm."))]):
+        flags = [arg for directory in baselines for arg in ("--baseline", directory)]
+        assert run(*flags, "--rescore", earlier, "--out", tmp_path / "rescored") == 2
+        assert "the captures the earlier comparison used" in capsys.readouterr().err
+    assert not (tmp_path / "rescored").exists()
+
+
+def test_a_rescore_refuses_what_is_not_a_comparison_and_writes_nowhere_inside_it(tmp_path, capsys):
+    first, second, earlier = compared(tmp_path, samples=2)
+    flags = ["--baseline", first, "--baseline", second]
+    assert run(*flags, "--rescore", tmp_path / "missing", "--out", tmp_path / "rescored") == 2
+    assert "not a comparison's output directory" in capsys.readouterr().err
+    assert run(*flags, "--rescore", earlier, "--out", earlier / "again") == 2
+    capsys.readouterr()
+    (earlier / "v2-planning-2.run.json").unlink()
+    assert run(*flags, "--rescore", earlier, "--out", tmp_path / "rescored") == 2
+    assert "do not pair up" in capsys.readouterr().err
+    (earlier / "v2-baseline-1.run.json").unlink()
+    assert run(*flags, "--rescore", earlier, "--out", tmp_path / "rescored") == 2
+    assert "not numbered 1 to 1" in capsys.readouterr().err
+    (earlier / "comparison-report.txt").write_text("something else\n", "utf-8")
+    assert run(*flags, "--rescore", earlier, "--out", tmp_path / "rescored") == 2
+    assert "names no 0.2.1 baselines" in capsys.readouterr().err
+    assert not (tmp_path / "rescored").exists()
