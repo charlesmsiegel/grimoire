@@ -246,3 +246,33 @@ and here it measured worse on both voice and choices.
 - **Planning.** The voice regression is an experiment result, not a scoring fault, and stays.
 
 A rerun is needed before 068's box can be checked.
+
+### Billed comparison (2026-11-22)
+
+The rerun, approved by CMS on 2026-11-22 and run once with `--live --with-planning` against the
+same 015 capture (evidence sha256 `1824a081…d24ff0`, not recaptured): 18 calls to
+`claude-sonnet-4-5-20250929` at `max_tokens=16000`, none retried, under a request ceiling of 54.
+**V2 against 0.2.1 failed the gate again, so 068's proving scenario is not established.**
+
+| Run | Calls | Input tokens | Output tokens | Cache read / write | Weighted billed tokens | Cast distinguishability | Choices unrealized |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0.2.1 baseline (measured) | 6 | 15,618 | 1,396 | 0 / 0 | 17,014 | 0.833 | 0 |
+| V2, one call per speaking NPC | 6 | 3,646 | 995 | 0 / 0 | 4,641 | 0.667 | 1 |
+| V2 with planning | 12 (6 planning) | 7,352 | 1,497 | 0 / 0 | 8,849 | 1.000 | 1 |
+
+- **V2 against 0.2.1: FAIL**, two findings. `choice_negated` on turn 1 (`ask-ledger`, unrealized:
+  no model text gives effect to the choice), and `voice_regression`: cast distinguishability fell
+  from 0.833 to 0.667. Leak rate 0 on both. This comparison decides 068.
+- **Planning against plain V2: FAIL**, three findings (an experiment; it does not decide 068).
+  `baseline_invalid` for the baseline's own turn-1 finding, `choice_negated` on turn 1
+  (`ask-ledger`) in the planning run too, and `cost_regression`: weighted billed tokens rose from
+  4,641 to 8,849. Cast distinguishability rose from 0.667 to 1.000.
+- `usage_incomplete` is gone: both sides called the Messages API and cache counts are reported
+  (all zero). The token sums are still not like for like, because the prompts differ, and V2's
+  usage has no capture evidence of its own.
+- The 2026-11-20 findings did not repeat and these are different ones. Then plain V2 scored 1.000
+  on voice and failed `ask-song` on turn 3; now it scores 0.667 and fails `ask-ledger` on turn 1,
+  and planning moved voice the other way. Two single samples disagree, so neither shows a stable
+  effect of planning, and six lines is too few for the voice measure to be steady.
+- No cost is in either run. At an assumed list price of 3 USD input and 15 USD output per million
+  tokens the 18 calls (10,998 input and 2,492 output tokens) come to about 0.07 USD, as an estimate.
