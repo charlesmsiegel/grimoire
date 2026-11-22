@@ -187,11 +187,14 @@ findings and token usage, reported apart), then V2 with planning against plain V
   contains it. If it fails or is stopped, nothing is written and it prints what was already sent, as
   counts only. Running it needs CMS's own spending approval, separate from 015's; the one
   approved run is [recorded below](#billed-comparison-2026-11-20).
-- V2 speaks only the OpenAI-compatible protocol. Against an `anthropic` capture it calls Anthropic's
-  OpenAI-compatible endpoint, which offers no prompt caching and reports no cached-token counts,
-  while 0.2.1 called the Messages API. The report says so, the cost comparison is `usage_incomplete`,
-  and the token sums are not like for like. A capture whose budget is `max_tokens=unset` is
-  reported incomparable, since V2 always sends an output cap.
+- Against an `anthropic` capture V2 calls Anthropic's own Messages API, as 0.2.1 did, so cache reads
+  and writes are provider-reported and the cost can be compared. The prompts still differ, so the
+  report says the token sums are not like for like. (Until 2026-11-22 V2 used Anthropic's
+  OpenAI-compatible endpoint, which reports no cached-token counts; that is why the first billed run
+  said `usage_incomplete`.) A capture whose budget is `max_tokens=unset` is reported incomparable,
+  since V2 always sends an output cap.
+- The first comparison (V2 against 0.2.1) is 068's proving scenario. The second, with planning, is
+  an experiment: a failure there rejects the optional stage, not V2, and the report says so.
 - The V2 run has no capture evidence of its own, so its usage is provider-reported and unverified,
   and its choices are unlabelled (judged on marker evidence only). Voice is the existing lexical
   distinguishability measure; no semantic characterization score exists.
@@ -229,3 +232,17 @@ One billed comparison was run with `--live --with-planning` against 015's
 
 One three-turn scenario on one model is a single sample. It does not show that planning helps,
 and here it measured worse on both voice and choices.
+
+### What changed after the first billed run (2026-11-22)
+
+- **Cost.** `usage_incomplete` came from the protocol, not from the run: Anthropic's OpenAI-compatible
+  endpoint reports no cached-token counts, and the gate never reads a missing count as zero. V2 now
+  calls the Messages API for an `anthropic` capture (see [PROVIDERS](PROVIDERS.md)), which reports
+  cache reads and writes.
+- **Choices.** `ask-song` was judged only on `sings` or `song`, so a bard who "sang", or answered with
+  a verse or a tune, counted as unrealized. Its effect markers now take those forms too. Negation
+  markers are unchanged, so no reply that passed before can fail now, and `ask-ledger` is unchanged
+  (a bare "ledger" would also match a refusal).
+- **Planning.** The voice regression is an experiment result, not a scoring fault, and stays.
+
+A rerun is needed before 068's box can be checked.

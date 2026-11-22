@@ -4,7 +4,7 @@
 
 `grimoire.providers` is an *adapter* package: it uses the network, a clock and the environment, so no pure package may import it. Its scope is narrow:
 
-- It sends **one planned, authorized model call** to an OpenAI-compatible streaming endpoint.
+- It sends **one planned, authorized model call** to a streaming endpoint that speaks OpenAI-compatible chat completions (`protocol="openai_chat"`, the default) or Anthropic's own Messages API (`protocol="anthropic_messages"`).
 - It books every attempt on the turn's `TurnUsageLedger`.
 - It accepts a reply only when the provider really finished.
 
@@ -102,7 +102,20 @@ The `approvals(label, attempt, envelope)` callback receives those bytes. Handles
 
 Redirects are never followed. A 200 whose first line is not SSE is classified from its whole body (up to 64 KiB).
 
-**Usage** maps only the documented OpenAI fields:
+**Protocols.** An endpoint's `protocol` is trusted configuration, like its URL.
+
+| | `openai_chat` | `anthropic_messages` |
+|---|---|---|
+| Path | `/chat/completions` | `/messages` |
+| Key header | `Authorization: Bearer` | `x-api-key`, plus `anthropic-version: 2023-06-01` |
+| System text | a `system` message | leading `system` messages become the top-level `system`; one after a turn is refused |
+| Reply text | `choices[0].delta.content` | `text_delta` events only (thinking is never reply text) |
+| Normal stop | `finish_reason: "stop"` | `stop_reason: "end_turn"` (read as `stop`; `max_tokens` reads as `length`) |
+| End of stream | `[DONE]` | `message_stop` |
+
+Anthropic's compatible endpoint reports no cached-token counts, so a cost comparison against Anthropic needs `anthropic_messages`.
+
+**Usage** maps only the documented fields. For `openai_chat`:
 
 | Token field | Source |
 |---|---|
@@ -111,6 +124,16 @@ Redirects are never followed. A 200 whose first line is not SSE is classified fr
 | `cache_read_tokens` | `prompt_tokens_details.cached_tokens` |
 | `reasoning_tokens` | `completion_tokens_details.reasoning_tokens` |
 | `cache_write_tokens` | always `None` |
+
+For `anthropic_messages` (from `message_start`, then the cumulative counts in `message_delta`):
+
+| Token field | Source |
+|---|---|
+| `input_tokens` | `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`, only when all three are reported |
+| `output_tokens` | `output_tokens` |
+| `cache_read_tokens` | `cache_read_input_tokens` |
+| `cache_write_tokens` | `cache_creation_input_tokens` |
+| `reasoning_tokens` | always `None` |
 
 A bad count (bool, negative, non-int or absent) is `None`, never `0`. Inconsistent slices are dropped to `None` and recorded in `usage_note`.
 

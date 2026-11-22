@@ -182,3 +182,30 @@ def test_cancel_callbacks_may_touch_the_token():
 def test_base_url_with_spaces_or_controls_is_refused(url):
     with pytest.raises(ValueError):
         ProviderEndpoint("x", url)
+
+
+def test_an_anthropic_endpoint_posts_the_messages_api_shape():
+    endpoint = ProviderEndpoint("anthropic", "https://api.anthropic.com/v1",
+                                protocol="anthropic_messages")
+    assert endpoint.completions_url == "https://api.anthropic.com/v1/messages"
+    request = _request(messages=[ChatMessage("system", "Be brief."), ChatMessage("system", "In voice."),
+                                 ChatMessage("user", "Hello?")], temperature=0.5)
+    assert json.loads(request_body(request, endpoint, "claude-x")) == {
+        "model": "claude-x", "max_tokens": 64, "system": "Be brief.\n\nIn voice.",
+        "messages": [{"role": "user", "content": "Hello?"}], "stream": True, "temperature": 0.5,
+    }
+    plain = json.loads(request_body(_request(messages=[ChatMessage("user", "Hi")]), endpoint, "m"))
+    assert "system" not in plain and "stream_options" not in plain
+    for messages in ([ChatMessage("user", "Hi"), ChatMessage("system", "late")],
+                     [ChatMessage("system", "only a system message")]):
+        with pytest.raises(ValueError, match="Messages API"):
+            request_body(_request(messages=messages), endpoint, "m")
+
+
+def test_an_endpoint_names_a_known_protocol_and_the_messages_api_takes_max_tokens_only():
+    with pytest.raises(ValueError, match="protocol"):
+        ProviderEndpoint("x", "https://api.anthropic.com/v1", protocol="grpc")
+    with pytest.raises(ValueError, match="max_tokens only"):
+        ProviderEndpoint("x", "https://api.anthropic.com/v1", protocol="anthropic_messages",
+                         max_tokens_field="max_completion_tokens")
+    assert ProviderEndpoint("x", "https://openrouter.ai/api/v1").protocol == "openai_chat"

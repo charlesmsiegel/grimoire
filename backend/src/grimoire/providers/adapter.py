@@ -24,7 +24,7 @@ from grimoire.security import Authorizer, Decision, Permission, WorkerHandle
 
 from .cancel import CancelToken
 from .config import (
-    AdapterLimits, Credentials, ProviderEndpoint, ProviderRegistry, RouteChoice, Secret,
+    ANTHROPIC_VERSION, AdapterLimits, Credentials, ProviderEndpoint, ProviderRegistry, RouteChoice, Secret,
     provider_resource, route_label,
 )
 from .errors import RETRYABLE, CallRefused, ProviderError, TransportError
@@ -34,7 +34,7 @@ from .sse import (
     DIAGNOSTIC_LIMIT, StreamState, classify_non_sse, error_from_object, feed_line, finished,
     normalize_usage,
 )
-from .transport import HttpTransport, Transport
+from .transport import HttpTransport, KeyScheme, Transport
 
 ERROR_BODY_LIMIT = 64 * 1024
 ResultStatus = Literal["accepted", "incomplete", "failed", "cancelled", "refused"]
@@ -107,6 +107,17 @@ def _sanitize(error: ProviderError, key: Secret | None) -> ProviderError:
             setattr(error, name, None)
     error.diagnostic = _redact(error.diagnostic, key)
     return error
+
+
+def _headers(endpoint: ProviderEndpoint) -> dict[str, str]:
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+    if endpoint.protocol == "anthropic_messages":
+        headers["anthropic-version"] = ANTHROPIC_VERSION
+    return headers
+
+
+def _key_scheme(endpoint: ProviderEndpoint) -> KeyScheme:
+    return "x-api-key" if endpoint.protocol == "anthropic_messages" else "bearer"
 
 
 def _default_wait(token: CancelToken, seconds: float) -> bool:
@@ -262,7 +273,7 @@ class ProviderAdapter:
                  endpoint: ProviderEndpoint, url: str, body: bytes, key: Secret | None,
                  on_delta: Callable[[str], None] | None, cancel: CancelToken) -> _Attempt:
         """One attempt. Whatever ends it (including an exception), it is booked."""
-        attempt = _Attempt()
+        attempt = _Attempt(state=StreamState(protocol=endpoint.protocol))
         state = attempt.state
         clock, limits, timeouts = self._clock, self._limits, endpoint.timeouts
         start = clock()
@@ -286,8 +297,8 @@ class ProviderAdapter:
             sent = True  # everything after connect() may have reached the provider
             attempt.outcome = "failed"
             try:
-                response = connection.send(body, {"Content-Type": "application/json",
-                                                  "Accept": "text/event-stream"}, key)
+                response = connection.send(body, _headers(endpoint), key,
+                                           key_scheme=_key_scheme(endpoint))
             except TransportError as error:
                 attempt.error = ProviderError(
                     self._deadline_kind(start, timeouts.total, error.kind))
@@ -396,7 +407,7 @@ class ProviderAdapter:
 
         def build() -> tuple[CallAttempt, AttemptReport]:
             if sent:
-                usage, note = normalize_usage(state.usage_block)
+                usage, note = normalize_usage(state.usage_block, state.protocol)
             else:
                 usage, note = TokenUsage(0, 0), None
             booked = CallAttempt(call.call_id, number, usage, measurement, attempt.outcome, label)

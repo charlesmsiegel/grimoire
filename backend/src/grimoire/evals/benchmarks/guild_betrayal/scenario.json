@@ -104,7 +104,20 @@
       "text": "I ask Bellamy to sing what was overheard.",
       "effect_markers": [
         "sings",
-        "song"
+        "sang",
+        "singing",
+        "sung",
+        "song",
+        "songs",
+        "verse",
+        "verses",
+        "tune",
+        "melody",
+        "hums",
+        "humming",
+        "croons",
+        "ballad",
+        "lyrics"
       ],
       "negation_markers": [
         "refuses to sing"

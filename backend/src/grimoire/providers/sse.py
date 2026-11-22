@@ -1,10 +1,15 @@
-"""Read an OpenAI-compatible chat-completions SSE stream, one line at a time.
+"""Read a streamed completion, one SSE line at a time, in either wire protocol.
 
-Pure parsing, no I/O. ``feed_line`` raises only ``ProviderError``, so a shape
-nobody expected fails the attempt instead of crashing the caller. Usage is
-normalized to the Wave 1 ``TokenUsage`` meaning: ``input_tokens`` is the whole
-prompt (this wire shape already counts cached tokens inside ``prompt_tokens``),
-cache reads and reasoning are slices, and anything unreported is ``None``.
+``openai_chat`` is OpenAI-compatible chat completions; ``anthropic_messages`` is
+Anthropic's own Messages API, whose events (``message_start``,
+``content_block_delta``, ``message_delta``, ``message_stop``) are folded into
+the same ``StreamState``. Pure parsing, no I/O. ``feed_line`` raises only
+``ProviderError``, so a shape nobody expected fails the attempt instead of
+crashing the caller. Usage is normalized to the Wave 1 ``TokenUsage`` meaning:
+``input_tokens`` is the whole prompt (OpenAI's ``prompt_tokens`` already counts
+cached tokens; Anthropic's ``input_tokens`` does not, so its cache reads and
+writes are added back), cache reads, cache writes and reasoning are slices, and
+anything unreported is ``None``.
 """
 
 from __future__ import annotations
@@ -31,6 +36,8 @@ class StreamState:
     usage_block: dict | None = None
     done: bool = False
     saw_sse: bool = False
+    #: Which wire protocol the stream speaks; see the module docstring.
+    protocol: str = "openai_chat"
 
     @property
     def text(self) -> str:
@@ -68,10 +75,11 @@ def error_from_object(error: object) -> ProviderError:
     kind_of = error.get("type") if isinstance(error, dict) else None
     number = code if isinstance(code, int) and not isinstance(code, bool) else (
         int(code) if isinstance(code, str) and re.fullmatch(r"[0-9]{1,3}", code) else None)
-    if number == 429:
+    if number == 429 or (number is None and kind_of == "rate_limit_error"):
         kind = "rate_limit"
-    elif number is not None and 500 <= number <= 599:
-        kind = "server_error"
+    elif (number is not None and 500 <= number <= 599) or (
+            number is None and kind_of in ("overloaded_error", "api_error")):
+        kind = "server_error"  # Anthropic names these by type, with no numeric code
     else:
         kind = "provider_error"
     return ProviderError(
@@ -121,6 +129,8 @@ def feed_line(state: StreamState, line: bytes) -> str | None:
         raise _bad("chunk_not_object")
     if "error" in chunk:
         raise error_from_object(chunk["error"])
+    if state.protocol == "anthropic_messages":
+        return _feed_messages(state, chunk)
     choices = chunk.get("choices", [])
     if not isinstance(choices, list) or not all(isinstance(c, dict) for c in choices):
         raise _bad("bad_choices")
@@ -148,6 +158,58 @@ def feed_line(state: StreamState, line: bytes) -> str | None:
     return content
 
 
+#: The Messages API's stop reasons, as the OpenAI-compatible finish reasons the adapter accepts.
+_STOP_REASONS = {"end_turn": "stop", "max_tokens": "length"}
+
+
+def _feed_messages(state: StreamState, chunk: dict) -> str | None:
+    """One Messages API event. Only ``text_delta`` is reply text; thinking is never kept."""
+    kind = chunk.get("type")
+    if not isinstance(kind, str):
+        raise _bad("event_without_type")
+    if kind == "message_start":
+        message = chunk.get("message")
+        if not isinstance(message, dict):
+            raise _bad("bad_message")
+        usage = message.get("usage")
+        if usage is not None and not isinstance(usage, dict):
+            raise _bad("bad_usage")
+        model = model_name(message.get("model"))
+        if model is not None:
+            state.served_model = model
+        if usage is not None:
+            state.usage_block = dict(usage)
+        return None
+    if kind == "content_block_delta":
+        delta = chunk.get("delta")
+        if not isinstance(delta, dict):
+            raise _bad("bad_delta")
+        if delta.get("type") != "text_delta":
+            return None  # thinking, signatures and tool input are not reply text
+        text = delta.get("text")
+        if not isinstance(text, str):
+            raise _bad("bad_content")
+        if not text:
+            return None
+        state.deltas.append(text)
+        return text
+    if kind == "message_delta":
+        delta = chunk.get("delta")
+        usage = chunk.get("usage")
+        if (delta is not None and not isinstance(delta, dict)) or (
+                usage is not None and not isinstance(usage, dict)):
+            raise _bad("bad_delta")
+        if usage is not None:  # cumulative counts: a later event's count replaces an earlier one
+            state.usage_block = {**(state.usage_block or {}), **usage}
+        reason = delta.get("stop_reason") if delta else None
+        if isinstance(reason, str) and reason:
+            state.finish_reason = _STOP_REASONS.get(reason) or (label(reason) or "other")
+        return None
+    if kind == "message_stop":
+        state.done = True
+    return None  # ping, content_block_start, content_block_stop and new event types
+
+
 def _count(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
@@ -159,14 +221,30 @@ def _detail(block: dict, outer: str, inner: str) -> int | None:
     return _count(details.get(inner)) if isinstance(details, dict) else None
 
 
-def normalize_usage(block: object) -> tuple[TokenUsage, str | None]:
-    """Map the documented OpenAI usage fields onto ``TokenUsage``; never raises.
+def _messages_usage(block: dict) -> tuple[TokenUsage, str | None]:
+    """Anthropic's ``input_tokens`` leaves cache reads and writes out; the whole prompt adds them.
+
+    The whole prompt is known only when all three counts were reported: a missing cache count
+    leaves ``input_tokens`` unreported, never a guess.
+    """
+    uncached = _count(block.get("input_tokens"))
+    read = _count(block.get("cache_read_input_tokens"))
+    written = _count(block.get("cache_creation_input_tokens"))
+    output = _count(block.get("output_tokens"))
+    whole = None if None in (uncached, read, written) else uncached + read + written
+    return TokenUsage(whole, output, cache_read_tokens=read, cache_write_tokens=written), None
+
+
+def normalize_usage(block: object, protocol: str = "openai_chat") -> tuple[TokenUsage, str | None]:
+    """Map the documented usage fields onto ``TokenUsage``; never raises.
 
     Inconsistent slices (cache larger than the prompt, reasoning larger than
     the output) are dropped to ``None`` and noted; the whole counts are kept.
     """
     if not isinstance(block, dict):
         return TokenUsage(None, None), None
+    if protocol == "anthropic_messages":
+        return _messages_usage(block)
     prompt = _count(block.get("prompt_tokens"))
     completion = _count(block.get("completion_tokens"))
     cached = _detail(block, "prompt_tokens_details", "cached_tokens")

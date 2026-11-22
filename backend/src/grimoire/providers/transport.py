@@ -18,12 +18,15 @@ import ssl
 import threading
 import time
 from collections.abc import Mapping
-from typing import Protocol
+from typing import Literal, Protocol
 from urllib.parse import urlsplit
 
 from .cancel import CancelToken
 from .config import Secret, Timeouts
 from .errors import TransportError
+
+#: How a key is sent: ``Authorization: Bearer`` (OpenAI-compatible), or Anthropic's ``x-api-key``.
+KeyScheme = Literal["bearer", "x-api-key"]
 
 
 class Response(Protocol):
@@ -40,7 +43,8 @@ class Response(Protocol):
 class Connection(Protocol):
     peer_loopback: bool
 
-    def send(self, body: bytes, headers: Mapping[str, str], key: Secret | None) -> Response:
+    def send(self, body: bytes, headers: Mapping[str, str], key: Secret | None, *,
+             key_scheme: KeyScheme = "bearer") -> Response:
         """Write the request and read the status. Raises ``TransportError(kind, "send")``."""
 
     def close(self) -> None: ...
@@ -160,8 +164,9 @@ class _HttpConnection:
         except (OSError, TypeError, AttributeError):
             pass
 
-    def send(self, body: bytes, headers: Mapping[str, str], key: Secret | None) -> Response:
-        failure = _write(self._connection, self._path, self._host, body, headers, key)
+    def send(self, body: bytes, headers: Mapping[str, str], key: Secret | None, *,
+             key_scheme: KeyScheme = "bearer") -> Response:
+        failure = _write(self._connection, self._path, self._host, body, headers, key, key_scheme)
         if failure is not None:
             self.close()
             _raise(failure, "send")
@@ -189,7 +194,7 @@ class _HttpConnection:
 
 
 def _write(connection: http.client.HTTPConnection, path: str, host: str, body: bytes,
-           headers: Mapping[str, str], key: Secret | None):
+           headers: Mapping[str, str], key: Secret | None, key_scheme: KeyScheme = "bearer"):
     """Send one request. The only place a key becomes header text.
 
     Returns ``None``, or what to raise; the caller raises it outside any
@@ -201,7 +206,9 @@ def _write(connection: http.client.HTTPConnection, path: str, host: str, body: b
         connection.putheader("Host", host)
         for name, value in headers.items():
             connection.putheader(name, value)
-        if key is not None:
+        if key is not None and key_scheme == "x-api-key":
+            connection.putheader("x-api-key", key.reveal())
+        elif key is not None:
             connection.putheader("Authorization", "Bearer " + key.reveal())
         connection.putheader("Content-Length", str(len(body)))
         connection.endheaders(body)

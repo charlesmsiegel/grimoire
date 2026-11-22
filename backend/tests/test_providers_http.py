@@ -5,7 +5,8 @@ import socket
 import pytest
 
 from provider_servers import (
-    STREAM_HEAD, RawServer, base_url, raw_chunk, reset, sse_lines, sse_server, stream,
+    STREAM_HEAD, RawServer, base_url, messages_lines, raw_chunk, reset, sse_lines, sse_server,
+    stream,
 )
 from grimoire.core.inference import (
     InferencePolicy, Measurement, TokenUsage, TurnUsageLedger, plan_turn,
@@ -26,17 +27,19 @@ USAGE = {"prompt_tokens": 50, "completion_tokens": 7,
          "completion_tokens_details": {"reasoning_tokens": 2}}
 
 
-def _run(url, *, attempts=1, timeouts=FAST, approvals=None):
+def _run(url, *, attempts=1, timeouts=FAST, approvals=None, protocol="openai_chat",
+         messages=(ChatMessage("user", "hi"),)):
     authz = Authorizer({"human:owner"})
     authz.add_grant(Grant("g", "app:runtime", frozenset({Permission.EXECUTE}),
                           ResourcePath(("providers",)), "human:owner"))
-    adapter = ProviderAdapter(ProviderRegistry([ProviderEndpoint("local", url, timeouts=timeouts)]),
+    adapter = ProviderAdapter(ProviderRegistry([ProviderEndpoint("local", url, timeouts=timeouts,
+                                                                  protocol=protocol)]),
                               StaticCredentials({"local": KEY}), authz, HttpTransport())
     plan = plan_turn("camp", "t1", present_actor_ids=["npc"], speaking_npc_ids=["npc"],
                      policy=InferencePolicy(max_attempts_per_call=attempts))
     meter = TurnMeter(TurnUsageLedger(plan))
     result = adapter.execute(meter, plan.calls[0],
-                             ModelRequest([ChatMessage("user", "hi")], max_output_tokens=16),
+                             ModelRequest(list(messages), max_output_tokens=16),
                              [RouteChoice("local", "synthetic-model")],
                              authz.handle_for("app:runtime", trusted=True), approvals=approvals)
     return result, meter
@@ -58,6 +61,32 @@ def test_a5_real_http_round_trip_is_provider_reported():
     assert body == open_envelope(authorized[0])[1] and path == "/v1/chat/completions"
     assert meter.summary().provider_reported_only and meter.all_accepted
     assert meter.cost_evidence is False  # a loopback endpoint is never billing evidence
+
+
+def test_a5_messages_api_round_trip_reports_cache_reads_and_writes_and_sends_x_api_key():
+    usage = {"input_tokens": 40, "cache_read_input_tokens": 30, "cache_creation_input_tokens": 5,
+             "output_tokens": 1}
+    with sse_server(stream(messages_lines(usage=usage, final_output=7, thinking="unseen"))) as server:
+        result, meter = _run(base_url(server), protocol="anthropic_messages",
+                             messages=(ChatMessage("system", "Be brief."), ChatMessage("user", "hi")))
+        path, headers, body = server.requests[0]
+    assert (result.status, result.reply, result.finish_reason) == ("accepted", "Hello!", "stop")
+    (attempt,) = result.attempts
+    assert attempt.measurement == Measurement.PROVIDER_REPORTED
+    assert attempt.usage == TokenUsage(75, 7, cache_read_tokens=30, cache_write_tokens=5)
+    assert path == "/v1/messages" and headers["x-api-key"] == KEY
+    assert "Authorization" not in headers and headers["anthropic-version"] == "2023-06-01"
+    assert b'"system":"Be brief."' in body and KEY.encode() not in body
+    assert meter.summary().provider_reported_only and meter.all_accepted
+
+
+def test_a5_messages_api_hitting_max_tokens_is_incomplete_and_a_stream_without_stop_is_truncated():
+    with sse_server(stream(messages_lines(stop="max_tokens"))) as server:
+        result, _ = _run(base_url(server), protocol="anthropic_messages")
+    assert (result.status, result.finish_reason) == ("incomplete", "length")
+    with sse_server(stream(messages_lines(stop=None, stop_event=True))) as server:
+        result, _ = _run(base_url(server), protocol="anthropic_messages")
+    assert (result.status, result.error.kind) == ("failed", "truncated")
 
 
 def test_a6_refused_port_is_not_sent():

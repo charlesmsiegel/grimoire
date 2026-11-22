@@ -21,11 +21,13 @@ against a dry-run baseline, and at most ``(calls planned) x (attempts per call)`
 Exit status: 0 written, 1 run failed, 2 refused or bad usage. On any failure nothing is left in
 ``--out``.
 
-Known limit: V2 speaks the OpenAI-compatible chat protocol only. Against an ``anthropic`` baseline it
-calls Anthropic's OpenAI-compatible endpoint, which does not offer prompt caching and does not report
-cached-token counts, while 0.2.1 called Anthropic's own API. The comparison then says the cost is
-``usage_incomplete`` rather than guessing, and the report says why; input and output token sums are
-still shown.
+Against an ``anthropic`` baseline V2 calls Anthropic's own Messages API, as 0.2.1 did, so cache
+reads and writes are provider-reported and the cost can be compared; an ``openrouter`` baseline is
+reached over OpenAI-compatible chat completions. The two sides still assemble different prompts, so
+the report says the token sums are not like for like.
+
+The first comparison (V2 against 0.2.1) is 068's proving scenario. The second, with planning, is an
+experiment: a failure there rejects the optional stage, not V2.
 """
 
 from __future__ import annotations
@@ -101,15 +103,19 @@ from .v021 import (
     forbidden_roots,
 )
 
-#: Where V2 sends each baseline provider's calls: OpenAI-compatible chat completions only.
+#: Where V2 sends each baseline provider's calls, and the wire protocol it speaks there.
 ENDPOINTS = {"openrouter": "https://openrouter.ai/api/v1", "anthropic": "https://api.anthropic.com/v1"}
+PROTOCOLS = {"openrouter": "openai_chat", "anthropic": "anthropic_messages"}
 #: Said in the report whenever a baseline's provider is reached by another protocol than 0.2.1 used.
 PROTOCOL_NOTES = {
-    "anthropic": ("0.2.1 called Anthropic's own Messages API; V2 calls Anthropic's OpenAI-compatible "
-                  "endpoint, which offers no prompt caching and reports no cached-token counts, so the "
-                  "cost comparison is usage_incomplete and the token sums are not like for like. The two "
-                  "requests may also differ in options 0.2.1's call set (extended thinking among them)."),
+    "anthropic": ("Both sides called Anthropic's Messages API, so cache reads and writes are "
+                  "provider-reported. The prompts differ (0.2.1 assembled its own, and may have set "
+                  "options V2 does not, extended thinking or cache breakpoints among them), so the token "
+                  "sums are not like for like."),
 }
+#: Said in every report: which comparison 068's proving scenario rests on.
+VERDICT_NOTE = ("068's proving scenario rests on the first comparison (V2 against 0.2.1). The second is an "
+                "experiment: a failure there rejects optional planning, not V2.")
 DRY_RUN_ENDPOINT = "https://dry-run.invalid/v1"
 #: The harness a run of this module names in its source.
 HARNESS = "grimoire.capture.v2/1"
@@ -272,7 +278,8 @@ class _DryRunConnection:
     def __init__(self, lines: Sequence[bytes], cancel: CancelToken) -> None:
         self._lines, self._cancel = lines, cancel
 
-    def send(self, body: bytes, headers: Mapping[str, str], key: Secret | None) -> Response:
+    def send(self, body: bytes, headers: Mapping[str, str], key: Secret | None, *,
+             key_scheme: str = "bearer") -> Response:
         return _DryRunResponse(self._lines, self._cancel)
 
     def close(self) -> None:
@@ -342,7 +349,8 @@ def _runtime(options: CompareOptions, baseline: Baseline, setup: Mapping, scenar
     handle = authorizer.handle_for(PRINCIPAL, trusted=True)
     if options.mode == "live":
         assert options.api_key_env is not None  # run_compare refuses a live run without it
-        endpoint = ProviderEndpoint(baseline.provider, ENDPOINTS[baseline.provider])
+        endpoint = ProviderEndpoint(baseline.provider, ENDPOINTS[baseline.provider],
+                                    protocol=PROTOCOLS[baseline.provider])
         credentials = EnvironmentCredentials({baseline.provider: options.api_key_env})
         adapter = ProviderAdapter(ProviderRegistry([endpoint]), credentials, authorizer, HttpTransport())
     else:
@@ -450,6 +458,7 @@ def _report(options: CompareOptions, baseline: Baseline, scenario: Scenario, run
     parts.append("== V2 (one call per speaking NPC) against 0.2.1 ==\n"
                  + render_v2(compare_v2(scenario, baseline.run, v2, baseline_evidence=evidence)))
     if "planning" in runs:
+        parts.append(VERDICT_NOTE)
         planned = parse_run_v2(runs["planning"], scenario)
         policy = GatePolicy(allowed_flags=frozenset({InferenceStage.PLANNING.value}))
         parts.append("== V2 with optional planning against plain V2 (an opt-in billed extra) ==\n"
