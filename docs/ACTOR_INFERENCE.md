@@ -164,7 +164,8 @@ generation runtime rather than the experiment runner. Critique is not adopted: t
 
 ```sh
 PYTHONPATH=backend/src python -m grimoire.capture.v2 --scenario guild_betrayal \
-  --baseline <015 capture dir> --out <new dir outside the repo> --dry-run [--with-planning]
+  --baseline <015 capture dir> [--baseline <another capture dir> ...] \
+  --out <new dir outside the repo> --dry-run [--samples N] [--with-planning]
 ```
 
 It verifies the capture's evidence, then takes its provider, served model, output budget and attempt
@@ -193,15 +194,45 @@ findings and token usage, reported apart), then V2 with planning against plain V
   OpenAI-compatible endpoint, which reports no cached-token counts; that is why the first billed run
   said `usage_incomplete`.) A capture whose budget is `max_tokens=unset` is reported incomparable,
   since V2 always sends an output cap.
+- `--samples N` (1 to 10) plays V2 N times, and with planning N more times, and `--baseline` may be
+  repeated with other 0.2.1 captures of the same play (same provider, model, budget, attempts and
+  conditions; the same capture twice is refused). With more than one sample on either side the
+  report gates [every sample together](#sampled-comparison). The request ceiling printed before a
+  live run is multiplied by N, and the files are numbered (`v2-baseline-1.run.json` and so on).
 - The first comparison (V2 against 0.2.1) is 068's proving scenario. The second, with planning, is
   an experiment: a failure there rejects the optional stage, not V2, and the report says so.
 - The V2 run has no capture evidence of its own, so its usage is provider-reported and unverified,
   and its choices are unlabelled (judged on marker evidence only). Voice is the existing lexical
   distinguishability measure; no semantic characterization score exists.
 
-Proofs: `backend/tests/test_presentation_planning.py` (runtime, play and app) and
+Proofs: `backend/tests/test_presentation_planning.py` (runtime, play and app),
 `backend/tests/test_capture_v2.py` (dry runs against 015's committed dry-run evidence, refusals, and
-the real HTTP transport against a loopback server).
+the real HTTP transport against a loopback server) and `backend/tests/test_evals_sampled.py` (the
+sampled gate).
+
+### Sampled comparison
+
+A billed play is one draw from a model that answers differently each time. With six NPC lines one
+line voiced off its profile moves cast distinguishability by a sixth, and one reply that happens not
+to name a choice's effect fails the choice; the two billed runs below failed on different findings
+for that reason. With several samples on a side (`--samples`, repeated `--baseline`), the gate
+(`grimoire.evals.sampled`) reads the same requirement over all of them:
+
+- every hard invariant (a leak, a model line that negates a choice, a missing scripted speaker and
+  the rest) must hold in **every** sample, on both sides;
+- a choice is given effect when model text realizes it in a **strict majority** of a side's samples;
+- voice compares the two sides' **mean** cast distinguishability. It regresses when V2's mean is
+  below 0.2.1's by more than the policy's allowed drop (0) plus a noise allowance of twice the
+  standard error of the difference of the means. The allowance is used only when both sides have at
+  least 5 samples; with fewer it is zero;
+- cost and latency compare means with the usual tolerances, and a sample with unreported counts
+  still makes cost incomparable.
+
+With one sample on each side every rule is the one-run rule, so the verdict is unchanged
+(`test_one_sample_each_gives_the_one_run_verdict`). The report states the rule and prints, per
+choice, how many samples on each side realized it, both sides' distinguishability values, the noise
+allowance and every sample's metrics. Five samples a side is the intended size: 015's capture
+(`python -m grimoire.capture.v021`, at most 18 requests each) four more times, and `--samples 5`.
 
 ### Billed comparison (2026-11-20)
 
@@ -276,3 +307,7 @@ same 015 capture (evidence sha256 `1824a081…d24ff0`, not recaptured): 18 calls
   effect of planning, and six lines is too few for the voice measure to be steady.
 - No cost is in either run. At an assumed list price of 3 USD input and 15 USD output per million
   tokens the 18 calls (10,998 input and 2,492 output tokens) come to about 0.07 USD, as an estimate.
+
+The method changed after this run (2026-11-22): the comparison can now be scored over several
+samples per side ([sampled comparison](#sampled-comparison)), so a rerun with five captures and five
+V2 plays is what can decide 068.
