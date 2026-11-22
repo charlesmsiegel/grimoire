@@ -354,13 +354,15 @@ with 0.2.1 error `empty_response`, and each call that completed was billed.
   6 calls, 15,254 input and 978 output tokens, no cache tokens, cast distinguishability 0.667,
   leak rate 0, usage by actor `npc-oda` 7,442 in / 662 out and `npc-bellamy` 7,812 in / 316 out.
   Its self-comparison gate is FAIL: `choice_negated` on turn 1 (`ask-ledger`, unrealized), with
-  `baseline_invalid` for the same finding. The evidence verifies; the play itself breaks a
-  hard check, so this capture is not a second clean baseline.
+  `baseline_invalid` for the same finding. The evidence verifies, and that FAIL is the
+  single-run reading. As one of five baseline samples it remains a valid completed sample: the
+  sampled gate settles an unrealized choice by strict majority across the side, so its effect
+  depends on the other samples.
 - **Tokens and cost:** 29 billed calls in all, 71,082 input and 4,309 output tokens. At an
   assumed list price of 3 USD input and 15 USD output per million tokens that is about
   0.28 USD, as an estimate.
 
-The measured baseline of 2026-11-20 is still the only capture without findings.
+The measured baseline of 2026-11-20 is still the only capture with no single-run finding.
 
 ## Privacy
 
