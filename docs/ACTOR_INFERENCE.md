@@ -327,3 +327,20 @@ Offline, 0.2.1's own empty-response check on the second speaker reproduces the s
 failure; the live error kind was not recorded, so the cause is not confirmed
 ([why](evals/V021_BASELINE.md#why-turn-1-fails-offline-2026-11-22)). A failed capture now reports
 0.2.1's error kind and the shape of each reply.
+
+### Billed comparison (2026-11-22, sampled, second approval): not run
+
+A second approval allowed up to 10 attempts at the four missing 0.2.1 captures, then one sampled
+comparison of at most 270 requests. **The comparison did not run, so 068 is still not
+established.** The 10 attempts gave one success and nine `empty_response` failures
+([attempts](evals/V021_BASELINE.md#capture-attempts-2026-11-22-with-the-failure-report)), fewer
+than the four needed, and the rule was then to stop. There are no per-sample or mean figures,
+choice realization counts, noise allowance or gate findings for either comparison: none was made.
+29 calls were billed on the captures (71,082 input and 4,309 output tokens, about 0.28 USD
+estimated) and none on V2.
+
+What stands between 068 and a sampled result is the capture rate: unmodified 0.2.1 completed
+this scene on 1 of 10 attempts, so five baseline samples would take on the order of 50 attempts
+at this rate. The one new capture is a valid completed sample. Scored alone it has an unrealized
+choice (`ask-ledger`, turn 1), but the sampled gate does not judge that per sample: a choice
+counts against a side only if it is realized in no strict majority of that side's five samples.
