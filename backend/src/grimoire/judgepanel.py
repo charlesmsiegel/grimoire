@@ -74,6 +74,13 @@ copy its token exactly. Answer with one JSON object and nothing else:
 
 PROMPT_VERSION = hashlib.sha256((DEFECT_PROMPT + '\0' + THEORY_PROMPT).encode()).hexdigest()
 
+# Sent once, in the same conversation, to a theory judge whose answer put a step off the ladder. It
+# names the dimensions and restates the ladder, never which rung to pick. The text is in each re-ask
+# record's prompt digest, so a capture made with other wording is refused as stale.
+REASK_PROMPT = """Your answer gave {dimensions} a step that is not on the ladder. Every step must be
+exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between
+them. Answer again with one complete JSON object in the same format, and nothing else."""
+
 
 def _digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -213,8 +220,10 @@ def prompt_sha256(messages: list[tuple[str, str]]) -> str:
 
 # Version 2 reads an answer's one schema-tagged object out of any text around it; version 1 needed the
 # whole answer (or a fence holding it) to be that object. The prompts did not change, so a capture
-# made under version 1 replays and is re-read under version 2.
-PARSER_VERSION = 2
+# made under version 1 replays and is re-read under version 2. Version 3 re-asks a theory judge once
+# when its answer puts a step off the ladder; a capture made before it has no re-asks and is read
+# with those answers ``unknown`` (``off_ladder``), as version 2 read them.
+PARSER_VERSION = 3
 
 
 def _decoded(text: str) -> dict | None:
@@ -339,6 +348,32 @@ def _grounded(dimensions: dict, name: str, count: int) -> tuple[dict | None, int
     return out, dropped
 
 
+def off_ladder(dimensions: object) -> list[str]:
+    """The dimensions whose step the pinned rubric would refuse as off its ladder, in rubric order."""
+    if not isinstance(dimensions, dict):
+        return []
+    return [key for key in DIMENSIONS
+            if isinstance(dimensions.get(key), dict) and dimensions[key].get('step') not in LADDER]
+
+
+def laddered(verdict: dict) -> dict:
+    """``verdict`` with each off-ladder step read as the rung the rubric checks most: 0.5, a lowered
+    step that still needs evidence, or 1.0 for a number at or above it. Only to ask the pinned
+    rubric what else it would refuse in a first answer; never scored, never shown as a grade."""
+    dimensions = {key: dict(entry) if isinstance(entry, dict) else entry
+                  for key, entry in verdict['dimensions'].items()}
+    for key in off_ladder(dimensions):
+        step = dimensions[key].get('step')
+        number = type(step) in (int, float) and step >= 1.0
+        dimensions[key]['step'] = 1.0 if number else 0.5
+    return {**verdict, 'dimensions': dimensions}
+
+
+def reask_messages(messages: list[tuple[str, str]], reply: str, keys: list[str]) -> list[tuple[str, str]]:
+    """The first conversation, the judge's own answer, and the ladder restated for ``keys``."""
+    return [*messages, ('assistant', reply), ('user', REASK_PROMPT.format(dimensions=', '.join(keys)))]
+
+
 def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
     """The verdict without its coverage block. Upstream validation happens at scoring."""
     data, failure, outside = extract(text, THEORY_SCHEMA)
@@ -354,13 +389,19 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
     verdict['unit'] = case['id']
     count = len(case['source'].splitlines())
     dimensions = data.get('dimensions')
+    # Checked, never rounded onto the ladder: that would be the harness choosing the judge's step.
+    off = {'off_ladder': off_ladder(dimensions)} if off_ladder(dimensions) else {}
     grounded, dropped = _grounded(dimensions, name, count) if isinstance(dimensions, dict) else (None, 0)
     if grounded is None:
-        return result('unknown', 'citation', verdict, dropped)
+        return {**result('unknown', 'citation', verdict, dropped), **off}
     verdict['dimensions'] = grounded
     if not covered(data, name, token):
         # Kept, so the report can show what an uncovered verdict would have been awarded.
-        return result('unknown', 'coverage', verdict, dropped)
+        return {**result('unknown', 'coverage', verdict, dropped), **off}
+    if off:
+        # The only fault found here, so the one a re-ask may cure. The verdict is kept: scoring asks
+        # the pinned rubric whether anything else in it would have been refused.
+        return {**result('unknown', 'off_ladder', verdict, dropped), **off}
     return result('verdict', None, verdict, dropped)
 
 
@@ -382,10 +423,11 @@ class ReplayJudge:
         version = manifest.get('parser_version')
         self.parser_version = version if type(version) is int else None
 
-    def respond(self, pin: JudgePin, case: dict, trial: int, messages: list[tuple[str, str]]) -> dict | None:
+    def respond(self, pin: JudgePin, case: dict, trial: int, messages: list[tuple[str, str]], *,
+                reask: bool = False) -> dict | None:
         if self.pins.get(pin.judge_id) != pin.sha256:
             raise ValueError(f'capture was made with a different pin for {pin.judge_id}')
-        path = self.capture / 'calls' / pin.judge_id / case['id'] / f'{trial}.json'
+        path = self.capture / 'calls' / pin.judge_id / case['id'] / record_name(trial, reask)
         if not path.exists():
             return None
         record = json.loads(path.read_text(encoding='utf-8'))
@@ -417,7 +459,8 @@ class LiveJudge:
                                            'pins': {pin.judge_id: pin.sha256 for pin in pins},
                                            'pin_records': [pin.record() for pin in pins]})
 
-    def respond(self, pin: JudgePin, case: dict, trial: int, messages: list[tuple[str, str]]) -> dict:
+    def respond(self, pin: JudgePin, case: dict, trial: int, messages: list[tuple[str, str]], *,
+                reask: bool = False) -> dict:
         from grimoire.app.config import policy_for
         from grimoire.core.inference import TurnUsageLedger, plan_turn
         from grimoire.core.inference.usage import TOKEN_FIELDS
@@ -452,8 +495,12 @@ class LiveJudge:
                                    'served_model': r.served_model or None,
                                    'tokens': {name: getattr(r.usage, name) for name in TOKEN_FIELDS}}
                                   for r in reports]
-            _write(self.out / 'calls' / pin.judge_id / case['id'] / f'{trial}.json', record)
+            _write(self.out / 'calls' / pin.judge_id / case['id'] / record_name(trial, reask), record)
         return record
+
+
+def record_name(trial: int, reask: bool) -> str:
+    return f'{trial}.reask.json' if reask else f'{trial}.json'
 
 
 def _write(path: Path, value: object) -> None:
@@ -475,6 +522,11 @@ def _parses(case: dict) -> bool:
 
 def planned(cases: list[dict], trials: int) -> int:
     return sum(PANEL_SIZE * trials for case in cases if _parses(case))
+
+
+def reasks_at_most(cases: list[dict], trials: int) -> int:
+    """One re-ask per theory answer, if every one of them put a step off the ladder."""
+    return sum(PANEL_SIZE * trials for case in cases if case['task'] == 'theory' and _parses(case))
 
 
 def trial_result(record: dict | None, pin: JudgePin, case: dict, token: str, name: str) -> dict:
@@ -499,6 +551,21 @@ def trial_result(record: dict | None, pin: JudgePin, case: dict, token: str, nam
             'served_model': served, 'observed_models': observed}
 
 
+# What ``parsing`` counts for each answer read, the first of a re-asked trial included.
+ANSWER_COUNTS = ('text_outside_json', 'ambiguous', 'citations_dropped')
+
+
+def _read(result: dict) -> bool:
+    """Whether an answer reached the parser: an accepted call, served by the pinned model."""
+    return 'text_outside_json' in result
+
+
+def _measured(first: str | None, second: str | None) -> str | None:
+    """One trial's measurement across its two calls: both must agree, as within one call."""
+    kinds = {kind for kind in (first, second) if kind is not None}
+    return kinds.pop() if len(kinds) == 1 else ('mixed' if kinds else None)
+
+
 def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: str) -> list[dict]:  # type: ignore[no-untyped-def]
     """Ask every judge every case ``trials`` times; an unparseable defect case is never sent."""
     out = []
@@ -512,10 +579,27 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
         for pin in pins:
             results = []
             for trial in range(trials):
-                token = canary(salt, pin.judge_id, case['id'], trial)
+                token, name = canary(salt, pin.judge_id, case['id'], trial), alias(salt, case['id'])
                 messages = messages_for(case, token, salt)
-                results.append(trial_result(judge.respond(pin, case, trial, messages), pin, case, token,
-                                            alias(salt, case['id'])))
+                record = judge.respond(pin, case, trial, messages)
+                result = trial_result(record, pin, case, token, name)
+                if result.get('reason') == 'off_ladder':
+                    # Once, never again: the re-asked answer is read on its own and stands as it is.
+                    again = judge.respond(pin, case, trial, reask_messages(messages, record['reply'],
+                                                                           result['off_ladder']), reask=True)
+                    if again is not None:
+                        first = result
+                        result = trial_result(again, pin, case, token, name)
+                        result.update(reasked=first['off_ladder'],
+                                      first_answer={**{key: first[key] for key in ANSWER_COUNTS},
+                                                    'verdict': first['verdict']},
+                                      observed_models=sorted({*first.get('observed_models', []),
+                                                              *result.get('observed_models', [])}),
+                                      measurement=_measured(first['measurement'], result['measurement']))
+                        if not _read(result):
+                            # No second answer was read, so the trial's only answer is still off.
+                            result['off_ladder'] = first['off_ladder']
+                results.append(result)
             entry['judges'][pin.judge_id] = results
         out.append(entry)
     return out
@@ -541,12 +625,17 @@ def parsing(cases: list[dict]) -> dict:
     for case in cases:
         for judge_id, results in case.get('judges', {}).items():
             row = out.setdefault(judge_id, {'answers': 0, 'text_outside_json': 0, 'ambiguous': 0,
-                                              'citations_dropped': 0})
+                                              'citations_dropped': 0, 'reasked': 0, 'off_ladder': 0})
             for result in results:
-                row['answers'] += 1
-                row['text_outside_json'] += bool(result.get('text_outside_json'))
-                row['ambiguous'] += bool(result.get('ambiguous'))  # kept apart: drift rewrites reason
-                row['citations_dropped'] += result.get('citations_dropped', 0)
+                for answer in (result.get('first_answer'), result):
+                    if answer is None:
+                        continue
+                    row['answers'] += 1
+                    row['text_outside_json'] += bool(answer.get('text_outside_json'))
+                    row['ambiguous'] += bool(answer.get('ambiguous'))  # kept apart: drift rewrites reason
+                    row['citations_dropped'] += answer.get('citations_dropped', 0)
+                row['reasked'] += bool(result.get('reasked'))
+                row['off_ladder'] += bool(result.get('off_ladder'))  # still off after any re-ask
     return out
 
 
@@ -670,6 +759,8 @@ def _score_trial(results: list[dict], size: dict, checkout: Path | None) -> dict
     """Profile rule: a panel is scored only when all three judges are covered and valid.
 
     ``upstream_score`` is what the pinned rubric alone would award the same verdicts, coverage aside.
+    A re-asked answer counts only if its judge's first answer had no fault but the ladder: the
+    pinned rubric must accept that first answer once its off-ladder steps are read as rungs.
     """
     verdicts = [r['verdict'] for r in results]
     upstream = upstream_score(checkout, verdicts, size) if checkout is not None and all(verdicts) else None
@@ -678,6 +769,10 @@ def _score_trial(results: list[dict], size: dict, checkout: Path | None) -> dict
         reason = 'no_pinned_rubric'
     elif reason is None and 'error' in upstream:
         reason = 'invalid_verdict'
+    elif reason is None and checkout is not None and any(
+            'error' in upstream_score(checkout, [laddered(r['first_answer']['verdict'])] * PANEL_SIZE, size)
+            for r in results if r.get('first_answer')):
+        reason = 'first_answer_invalid'
     scored = reason is None
     return {'profile_score': upstream['score'] if scored else None,
             'upstream_score': (upstream or {}).get('score'),
@@ -693,7 +788,10 @@ def score_theory(cases: list[dict], trials: int, checkout: Path | None) -> dict:
                                  'reason': case['reason']}
             continue
         size = {'files': 1, 'loc': len(case['source_lines'])}
-        trial_scores = [_score_trial([results[trial] for results in case['judges'].values()], size, checkout)
+        trial_scores = [{**_score_trial([results[trial] for results in case['judges'].values()], size, checkout),
+                         # Whose answer in this trial came from a re-ask, so the audit can name it.
+                         'reasked': sorted(judge_id for judge_id, results in case['judges'].items()
+                                           if results[trial].get('reasked') and _read(results[trial]))}
                         for trial in range(trials)]
         scores = [t['profile_score'] for t in trial_scores]
         known = None not in scores
@@ -785,10 +883,11 @@ def main(argv: list[str] | None = None) -> None:
     try:
         pins, trials, configs = load_panel(args.panel)
         cases = load_corpus(args.corpus)
-        calls = planned(cases, trials)
+        calls = planned(cases, trials) + reasks_at_most(cases, trials)
         if args.command == 'plan':
             chars = sum(len(c) for case in cases if _parses(case) for _, c in messages_for(case, '0' * 16, ''))
-            print(json.dumps({'planned_calls': calls,
+            print(json.dumps({'planned_calls': planned(cases, trials),
+                              'reasks_at_most': reasks_at_most(cases, trials), 'max_calls': calls,
                               'request_ceiling': sum(calls // PANEL_SIZE * pin.attempts for pin in pins),
                               'prompt_characters_per_judge_trial': chars,
                               'max_output_tokens': {p.judge_id: p.max_output_tokens for p in pins}}, indent=2))
