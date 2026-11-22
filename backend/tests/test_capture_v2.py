@@ -438,6 +438,10 @@ def sheet_of(tmp_path, first, second, earlier):
     return json.loads((out / "label-sheet.json").read_text("utf-8"))
 
 
+def key_of(tmp_path):
+    return tmp_path / "sheet" / "label-key.json"
+
+
 def fill(sheet, path, **outcomes):
     for play in sheet["plays"]:
         for choice_id, entry in play["choices"].items():
@@ -451,18 +455,26 @@ def test_a_label_sheet_lists_every_play_of_a_comparison_blind_and_sends_nothing(
     first, second, earlier = compared(tmp_path)
     monkeypatch.setattr(v2, "play", lambda *a, **k: pytest.fail("a label sheet must not play"))
     sheet = sheet_of(tmp_path, first, second, earlier)
-    assert "label sheet written to" in capsys.readouterr().out
+    assert "give the reader label-sheet.json only" in capsys.readouterr().out
     assert len(sheet["plays"]) == 2 + 3 + 3  # two captures, three plain and three planned plays
     digests = {evidence_digest(load_json(earlier / f"v2-{kind}-{n}.run.json"))
                for kind in ("baseline", "planning") for n in (1, 2, 3)}
     digests |= {load_json(path / "run.json")["source"]["evidence_sha256"] for path in (first, second)}
-    assert {play["run_sha256"] for play in sheet["plays"]} == digests
+    key = load_json(key_of(tmp_path))
+    assert set(key["plays"].values()) == digests
+    assert sorted(key["plays"]) == sorted(play["play"] for play in sheet["plays"])
+    text = (tmp_path / "sheet" / "label-sheet.json").read_text("utf-8")
+    report = (earlier / "comparison-report.txt").read_text("utf-8")
+    assert not any(digest in text for digest in digests)  # no digest a report or capture shows
+    assert all(digest in report for digest in {load_json(path / "run.json")["source"][
+        "evidence_sha256"] for path in (first, second)})
     for play in sheet["plays"]:
-        assert set(play) == {"play", "run_sha256", "choices"}  # no side, kind, sample or run id
+        assert set(play) == {"play", "choices"}  # no side, kind, sample, run id or digest
         assert all(entry["outcome"] is None and all(set(line) == {"turn", "speaker", "text"}
                                                     for line in entry["text"])
                    for entry in play["choices"].values())
-    assert not (tmp_path / "sheet" / "comparison-report.txt").exists()
+    assert sorted(path.name for path in (tmp_path / "sheet").iterdir()) == [
+        "label-key.json", "label-sheet.json"]
 
 
 def test_labels_decide_every_choice_of_a_rescore_on_both_sides(tmp_path):
@@ -471,7 +483,7 @@ def test_labels_decide_every_choice_of_a_rescore_on_both_sides(tmp_path):
     out = tmp_path / "answered"
     labels = fill(sheet, tmp_path / "labels.json", ask_ledger="complicated")
     assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", labels,
-               "--out", out) == 0
+               "--label-key", key_of(tmp_path), "--out", out) == 0
     report = outputs(out)["comparison-report.txt"]
     assert "Choice outcomes: every choice in every play was decided by a reader's label" in report
     plain = report.split("== V2 with optional planning")[0]
@@ -480,7 +492,7 @@ def test_labels_decide_every_choice_of_a_rescore_on_both_sides(tmp_path):
     out = tmp_path / "ignored"
     labels = fill(sheet, tmp_path / "ignored.json", ask_ledger="ignored")
     assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", labels,
-               "--out", out) == 0
+               "--label-key", key_of(tmp_path), "--out", out) == 0
     report = outputs(out)["comparison-report.txt"]
     assert "story-quality gate: FAIL" in report and "  - ask-ledger: 0/2 / 0/3" in report
     assert "the labels give effect to the choice in 0 of 2 samples" in report
@@ -489,25 +501,44 @@ def test_labels_decide_every_choice_of_a_rescore_on_both_sides(tmp_path):
 def test_labels_must_be_this_comparisons_sheet_whole(tmp_path, capsys):
     first, second, earlier = compared(tmp_path, samples=2)
     sheet = sheet_of(tmp_path, first, second, earlier)
+    key = key_of(tmp_path)
+    flags = ["--baseline", first, "--baseline", second, "--rescore", earlier]
     short = dict(sheet, plays=sheet["plays"][1:])
     labels = fill(short, tmp_path / "short.json")
-    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", labels,
-               "--out", tmp_path / "out") == 2
-    assert "not this comparison's sheet (1 of its 6 plays unlabelled" in capsys.readouterr().err
+    assert run(*flags, "--labels", labels, "--label-key", key, "--out", tmp_path / "out") == 2
+    assert "1 of the key's 6 plays are not labelled" in capsys.readouterr().err
     unfilled = tmp_path / "unfilled.json"
     unfilled.write_text(json.dumps(sheet), "utf-8")
-    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", unfilled,
-               "--out", tmp_path / "out") == 2
+    assert run(*flags, "--labels", unfilled, "--label-key", key, "--out", tmp_path / "out") == 2
     assert "outcome" in capsys.readouterr().err
+    whole = fill(sheet, tmp_path / "whole.json")
     linked = tmp_path / "linked.json"
-    linked.symlink_to(fill(sheet, tmp_path / "whole.json"))
-    assert run("--baseline", first, "--baseline", second, "--rescore", earlier, "--labels", linked,
-               "--out", tmp_path / "out") == 2
+    linked.symlink_to(whole)
+    assert run(*flags, "--labels", linked, "--label-key", key, "--out", tmp_path / "out") == 2
     assert "is a link" in capsys.readouterr().err
+    other = load_json(key)
+    other["plays"] = dict(zip(other["plays"], reversed(list(other["plays"].values()))))
+    swapped = tmp_path / "swapped-key.json"
+    swapped.write_text(json.dumps(other), "utf-8")  # labels moved onto other plays
+    assert run(*flags, "--labels", whole, "--label-key", swapped, "--out", tmp_path / "out") == 2
+    assert "not what the current scenario reads from this play" in capsys.readouterr().err
+    assert run(*flags, "--labels", whole, "--out", tmp_path / "out") == 2
+    assert "--labels and --label-key go together" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_comparison_with_a_run_saved_twice_is_refused(tmp_path, capsys):
+    first, second, earlier = compared(tmp_path, samples=2)
+    (earlier / "v2-baseline-2.run.json").write_bytes((earlier / "v2-baseline-1.run.json").read_bytes())
+    for mode in ("--rescore", "--label-sheet"):
+        assert run("--baseline", first, "--baseline", second, mode, earlier,
+                   "--out", tmp_path / "out") == 2
+        assert "two of its saved V2 runs are the same run" in capsys.readouterr().err
     assert not (tmp_path / "out").exists()
 
 
 @pytest.mark.parametrize("extra", [["--dry-run", "--labels", "x.json"],
+                                   ["--dry-run", "--label-key", "x.json"],
                                    ["--label-sheet", "DIR", "--samples", "2"],
                                    ["--label-sheet", "DIR", "--confirm-billing"]])
 def test_labels_are_read_only_by_a_rescore_and_a_sheet_takes_no_play_flags(tmp_path, capsys, extra):

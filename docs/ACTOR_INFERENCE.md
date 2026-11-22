@@ -210,11 +210,13 @@ findings and token usage, reported apart), then V2 with planning against plain V
   again, never played again. Any change to the gate since that run is applied too, and nothing binds
   the run files to the earlier report beyond their names, so a rescore is a measurement, not a
   verdict.
-- `--label-sheet DIR` writes `label-sheet.json` to `--out`: every play of the comparison in `DIR`
-  (its 0.2.1 captures, plain and planned V2 runs), shuffled under neutral ids, each choice with the
-  model text the choice check reads and an empty outcome to fill in. `--rescore DIR --labels FILE`
-  then decides every choice from the filled-in sheet instead of from phrase markers
-  ([why](#choices-decided-by-labels-2026-11-22)). Both send nothing and bill nothing.
+- `--label-sheet DIR` writes `label-sheet.json` and `label-key.json` to `--out`. The sheet holds
+  every play of the comparison in `DIR` (its 0.2.1 captures, plain and planned V2 runs), shuffled
+  under neutral ids, each choice with the model text the choice check reads and an empty outcome to
+  fill in. The key says which run each id is and is not given to the reader.
+  `--rescore DIR --labels FILE --label-key KEY` then decides every choice from the filled-in sheet
+  instead of from phrase markers ([why](#choices-decided-by-labels-2026-11-22)). Both send nothing
+  and bill nothing.
 - The first comparison (V2 against 0.2.1) is 068's proving scenario. The second, with planning, is
   an experiment: a failure there rejects the optional stage, not V2, and the report says so.
 - The V2 run has no capture evidence of its own, so its usage is provider-reported and unverified,
@@ -534,11 +536,19 @@ judge that: the same refusal passes or fails on one word. So, for every choice a
 | `negated` | the text contradicts or undoes the act, as if it had not happened | a hard finding in that sample |
 
 - **How labels are made.** `--label-sheet` writes a blind sheet: the plays in an order shuffled by a
-  salt that is not kept, under ids `p01`, `p02` and so on, with no side, kind, sample or run id, and
-  each choice's text exactly as the choice check reads it (the replies after the player's line on
-  the choice's turn, then its window). Each play is bound to its run by a digest (a capture's
-  evidence digest, a V2 run's canonical-JSON digest), so a label cannot be moved to another run, and
-  `--labels` refuses a sheet that misses, repeats or adds a play or leaves any choice unlabelled.
+  salt that is not kept, under ids `p01`, `p02` and so on, with no side, kind, sample, run id or
+  digest, and each choice's text exactly as the choice check reads it (the replies after the
+  player's line on the choice's turn, then its window). A separate key binds each id to its run by
+  a digest (a capture's evidence digest, a V2 run's canonical-JSON digest). The reader is given the
+  sheet only: the comparison directory and its report show the captures' digests, so a reader who
+  can open them could tell the sides apart. The rescore refuses a filled sheet whose key is not this
+  comparison's, that misses, repeats or adds a play, leaves any choice unlabelled, or whose acts or
+  any choice's text differ from what the current scenario reads from that run. So a label cannot
+  move to another run, and a change to a choice's turn, window or act needs a new sheet.
+- **In the report.** The per-sample tables still print the run's own recorded negations and the
+  phrase-marker reading for information; under labels those rows are named "choices negated in the
+  run's own record" and "choices unrealized by phrase markers (not used)". A saved comparison with
+  the same V2 run twice is refused, since it would count one play twice.
 - **What stays the same.** Every hard check still reads the text: leaks, attribution, continuity,
   speakers and the negation markers ("never offered a coin", "coin vanishes", "refuses to sing"),
   any one of which fails its sample. The strict-majority rule and the voice, cost and latency rules
@@ -547,8 +557,8 @@ judge that: the same refusal passes or fails on one word. So, for every choice a
 - **Without labels** a comparison is still decided by the phrase markers, and its report says so
   ("choices: decided by phrase markers in the model text"). With labels it says the labels decided
   and names the file.
-- **Limits.** A label is one reader's judgement. The sheet hides which side a play is, but the
-  replies' own style (0.2.1's second speaker often continues the first speaker's actions) can give
+- **Limits.** A label is one reader's judgement. The report cannot check that the reader saw only
+  the sheet. The sheet hides which side a play is, but the replies' own style (0.2.1's second speaker often continues the first speaker's actions) can give
   a side away. The redefinition was made after the failing run was read; it was decided on what
   the choice should mean, not on whether 068 then passes. The scenario's scripted dry-run reply has
   Oda comply, which her card contradicts; that reply is a fixture for the dry run and is not used

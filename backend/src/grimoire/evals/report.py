@@ -205,9 +205,18 @@ def _findings(findings) -> list[str]:
     return lines
 
 
-def _sample_table(title: str, ids, cards) -> list[str]:
+#: Under a reader's labels, the per-sample rows that come from the run's own record and from phrase
+#: markers are renamed, so a table does not read as contradicting the labelled verdict.
+LABELLED_ROWS = {
+    "choices negated by label": "choices negated in the run's own record",
+    "choices unrealized": "choices unrealized by phrase markers (not used)",
+}
+
+
+def _sample_table(title: str, ids, cards, *, labelled: bool = False) -> list[str]:
     columns = [[value for _, value in _rows_v2(card)] for card in cards]
-    labels = [label for label, _ in _rows_v2(cards[0])]
+    labels = [LABELLED_ROWS.get(label, label) if labelled else label
+              for label, _ in _rows_v2(cards[0])]
     heads = [f"sample {index}" for index in range(1, len(cards) + 1)]
     width = max(len(label) for label in [*labels, "metric"])
     widths = [max(len(head), *(len(value) for value in column)) for head, column in zip(heads, columns)]
@@ -252,7 +261,10 @@ def render_samples(report: SampledReport) -> str:
                  f"{'n/a (usage incomplete)' if report.baseline_cost is None else _fmt(report.baseline_cost)}, "
                  f"candidate "
                  f"{'n/a (usage incomplete)' if report.candidate_cost is None else _fmt(report.candidate_cost)}")
-    lines += ["", *_sample_table("baseline samples", report.baseline_ids, report.baselines), "",
-              *_sample_table("candidate samples", report.candidate_ids, report.candidates),
+    labelled = report.choice_basis == "labels"
+    lines += ["", *_sample_table("baseline samples", report.baseline_ids, report.baselines,
+                                 labelled=labelled), "",
+              *_sample_table("candidate samples", report.candidate_ids, report.candidates,
+                             labelled=labelled),
               "judge scores never decide the verdict."]
     return "\n".join(lines) + "\n"

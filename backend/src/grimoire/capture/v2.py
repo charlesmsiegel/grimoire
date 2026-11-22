@@ -64,7 +64,7 @@ from grimoire.core.model import ActorView
 from grimoire.evals.format import BenchmarkFormatError, Scenario
 from grimoire.evals.format2 import FORMAT_V2, RunV2, parse_run_v2
 from grimoire.evals.gate2 import compare_v2
-from grimoire.evals.labels import Play, label_sheet, parse_labels
+from grimoire.evals.labels import Play, bind_labels, label_sheet
 from grimoire.evals.loader import (
     benchmark_file,
     evidence_digest,
@@ -671,8 +671,9 @@ def saved_comparison(directory: Path, flag: str = "--rescore",
 
 
 LABELS_NOTE = ("Choice outcomes: every choice in every play was decided by a reader's label from "
-               "{file}, made on a blind sheet (shuffled plays, no side or kind shown), not by phrase "
-               "markers. honored or complicated gives a choice effect; ignored does not; negated is "
+               "{file}, not by phrase markers. The sheet it was filled from shows the plays shuffled "
+               "under neutral ids with no side, kind or run digest; whether the reader saw only the "
+               "sheet is not something this report can check. honored or complicated gives a choice effect; ignored does not; negated is "
                "a hard finding.")
 
 
@@ -698,6 +699,9 @@ def _saved(scenario_name: str, baselines: Sequence[Path], rescore: Path, flag: s
                 parse_run_v2(raw, scenario)
             except BenchmarkFormatError as error:
                 raise CaptureRefused(f"{flag} {rescore}: a {kind} V2 run: {error}") from None
+    digests_seen = [evidence_digest(raw) for samples in runs.values() for raw in samples]
+    if len(set(digests_seen)) != len(digests_seen):
+        raise CaptureRefused(f"{flag} {rescore}: two of its saved V2 runs are the same run")
     forbidden = [*forbidden_roots(Path(baselines[0]).resolve()), rescore,
                  *(Path(os.path.realpath(directory)) for directory in baselines[1:])]
     return scenario, rescore, mode, preamble, runs, loaded, forbidden
@@ -714,32 +718,32 @@ def _plays(loaded: Sequence[Baseline], runs: Mapping[str, Sequence[dict]],
     return plays
 
 
-def _read_labels(path: Path, scenario: Scenario, plays: Sequence[Play]) -> dict[str, dict[str, str]]:
-    if path.is_symlink():
-        raise CaptureRefused(f"--labels {path}: is a link")
+def _read_labels(path: Path, key_path: Path, scenario: Scenario,
+                 plays: Sequence[Play]) -> dict[str, dict[str, str]]:
+    for flag, each in (("--labels", path), ("--label-key", key_path)):
+        if each.is_symlink():
+            raise CaptureRefused(f"{flag} {each}: is a link")
     try:
-        labels = parse_labels(load_json(path), scenario)
+        sheet, key = load_json(path), load_json(key_path)
+        return bind_labels(sheet, key, scenario, plays)
     except BenchmarkFormatError as error:
-        raise CaptureRefused(f"--labels {path}: {error}") from None
-    wanted = {play.digest for play in plays}
-    if set(labels) != wanted:
-        missing, extra = len(wanted - set(labels)), len(set(labels) - wanted)
-        raise CaptureRefused(f"--labels {path}: not this comparison's sheet ({missing} of its "
-                             f"{len(wanted)} plays unlabelled, {extra} labelled plays not in it)")
-    return labels
+        raise CaptureRefused(f"--labels {path} with --label-key {key_path}: {error}") from None
 
 
 def run_rescore(scenario_name: str, baselines: Sequence[Path], rescore: Path, out: Path,
-                labels: Path | None = None) -> Path:
+                labels: Path | None = None, label_key: Path | None = None) -> Path:
     """Score an earlier comparison's V2 runs again, against the same captures, with the current
     scenario, and with ``labels`` deciding every choice when given. Nothing is sent: the runs are
     read back from ``rescore``."""
     scenario, rescore, mode, preamble, runs, loaded, forbidden = _saved(
         scenario_name, baselines, rescore, "--rescore")
     outcomes = None
-    if labels is not None:
+    if (labels is None) != (label_key is None):
+        raise CaptureRefused("--labels and --label-key go together")
+    if labels is not None and label_key is not None:
         labels = Path(os.path.abspath(labels))
-        outcomes = _read_labels(labels, scenario, _plays(loaded, runs, scenario))
+        outcomes = _read_labels(labels, Path(os.path.abspath(label_key)), scenario,
+                                _plays(loaded, runs, scenario))
     out = check_out_dir(out, forbidden=forbidden)
     options = CompareOptions(scenario_name, tuple(baselines), out, mode,
                              with_planning="planning" in runs, samples=len(runs["baseline"]),
@@ -749,13 +753,15 @@ def run_rescore(scenario_name: str, baselines: Sequence[Path], rescore: Path, ou
 
 
 def run_label_sheet(scenario_name: str, baselines: Sequence[Path], directory: Path, out: Path) -> Path:
-    """Write a blind labelling sheet for an earlier comparison's plays and its captures, to be
-    filled in and given back with ``--rescore DIR --labels``. Nothing is sent."""
+    """Write a blind labelling sheet for an earlier comparison's plays and its captures, and the key
+    that says which run each play is. The reader gets the sheet only; the filled sheet and the key
+    are given back with ``--rescore DIR --labels FILE --label-key KEY``. Nothing is sent."""
     scenario, directory, _mode, _preamble, runs, loaded, forbidden = _saved(
         scenario_name, baselines, directory, "--label-sheet")
     out = check_out_dir(out, forbidden=forbidden)
-    sheet = label_sheet(scenario, _plays(loaded, runs, scenario), salt=secrets.token_hex(16))
-    _write(out, {"label-sheet.json": json.dumps(sheet, indent=2, ensure_ascii=False) + "\n"})
+    sheet, key = label_sheet(scenario, _plays(loaded, runs, scenario), salt=secrets.token_hex(16))
+    _write(out, {"label-sheet.json": json.dumps(sheet, indent=2, ensure_ascii=False) + "\n",
+                 "label-key.json": json.dumps(key, indent=2) + "\n"})
     return out
 
 
@@ -780,8 +786,10 @@ def _parser() -> argparse.ArgumentParser:
                            "--baseline captures, for a reader to label each choice's outcome; "
                            "no calls, nothing billed")
     parser.add_argument("--labels", type=Path, metavar="FILE",
-                        help="with --rescore: a filled-in label sheet; its outcomes decide every "
-                             "choice instead of phrase markers")
+                        help="with --rescore and --label-key: a filled-in label sheet; its "
+                             "outcomes decide every choice instead of phrase markers")
+    parser.add_argument("--label-key", type=Path, metavar="KEY",
+                        help="with --labels: the label-key.json written beside the sheet")
     parser.add_argument("--with-planning", action="store_true",
                         help="also play V2 with optional presentation planning (more billed calls)")
     parser.add_argument("--samples", type=int, default=None, metavar="N",
@@ -799,8 +807,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as error:
         return int(error.code or 0)
     try:
-        if args.labels is not None and args.rescore is None:
-            raise CaptureRefused("--labels is read by --rescore only")
+        if (args.labels is not None or args.label_key is not None) and args.rescore is None:
+            raise CaptureRefused("--labels and --label-key are read by --rescore only")
         if args.rescore is not None or args.label_sheet is not None:
             flag = "--rescore" if args.rescore is not None else "--label-sheet"
             given = [name for name, value in (("--with-planning", args.with_planning),
@@ -812,10 +820,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                                      f"drop {', '.join(given)}")
             if args.label_sheet is not None:
                 out = run_label_sheet(args.scenario, tuple(args.baseline), args.label_sheet, args.out)
-                print(f"label sheet written to {out}")
+                print(f"label sheet written to {out}: give the reader label-sheet.json only, and "
+                      "keep label-key.json for --rescore --labels --label-key")
                 return 0
             out = run_rescore(args.scenario, tuple(args.baseline), args.rescore, args.out,
-                              args.labels)
+                              args.labels, args.label_key)
             print(f"rescored comparison written to {out}")
             return 0
         if args.live and not args.confirm_billing:

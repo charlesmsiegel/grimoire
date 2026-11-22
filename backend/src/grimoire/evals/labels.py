@@ -18,8 +18,11 @@ the strict-majority rule as an unrealized choice does. ``negated`` breaks the pl
 like a negation marker it is a hard finding in any one sample.
 
 Labels are made blind. :func:`label_sheet` writes every play of a comparison in a shuffled order
-under neutral ids, with no side, kind or sample on it, and binds each id to its run by a digest, so
-labels can neither be swapped between runs nor read as one side's.
+under neutral ids, with no side, kind, sample or run digest on it, and a separate key that binds each
+id to its run by a digest. The reader is given the sheet only. :func:`bind_labels` joins a filled
+sheet to its key and refuses it unless every choice's text is still exactly what the current
+scenario reads from that run, so a label can neither move to another run nor outlive a change to a
+choice's turn, window or act.
 """
 
 from __future__ import annotations
@@ -32,7 +35,9 @@ from dataclasses import dataclass
 from .format import BenchmarkFormatError, Run, Scenario
 
 #: The sheet and label file format tag.
-FORMAT_LABELS = "grimoire.choice-labels/1"
+FORMAT_LABELS = "grimoire.choice-labels/2"
+#: The key format tag: which run each neutral play id on a sheet stands for.
+FORMAT_KEY = "grimoire.choice-label-key/1"
 #: What a reader may label a choice.
 LABELS = ("honored", "complicated", "ignored", "negated")
 #: Labels that give a choice effect.
@@ -88,11 +93,28 @@ class Play:
     run: Run
 
 
-def label_sheet(scenario: Scenario, plays: Sequence[Play], *, salt: str) -> dict:
-    """A blind labelling sheet for ``plays``: shuffled, neutral ids, every outcome left empty.
+def _shown(scenario: Scenario, run: Run) -> dict[str, list[dict[str, str | None]]]:
+    """Per choice, the evidence as the sheet shows it, with speakers by name."""
+    names = {actor.actor_id: actor.name for actor in scenario.actors}
+    return {choice_id: [{**line, "speaker": names.get(line["speaker"] or "", line["speaker"])}
+                        for line in lines]
+            for choice_id, lines in choice_evidence(scenario, run).items()}
 
-    The order is the plays sorted by a hash of ``salt`` and each run's digest. The caller draws the
-    salt at random and does not keep it, so the order says nothing about which run is which.
+
+def _acts(scenario: Scenario) -> list[dict[str, str | None]]:
+    names = {actor.actor_id: actor.name for actor in scenario.actors}
+    return [{"choice_id": choice.choice_id, "player": names.get(choice.actor_id),
+             "act": choice.text} for choice in scenario.choices]
+
+
+def label_sheet(scenario: Scenario, plays: Sequence[Play], *, salt: str) -> tuple[dict, dict]:
+    """A blind labelling sheet for ``plays`` and its key.
+
+    The sheet holds the plays in a shuffled order under neutral ids, every outcome left empty, and
+    nothing that names a run. The key maps each id to its run's digest and is not given to the
+    reader. The order is the plays sorted by a hash of ``salt`` and each run's digest; the caller
+    draws the salt at random and does not keep it, so the order says nothing about which run is
+    which.
     """
     digests = [play.digest for play in plays]
     if len(set(digests)) != len(digests):
@@ -100,9 +122,9 @@ def label_sheet(scenario: Scenario, plays: Sequence[Play], *, salt: str) -> dict
     if not salt:
         raise ValueError("the sheet needs a random salt to shuffle its plays")
     order = sorted(plays, key=lambda play: hashlib.sha256(
-        f"{salt}:{play.digest}".encode("utf-8")).hexdigest())
-    names = {actor.actor_id: actor.name for actor in scenario.actors}
-    return {
+        f"{salt}:{play.digest}".encode()).hexdigest())
+    ids = [f"p{index:02d}" for index in range(1, len(order) + 1)]
+    sheet = {
         "format": FORMAT_LABELS,
         "scenario_id": scenario.scenario_id,
         "instructions": (
@@ -110,52 +132,83 @@ def label_sheet(scenario: Scenario, plays: Sequence[Play], *, salt: str) -> dict
             "only. Judge whether the scene engages with the player's act, not whether the player "
             "got what they wanted. Fill in each \"outcome\" and nothing else."),
         "definitions": dict(DEFINITIONS),
-        "choices": [{"choice_id": choice.choice_id, "player": names.get(choice.actor_id),
-                     "act": choice.text} for choice in scenario.choices],
+        "choices": _acts(scenario),
         "plays": [{
-            "play": f"p{index:02d}",
-            "run_sha256": play.digest,
-            "choices": {choice_id: {
-                "text": [{**line, "speaker": names.get(line["speaker"] or "", line["speaker"])}
-                         for line in lines],
-                "outcome": None,
-            } for choice_id, lines in choice_evidence(scenario, play.run).items()},
-        } for index, play in enumerate(order, start=1)],
+            "play": play_id,
+            "choices": {choice_id: {"text": lines, "outcome": None}
+                        for choice_id, lines in _shown(scenario, play.run).items()},
+        } for play_id, play in zip(ids, order)],
     }
+    key = {"format": FORMAT_KEY, "scenario_id": scenario.scenario_id,
+           "plays": {play_id: play.digest for play_id, play in zip(ids, order)}}
+    return sheet, key
 
 
-def parse_labels(data: object, scenario: Scenario) -> dict[str, dict[str, str]]:
-    """A filled-in sheet as run digest -> choice id -> outcome; every choice must be labelled."""
+def bind_labels(sheet: object, key: object, scenario: Scenario,
+                plays: Sequence[Play]) -> dict[str, dict[str, str]]:
+    """A filled-in sheet joined to its key, as run digest -> choice id -> outcome.
+
+    Refused unless the sheet and key are for ``scenario``, the key names exactly ``plays``, every
+    choice of every play has one outcome, and the sheet's acts and each choice's text are what the
+    current scenario reads from that run.
+    """
     def fail(where: str, why: str) -> BenchmarkFormatError:
         return BenchmarkFormatError(f"labels: {where}: {why}")
-    if not isinstance(data, Mapping) or data.get("format") != FORMAT_LABELS:
+    if not isinstance(key, Mapping) or key.get("format") != FORMAT_KEY:
+        raise fail("key format", f"expected {FORMAT_KEY!r}")
+    if key.get("scenario_id") != scenario.scenario_id:
+        raise fail("key scenario_id", f"expected {scenario.scenario_id!r}")
+    ids = key.get("plays")
+    if not isinstance(ids, Mapping) or not all(
+            isinstance(digest, str) and len(digest) == 64
+            and not set(digest) - set("0123456789abcdef") for digest in ids.values()):
+        raise fail("key plays", "expected play ids mapped to sha256 digests")
+    by_digest = {play.digest: play for play in plays}
+    if len(set(ids.values())) != len(ids) or set(ids.values()) != set(by_digest):
+        missing = len(set(by_digest) - set(ids.values()))
+        extra = len(set(ids.values()) - set(by_digest))
+        raise fail("key plays", f"not this comparison's key ({missing} of its {len(by_digest)} "
+                                f"plays missing, {extra} plays not in it)")
+    if not isinstance(sheet, Mapping) or sheet.get("format") != FORMAT_LABELS:
         raise fail("format", f"expected {FORMAT_LABELS!r}")
-    if data.get("scenario_id") != scenario.scenario_id:
+    if sheet.get("scenario_id") != scenario.scenario_id:
         raise fail("scenario_id", f"expected {scenario.scenario_id!r}")
-    plays = data.get("plays")
-    if not isinstance(plays, list) or not plays:
+    if sheet.get("choices") != _acts(scenario):
+        raise fail("choices", "the acts are not the current scenario's; make a new sheet")
+    entries = sheet.get("plays")
+    if not isinstance(entries, list) or not entries:
         raise fail("plays", "expected a non-empty list")
     expected = [choice.choice_id for choice in scenario.choices]
     labels: dict[str, dict[str, str]] = {}
-    for index, play in enumerate(plays):
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
         where = f"plays[{index}]"
-        if not isinstance(play, Mapping):
+        if not isinstance(entry, Mapping):
             raise fail(where, "expected an object")
-        digest = play.get("run_sha256")
-        if not isinstance(digest, str) or len(digest) != 64 or set(digest) - set("0123456789abcdef"):
-            raise fail(f"{where}.run_sha256", "expected a sha256")
-        if digest in labels:
-            raise fail(f"{where}.run_sha256", "labels the same run twice")
-        choices = play.get("choices")
+        play_id = entry.get("play")
+        if not isinstance(play_id, str) or play_id not in ids:
+            raise fail(f"{where}.play", "not a play id in the key")
+        if play_id in seen:
+            raise fail(f"{where}.play", "labels the same play twice")
+        seen.add(play_id)
+        choices = entry.get("choices")
         if not isinstance(choices, Mapping) or sorted(choices) != sorted(expected):
             raise fail(f"{where}.choices", f"expected exactly {', '.join(expected)}")
+        shown = _shown(scenario, by_digest[ids[play_id]].run)
         outcomes: dict[str, str] = {}
         for choice_id in expected:
-            entry = choices[choice_id]
-            outcome = entry.get("outcome") if isinstance(entry, Mapping) else None
+            choice = choices[choice_id]
+            if not isinstance(choice, Mapping):
+                raise fail(f"{where}.choices.{choice_id}", "expected an object")
+            if choice.get("text") != shown[choice_id]:
+                raise fail(f"{where}.choices.{choice_id}.text",
+                           "not what the current scenario reads from this play; make a new sheet")
+            outcome = choice.get("outcome")
             if outcome not in LABELS:
                 raise fail(f"{where}.choices.{choice_id}.outcome",
                            f"expected one of {', '.join(LABELS)}")
             outcomes[choice_id] = outcome
-        labels[digest] = outcomes
+        labels[ids[play_id]] = outcomes
+    if seen != set(ids):
+        raise fail("plays", f"{len(set(ids) - seen)} of the key's {len(ids)} plays are not labelled")
     return labels

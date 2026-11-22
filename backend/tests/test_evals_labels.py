@@ -1,11 +1,22 @@
 """Choice outcomes labelled by a reader decide every choice in place of phrase markers (068)."""
 
+import copy
+import json
+
 import pytest
 from evals_helpers import contribution, guild_run_v2, mutate
 
 from grimoire.evals.format import BenchmarkFormatError, parse_scenario
 from grimoire.evals.format2 import parse_run_v2
-from grimoire.evals.labels import FORMAT_LABELS, LABELS, Play, choice_evidence, label_sheet, parse_labels
+from grimoire.evals.labels import (
+    FORMAT_KEY,
+    FORMAT_LABELS,
+    LABELS,
+    Play,
+    bind_labels,
+    choice_evidence,
+    label_sheet,
+)
 from grimoire.evals.report import render_samples
 from grimoire.evals.sampled import compare_samples
 
@@ -46,6 +57,8 @@ def test_an_in_character_refusal_labelled_complicated_gives_the_choice_effect():
     assert report.realized["ask-ledger"] == (3, 3) and report.choice_basis == "labels"
     assert "decided by a reader's labels" in render_samples(report)
     assert "decided by phrase markers" in render_samples(by_markers)
+    assert "choices unrealized by phrase markers (not used)" in render_samples(report)
+    assert "choices unrealized by phrase markers" not in render_samples(by_markers)
 
 
 def test_a_marker_phrase_gives_no_effect_once_labels_decide():
@@ -106,20 +119,25 @@ def plays():
 
 
 def test_the_sheet_is_blind_and_shows_each_choice_the_text_the_check_reads():
-    sheet = label_sheet(SCENARIO, plays(), salt="one")
-    text = str(sheet)
+    sheet, key = label_sheet(SCENARIO, plays(), salt="one")
+    text = json.dumps(sheet)
     assert sheet["format"] == FORMAT_LABELS and set(sheet["definitions"]) == set(LABELS)
     assert "run-1" not in text and "run-2" not in text  # no run id, label or side on the sheet
+    assert not any(play.digest in text for play in plays())  # nor any run's digest
+    assert all(set(play) == {"play", "choices"} for play in sheet["plays"])
     assert [play["play"] for play in sheet["plays"]] == ["p01", "p02", "p03", "p04"]
+    assert key["format"] == FORMAT_KEY and sorted(key["plays"]) == ["p01", "p02", "p03", "p04"]
+    assert set(key["plays"].values()) == {play.digest for play in plays()}
     for play in sheet["plays"]:
         assert set(play["choices"]) == set(CHOICES)
         assert all(entry["outcome"] is None for entry in play["choices"].values())
     run = plays()[0].run
     evidence = choice_evidence(SCENARIO, run)
     assert [line["speaker"] for line in evidence["ask-ledger"]] == ["npc-oda", "npc-bellamy"]
-    [first] = [play for play in sheet["plays"] if play["run_sha256"] == plays()[0].digest]
+    [first_id] = [play_id for play_id, digest in key["plays"].items() if digest == plays()[0].digest]
+    [first] = [play for play in sheet["plays"] if play["play"] == first_id]
     assert [line["speaker"] for line in first["choices"]["ask-ledger"]["text"]] == ["Oda", "Bellamy"]
-    orders = {tuple(play["run_sha256"] for play in label_sheet(SCENARIO, plays(), salt=salt)["plays"])
+    orders = {tuple(label_sheet(SCENARIO, plays(), salt=salt)[1]["plays"].values())
               for salt in ("one", "two", "three", "four", "five")}
     assert len(orders) > 1  # the salt shuffles the plays
 
@@ -132,32 +150,70 @@ def test_a_sheet_needs_distinct_runs_and_a_salt():
 
 
 def filled(outcome="complicated"):
-    sheet = label_sheet(SCENARIO, plays(), salt="x")
+    sheet, key = label_sheet(SCENARIO, plays(), salt="x")
     for play in sheet["plays"]:
         for entry in play["choices"].values():
             entry["outcome"] = outcome
-    return sheet
+    return json.loads(json.dumps(sheet)), json.loads(json.dumps(key))  # as read back from files
 
 
-def test_a_filled_sheet_reads_back_as_outcomes_by_run():
-    labels = parse_labels(filled(), SCENARIO)
+def test_a_filled_sheet_and_its_key_read_back_as_outcomes_by_run():
+    labels = bind_labels(*filled(), SCENARIO, plays())
     assert set(labels) == {play.digest for play in plays()}
     assert all(outcomes == {choice_id: "complicated" for choice_id in CHOICES}
                for outcomes in labels.values())
 
 
 @pytest.mark.parametrize("spoil, message", [
-    (lambda sheet: sheet.update(format="other"), "format"),
-    (lambda sheet: sheet.update(scenario_id="other"), "scenario_id"),
-    (lambda sheet: sheet["plays"][0]["choices"]["ask-song"].update(outcome=None), "outcome"),
-    (lambda sheet: sheet["plays"][0]["choices"]["ask-song"].update(outcome="refused"), "outcome"),
-    (lambda sheet: sheet["plays"][0]["choices"].pop("ask-song"), "expected exactly"),
-    (lambda sheet: sheet["plays"][1].update(run_sha256=sheet["plays"][0]["run_sha256"]), "twice"),
-    (lambda sheet: sheet["plays"][0].update(run_sha256="not a digest"), "sha256"),
-    (lambda sheet: sheet.update(plays=[]), "non-empty"),
+    (lambda sheet, key: sheet.update(format="other"), "format"),
+    (lambda sheet, key: sheet.update(scenario_id="other"), "scenario_id"),
+    (lambda sheet, key: sheet["plays"][0]["choices"]["ask-song"].update(outcome=None), "outcome"),
+    (lambda sheet, key: sheet["plays"][0]["choices"]["ask-song"].update(outcome="refused"), "outcome"),
+    (lambda sheet, key: sheet["plays"][0]["choices"].pop("ask-song"), "expected exactly"),
+    (lambda sheet, key: sheet["plays"][1].update(play=sheet["plays"][0]["play"]), "twice"),
+    (lambda sheet, key: sheet["plays"][0].update(play="p99"), "not a play id"),
+    (lambda sheet, key: sheet["plays"].pop(), "not labelled"),
+    (lambda sheet, key: sheet.update(plays=[]), "non-empty"),
+    (lambda sheet, key: sheet["choices"][0].update(act="Something else."), "acts"),
+    (lambda sheet, key: sheet["plays"][0]["choices"]["ask-ledger"]["text"].pop(), "current scenario"),
+    (lambda sheet, key: key.update(format="other"), "key format"),
+    (lambda sheet, key: key.update(scenario_id="other"), "key scenario_id"),
+    (lambda sheet, key: key["plays"].update(p01="0" * 64), "not this comparison's key"),
+    (lambda sheet, key: key["plays"].update(p01="not a digest"), "sha256"),
 ])
 def test_a_sheet_with_any_choice_unlabelled_or_misbound_is_refused(spoil, message):
-    sheet = filled()
-    spoil(sheet)
+    sheet, key = filled()
+    spoil(sheet, key)
     with pytest.raises(BenchmarkFormatError, match=message):
-        parse_labels(sheet, SCENARIO)
+        bind_labels(sheet, key, SCENARIO, plays())
+
+
+def test_labels_do_not_outlive_a_change_to_what_a_choice_reads():
+    raw = copy.deepcopy(RAW_SCENARIO)
+    [ledger] = [choice for choice in raw["choices"] if choice["choice_id"] == "ask-ledger"]
+    ledger["window"] = ledger.get("window", 0) + 2  # now reads turns the reader never saw
+    wider = parse_scenario(raw)
+    sheet, key = filled()
+    widened = [Play(play.digest, parse_run_v2(mutate(RAW, lambda r, i=index: r.update(
+        run_id=f"run-{i}")), wider).scoring_view()) for index, play in enumerate(plays(), start=1)]
+    with pytest.raises(BenchmarkFormatError, match="current scenario"):
+        bind_labels(sheet, key, wider, widened)
+
+
+def test_the_sheet_shows_exactly_the_text_the_marker_check_reads():
+    from collections import Counter
+
+    from grimoire.evals.checks import _evidence_text
+    raw = copy.deepcopy(RAW_SCENARIO)
+    for choice in raw["choices"]:
+        choice["window"] = choice.get("window", 0) + 1
+    for scenario in (SCENARIO, parse_scenario(raw)):
+        for change in (None, refuse_ledger):
+            run = parse_run_v2(mutate(RAW, change or (lambda r: None)), scenario).scoring_view()
+            evidence, seen = choice_evidence(scenario, run), Counter()
+            for choice in scenario.choices:
+                key = (choice.turn, choice.actor_id, choice.text)
+                expected = _evidence_text(run, choice.turn, choice.actor_id, choice.text,
+                                          choice.window, seen[key])
+                seen[key] += 1
+                assert [line["text"] for line in evidence[choice.choice_id]] == expected
