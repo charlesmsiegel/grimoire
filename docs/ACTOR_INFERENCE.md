@@ -311,3 +311,15 @@ same 015 capture (evidence sha256 `1824a081…d24ff0`, not recaptured): 18 calls
 The method changed after this run (2026-11-22): the comparison can now be scored over several
 samples per side ([sampled comparison](#sampled-comparison)), so a rerun with five captures and five
 V2 plays is what can decide 068.
+
+### Billed comparison (2026-11-22, sampled): not run
+
+The sampled rerun was approved for four more 0.2.1 captures and one comparison of at most 270
+requests. **It did not run, so 068 is still not established.** The first of the four captures
+(sample 2) failed in turn 1 and wrote nothing; under the approval's rule a failed billed step is
+not retried, so captures 3 to 5 and the comparison were not started. There are no per-sample
+figures, choice counts, noise allowance or findings to report: neither comparison was made. The
+failed capture is recorded in [V021_BASELINE](evals/V021_BASELINE.md#sampled-capture-attempt-2026-11-22).
+
+068 now waits on five 0.2.1 captures, and a live 0.2.1 capture on this route has failed in turn 1
+on two of three attempts with this model.
