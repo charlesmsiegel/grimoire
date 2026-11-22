@@ -31,9 +31,13 @@ Save this as a file outside the repository, and set `PANEL` to its absolute path
 - `attempts` is 1: a retry is a second billed call.
 
 Checked offline: this panel loads and plans 108 calls, about 16.7k prompt characters per
-judge per trial round, which is about 43k input tokens for the whole run. At list prices
-on 2026-11-03, the worst case (every answer at its 8000-token limit) is about $9, and the
-likely cost is about $2.
+judge per trial round, which is about 43k input tokens for the whole run. Under parser
+version 3, each of the 18 theory answers may be re-asked once if it puts a step off the
+ladder, so a capture makes at most **126 calls**. At list prices on 2026-11-03, the worst
+case for 108 calls (every answer at its 8000-token limit) is about $9. The 18 re-asks, each
+carrying the judge's first answer back and bounded the same way, add at most about $2, so the
+worst case for 126 calls is about **$11**. The two live captures cost about $0.55 and $0.58,
+and the second would have needed 2 re-asks.
 
 ## Commands
 
@@ -43,20 +47,22 @@ these from `backend/` with `PYTHONPATH=src`:
 ```sh
 python -m grimoire.judgepanel plan    --corpus tests/fixtures/calibration/panel --panel "$PANEL"
 python -m grimoire.judgepanel capture --corpus tests/fixtures/calibration/panel --panel "$PANEL" \
-    --out capture --confirm-billing --spend-cap "10 USD" --max-calls 108
+    --out capture --confirm-billing --spend-cap "<approved> USD" --max-calls 126
 python -m grimoire.judgepanel score   --corpus tests/fixtures/calibration/panel --panel "$PANEL" \
     --capture capture --coding-skills <checkout>
 ```
 
-- `plan` must report 108 planned calls before `capture` runs.
-- `--spend-cap` is recorded in the capture, not enforced. What holds the run under $10 is
-  `--max-calls 108` (the harness refuses a 109th call) with `attempts: 1` and each answer
-  bounded at 8000 output tokens, which caps the worst case at about $9. Do not raise either
-  bound. The provider-enforced limit that [CALIBRATION.md](../CALIBRATION.md#spending-approval)
+- `plan` must report `planned_calls` 108, `reasks_at_most` 18 and `max_calls` 126 before
+  `capture` runs. `capture` refuses a `--max-calls` below 126, because a re-ask is a billed
+  call.
+- `--spend-cap` is recorded in the capture, not enforced. What bounds the run is
+  `--max-calls 126` (the harness refuses a 127th call) with `attempts: 1` and each answer
+  bounded at 8000 output tokens, which caps the worst case at about $11. The approved cap
+  must cover that worst case. Do not raise either bound. The provider-enforced limit that [CALIBRATION.md](../CALIBRATION.md#spending-approval)
   requires is the key's prepaid credit: CMS said the key stops when its credits run out.
-  That limit may be above $10, so the call and token bounds are what keep this run within
+  That limit may be above the cap, so the call and token bounds are what keep this run within
   the approval.
-- The $9 worst case assumes the Opus judge costs $4 input and $20 output per million
+- The worst case assumes the Opus judge costs $4 input and $20 output per million
   tokens. If the resolved `<OPUS_MODEL_ID>` is priced higher, stop and ask before capture.
 - The `capture` folder must not exist yet. Every call is written before the next starts,
   and an interrupted call is recorded too. Do not rerun a capture to get a better result.
@@ -85,10 +91,30 @@ keys that failed, keep 069 unchecked, and do not narrow the requirement.
 
 ## Next capture
 
+Parser version 3 re-asks a theory judge once when its answer puts a step off the rubric's
+ladder (see [CALIBRATION.md](../CALIBRATION.md#independent-judge-panel)). That is what left
+the 2026-11-22 capture's cohesive unit unscored. The prompts, the corpus and the panel did
+not change. The plan is 108 calls plus at most 18 re-asks, so `capture` takes
+`--max-calls 126`. A new capture needs:
+
+- CMS's fresh approval of a cap that covers the worst case of about $11. The two runs so far
+  cost about $0.55 and $0.58.
+- A new, empty `capture` folder.
+- The score report's `proof.captured_for_this_parser` to be true: a capture taken by this
+  code records parser version 3 in its manifest. Check `parsing` per judge too. Name in the
+  audit any judge that was re-asked (`reasked`), was still off the ladder after a re-ask
+  (`off_ladder`), or had most of its answers read out of prose, `ambiguous` or missing
+  citations.
+
+Re-scoring the 2026-11-22 capture under version 3 makes no calls but changes nothing: it
+holds no re-asks, and its manifest names parser version 2.
+
+### Parser version 2 (2026-11-20)
+
 Parser version 2 (see [CALIBRATION.md](../CALIBRATION.md#independent-judge-panel)) reads an
 answer out of prose before its JSON object and drops citations of lines the listing lacks.
-The prompts, the corpus and the panel did not change, so the plan is still 108 calls and the
-commands above are the same. A new capture needs:
+The prompts, the corpus and the panel did not change, so the plan stayed 108 calls. The
+second capture, on 2026-11-22, was taken under it, and needed:
 
 - CMS's fresh approval of a cap. The first run's token counts come to about 0.55 USD at list
   prices, and the worst case is still about $9.

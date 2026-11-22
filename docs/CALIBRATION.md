@@ -126,6 +126,22 @@ costs nothing. Evidence that is not a list is `citation` too. Defect findings ar
 treated this way: a finding's line is the verdict itself, so a finding on a line that does
 not exist stays `malformed`.
 
+**Off-ladder steps (parser version 3).** The pinned rubric refuses a verdict whose step is
+not on its ladder (1.0, 0.5, 0.25, 0.0), so one such step leaves the whole trial's panel
+unscored. When a theory answer puts any step off the ladder (`step not in LADDER`, the
+rubric's own test), the harness asks that judge once more, in the same conversation. The
+re-ask holds the first prompt, the judge's own answer, and a fixed message that names the
+off-ladder dimensions and restates the ladder, never which rung to choose. The re-asked
+answer is read on its own, in full, and stands as it is. It is never asked again: a step
+still off the ladder is `unknown` (`off_ladder`), and so is any off-ladder step whose re-ask
+was not captured. A step is never rounded onto the ladder, because that would be the harness
+choosing the judge's grade. Defect answers have no steps and are never re-asked. The report
+counts both per judge: `parsing.reasked` and `parsing.off_ladder` (still off after any
+re-ask). Each re-ask is a billed call, written to its own capture record
+(`<trial>.reask.json`). Its digest covers the re-ask message, so a capture made with other
+wording is refused as stale. The plan counts every theory answer as possibly re-asked:
+`max_calls` is 126 for the default corpus, and `capture` refuses a `--max-calls` below it.
+
 **Defects.** A judge's verdict on a case is settled only when all trials agree;
 otherwise it is `inconsistent` and excluded, and counted. A defect counts as found
 only when the flagged lines include a labelled defect line. Per trial, the panel says
@@ -170,7 +186,8 @@ needs a fresh capture.
 ### Spending approval
 
 The default corpus plans **108 calls** (12 sent cases × 3 judges ×
-3 trials; the unparseable case is never sent), about 17,000 prompt characters per
+3 trials; the unparseable case is never sent) and at most **18 re-asks** (one per theory
+answer, if every one put a step off the ladder), so `capture` needs `--max-calls 126`, about 17,000 prompt characters per
 judge per trial round, with each reply bounded by the judge's `max_output_tokens`.
 The operator needs explicitly approved providers and exact models, credentials in
 named environment variables (never pasted anywhere), and an approved maximum spend
@@ -302,4 +319,10 @@ Still unproven: theory discrimination, and a score range and repeating grade for
 cohesive unit. The requirement is unchanged. An off-ladder step is a judge's answer the
 rubric will not score, not a reading fault, and the harness does not flag it before the
 rubric does. Closing the proof needs another capture with its own approval.
+
+**After this capture.** [Parser version 3](#independent-judge-panel) re-asks a judge once
+when a theory step is off the ladder, so an answer like `sonnet`'s two would get one more
+chance to be scored instead of voiding its trial. Re-scoring this capture under version 3
+changes nothing: it holds no re-asks, so those two answers stay `unknown` (`off_ladder`), and
+its manifest names parser version 2, so `captured_for_this_parser` is false.
 
