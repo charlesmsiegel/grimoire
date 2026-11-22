@@ -129,8 +129,12 @@ costs nothing. Evidence that is not a list is `citation` too. Defect findings ar
 treated this way: a finding's line is the verdict itself, so a finding on a line that does
 not exist stays `malformed`.
 
-This check is stricter than the pinned rubric, which takes any non-empty evidence string. The
-report gives each dropped citation's shape, never its text, per judge in
+This check is stricter than the pinned rubric, which takes any non-empty evidence string.
+A range of lines is never a citation, however short: CMS chose on 2026-11-22 to keep one line
+per citation rather than accept ranges, since one range could cite most of a file. Since
+parser version 6 the theory prompt says so up front: one line number per citation, a range
+such as `"<file>:<first>-<last>"` is not a citation, and several lines are listed one by one.
+The report gives each dropped citation's shape, never its text, per judge in
 `parsing.<judge>.dropped_shapes`:
 - `unlisted_line`: the right file and a whole number outside the listing.
 - `spacing`: the right file and a listed line, with a space around the file or the number.
@@ -143,7 +147,7 @@ report gives each dropped citation's shape, never its text, per judge in
 Only these counts give shapes. A verdict kept in the report keeps the citations it was
 given, because the pinned rubric scores the raw evidence.
 
-**Re-asks (parser versions 3 to 5).** The pinned rubric refuses a verdict whose step is
+**Re-asks (parser versions 3 to 6).** The pinned rubric refuses a verdict whose step is
 not on its ladder (1.0, 0.5, 0.25, 0.0), so one such step leaves the whole trial's panel
 unscored. When a theory answer puts any step off the ladder (`step not in LADDER`, the
 rubric's own test), the harness asks that judge once more, in the same conversation. The
@@ -165,7 +169,7 @@ rubric would accept. The 2026-11-22 parser 3 capture lost a cohesive trial that 
 message names those dimensions and restates the citation form, `"<alias>:<line>"`, with
 `<line>` one line number the listing shows, never which line to cite. An answer with both
 faults gets one re-ask that restates both rules. A re-ask for the ladder alone is word for
-word what version 3 sent, so a version 3 capture still replays. The re-asked answer must
+word what version 3 sent, so under versions 4 and 5 a version 3 capture still replayed. The re-asked answer must
 then pass every check on its own. A lowered step still uncited after it is `unknown`
 (`citation`). `parsing.uncited` counts every trial whose final answer has a rubric dimension
 graded other than 1.0 that cited something and kept no listed line, whether or not it was
@@ -189,7 +193,16 @@ must. `parsing.malformed` counts, per judge, the theory trials whose final answe
 readable object, whether or not it was re-asked, and a re-asked trial's `reasked` is
 `["malformed"]`. This is still at most one re-ask per answer, so the
 plan and `max_calls` are unchanged. The ladder and citation messages are word for word
-what version 4 sent, so a version 4 capture still replays.
+what version 4 sent, so under version 5 a version 4 capture still replayed.
+
+Parser version 6 changes words, not checks. The 2026-11-22 parser 5 capture lost a cohesive
+trial because `haiku` cited line ranges, was re-asked, and cited line ranges again. The theory
+prompt now says that a range is not a citation (see Theory citations), and the citation
+re-ask adds one sentence: `A range such as "<alias>:<first>-<last>" is not a citation; list
+each line on its own.` It still names no line. What counts as a citation, the re-ask rules,
+the plan and `max_calls` are unchanged. The ladder re-ask is word for word what version 3
+sent. The prompts are part of every judge's pin, so a capture taken before version 6 no
+longer replays: scoring refuses it as made with a different pin.
 
 Apart from a `malformed` answer, only an answer whose other checks passed is re-asked: the unit and the coverage canary, and
 for the ladder alone, the citations too. An answer that also fails one of those keeps that
@@ -257,7 +270,8 @@ inconsistent case), every theory unit scored with `ledger_cohesive` above
 `ledger_scrambled` in every trial, and every answer provider-reported. Scripted and replayed test captures meet the first three
 and the fourth with the pinned rubric, but are synthetic, so `established` is false.
 `established` also needs `captured_for_this_parser`: the capture's manifest must name the
-parser version that scores it. A capture taken before a parser change replays and is
+parser version that scores it. A capture taken before a prompt change, such as version 6's,
+does not replay at all. One taken before a parser change that kept the prompts replays and is
 re-read, but it shaped that change, so it can never establish the proof; each parser change
 needs a fresh capture.
 
@@ -636,3 +650,7 @@ time the re-ask added for it did not help: `haiku` cited line ranges both
 times, a shape the check does not accept. The cohesive unit's scored trials also ranged from
 62.5 to 87.5 here, wider than in earlier captures. Closing the proof needs another capture
 with its own approval.
+
+**After this capture.** [Parser version 6](#independent-judge-panel) keeps one line per
+citation and has the theory prompt and the citation re-ask say up front that a range is
+not a citation. It changes the prompts, so this capture no longer replays under it.

@@ -61,7 +61,9 @@ world_mapping (can each part be mapped to the problem and back?),
 abstraction (domain names, unwritten cases expressible, less to hold in mind?),
 justification (is it recoverable why each part is what it is?),
 honest_limits (are unpinned assumptions and duplication named honestly?).
-A step below 1.0 must cite evidence as "<file>:<line>". Give at least three rehearsals.
+A step below 1.0 must cite evidence as "<file>:<line>", one line number per citation. A range
+such as "<file>:<first>-<last>" is not a citation; to cite several lines, list each one.
+Give at least three rehearsals.
 
 Each listing line starts with its line number. One unnumbered line holds a coverage canary;
 copy its token exactly. Answer with one JSON object and nothing else:
@@ -78,13 +80,14 @@ PROMPT_VERSION = hashlib.sha256((DEFECT_PROMPT + '\0' + THEORY_PROMPT).encode())
 # off the ladder, a lowered step none of whose citations is a listed line, or no readable object at
 # all. It names the dimensions and restates the rule, never which rung or line to pick. The text
 # is in each re-ask record's prompt digest, so a capture made with other wording is refused as
-# stale. A re-ask for the ladder alone is
-# word for word what parser version 3 sent, so its captures still replay.
+# stale. Since parser version 6 the theory prompt and the citation re-ask both say that a range of
+# lines is not a citation, so a capture taken before it was made with another pin and never replays.
 REASK_LADDER = """Your answer gave {dimensions} a step that is not on the ladder. Every step must be
 exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between
 them."""
 REASK_CITATION = """Your answer gave {dimensions} a step below 1.0 with no citation of a line the listing
-has. Each citation must be exactly "{file}:<line>", where <line> is one line number the listing shows."""
+has. Each citation must be exactly "{file}:<line>", where <line> is one line number the listing shows.
+A range such as "{file}:<first>-<last>" is not a citation; list each line on its own."""
 REASK_MALFORMED = f'Your answer held no JSON object with "schema": "{THEORY_SCHEMA}" that could be read.'
 REASK_END = 'Answer again with one complete JSON object in the same format, and nothing else.'
 REASK_PROMPT = REASK_LADDER + ' ' + REASK_END
@@ -234,8 +237,10 @@ def prompt_sha256(messages: list[tuple[str, str]]) -> str:
 # covered answer whose lowered step kept no listed line, and reports the shape of each dropped
 # citation; a version 3 capture has no such re-ask and is read with that answer ``citation``.
 # Version 5 also re-asks a theory answer that held no readable object at all; a version 4 capture
-# has no such re-ask and is read with that answer ``malformed``.
-PARSER_VERSION = 5
+# has no such re-ask and is read with that answer ``malformed``. Version 6 changes no check: the theory
+# prompt and the citation re-ask say that a range of lines is not a citation. The prompts are in
+# every pin, so a capture taken before it no longer replays.
+PARSER_VERSION = 6
 
 
 def _decoded(text: str) -> dict | None:

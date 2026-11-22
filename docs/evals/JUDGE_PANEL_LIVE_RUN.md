@@ -32,15 +32,16 @@ Save this as a file outside the repository, and set `PANEL` to its absolute path
   limit risks truncated answers, which count as `unknown`.
 - `attempts` is 1: a retry is a second billed call.
 
-Checked offline: this panel loads and plans 108 calls, about 16.7k prompt characters per
+Checked offline: this panel loads and plans 108 calls, about 16.9k prompt characters per
 judge per trial round, which is about 43k input tokens for the whole run. Under parser
-version 5, each of the 18 theory answers may be re-asked once if it puts a step off the
+version 6, each of the 18 theory answers may be re-asked once if it puts a step off the
 ladder, leaves a lowered step with no listed line, or holds no readable object, so a capture
 makes at most **126 calls**. At list prices on 2026-11-03, the worst
 case for 108 calls (every answer at its 8000-token limit) is about $9. The 18 re-asks, each
 carrying the judge's first answer back and bounded the same way, add at most about $2, so the
-worst case for 126 calls is about **$11**. The four live captures cost about $0.55, $0.58,
-$0.58 and $0.59. The second would have needed 2 re-asks, and the third and fourth made 2 each.
+worst case for 126 calls is about **$11**. The five live captures cost about $0.55, $0.58,
+$0.58, $0.59 and $0.62. The second would have needed 2 re-asks, the third and fourth made 2
+each, and the fifth made 3.
 
 ## Commands
 
@@ -94,27 +95,33 @@ keys that failed, keep 069 unchecked, and do not narrow the requirement.
 
 ## Next capture
 
-Parser version 5 re-asks a theory judge once when its answer holds no readable object
-(`malformed`), as well as for an off-ladder step or a lowered step with no listed line (see
-[CALIBRATION.md](../CALIBRATION.md#independent-judge-panel)). An unreadable Opus answer is
-what left one scrambled trial of the 2026-11-22 parser 4 capture unscored. Each answer is
-still re-asked at most once, so the plan is still 108 calls plus at most 18 re-asks, and
-`capture` still takes `--max-calls 126`. The prompts, the corpus and the panel did not
-change. A new capture needs:
+Parser version 6 keeps one line per citation, as CMS chose on 2026-11-22, and has the
+theory prompt and the citation re-ask say up front that a range such as
+`"<file>:<first>-<last>"` is not a citation (see
+[CALIBRATION.md](../CALIBRATION.md#independent-judge-panel)). `haiku` citing line ranges, even
+after its re-ask, is what left one cohesive trial of the 2026-11-22 parser 5 capture
+unscored. The checks, the corpus and the panel did not change, and each answer is still
+re-asked at most once, so the plan is still 108 calls plus at most 18 re-asks and `capture`
+still takes `--max-calls 126`. A new capture needs:
 
-- CMS's fresh approval of a cap that covers the worst case of about $11. The four runs so
-  far cost about $0.55, $0.58, $0.58 and $0.59.
+- CMS's fresh approval of a cap that covers the worst case of about $11. The five runs so
+  far cost about $0.55, $0.58, $0.58, $0.59 and $0.62.
 - A new, empty `capture` folder.
 - The score report's `proof.captured_for_this_parser` to be true: a capture taken by this
-  code records parser version 5 in its manifest. Check `parsing` per judge too. Name in the
+  code records parser version 6 in its manifest. Check `parsing` per judge too. Name in the
   audit any judge that was re-asked (`reasked`), was still off the ladder, uncited or
   unreadable (`off_ladder`, `uncited`, `malformed`), or had most of its
   answers read out of prose, `ambiguous` or missing citations, and give each judge's
   `dropped_shapes`.
 
-Re-scoring the 2026-11-22 parser 4 capture under version 5 makes no calls and cannot close
-the proof: it holds no re-ask for the unreadable answer, and its manifest names parser
-version 4.
+Captures taken before version 6 no longer replay: the prompts are part of every judge's pin,
+so scoring one refuses it as made with a different pin.
+
+### Parser version 5 (2026-11-22)
+
+Parser version 5 re-asks a theory judge once when its answer holds no readable object
+(`malformed`). An unreadable Opus answer is what left one scrambled trial of the 2026-11-22
+parser 4 capture unscored.
 
 ### Parser version 4 (2026-11-22)
 

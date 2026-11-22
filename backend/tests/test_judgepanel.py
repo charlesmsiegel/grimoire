@@ -3,6 +3,7 @@ import asyncio
 import os
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -579,7 +580,8 @@ def test_a_lowered_step_with_no_listed_line_is_reasked_once_and_the_new_answer_s
     name = jp.alias('salt', 'ledger_cohesive')
     assert judge.asked[0][-1] == ('user', (
         'Your answer gave honest_limits a step below 1.0 with no citation of a line the listing\n'
-        f'has. Each citation must be exactly "{name}:<line>", where <line> is one line number the listing shows. '
+        f'has. Each citation must be exactly "{name}:<line>", where <line> is one line number the listing shows.\n'
+        f'A range such as "{name}:<first>-<last>" is not a citation; list each line on its own. '
         'Answer again with one complete JSON object in the same format, and nothing else.'))
     trial = cohesive_b(result)
     assert trial['state'] == 'verdict' and trial['reasked'] == ['honest_limits']
@@ -850,14 +852,27 @@ def test_a_defect_answer_with_no_readable_object_is_never_reasked(tmp_path):
     assert defect['judges']['b'][0]['reason'] == 'malformed' and 'reasked' not in defect['judges']['b'][0]
 
 
-def test_a_reask_for_the_ladder_or_citations_is_word_for_word_what_parser_version_4_sent():
+def test_a_reask_for_both_faults_restates_both_rules_and_says_a_range_is_not_a_citation():
     name = 'unit_0123456789.py'
-    assert jp.reask_text(['honest_limits'], ['abstraction'], name) == (
+    text = jp.reask_text(['honest_limits'], ['abstraction'], name)
+    assert text == (
         'Your answer gave honest_limits a step that is not on the ladder. Every step must be\n'
         'exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between\n'
         'them. Your answer gave abstraction a step below 1.0 with no citation of a line the listing\n'
-        f'has. Each citation must be exactly "{name}:<line>", where <line> is one line number the listing shows. '
+        f'has. Each citation must be exactly "{name}:<line>", where <line> is one line number the listing shows.\n'
+        f'A range such as "{name}:<first>-<last>" is not a citation; list each line on its own. '
         'Answer again with one complete JSON object in the same format, and nothing else.')
+    # The rule, never a line: no number appears but the ladder's rungs and the file's own name.
+    assert not re.search(r'\d', text.replace(name, '').replace('1.0', '').replace('0.5', '').replace(
+        '0.25', '').replace('0.0', ''))
+
+
+def test_the_theory_prompt_says_up_front_that_a_range_is_not_a_citation():
+    assert ('A step below 1.0 must cite evidence as "<file>:<line>", one line number per citation. A range\n'
+            'such as "<file>:<first>-<last>" is not a citation; to cite several lines, list each one.'
+            ) in jp.THEORY_PROMPT
+    assert jp.PARSER_VERSION == 6
+
 
 
 @pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
@@ -1166,6 +1181,10 @@ def test_replay_reproduces_a_capture_and_refuses_a_stale_one(tmp_path, monkeypat
     other = panel_file(tmp_path, model='judge-model-2')
     with pytest.raises(ValueError, match='different pin'):
         jp.run(CORPUS, jp.load_panel(other)[0], trials, jp.ReplayJudge(capture), 'salt')
+    # The prompts are in every pin: a capture made before the range rule (parser 6) never replays.
+    monkeypatch.setattr(jp, 'PROMPT_VERSION', 'the version 5 prompts')
+    with pytest.raises(ValueError, match='different pin'):
+        jp.run(CORPUS, jp.load_panel(panel_file(tmp_path))[0], trials, jp.ReplayJudge(capture), 'salt')
 
 
 def test_a_reask_is_captured_counted_against_the_ceiling_and_replayed(tmp_path, monkeypatch, stub_checkout):
