@@ -55,9 +55,10 @@ in-process through FastAPI's `TestClient` (lifespan entered, as 0.2.1's own test
 - in a dry run only, forces 0.2.1's token counter onto its offline heuristic
   (`store.tokens._encoder`), so a `[desktop]` install does not download a tokenizer.
 
-When a turn fails, the driver reads that turn's chat stream as 0.2.1 sent it to its client and
-reports 0.2.1's error kind and each reply's length and labels, matching labels with 0.2.1's own
-`store.scenes._markers`. It changes nothing in the run.
+The counting transport also keeps each provider reply in memory (never written or printed). When
+a turn fails, the driver reports 0.2.1's error kind and each reply's shape (lengths, fences and
+whose labels it used, matched with 0.2.1's own `store.scenes._markers` after its own state-block
+split and macro expansion). It changes nothing in the run.
 
 Prompt assembly, provider adapters, retry and the usage meter are 0.2.1's own.
 
@@ -182,9 +183,11 @@ cannot verify the provider's own billing receipt. The report says both.
   fails the capture (`multi_call_contribution`).
 - **Live captures can fail.** Three of four live attempts failed; see
   [earlier attempts](#earlier-attempts-the-same-day) and the
-  [2026-11-22 attempt](#sampled-capture-attempt-2026-11-22). The failures in turn 1 are 0.2.1's
-  own empty-response check on the second speaker ([why](#why-turn-1-fails-offline-2026-11-22)).
-  The driver now reports a failed turn by 0.2.1's error kind and each reply's length and labels.
+  [2026-11-22 attempt](#sampled-capture-attempt-2026-11-22). The two with
+  `claude-sonnet-4-5-20250929` match what 0.2.1's own empty-response check produces, which is
+  reproduced offline but not confirmed live; the Sonnet 5.5 one was the prefill 400
+  ([why](#why-turn-1-fails-offline-2026-11-22)). The driver now reports a failed turn by 0.2.1's
+  error kind and the shape of each reply.
 - **Windows.** The real driver has been run on Linux only.
 - **Matched comparison.** A V2-vs-V0.2.1 comparison needs V2's provider adapter (013) and
   generation runtime (027); `/2` reserves a `v2-runtime` source for it.
@@ -278,33 +281,41 @@ afterwards (below).
 
 ## Why turn 1 fails (offline, 2026-11-22)
 
-Reproduced with no provider request, on the pinned 0.2.1 commit and its own test transport:
+Two of the three live failures, both with `claude-sonnet-4-5-20250929`, failed in turn 1 with
+both calls completed and booked `ok`, a short second reply (19 output tokens) and HTTP 200. Their
+error kind was not recorded live. Offline, with no provider request, on the pinned 0.2.1 commit
+and its own test transport, 0.2.1's own `empty_response` check produces exactly that result:
 
 - Each turn's second speaker is asked with a conversation that ends in the first speaker's reply,
-  as an assistant message carrying that speaker's label. On this model the second reply therefore
-  continues that message.
+  as an assistant message carrying that speaker's label, so the second reply continues it.
 - 0.2.1 keeps a reply's text only where it comes before any speaker label or under the speaker's
-  own label. Text under another cast member's label (the player's or the first speaker's) is
-  dropped, and a reply left with no text fails the turn with 0.2.1's `empty_response` error. An
-  empty reply, or one holding only a trailing `state` block, fails the same way.
-- A dry run whose turn-1 second reply has any of those shapes reproduces the live failures
-  exactly: both calls complete and are booked `ok`, and the turn is reported as failed with
-  HTTP 200. The same play with the second reply under its own label, or under no label, succeeds.
+  own label (after splitting off a `state` block and expanding macros such as `{{user}}`). Text
+  under another label (the player's, the first speaker's or `You`) is dropped, and a reply left
+  with no text fails the turn with `empty_response`.
+- A dry run whose turn-1 second reply is empty, holds only a `state` block, holds only the
+  `handoff` fence 0.2.1's prompt asks every reply to end with, or is written only under another
+  label, fails exactly like the live runs. The same play with the second reply under its own
+  label, or under no label, succeeds.
 
-So the live failures are 0.2.1's own behaviour on this route, not a fault in the capture. Which
-shape the model wrote is not known; a 19-token reply is about one short line under another
-speaker's label, but that is an inference. The driver now says it: a failed turn is reported by
-0.2.1's error kind and, for each reply of that turn, the actor it was for, how many characters
-0.2.1 streamed of it and whose labels it was written under (actor ids, `you` or `another name`,
-never text), for example `npc-bellamy's reply: 40 characters streamed, under the label pc-wren`.
+So the live failures are consistent with 0.2.1's own behaviour on this route, not with a fault in
+the capture; that is not confirmed. A 19-token reply fits more than one of those shapes (a
+`handoff` fence alone, or one short line under another label), so which one the model wrote is not
+known. The third failure (`claude-sonnet-5-5`) was different: the provider refused the
+prefilled request with a 400 and no usage was booked.
+
+The driver now records it. A failed turn is reported by 0.2.1's error kind; for each reply 0.2.1
+streamed, the actor it was for and how many characters its client saw; and for each provider reply
+of that turn, its length, which of the fences 0.2.1 hides it held (`handoff`, `state`) and whose
+labels it was written under, read as 0.2.1's authority check reads them (actor ids, `you` or
+`another name`; never text). For example: `provider reply 2: 40 characters, no fence, under the
+label pc-wren`. A compressed provider reply is reported as unreadable.
 
 For 068 this means a capture can fail on any of its three turns (each second speaker's request
 ends the same way) whenever that reply keeps no text of its own, and that retrying a capture is
-playing 0.2.1 again, not repairing it. A failed capture
-writes nothing and costs its completed calls (about 0.02 USD in turn 1). Keeping only captures
-that finish makes the baseline 0.2.1's completed plays, which leaves V2 a harder baseline, not an
-easier one; the number of failed attempts is itself a measurement of 0.2.1 and is recorded with
-the captures.
+playing 0.2.1 again, not repairing it. A failed capture writes nothing and costs its completed
+calls (about 0.02 USD in turn 1). The comparison can only use captures that finish, so its baseline
+is 0.2.1's completed plays; how often 0.2.1 fails a play is a separate measurement of 0.2.1, to be
+recorded with the captures.
 
 ## Privacy
 

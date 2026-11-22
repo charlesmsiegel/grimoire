@@ -84,18 +84,63 @@ def _chat_frames(text: str):
                 yield frame
 
 
-def turn_failure(text: str, actors: dict[str, str], labels: dict[str, str], markers) -> str:
+def provider_text(body: bytes | None, provider: str) -> str | None:
+    """The reply text of one streamed provider response, or None if it cannot be read.
+
+    Held in memory only, to describe a failed turn's shape; never written or printed.
+    """
+    if body is None:
+        return None
+    text = []
+    for frame in _chat_frames(body.decode("utf-8", errors="replace")):
+        if provider == "openrouter":
+            for choice in frame.get("choices") or []:
+                delta = choice.get("delta") if isinstance(choice, dict) else None
+                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                    text.append(delta["content"])
+        elif frame.get("type") == "content_block_delta":
+            delta = frame.get("delta")
+            if isinstance(delta, dict) and delta.get("type") == "text_delta" and isinstance(
+                    delta.get("text"), str):
+                text.append(delta["text"])
+    return "".join(text)
+
+
+def _labels(text: str, labels: dict[str, str], markers) -> str:
+    found = []
+    for marker in markers(text):
+        name = marker.group(1)
+        found.append(labels.get(name, "you" if name == "You" else "another name"))
+    if not found:
+        return "under no label"
+    return ("under the label " if len(found) == 1 else "under the labels ") + ", ".join(found)
+
+
+def turn_failure(text: str, actors: dict[str, str], *, status: int = 200,
+                 calls: list[str | None] = (), labels: dict[str, str] | None = None,
+                 markers=None, prepare=None, fences: dict | None = None) -> str:
     """Why 0.2.1 failed a turn, as error kinds, actor ids and counts only (never text).
 
-    ``text`` is the turn's chat stream as 0.2.1 sent it to its client; ``actors`` maps 0.2.1's
-    actor refs to scenario actor ids, ``labels`` maps cast names to actor ids, and ``markers``
-    is 0.2.1's own speaker-label matcher (``store.scenes._markers``), so a label counts exactly
-    when 0.2.1's authority check reads it as one. Each reply is described by the actor it was
-    for, how many characters 0.2.1 streamed of it, and whose labels it was written under.
+    ``text`` is the turn's ``/chat`` response as 0.2.1 sent it to its client, and ``actors``
+    maps 0.2.1's actor refs to scenario actor ids. Each reply 0.2.1 streamed is described by the
+    actor it was for and how many characters the client saw (0.2.1 hides its control fences
+    from the client). ``calls`` are the provider's reply texts for the turn's requests, in
+    order (None where unreadable); each is described by its length, which named fences it held
+    (``fences``: name to pattern, 0.2.1's own) and whose speaker labels it was written under.
+    Labels are matched as 0.2.1's authority check matches them: ``prepare`` is the text as 0.2.1
+    reads it there (state block split off, macros expanded) and ``markers`` its label matcher.
     """
     kinds: list[str] = []
     replies: list[list] = []
-    for frame in _chat_frames(text):
+    if status >= 400:
+        try:
+            detail = json.loads(text).get("detail")
+        except (ValueError, AttributeError):
+            detail = None
+        kind = detail.get("kind") if isinstance(detail, dict) else None
+        kinds.append(kind if isinstance(kind, str) and ERROR_KIND.fullmatch(kind)
+                     else "unrecognised")
+    for frame in [] if status >= 400 else _chat_frames(text):
         error = frame.get("error")
         start = frame.get("response_start")
         if isinstance(error, dict):
@@ -103,19 +148,20 @@ def turn_failure(text: str, actors: dict[str, str], labels: dict[str, str], mark
             kinds.append(kind if isinstance(kind, str) and ERROR_KIND.fullmatch(kind)
                          else "unrecognised")
         elif isinstance(start, dict):
-            replies.append([actors.get(str(start.get("actor_ref")), "unknown"), ""])
+            replies.append([actors.get(str(start.get("actor_ref")), "unknown"), 0])
         elif isinstance(frame.get("delta"), str) and replies:
-            replies[-1][1] += frame["delta"]
+            replies[-1][1] += len(frame["delta"])
     parts = ["0.2.1 error " + (", ".join(kinds) if kinds else "not reported")]
-    for actor, reply in replies:
-        body = reply.strip()
-        found = []
-        for marker in markers(body):
-            name = marker.group(1)
-            found.append(labels.get(name, "you" if name == "You" else "another name"))
-        under = ("no label" if not found else
-                 ("the label " if len(found) == 1 else "the labels ") + ", ".join(found))
-        parts.append(f"{actor}'s reply: {len(body)} characters streamed, under {under}")
+    parts += [f"{actor}'s reply: {count} characters streamed" for actor, count in replies]
+    for number, call in enumerate(calls, 1):
+        if call is None:
+            parts.append(f"provider reply {number}: unreadable")
+            continue
+        held = [name for name, pattern in (fences or {}).items() if pattern.search(call)]
+        shown = prepare(call) if prepare else call.strip()
+        under = _labels(shown, labels or {}, markers) if markers else "labels not read"
+        parts.append(f"provider reply {number}: {len(call.strip())} characters, "
+                     f"{'fences ' + ', '.join(held) if held else 'no fence'}, {under}")
     return "; ".join(parts)
 
 
@@ -171,6 +217,9 @@ class Guard:
         self.httpx, self.inner, self.path, self.budget = httpx, inner, CHAT_PATHS[provider], budget
         self.forwarded = 0
         self.max_tokens: set[object] = set()
+        #: Each forwarded request's reply body, in memory only (None if it cannot be decoded),
+        #: so a failed turn can be described by its shape. Never written or printed.
+        self.bodies: list[bytearray | None] = []
 
     def transport(self):
         guard = self
@@ -186,10 +235,30 @@ class Guard:
                     guard.max_tokens.add(json.loads(request.content).get("max_tokens"))
                 except ValueError:
                     guard.max_tokens.add("unreadable")
-                return await guard.inner.handle_async_request(request)
+                response = await guard.inner.handle_async_request(request)
+                guard.bodies.append(sink := bytearray())
+                try:
+                    sink += response.content  # already read (a test transport)
+                except guard.httpx.ResponseNotRead:
+                    response.stream = Recording(response.stream, sink)
+                if response.headers.get("content-encoding", "identity") not in ("", "identity"):
+                    guard.bodies[-1] = None  # compressed: not decoded here, reported unreadable
+                return response
 
             async def aclose(self):
                 await guard.inner.aclose()
+
+        class Recording(guard.httpx.AsyncByteStream):
+            def __init__(self, inner, sink):
+                self.inner, self.sink = inner, sink
+
+            async def __aiter__(self):
+                async for chunk in self.inner:
+                    self.sink += chunk
+                    yield chunk
+
+            async def aclose(self):
+                await self.inner.aclose()
 
         return Transport()
 
@@ -237,7 +306,7 @@ def main(argv: list[str]) -> int:
 
     from grimoire import store  # noqa: PLC0415
     from grimoire.main import create_app  # noqa: PLC0415
-    from grimoire.store import scenes  # noqa: PLC0415  (0.2.1's speaker-label matcher)
+    from grimoire.store import response_protocol, scenes, state_fence  # noqa: PLC0415
 
     speakers = setup["speakers"]
     npcs = {npc["actor_id"]: npc for npc in setup["npcs"]}
@@ -327,6 +396,8 @@ def main(argv: list[str]) -> int:
         refs[f"pcs:{pc['pc']}"] = setup["pc"]["actor_id"]
         _ok(client.post(f"{base}/cast", json={"id": pc["pc"], "kind": "pcs"}), "cast the PC")
 
+        # 0.2.1's own patterns for the fences it hides from its client.
+        fences = {"handoff": response_protocol._HANDOFF, "state": state_fence._OPEN}
         cast_labels = {npcs[a]["name"]: a for a in npcs}
         cast_labels[setup["pc"]["name"]] = setup["pc"]["actor_id"]
         speaker_refs = [ref for actor in speakers for ref, a in refs.items() if a == actor]
@@ -359,9 +430,18 @@ def main(argv: list[str]) -> int:
 
         boundaries = []
         for turn in turns:
+            first_call = len(guard.bodies)
             response = client.post(f"{base}/chat", json={"content": turn["player_text"]})
             if response.status_code >= 400 or '"error"' in response.text:
-                why = turn_failure(response.text, refs, cast_labels, scenes._markers)
+                calls = [None if body is None else provider_text(bytes(body), args.provider)
+                         for body in guard.bodies[first_call:]]
+                why = turn_failure(
+                    response.text, refs, status=response.status_code, calls=calls,
+                    labels=cast_labels, markers=scenes._markers, fences=fences,
+                    prepare=lambda text: store.context.expand_macros(
+                        store.context.resolve_art_handles(
+                            cid, state_fence.split_block(text)[0], sid),
+                        store.context.scene_substitutions(cid, sid), cid, sid).strip())
                 fail(f"turn {turn['turn']} failed: HTTP {response.status_code}; {why}")
             boundaries.append(len(store.scenes.read_scene(cid, sid)["messages"]))
         deadline = time.monotonic() + IDLE_TIMEOUT_SECONDS

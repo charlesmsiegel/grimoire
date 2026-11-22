@@ -90,19 +90,39 @@ def stream(*frames):
 
 ACTORS = {"characters:oda": "npc-oda", "characters:bellamy": "npc-bellamy"}
 LABELS = {"Oda": "npc-oda", "Bellamy": "npc-bellamy", "Wren": "pc-wren"}
+FENCES = {"handoff": re.compile(r"```[ \t]*handoff\b", re.IGNORECASE),
+          "state": re.compile(r"(?:^|\n)[ \t]*```[ \t]*state[ \t\r]*(?:\n|$)", re.IGNORECASE)}
 
 
-def test_turn_failure_names_the_kind_and_whose_labels_each_reply_used():
+def describe(d, text, calls=(), **kwargs):
+    return d.turn_failure(text, ACTORS, calls=list(calls), labels=LABELS, markers=markers,
+                          fences=FENCES, **kwargs)
+
+
+def test_turn_failure_names_the_kind_and_each_reply_s_shape():
     d = driver()
     text = stream(
         {"response_start": {"id": "r1", "actor_ref": "characters:oda"}},
         {"delta": "Coin first."}, {"response_end": {"id": "r1"}},
         {"response_start": {"id": "r2", "actor_ref": "characters:bellamy"}},
-        {"delta": "\n\n**Wren:** I read "}, {"delta": "it.\n\n**Mystery (aside):** Hm."},
+        {"delta": "\n\n"},
         {"error": {"kind": "empty_response", "detail": "The model returned no response prose."}})
-    assert d.turn_failure(text, ACTORS, LABELS, markers) == (
-        "0.2.1 error empty_response; npc-oda's reply: 11 characters streamed, under no label; "
-        "npc-bellamy's reply: 46 characters streamed, under the labels pc-wren, another name")
+    calls = ["Coin first.\n\n```handoff\n{\"next\": null}\n```",
+             "\n\n**Wren:** I read it.\n\n**Mystery (aside):** Hm.", None]
+    assert describe(d, text, calls) == (
+        "0.2.1 error empty_response; npc-oda's reply: 11 characters streamed; "
+        "npc-bellamy's reply: 2 characters streamed; "
+        "provider reply 1: 42 characters, fences handoff, under no label; "
+        "provider reply 2: 46 characters, no fence, under the labels pc-wren, another name; "
+        "provider reply 3: unreadable")
+
+
+def test_labels_are_read_as_0_2_1_reads_them():
+    # 0.2.1 expands {{user}} before its authority check, so that line is the player's.
+    d = driver()
+    said = describe(d, "", ["**{{user}}:** I take it."],
+                    prepare=lambda text: text.replace("{{user}}", "Wren").strip())
+    assert said.endswith("provider reply 1: 24 characters, no fence, under the label pc-wren")
 
 
 def test_turn_failure_never_echoes_text():
@@ -112,12 +132,34 @@ def test_turn_failure_never_echoes_text():
                   {"error": {"kind": "Secret Words!", "detail": "secret words"}},
                   "not a frame", {"error": "secret"})
     text += "data: {not json\n"
-    said = d.turn_failure(text, ACTORS, LABELS, markers)
-    assert said == ("0.2.1 error unrecognised; unknown's reply: 21 characters streamed, "
-                    "under the label you")
+    said = describe(d, text, ["**You:** secret words", "```state\nsecret\n```"])
+    assert said == ("0.2.1 error unrecognised; unknown's reply: 21 characters streamed; "
+                    "provider reply 1: 21 characters, no fence, under the label you; "
+                    "provider reply 2: 19 characters, fences state, under no label")
     assert "secret" not in said.lower()
+
+
+def test_a_refused_turn_reports_0_2_1_s_kind():
+    d = driver()
+    body = json.dumps({"detail": {"kind": "scene_busy", "message": "secret"}})
+    assert describe(d, body, status=409) == "0.2.1 error scene_busy"
+    assert describe(d, "<html>secret</html>", status=502) == "0.2.1 error unrecognised"
 
 
 def test_turn_failure_with_nothing_reported():
     d = driver()
-    assert d.turn_failure("", ACTORS, LABELS, markers) == "0.2.1 error not reported"
+    assert describe(d, "") == "0.2.1 error not reported"
+
+
+@pytest.mark.parametrize("provider, frames", [
+    ("anthropic", [{"type": "content_block_delta", "delta": {"type": "text_delta", "text": "a"}},
+                   {"type": "content_block_delta", "delta": {"type": "input_json_delta"}},
+                   {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "b"}}]),
+    ("openrouter", [{"choices": [{"delta": {"content": "a"}}]}, {"choices": []},
+                    {"choices": [{"delta": {"content": "b"}}]}]),
+])
+def test_provider_text_reads_the_streamed_reply(provider, frames):
+    d = driver()
+    body = ("".join(f"data: {json.dumps(f)}\n\n" for f in frames) + "data: [DONE]\n\n").encode()
+    assert d.provider_text(body, provider) == "ab"
+    assert d.provider_text(None, provider) is None
