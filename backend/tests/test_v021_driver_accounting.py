@@ -1,8 +1,10 @@
 """The 0.2.1 driver's request accounting (its pure part; the driver imports 0.2.1 lazily)."""
 
+import gzip
 import importlib.util
 import json
 import re
+import zlib
 from pathlib import Path
 
 import pytest
@@ -90,13 +92,17 @@ def stream(*frames):
 
 ACTORS = {"characters:oda": "npc-oda", "characters:bellamy": "npc-bellamy"}
 LABELS = {"Oda": "npc-oda", "Bellamy": "npc-bellamy", "Wren": "pc-wren"}
-FENCES = {"handoff": re.compile(r"```[ \t]*handoff\b", re.IGNORECASE),
-          "state": re.compile(r"(?:^|\n)[ \t]*```[ \t]*state[ \t\r]*(?:\n|$)", re.IGNORECASE)}
+
+
+def read(text):
+    """A stand-in for 0.2.1's own reading: the prose before a handoff fence, which is named."""
+    prose, fence, _ = text.partition("```handoff")
+    return prose.strip(), ["handoff"] if fence else []
 
 
 def describe(d, text, calls=(), **kwargs):
     return d.turn_failure(text, ACTORS, calls=list(calls), labels=LABELS, markers=markers,
-                          fences=FENCES, **kwargs)
+                          read=kwargs.pop("read", read), **kwargs)
 
 
 def test_turn_failure_names_the_kind_and_each_reply_s_shape():
@@ -107,22 +113,38 @@ def test_turn_failure_names_the_kind_and_each_reply_s_shape():
         {"response_start": {"id": "r2", "actor_ref": "characters:bellamy"}},
         {"delta": "\n\n"},
         {"error": {"kind": "empty_response", "detail": "The model returned no response prose."}})
-    calls = ["Coin first.\n\n```handoff\n{\"next\": null}\n```",
-             "\n\n**Wren:** I read it.\n\n**Mystery (aside):** Hm.", None]
+    calls = [(429, None), (200, "Coin first.\n\n```handoff\n{\"next\": null}\n```"),
+             (200, "\n\n**Wren:** I read it.\n\n**Mystery (aside):** Hm."),
+             (200, "```handoff\n{}\n```\n\n**Wren:** after the fence"),
+             (200, None), (None, None)]
     assert describe(d, text, calls) == (
         "0.2.1 error empty_response; npc-oda's reply: 11 characters streamed; "
         "npc-bellamy's reply: 2 characters streamed; "
-        "provider reply 1: 42 characters, fences handoff, under no label; "
-        "provider reply 2: 46 characters, no fence, under the labels pc-wren, another name; "
-        "provider reply 3: unreadable")
+        "provider reply 1: HTTP 429; "
+        "provider reply 2: 42 characters, 11 of prose, fences handoff, prose under no label; "
+        "provider reply 3: 46 characters, 46 of prose, no fence, "
+        "prose under the labels pc-wren, another name; "
+        "provider reply 4: 44 characters, 0 of prose, fences handoff, prose under no label; "
+        "provider reply 5: unreadable; provider reply 6: no response")
 
 
-def test_labels_are_read_as_0_2_1_reads_them():
+def test_labels_are_read_from_the_prose_0_2_1_reads():
     # 0.2.1 expands {{user}} before its authority check, so that line is the player's.
     d = driver()
-    said = describe(d, "", ["**{{user}}:** I take it."],
-                    prepare=lambda text: text.replace("{{user}}", "Wren").strip())
-    assert said.endswith("provider reply 1: 24 characters, no fence, under the label pc-wren")
+    said = describe(d, "", [(200, "**{{user}}:** I take it.")],
+                    read=lambda text: (text.replace("{{user}}", "Wren").strip(), []))
+    assert said.endswith("provider reply 1: 24 characters, 20 of prose, no fence, "
+                         "prose under the label pc-wren")
+
+
+def test_a_reply_that_cannot_be_read_still_gets_described():
+    d = driver()
+
+    def broken(text):
+        raise ValueError("secret")
+
+    said = describe(d, "", [(200, "secret words")], read=broken)
+    assert said == "0.2.1 error not reported; provider reply 1: 12 characters, not parsed"
 
 
 def test_turn_failure_never_echoes_text():
@@ -132,10 +154,10 @@ def test_turn_failure_never_echoes_text():
                   {"error": {"kind": "Secret Words!", "detail": "secret words"}},
                   "not a frame", {"error": "secret"})
     text += "data: {not json\n"
-    said = describe(d, text, ["**You:** secret words", "```state\nsecret\n```"])
+    said = describe(d, text, [(200, "**You:** secret words")])
     assert said == ("0.2.1 error unrecognised; unknown's reply: 21 characters streamed; "
-                    "provider reply 1: 21 characters, no fence, under the label you; "
-                    "provider reply 2: 19 characters, fences state, under no label")
+                    "provider reply 1: 21 characters, 21 of prose, no fence, "
+                    "prose under the label you")
     assert "secret" not in said.lower()
 
 
@@ -151,15 +173,31 @@ def test_turn_failure_with_nothing_reported():
     assert describe(d, "") == "0.2.1 error not reported"
 
 
-@pytest.mark.parametrize("provider, frames", [
-    ("anthropic", [{"type": "content_block_delta", "delta": {"type": "text_delta", "text": "a"}},
-                   {"type": "content_block_delta", "delta": {"type": "input_json_delta"}},
-                   {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "b"}}]),
-    ("openrouter", [{"choices": [{"delta": {"content": "a"}}]}, {"choices": []},
-                    {"choices": [{"delta": {"content": "b"}}]}]),
-])
-def test_provider_text_reads_the_streamed_reply(provider, frames):
+FRAMES = {
+    "anthropic": [{"type": "content_block_delta", "delta": {"type": "text_delta", "text": "a"}},
+                  {"type": "content_block_delta", "delta": {"type": "input_json_delta"}},
+                  {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "b"}}],
+    "openrouter": [{"choices": [{"delta": {"content": "a"}}]}, {"choices": []},
+                   {"choices": [{"delta": {"content": "b"}}]}],
+}
+
+
+@pytest.mark.parametrize("provider", sorted(FRAMES))
+@pytest.mark.parametrize("encoding", ["", "identity", "gzip", "deflate"])
+def test_provider_text_reads_the_streamed_reply(provider, encoding):
     d = driver()
-    body = ("".join(f"data: {json.dumps(f)}\n\n" for f in frames) + "data: [DONE]\n\n").encode()
-    assert d.provider_text(body, provider) == "ab"
-    assert d.provider_text(None, provider) is None
+    body = ("".join(f"data: {json.dumps(f)}\n\n" for f in FRAMES[provider])
+            + "data: [DONE]\n\n").encode()
+    if encoding == "gzip":
+        body = gzip.compress(body)
+    elif encoding == "deflate":
+        body = zlib.compress(body)
+    assert d.provider_text({"body": bytearray(body), "encoding": encoding}, provider) == "ab"
+
+
+def test_provider_text_refuses_what_it_cannot_decode():
+    d = driver()
+    assert d.provider_text({"body": None}, "anthropic") is None
+    assert d.provider_text({"body": bytearray(b"x"), "encoding": "br"}, "anthropic") is None
+    assert d.provider_text({"body": bytearray(b"not gzip"), "encoding": "gzip"},
+                           "anthropic") is None

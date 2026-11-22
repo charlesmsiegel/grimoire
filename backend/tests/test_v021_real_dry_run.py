@@ -72,7 +72,9 @@ def test_real_dry_run_names_why_a_turn_failed(kind, tmp_path, monkeypatch):
     assert "turn 1 failed: HTTP 200; 0.2.1 error empty_response" in message
     assert "npc-oda's reply: 54 characters streamed" in message
     assert "npc-bellamy's reply: " in message
-    assert "provider reply 1: 54 characters, no fence, under no label" in message
-    assert "provider reply 2: 40 characters, no fence, under the label pc-wren" in message
+    assert ("provider reply 1: 54 characters, 54 of prose, no fence, prose under no label"
+            in message)
+    assert ("provider reply 2: 40 characters, 40 of prose, no fence, prose under the label "
+            "pc-wren") in message
     assert "ledger" not in message.split("partial ledger")[0]  # no reply text
     assert not out.exists() or not any(out.iterdir())

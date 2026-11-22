@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 import time
+import zlib
 from pathlib import Path
 
 EVIDENCE_FORMAT = "grimoire.v021-capture-evidence/1"
@@ -84,15 +85,25 @@ def _chat_frames(text: str):
                 yield frame
 
 
-def provider_text(body: bytes | None, provider: str) -> str | None:
-    """The reply text of one streamed provider response, or None if it cannot be read.
+def provider_text(reply: dict, provider: str) -> str | None:
+    """The reply text of one recorded provider response, or None if it cannot be read.
 
-    Held in memory only, to describe a failed turn's shape; never written or printed.
+    ``reply`` is what the counting transport kept (``body``, its ``encoding``). Held in memory
+    only, to describe a failed turn's shape; never written or printed.
     """
+    body, encoding = reply.get("body"), (reply.get("encoding") or "identity").lower()
     if body is None:
         return None
+    try:
+        if encoding in ("gzip", "deflate"):
+            body = zlib.decompressobj(47 if encoding == "gzip" else zlib.MAX_WBITS).decompress(
+                bytes(body))
+        elif encoding != "identity":
+            return None
+    except zlib.error:
+        return None
     text = []
-    for frame in _chat_frames(body.decode("utf-8", errors="replace")):
+    for frame in _chat_frames(bytes(body).decode("utf-8", errors="replace")):
         if provider == "openrouter":
             for choice in frame.get("choices") or []:
                 delta = choice.get("delta") if isinstance(choice, dict) else None
@@ -116,19 +127,24 @@ def _labels(text: str, labels: dict[str, str], markers) -> str:
     return ("under the label " if len(found) == 1 else "under the labels ") + ", ".join(found)
 
 
+def _kind(kind) -> str:
+    return kind if isinstance(kind, str) and ERROR_KIND.fullmatch(kind) else "unrecognised"
+
+
 def turn_failure(text: str, actors: dict[str, str], *, status: int = 200,
-                 calls: list[str | None] = (), labels: dict[str, str] | None = None,
-                 markers=None, prepare=None, fences: dict | None = None) -> str:
+                 calls: list[tuple[int | None, str | None]] = (),
+                 labels: dict[str, str] | None = None, markers=None, read=None) -> str:
     """Why 0.2.1 failed a turn, as error kinds, actor ids and counts only (never text).
 
     ``text`` is the turn's ``/chat`` response as 0.2.1 sent it to its client, and ``actors``
     maps 0.2.1's actor refs to scenario actor ids. Each reply 0.2.1 streamed is described by the
-    actor it was for and how many characters the client saw (0.2.1 hides its control fences
-    from the client). ``calls`` are the provider's reply texts for the turn's requests, in
-    order (None where unreadable); each is described by its length, which named fences it held
-    (``fences``: name to pattern, 0.2.1's own) and whose speaker labels it was written under.
-    Labels are matched as 0.2.1's authority check matches them: ``prepare`` is the text as 0.2.1
-    reads it there (state block split off, macros expanded) and ``markers`` its label matcher.
+    actor it was for and how many characters its client saw (0.2.1 hides its control fences).
+
+    ``calls`` are the turn's provider requests in order, each ``(HTTP status or None if no
+    response came, reply text or None if unreadable)``. A reply is described by its length, by
+    ``read(text) -> (prose, fence names)`` (0.2.1's own reading of a reply: the prose its
+    authority check sees, and which hidden fences the reply held) and by whose speaker labels
+    that prose is written under, matched with ``markers``, 0.2.1's label matcher.
     """
     kinds: list[str] = []
     replies: list[list] = []
@@ -137,31 +153,36 @@ def turn_failure(text: str, actors: dict[str, str], *, status: int = 200,
             detail = json.loads(text).get("detail")
         except (ValueError, AttributeError):
             detail = None
-        kind = detail.get("kind") if isinstance(detail, dict) else None
-        kinds.append(kind if isinstance(kind, str) and ERROR_KIND.fullmatch(kind)
-                     else "unrecognised")
+        kinds.append(_kind(detail.get("kind") if isinstance(detail, dict) else None))
     for frame in [] if status >= 400 else _chat_frames(text):
         error = frame.get("error")
         start = frame.get("response_start")
         if isinstance(error, dict):
-            kind = error.get("kind")
-            kinds.append(kind if isinstance(kind, str) and ERROR_KIND.fullmatch(kind)
-                         else "unrecognised")
+            kinds.append(_kind(error.get("kind")))
         elif isinstance(start, dict):
             replies.append([actors.get(str(start.get("actor_ref")), "unknown"), 0])
         elif isinstance(frame.get("delta"), str) and replies:
             replies[-1][1] += len(frame["delta"])
     parts = ["0.2.1 error " + (", ".join(kinds) if kinds else "not reported")]
     parts += [f"{actor}'s reply: {count} characters streamed" for actor, count in replies]
-    for number, call in enumerate(calls, 1):
-        if call is None:
-            parts.append(f"provider reply {number}: unreadable")
-            continue
-        held = [name for name, pattern in (fences or {}).items() if pattern.search(call)]
-        shown = prepare(call) if prepare else call.strip()
-        under = _labels(shown, labels or {}, markers) if markers else "labels not read"
-        parts.append(f"provider reply {number}: {len(call.strip())} characters, "
-                     f"{'fences ' + ', '.join(held) if held else 'no fence'}, {under}")
+    for number, (code, call) in enumerate(calls, 1):
+        lead = f"provider reply {number}: "
+        if code is None:
+            parts.append(lead + "no response")
+        elif not 200 <= code < 300:
+            parts.append(lead + f"HTTP {code}")
+        elif call is None:
+            parts.append(lead + "unreadable")
+        else:
+            try:
+                prose, held = read(call) if read else (call.strip(), [])
+            except Exception:  # noqa: BLE001 -- a description must never fail the report
+                parts.append(lead + f"{len(call.strip())} characters, not parsed")
+                continue
+            under = _labels(prose, labels or {}, markers) if markers else "labels not read"
+            fences = "fences " + ", ".join(held) if held else "no fence"
+            parts.append(lead + f"{len(call.strip())} characters, {len(prose)} of prose, "
+                         f"{fences}, prose {under}")
     return "; ".join(parts)
 
 
@@ -217,9 +238,10 @@ class Guard:
         self.httpx, self.inner, self.path, self.budget = httpx, inner, CHAT_PATHS[provider], budget
         self.forwarded = 0
         self.max_tokens: set[object] = set()
-        #: Each forwarded request's reply body, in memory only (None if it cannot be decoded),
-        #: so a failed turn can be described by its shape. Never written or printed.
-        self.bodies: list[bytearray | None] = []
+        #: One record per forwarded request, in order: its HTTP status (None if no response
+        #: came), its raw body and content encoding. In memory only, so a failed turn can be
+        #: described by its shape; never written or printed.
+        self.replies: list[dict] = []
 
     def transport(self):
         guard = self
@@ -235,14 +257,14 @@ class Guard:
                     guard.max_tokens.add(json.loads(request.content).get("max_tokens"))
                 except ValueError:
                     guard.max_tokens.add("unreadable")
+                guard.replies.append(reply := {"status": None, "body": None, "encoding": ""})
                 response = await guard.inner.handle_async_request(request)
-                guard.bodies.append(sink := bytearray())
+                reply["status"], reply["body"] = response.status_code, bytearray()
                 try:
-                    sink += response.content  # already read (a test transport)
+                    reply["body"] += response.content  # already read and decoded (a test transport)
                 except guard.httpx.ResponseNotRead:
-                    response.stream = Recording(response.stream, sink)
-                if response.headers.get("content-encoding", "identity") not in ("", "identity"):
-                    guard.bodies[-1] = None  # compressed: not decoded here, reported unreadable
+                    reply["encoding"] = response.headers.get("content-encoding", "")
+                    response.stream = Recording(response.stream, reply["body"])
                 return response
 
             async def aclose(self):
@@ -396,8 +418,23 @@ def main(argv: list[str]) -> int:
         refs[f"pcs:{pc['pc']}"] = setup["pc"]["actor_id"]
         _ok(client.post(f"{base}/cast", json={"id": pc["pc"], "kind": "pcs"}), "cast the PC")
 
-        # 0.2.1's own patterns for the fences it hides from its client.
-        fences = {"handoff": response_protocol._HANDOFF, "state": state_fence._OPEN}
+        def read(text: str) -> tuple[str, list[str]]:
+            """A reply as 0.2.1 reads it for a speaking NPC: its own watcher (perception on,
+            as ``_rounds`` sets it for an NPC) takes the prose before the handoff, then
+            ``_persistence._normalise``'s steps up to the label check."""
+            watcher = response_protocol.ResponseWatcher(perception=True)
+            watcher.feed(text)
+            watcher.finish()
+            held = [name for name, present in (
+                ("perception", bool(watcher.preparation.body.strip())),
+                ("handoff", bool(response_protocol._HANDOFF.search(watcher.raw))),
+                ("state", bool(state_fence._OPEN.search(watcher.raw)))) if present]
+            prose = store.context.expand_macros(
+                store.context.resolve_art_handles(
+                    cid, state_fence.split_block(watcher.narration)[0], sid),
+                store.context.scene_substitutions(cid, sid), cid, sid).strip()
+            return prose, held
+
         cast_labels = {npcs[a]["name"]: a for a in npcs}
         cast_labels[setup["pc"]["name"]] = setup["pc"]["actor_id"]
         speaker_refs = [ref for actor in speakers for ref, a in refs.items() if a == actor]
@@ -430,18 +467,15 @@ def main(argv: list[str]) -> int:
 
         boundaries = []
         for turn in turns:
-            first_call = len(guard.bodies)
+            first_call = len(guard.replies)
             response = client.post(f"{base}/chat", json={"content": turn["player_text"]})
             if response.status_code >= 400 or '"error"' in response.text:
-                calls = [None if body is None else provider_text(bytes(body), args.provider)
-                         for body in guard.bodies[first_call:]]
-                why = turn_failure(
-                    response.text, refs, status=response.status_code, calls=calls,
-                    labels=cast_labels, markers=scenes._markers, fences=fences,
-                    prepare=lambda text: store.context.expand_macros(
-                        store.context.resolve_art_handles(
-                            cid, state_fence.split_block(text)[0], sid),
-                        store.context.scene_substitutions(cid, sid), cid, sid).strip())
+                calls = [(reply["status"], None if reply["body"] is None
+                          else provider_text(reply, args.provider))
+                         for reply in guard.replies[first_call:]]
+                why = turn_failure(response.text, refs, status=response.status_code,
+                                   calls=calls, labels=cast_labels, markers=scenes._markers,
+                                   read=read)
                 fail(f"turn {turn['turn']} failed: HTTP {response.status_code}; {why}")
             boundaries.append(len(store.scenes.read_scene(cid, sid)["messages"]))
         deadline = time.monotonic() + IDLE_TIMEOUT_SECONDS
