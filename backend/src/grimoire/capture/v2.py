@@ -147,6 +147,8 @@ class CompareOptions:
     with_planning: bool = False
     #: How many times V2 plays the scenario (and, with planning, plays it planned).
     samples: int = 1
+    #: An earlier comparison's output, whose V2 runs are scored again instead of played (no calls).
+    rescore_of: Path | None = None
 
     @property
     def baselines(self) -> tuple[Path, ...]:
@@ -495,8 +497,29 @@ def _rejected_note(baselines: Sequence[Baseline]) -> str:
             "and latency are those of the play 0.2.1 kept, a lower bound on what its player paid.")
 
 
+def _run_notes(options: CompareOptions, baselines: Sequence[Baseline], sampled: bool) -> list[str]:
+    """What the report says about the run before its verdicts: samples, mode, what was left out."""
+    first, notes = baselines[0], []
+    if sampled:
+        notes.append(f"Samples: {len(baselines)} 0.2.1 capture{'s' if len(baselines) > 1 else ''}, "
+                     f"{options.samples} V2 play{'s' if options.samples > 1 else ''}"
+                     f"{' of each kind' if options.with_planning else ''}. "
+                     "One reply is one draw from the model, so each side is read over all its samples.")
+    if options.mode == "dry_run":
+        notes.append("Dry run: scripted replies and synthetic numbers; nothing was sent.")
+    rejected = _rejected_note(baselines)
+    if rejected:
+        notes.append(rejected)
+    if first.max_tokens is None:
+        notes.append("0.2.1 sent no output cap (max_tokens=unset) and V2 always sends one, so the "
+                     "budgets differ and the gate reports the runs as incomparable.")
+    if first.provider in PROTOCOL_NOTES and options.mode == "live":
+        notes.append(PROTOCOL_NOTES[first.provider])
+    return notes
+
+
 def _report(options: CompareOptions, baselines: Sequence[Baseline], scenario: Scenario,
-            runs: Mapping[str, Sequence[dict]]) -> str:
+            runs: Mapping[str, Sequence[dict]], preamble: Sequence[str] = ()) -> str:
     first = baselines[0]
     evidence = [verify_evidence(each.run, each.bundle, evidence_digest(each.bundle), scenario)
                 for each in baselines]
@@ -505,21 +528,10 @@ def _report(options: CompareOptions, baselines: Sequence[Baseline], scenario: Sc
               f"provider {first.provider}, model {first.model}, V2 max_tokens={first.sent_max_tokens}, "
               f"baseline evidence sha256 {digests}")]
     sampled = options.samples > 1 or len(baselines) > 1
-    if sampled:
-        parts.append(f"Samples: {len(baselines)} 0.2.1 capture{'s' if len(baselines) > 1 else ''}, "
-                     f"{options.samples} V2 play{'s' if options.samples > 1 else ''}"
-                     f"{' of each kind' if options.with_planning else ''}. "
-                     "One reply is one draw from the model, so each side is read over all its samples.")
-    if options.mode == "dry_run":
-        parts.append("Dry run: scripted replies and synthetic numbers; nothing was sent.")
-    rejected = _rejected_note(baselines)
-    if rejected:
-        parts.append(rejected)
-    if first.max_tokens is None:
-        parts.append("0.2.1 sent no output cap (max_tokens=unset) and V2 always sends one, so the "
-                     "budgets differ and the gate reports the runs as incomparable.")
-    if first.provider in PROTOCOL_NOTES and options.mode == "live":
-        parts.append(PROTOCOL_NOTES[first.provider])
+    if preamble:  # a rescore: the earlier report's own account of its run, word for word
+        parts = [*preamble, RESCORE_NOTE.format(directory=options.rescore_of, mode=options.mode)]
+    else:
+        parts.extend(_run_notes(options, baselines, sampled))
     plain = [parse_run_v2(raw, scenario) for raw in runs["baseline"]]
     title = "== V2 (one call per speaking NPC) against 0.2.1 ==\n"
     if sampled:
@@ -593,6 +605,85 @@ def run_compare(options: CompareOptions) -> Path:
     return out
 
 
+RESCORE_NOTE = ("Rescored: the V2 runs were read back from {directory} and scored again, against the "
+                "same 0.2.1 captures, with the scenario and the gate as they are now. The paragraphs "
+                "above are copied from the earlier {mode} comparison's report, so they describe the "
+                "run as it was made. Nothing was sent and nothing was billed.")
+_SAVED_RUN = re.compile(r"v2-(baseline|planning)(?:-([1-9][0-9]*))?\.run\.json")
+_SAVED_HEADER = re.compile(r"V2 against the 0\.2\.1 captures?: (dry_run|live), .*?baseline evidence "
+                           r"sha256 ([0-9a-f]{64}(?:, [0-9a-f]{64})*)\n")
+
+
+def saved_comparison(directory: Path) -> tuple[str, tuple[str, ...], tuple[str, ...], dict[str, list[dict]]]:
+    """An earlier comparison's mode, baseline evidence digests, the paragraphs its report wrote before
+    its verdicts, and its V2 runs, read back from its output."""
+    if not directory.is_dir():
+        raise CaptureRefused(f"--rescore {directory}: not a comparison's output directory")
+    report = directory / "comparison-report.txt"
+    if report.is_symlink():
+        raise CaptureRefused(f"--rescore {directory}: its comparison-report.txt is a link")
+    try:
+        header = report.read_text("utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise CaptureRefused(f"--rescore {directory}: no readable comparison-report.txt") from None
+    match = _SAVED_HEADER.match(header)
+    if match is None:
+        raise CaptureRefused(f"--rescore {directory}: comparison-report.txt names no 0.2.1 baselines")
+    found: dict[str, dict[int, Path]] = {}
+    for path in directory.iterdir():
+        if (name := _SAVED_RUN.fullmatch(path.name)) is not None:
+            if path.is_symlink():
+                raise CaptureRefused(f"--rescore {directory}: {path.name} is a link")
+            found.setdefault(name[1], {})[int(name[2] or 0)] = path
+    if "baseline" not in found:
+        raise CaptureRefused(f"--rescore {directory}: holds no V2 run")
+    numbers = sorted(found["baseline"])
+    if numbers != [0] and numbers != list(range(1, len(numbers) + 1)):
+        raise CaptureRefused(f"--rescore {directory}: its V2 runs are not numbered 1 to {len(numbers)}")
+    if "planning" in found and sorted(found["planning"]) != numbers:
+        raise CaptureRefused(f"--rescore {directory}: its planned and plain V2 runs do not pair up")
+    runs: dict[str, list[dict]] = {}
+    for kind, paths in found.items():
+        try:
+            runs[kind] = [load_json(paths[number]) for number in numbers]  # type: ignore[misc]
+        except BenchmarkFormatError as error:
+            raise CaptureRefused(f"--rescore {directory}: {error}") from None
+    preamble = tuple(header.split("\n\n== ", 1)[0].split("\n\n"))
+    return match[1], tuple(match[2].split(", ")), preamble, runs
+
+
+def run_rescore(scenario_name: str, baselines: Sequence[Path], rescore: Path, out: Path) -> Path:
+    """Score an earlier comparison's V2 runs again, against the same captures, with the current
+    scenario. Nothing is sent: the runs are read back from ``rescore``."""
+    try:
+        scenario = load_scenario(benchmark_file(scenario_name, "scenario.json"))
+    except BenchmarkFormatError as error:
+        raise CaptureRefused(f"scenario {scenario_name!r}: {error}") from None
+    rescore = Path(os.path.realpath(rescore))
+    mode, digests, preamble, runs = saved_comparison(rescore)
+    loaded = load_baselines(baselines, scenario)
+    if tuple(each.run.source.evidence_sha256 for each in loaded) != digests:
+        raise CaptureRefused("--baseline must name the captures the earlier comparison used, in "
+                             "the same order")
+    if loaded[0].run.source.mode != mode:
+        raise CaptureRefused(f"--rescore {rescore}: its report says {mode}, but the captures are "
+                             f"{loaded[0].run.source.mode}")
+    for kind, samples in runs.items():
+        for raw in samples:
+            try:
+                parse_run_v2(raw, scenario)
+            except BenchmarkFormatError as error:
+                raise CaptureRefused(f"--rescore {rescore}: a {kind} V2 run: {error}") from None
+    forbidden = [*forbidden_roots(Path(baselines[0]).resolve()), rescore,
+                 *(Path(os.path.realpath(directory)) for directory in baselines[1:])]
+    out = check_out_dir(out, forbidden=forbidden)
+    options = CompareOptions(scenario_name, tuple(baselines), out, mode,
+                             with_planning="planning" in runs, samples=len(runs["baseline"]),
+                             rescore_of=rescore)
+    _write(out, {"comparison-report.txt": _report(options, loaded, scenario, runs, preamble)})
+    return out
+
+
 # --- command line --------------------------------------------------------------------------------
 
 def _parser() -> argparse.ArgumentParser:
@@ -606,9 +697,12 @@ def _parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="no network; synthetic numbers")
     mode.add_argument("--live", action="store_true", help="real provider calls; billed")
+    mode.add_argument("--rescore", type=Path, metavar="DIR",
+                      help="score an earlier comparison's V2 runs in DIR again with the current "
+                           "scenario, against the same --baseline captures; no calls, nothing billed")
     parser.add_argument("--with-planning", action="store_true",
                         help="also play V2 with optional presentation planning (more billed calls)")
-    parser.add_argument("--samples", type=int, default=1, metavar="N",
+    parser.add_argument("--samples", type=int, default=None, metavar="N",
                         help=f"V2 plays of each kind, 1 to {MAX_SAMPLES} (each billed on --live)")
     parser.add_argument("--api-key-env", metavar="VAR",
                         help="name of the environment variable holding the key (live)")
@@ -623,6 +717,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as error:
         return int(error.code or 0)
     try:
+        if args.rescore is not None:
+            given = [flag for flag, value in (("--with-planning", args.with_planning),
+                                              ("--samples", args.samples is not None),
+                                              ("--api-key-env", args.api_key_env),
+                                              ("--confirm-billing", args.confirm_billing)) if value]
+            if given:
+                raise CaptureRefused(f"--rescore makes no calls and reads its runs from DIR; "
+                                     f"drop {', '.join(given)}")
+            out = run_rescore(args.scenario, tuple(args.baseline), args.rescore, args.out)
+            print(f"rescored comparison written to {out}")
+            return 0
         if args.live and not args.confirm_billing:
             raise CaptureRefused("--live makes billed provider calls; add --confirm-billing")
         if args.live and not args.api_key_env:
@@ -631,7 +736,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             check_key_env(args.api_key_env)
         options = CompareOptions(args.scenario, tuple(args.baseline), args.out,
                                  "live" if args.live else "dry_run", args.api_key_env,
-                                 args.with_planning, args.samples)
+                                 args.with_planning, 1 if args.samples is None else args.samples)
         out = run_compare(options)
     except CaptureRefused as error:
         print(f"refused: {error}", file=sys.stderr)

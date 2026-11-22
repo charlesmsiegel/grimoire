@@ -96,6 +96,49 @@ def test_negation_label_and_evidence_are_independent_signals(bench):
     assert [(f.check, f.evidence) for f in negated] == [("choice_negated", "negation#0")]
 
 
+@pytest.mark.parametrize("narration", [
+    "Oda flips the guest book open and taps a line.",
+    "Oda slides the ledger across the counter without a word.",
+    "Oda hands Wren the ledger.",
+    "Oda handed over the ledger.",
+    "Oda gave the ledger to Wren.",
+    "Oda runs a thumb down the guest-ledger.",
+    "Oda checks the guests’ ledger.",
+    "Oda turns the ledger toward Wren.",
+])
+def test_the_ledger_choice_is_realized_by_its_other_forms(bench, narration):
+    scenario, run = bench
+    found = findings_for(scenario, mutate(run, both(
+        set_text(1, "npc-oda", "Fine."), set_text(1, None, narration + " The sealed vault door gleams."))))
+    assert found == ()
+
+
+@pytest.mark.parametrize("narration", [
+    "Ledger's closed tonight. Come back at dawn.",  # a bare ledger is not the effect
+    "No. Rules are rules. Keep your silver.",
+    "Oda never takes the coin.",  # nothing about the coin counts: taking it is not giving the book
+    "Oda takes the coin and the ledger stays shut.",
+    "Oda pockets the silver and shakes her head.",
+    "Oda pushes the ledger away and slides the coin back.",
+    "Oda turns the ledger face down.",
+    "Oda never opens the ledger for strangers.",
+    "Oda keeps the ledger open only for her counts.",
+    "Bellamy laughs that the guest list is full of rogues.",
+    "Oda refuses to show the ledger to Wren.",
+    "Oda says nothing about the ledger to Wren.",
+    "Oda drags the ledger across the counter, out of Wren's reach.",
+    "Oda keeps the ledger across the room.",
+    "Bellamy eyes the ledger across the counter.",
+    "Oda hands the ledger over to Quill and turns away.",
+])
+def test_a_reply_that_does_not_produce_the_guest_ledger_does_not_realize_the_choice(bench, narration):
+    scenario, run = bench
+    found = findings_for(scenario, mutate(run, both(
+        set_text(1, "npc-oda", "Hm."), set_text(1, None, narration + " The sealed vault door gleams."))))
+    assert [(f.check, f.subject, f.evidence) for f in found] == [
+        ("choice_negated", "ask-ledger", "unrealized")]
+
+
 def test_effect_text_before_the_players_line_is_not_evidence(bench):
     scenario, run = bench
 
