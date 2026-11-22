@@ -176,8 +176,9 @@ cannot verify the provider's own billing receipt. The report says both.
   invents a label.
 - **Rolls.** A 0.2.1 reply that pauses for a roll is a second call for one contribution, which
   fails the capture (`multi_call_contribution`).
-- **Live captures can fail.** Two of three live attempts failed; see
-  [earlier attempts](#earlier-attempts-the-same-day). The driver reports a failed turn only as an
+- **Live captures can fail.** Three of four live attempts failed; see
+  [earlier attempts](#earlier-attempts-the-same-day) and the
+  [2026-11-22 attempt](#sampled-capture-attempt-2026-11-22). The driver reports a failed turn only as an
   HTTP status, not 0.2.1's error kind.
 - **Windows.** The real driver has been run on Linux only.
 - **Matched comparison.** A V2-vs-V0.2.1 comparison needs V2's provider adapter (013) and
@@ -245,6 +246,30 @@ Both failed in turn 1, wrote nothing and were billed for the calls that had comp
    0.2.1 still reported the turn as failed. The cause was not captured; the 19-token second
    reply suggests 0.2.1's empty-response check, which is unconfirmed. The same command
    succeeded on the next attempt, so a live capture on this route can fail intermittently.
+
+## Sampled capture attempt (2026-11-22)
+
+068's sampled comparison needs five captures of the same play, so four more were approved, with
+the same command, model (`claude-sonnet-4-5-20250929`) and stock driver. Only the first was
+started, and it failed, so **no 2026-11-22 capture exists** and the measured baseline above is
+still the only one.
+
+| Sample | Result | Calls completed | Input tokens | Output tokens | Cast distinguishability |
+|---|---|---:|---:|---:|---|
+| 2 | failed in turn 1, nothing written | 2 | 4,721 | 213 | not measured |
+| 3, 4, 5 | not started | 0 | 0 | 0 | not measured |
+
+Both of sample 2's calls completed (2,324 / 194 and 2,397 / 19 tokens, no cache tokens) and
+0.2.1 still reported the turn as failed. That is the same pattern as the second attempt on
+2026-11-20, down to the 19-token second reply. The driver reports only the HTTP status, so the
+cause is still not captured; 0.2.1's empty-response check remains the unconfirmed suspect. A
+failed billed step was not to be retried, so the remaining captures were not run. At an assumed
+list price of 3 USD input and 15 USD output per million tokens the two calls come to about
+0.02 USD, as an estimate.
+
+On this route the capture has now failed this way on two of three attempts with this model.
+Five captures in a row are unlikely to succeed until the cause is known, and the driver would
+have to report 0.2.1's error kind to find it.
 
 ## Privacy
 
