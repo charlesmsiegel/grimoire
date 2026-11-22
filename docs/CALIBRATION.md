@@ -142,7 +142,7 @@ report gives each dropped citation's shape, never its text, per judge in
 Only these counts give shapes. A verdict kept in the report keeps the citations it was
 given, because the pinned rubric scores the raw evidence.
 
-**Re-asks (parser versions 3 and 4).** The pinned rubric refuses a verdict whose step is
+**Re-asks (parser versions 3 to 5).** The pinned rubric refuses a verdict whose step is
 not on its ladder (1.0, 0.5, 0.25, 0.0), so one such step leaves the whole trial's panel
 unscored. When a theory answer puts any step off the ladder (`step not in LADDER`, the
 rubric's own test), the harness asks that judge once more, in the same conversation. The
@@ -173,14 +173,31 @@ the pinned rubric refuses it when the report is scored (`invalid_verdict`). An u
 the rubric does not grade leaves the answer `citation` and shows only in `dropped_shapes`. Each answer is re-asked at most once for both
 faults together, so the plan and `max_calls` are unchanged.
 
-Only an answer whose other checks passed is re-asked: the unit and the coverage canary, and
+Parser version 5 also re-asks a theory answer that is `malformed`: it holds no JSON object
+tagged `"schema": "theory-verdict/1"` that could be read, such as prose alone, broken JSON
+or another schema tag. The 2026-11-22 parser 4 capture lost a scrambled trial that way. An
+object that holds the tagged one inside it, such as a wrapper or a draft and a final answer,
+is `ambiguous` instead. The message says only that no such object could be read, never what
+the answer should say. It carries the judge's own answer back, so an empty answer is never
+re-asked. Nor is an `ambiguous` one, whose second object may be the judge changing its mind.
+Nor is one that names files without copying the canary: a `"files"` key with the canary
+nowhere in the answer, even in broken JSON, or an object whose files are not covered. That
+answer was not read, so it gets no second draw. Defect answers are never re-asked. No
+object was read, so the re-asked answer must copy the canary itself, and pass every other check on its own, as any answer
+must. `parsing.malformed` counts, per judge, the theory trials whose final answer held no
+readable object, whether or not it was re-asked, and a re-asked trial's `reasked` is
+`["malformed"]`. This is still at most one re-ask per answer, so the
+plan and `max_calls` are unchanged. The ladder and citation messages are word for word
+what version 4 sent, so a version 4 capture still replays.
+
+Apart from a `malformed` answer, only an answer whose other checks passed is re-asked: the unit and the coverage canary, and
 for the ladder alone, the citations too. An answer that also fails one of those keeps that
 reason (`coverage`, `citation`), is never re-asked, and still counts in `parsing.off_ladder`.
 Evidence that is not a list of citations is never re-asked either, nor is a lowered step whose
 evidence is blank, whose step is not a number below 1.0, or that sits under a key the rubric
-does not grade. A re-ask cures one of two
-faults of form, a step between rungs or a lowered step with no listed line, and never gives
-an unread answer a second draw. A re-ask that brings back no readable answer (refused, interrupted, or served
+does not grade. A re-ask cures one of three faults of form: a step between rungs, a lowered
+step with no listed line, or an answer with no readable object. Apart from that last one,
+it never gives an unread answer a second draw. A re-ask that brings back no readable answer (refused, interrupted, or served
 by another model) leaves the trial `unknown`, with the first answer's faults still counted.
 A re-asked trial keeps its first answer's parse counts, dropped-citation shapes and verdict
 (`first_answer`), and both answers count in `parsing`.
@@ -190,7 +207,8 @@ least three rehearsals, and the theory fields must not be empty. So, when the re
 scored, each re-asked trial's first answer is also put through the pinned rubric, with each
 off-ladder step read as a rung (1.0 for a number at or above the top, 0.5 otherwise) for that check only.
 If the rubric refuses it for any other fault, the trial is `first_answer_invalid` and its
-panel is unscored, whatever the re-ask said. That check never scores anything: the profile
+panel is unscored, whatever the re-ask said. A `malformed` first answer holds no verdict, so
+it has nothing for the rubric to refuse. That check never scores anything: the profile
 comes from the re-asked answer alone.
 
 A re-asked answer counts as that judge's answer for the trial. The judge's first answer
@@ -534,3 +552,8 @@ is reported but is not a proof key. The requirement is unchanged. Four captures 
 `opus` answer. With 18 theory answers per capture that must all be readable, one bad answer
 voids a unit. Closing the proof needs another capture
 with its own approval.
+
+**After this capture.** [Parser version 5](#independent-judge-panel) re-asks a theory
+answer once when it holds no readable object. Re-scoring this capture under version 5 makes
+no calls and cannot close the proof: it holds no such re-ask, and its manifest names parser
+version 4, so `captured_for_this_parser` is false.

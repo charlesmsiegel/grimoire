@@ -75,15 +75,17 @@ copy its token exactly. Answer with one JSON object and nothing else:
 PROMPT_VERSION = hashlib.sha256((DEFECT_PROMPT + '\0' + THEORY_PROMPT).encode()).hexdigest()
 
 # Sent once, in the same conversation, to a theory judge whose answer had only these faults: a step
-# off the ladder, or a lowered step none of whose citations is a listed line. It names the dimensions
-# and restates the rule, never which rung or line to pick. The text is in each re-ask record's prompt
-# digest, so a capture made with other wording is refused as stale. A re-ask for the ladder alone is
+# off the ladder, a lowered step none of whose citations is a listed line, or no readable object at
+# all. It names the dimensions and restates the rule, never which rung or line to pick. The text
+# is in each re-ask record's prompt digest, so a capture made with other wording is refused as
+# stale. A re-ask for the ladder alone is
 # word for word what parser version 3 sent, so its captures still replay.
 REASK_LADDER = """Your answer gave {dimensions} a step that is not on the ladder. Every step must be
 exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between
 them."""
 REASK_CITATION = """Your answer gave {dimensions} a step below 1.0 with no citation of a line the listing
 has. Each citation must be exactly "{file}:<line>", where <line> is one line number the listing shows."""
+REASK_MALFORMED = f'Your answer held no JSON object with "schema": "{THEORY_SCHEMA}" that could be read.'
 REASK_END = 'Answer again with one complete JSON object in the same format, and nothing else.'
 REASK_PROMPT = REASK_LADDER + ' ' + REASK_END
 
@@ -231,7 +233,9 @@ def prompt_sha256(messages: list[tuple[str, str]]) -> str:
 # with those answers ``unknown`` (``off_ladder``), as version 2 read them. Version 4 also re-asks a
 # covered answer whose lowered step kept no listed line, and reports the shape of each dropped
 # citation; a version 3 capture has no such re-ask and is read with that answer ``citation``.
-PARSER_VERSION = 4
+# Version 5 also re-asks a theory answer that held no readable object at all; a version 4 capture
+# has no such re-ask and is read with that answer ``malformed``.
+PARSER_VERSION = 5
 
 
 def _decoded(text: str) -> dict | None:
@@ -258,8 +262,9 @@ def extract(text: object, schema: str) -> tuple[dict | None, str | None, bool]:
     if not isinstance(text, str):
         return None, 'malformed', False
     whole = _decoded(text)
-    if whole is not None:
+    if whole is not None and (whole.get('schema') == schema or schema not in text):
         return (whole, None, False) if whole.get('schema') == schema else (None, 'malformed', False)
+    # An object holding the schema's object inside it is read by the scan below: ``ambiguous``.
     decoder, found, at = json.JSONDecoder(), [], text.find('{')
     while at != -1:
         try:
@@ -290,6 +295,34 @@ def _opens(text: str) -> bool:
         elif char in '}]' and depth:
             depth -= 1
     return depth > 0
+
+
+def _objects(text: str) -> list[dict]:
+    """Every JSON object in ``text`` that is not inside another, whatever its tag."""
+    whole = _decoded(text)
+    if whole is not None:
+        return [whole]
+    decoder, found, at = json.JSONDecoder(), [], text.find('{')
+    while at != -1:
+        try:
+            value, end = decoder.raw_decode(text, at)
+        except ValueError:
+            at = text.find('{', at + 1)
+            continue
+        if isinstance(value, dict):
+            found.append(value)
+        at = text.find('{', end)
+    return found
+
+
+def _uncovered_object(text: str, name: str, token: str) -> bool:
+    """Whether an unreadable answer gives files but never copied the canary: a ``"files"`` key with
+    the canary nowhere in the text, broken JSON included, or a parsed object with files, none of
+    which is covered."""
+    if token not in text and re.search(r'"files"\s*:', text):
+        return True
+    objects = [o for o in _objects(text) if 'files' in o]
+    return bool(objects) and not any(covered(o, name, token) for o in objects)
 
 
 def covered(data: dict, name: str, token: str) -> bool:
@@ -429,17 +462,19 @@ def laddered(verdict: dict) -> dict:
     return {**verdict, 'dimensions': dimensions}
 
 
-def reask_text(off: list[str], uncited: list[str], file: str) -> str:
+def reask_text(off: list[str], uncited: list[str], file: str, malformed: bool = False) -> str:
     """The rule restated for each fault found, and the ask to answer again."""
-    parts = ([REASK_LADDER.format(dimensions=', '.join(off))] if off else []) + (
+    parts = ([REASK_MALFORMED] if malformed else []) + (
+        [REASK_LADDER.format(dimensions=', '.join(off))] if off else []) + (
         [REASK_CITATION.format(dimensions=', '.join(uncited), file=file)] if uncited else [])
     return ' '.join([*parts, REASK_END])
 
 
 def reask_messages(messages: list[tuple[str, str]], reply: str, off: list[str],
-                   uncited: list[str] | None = None, file: str = '') -> list[tuple[str, str]]:
+                   uncited: list[str] | None = None, file: str = '',
+                   malformed: bool = False) -> list[tuple[str, str]]:
     """The first conversation, the judge's own answer, and the rules it broke restated."""
-    return [*messages, ('assistant', reply), ('user', reask_text(off, uncited or [], file))]
+    return [*messages, ('assistant', reply), ('user', reask_text(off, uncited or [], file, malformed))]
 
 
 def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
@@ -451,8 +486,16 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
         return {'state': state, 'reason': reason, 'verdict': verdict, 'text_outside_json': outside,
                 'ambiguous': failure == 'ambiguous', 'citations_dropped': dropped,
                 'dropped_shapes': shapes or {}}
+    if data is None and failure != 'ambiguous':
+        # No object could be read, so nothing in it was judged: a fault of form alone. Re-askable
+        # only with a reply to show the judge, since a re-ask carries the judge's own answer back,
+        # and never when an object in it names files without the canary: that answer was unread.
+        fault = {'malformed': True}
+        if isinstance(text, str) and text.strip() and not _uncovered_object(text, name, token):
+            fault['reaskable'] = True
+        return {**result('unknown', 'malformed', None), **fault}
     if data is None:
-        return result('unknown', failure or 'malformed', None)
+        return result('unknown', 'ambiguous', None)
     verdict = {key: value for key, value in data.items() if key != 'files'}
     if data.get('unit') != name[:-3]:
         return result('unknown', 'unit', None)
@@ -465,7 +508,8 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
         _grounded(dimensions, name, count) if isinstance(dimensions, dict) else (None, 0, [], False, {}))
     if grounded is None:
         # Re-askable only when the canary was copied too, so a re-ask never gives an unread answer
-        # a second draw. With the ladder, an uncited lowered step is the only fault a re-ask cures.
+        # a second draw. Besides the ladder and an unreadable answer, an uncited lowered step is
+        # the only fault a re-ask cures.
         fault = {'uncited': uncited} if uncited else {}
         if curable and covered(data, name, token):
             fault['reaskable'] = True
@@ -662,14 +706,17 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
                 if result.get('reason') == 'off_ladder' or result.pop('reaskable', False):
                     # Once, never again: the re-asked answer is read on its own and stands as it is.
                     off, uncited = result.get('off_ladder', []), result.get('uncited', [])
+                    malformed = bool(result.get('malformed'))
                     again = judge.respond(pin, case, trial, reask_messages(messages, record['reply'], off,
-                                                                           uncited, name), reask=True)
+                                                                           uncited, name, malformed), reask=True)
                     if again is not None:
                         first = result
                         result = trial_result(again, pin, case, token, name)
                         result.pop('reaskable', None)  # only a gate for the first answer; kept out of the report
                         order = {key: n for n, key in enumerate(DIMENSIONS)}
-                        result.update(reasked=sorted({*off, *uncited}, key=lambda k: order.get(k, len(order))),
+                        # What the re-ask restated: the dimensions named, or the whole answer.
+                        result.update(reasked=['malformed'] if malformed else sorted(
+                                          {*off, *uncited}, key=lambda k: order.get(k, len(order))),
                                       first_answer={**{key: first[key] for key in ANSWER_COUNTS},
                                                     'verdict': first['verdict']},
                                       observed_models=sorted({*first.get('observed_models', []),
@@ -677,7 +724,8 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
                                       measurement=_measured(first['measurement'], result['measurement']))
                         if not _read(result):
                             # No second answer was read, so the trial's only answer keeps its faults.
-                            result.update({key: first[key] for key in ('off_ladder', 'uncited') if key in first})
+                            result.update({key: first[key] for key in ('off_ladder', 'uncited', 'malformed')
+                                           if key in first})
                 results.append(result)
             entry['judges'][pin.judge_id] = results
         out.append(entry)
@@ -705,7 +753,7 @@ def parsing(cases: list[dict]) -> dict:
         for judge_id, results in case.get('judges', {}).items():
             row = out.setdefault(judge_id, {'answers': 0, 'text_outside_json': 0, 'ambiguous': 0,
                                               'citations_dropped': 0, 'dropped_shapes': {}, 'reasked': 0,
-                                              'off_ladder': 0, 'uncited': 0})
+                                              'off_ladder': 0, 'uncited': 0, 'malformed': 0})
             for result in results:
                 for answer in (result.get('first_answer'), result):
                     if answer is None:
@@ -719,6 +767,7 @@ def parsing(cases: list[dict]) -> dict:
                 row['reasked'] += bool(result.get('reasked'))
                 row['off_ladder'] += bool(result.get('off_ladder'))  # still off after any re-ask
                 row['uncited'] += bool(result.get('uncited'))  # still uncited after any re-ask
+                row['malformed'] += bool(result.get('malformed'))  # still unreadable after any re-ask
     return out
 
 
@@ -855,7 +904,8 @@ def _score_trial(results: list[dict], size: dict, checkout: Path | None) -> dict
         reason = 'invalid_verdict'
     elif reason is None and checkout is not None and any(
             'error' in upstream_score(checkout, [laddered(r['first_answer']['verdict'])] * PANEL_SIZE, size)
-            for r in results if r.get('first_answer')):
+            # A first answer with no readable object holds no verdict for the rubric to refuse.
+            for r in results if r.get('first_answer') and r['first_answer']['verdict'] is not None):
         reason = 'first_answer_invalid'
     scored = reason is None
     return {'profile_score': upstream['score'] if scored else None,

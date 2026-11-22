@@ -214,7 +214,7 @@ def test_the_report_counts_answers_read_out_of_prose_and_ambiguous_ones_even_aft
                                 'dropped_shapes': {'range': 1, 'other_file': 1}}]}}]
     assert jp.parsing(cases) == {'a': {'answers': 2, 'text_outside_json': 1, 'ambiguous': 1,
                                        'citations_dropped': 2, 'dropped_shapes': {'range': 1, 'other_file': 1},
-                                       'reasked': 0, 'off_ladder': 0, 'uncited': 0}}
+                                       'reasked': 0, 'off_ladder': 0, 'uncited': 0, 'malformed': 0}}
 
 
 def test_a_superscript_line_number_is_a_dropped_citation_not_a_crash():
@@ -752,6 +752,121 @@ def test_the_pinned_rubric_refuses_a_reask_whose_first_answer_had_another_fault(
     result = run_reasked(tmp_path, Reasked(accurate, first=lambda reply: json.dumps(fault(reply))), checkout)
     assert result['theory']['units']['ledger_cohesive']['trials'][0]['reason'] == 'first_answer_invalid'
     assert not result['proof']['theory_panel_scored_and_discriminates']
+
+
+@pytest.mark.parametrize('first', [
+    lambda reply: 'Having read the listing, I would grade it well.',
+    lambda reply: json.dumps(reply)[:-1] + ',}',  # a trailing comma: not JSON
+    lambda reply: json.dumps({**reply, 'schema': 'theory_verdict/1'}),
+])
+def test_an_answer_with_no_readable_object_is_reasked_once_and_the_new_answer_stands(tmp_path, stub_checkout, first):
+    judge = Reasked(accurate, first=first)
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert [call for call in judge.calls if call[-1] == 'reask'] == [('b', 'ledger_cohesive', 0, 'reask')]
+    assert judge.asked[0][-2][0] == 'assistant'  # the judge's own answer, carried back unchanged
+    assert judge.asked[0][-1] == ('user', (
+        'Your answer held no JSON object with "schema": "theory-verdict/1" that could be read. '
+        'Answer again with one complete JSON object in the same format, and nothing else.'))
+    trial = cohesive_b(result)
+    assert trial['state'] == 'verdict' and trial['reasked'] == ['malformed'] and 'malformed' not in trial
+    assert trial['first_answer']['verdict'] is None and 'reaskable' not in trial
+    row = result['parsing']['b']
+    assert row['reasked'] == 1 and row['malformed'] == 0 and row['answers'] == 37
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reasked'] == ['b']
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reason'] is None
+    assert result['proof']['theory_panel_scored_and_discriminates']
+
+
+def test_an_answer_still_unreadable_after_its_reask_is_malformed_and_never_asked_again(tmp_path, stub_checkout):
+    def prose(record):
+        return {**record, 'reply': 'Still thinking it over.'}
+    judge = Reasked(accurate, first=lambda reply: 'Not sure yet.', again=prose)
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert sum(call[-1] == 'reask' for call in judge.calls) == 1
+    trial = cohesive_b(result)
+    assert trial['reason'] == 'malformed' and trial['malformed'] and 'reaskable' not in trial
+    assert result['parsing']['b']['malformed'] == 1 and result['parsing']['b']['reasked'] == 1
+    assert not result['proof']['theory_panel_scored_and_discriminates']
+
+
+def test_a_refused_reask_keeps_the_first_answer_malformed(tmp_path, stub_checkout):
+    def refused(record):
+        return {**record, 'status': 'refused', 'reply': None}
+    result = run_reasked(tmp_path, Reasked(accurate, first=lambda reply: 'No.', again=refused), stub_checkout)
+    trial = cohesive_b(result)
+    assert trial['reason'] == 'call_refused' and trial['malformed'] is True
+    assert result['parsing']['b']['malformed'] == 1
+
+
+def test_a_reasked_malformed_answer_must_pass_every_check_on_its_own(tmp_path, stub_checkout):
+    def uncovered_again(record):
+        return {**record, 'reply': json.dumps(uncovered(json.loads(record['reply'])))}
+    judge = Reasked(accurate, first=lambda reply: 'No object here.', again=uncovered_again)
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert sum(call[-1] == 'reask' for call in judge.calls) == 1
+    assert cohesive_b(result)['reason'] == 'coverage'
+    assert not result['proof']['theory_panel_scored_and_discriminates']
+
+
+@pytest.mark.parametrize('first, reason', [
+    (lambda reply: '', 'malformed'),  # nothing to carry back to the judge
+    (lambda reply: ' \n ', 'malformed'),
+    # A second object, or the answer inside another: the judge may have changed its mind.
+    (lambda reply: json.dumps(reply) + '\n' + json.dumps(reply), 'ambiguous'),
+    (lambda reply: json.dumps({'answer': reply}), 'ambiguous'),
+    (lambda reply: json.dumps({'draft': reply, 'final': reply}), 'ambiguous'),
+    (lambda reply: '```json\n' + json.dumps({'answer': reply}) + '\n```', 'ambiguous'),
+    # A mis-tagged object that names files without the canary: unread, so no second draw.
+    (lambda reply: json.dumps(uncovered({**reply, 'schema': 'theory_verdict/1'})), 'malformed'),
+    (lambda reply: 'Here: ' + json.dumps(uncovered({**reply, 'schema': 'theory_verdict/1'})), 'malformed'),
+    # Broken JSON, or a wrapper under another tag, that names files and never copies the canary.
+    (lambda reply: json.dumps(uncovered(reply))[:-1] + ',}', 'malformed'),
+    (lambda reply: json.dumps(uncovered(reply))[:-25], 'malformed'),
+    (lambda reply: json.dumps({'answer': uncovered({**reply, 'schema': 'theory_verdict/1'})}), 'malformed'),
+    (lambda reply: 'So: ' + json.dumps({'answer': uncovered({**reply, 'schema': 'theory_verdict/1'})}),
+     'malformed'),
+])
+def test_an_empty_or_ambiguous_answer_is_never_reasked(tmp_path, first, reason):
+    judge = Reasked(accurate, first=first)
+    result = run_reasked(tmp_path, judge)
+    assert not any(call[-1] == 'reask' for call in judge.calls)
+    trial = cohesive_b(result)
+    assert trial['reason'] == reason and 'reasked' not in trial and 'reaskable' not in trial
+    assert result['parsing']['b']['malformed'] == (reason == 'malformed')
+
+
+def test_a_defect_answer_with_no_readable_object_is_never_reasked(tmp_path):
+    class Prose(Scripted):
+        def respond(self, pin, case, trial, messages, reask=False):
+            record = super().respond(pin, case, trial, messages, reask)
+            if case['task'] == 'defect' and pin.judge_id == 'b' and trial == 0:
+                record['reply'] = 'It looks fine to me.'
+            return record
+    pins, trials, _ = jp.load_panel(panel_file(tmp_path))
+    judge = Prose(accurate)
+    result = jp.run(CORPUS, pins, trials, judge, 'salt', None)
+    assert not any(call[-1] == 'reask' for call in judge.calls)
+    defect = next(c for c in result['cases'] if c['task'] == 'defect' and c.get('judges'))
+    assert defect['judges']['b'][0]['reason'] == 'malformed' and 'reasked' not in defect['judges']['b'][0]
+
+
+def test_a_reask_for_the_ladder_or_citations_is_word_for_word_what_parser_version_4_sent():
+    name = 'unit_0123456789.py'
+    assert jp.reask_text(['honest_limits'], ['abstraction'], name) == (
+        'Your answer gave honest_limits a step that is not on the ladder. Every step must be\n'
+        'exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between\n'
+        'them. Your answer gave abstraction a step below 1.0 with no citation of a line the listing\n'
+        f'has. Each citation must be exactly "{name}:<line>", where <line> is one line number the listing shows. '
+        'Answer again with one complete JSON object in the same format, and nothing else.')
+
+
+@pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
+                    reason='set GRIMOIRE_CODING_SKILLS to a clean checkout at the calibration pin')
+def test_the_pinned_rubric_scores_a_trial_whose_first_answer_held_no_readable_object(tmp_path):
+    checkout = Path(os.environ['GRIMOIRE_CODING_SKILLS'])
+    result = run_reasked(tmp_path, Reasked(accurate, first=lambda reply: 'No object.'), checkout)
+    trial = result['theory']['units']['ledger_cohesive']['trials'][0]
+    assert trial['reason'] is None and trial['reasked'] == ['b']
 
 
 def test_a_reask_is_measured_and_watched_for_drift_with_its_trial(tmp_path):
