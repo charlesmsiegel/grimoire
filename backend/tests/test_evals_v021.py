@@ -306,7 +306,7 @@ def test_retried_reply_books_only_the_kept_row():
     assert [a["outcome"] for a in call["attempts"]] == ["completed"]
     assert call["attempts"][0]["usage"]["input_tokens"] == 100  # the last row, the kept reply
     assert rejected_replies(data) == {
-        "replies": 2, "requests": 2, "prompt_tokens": 181, "completion_tokens": 6,
+        "replies": 2, "requests": 2, "attempts_unreported": 0, "prompt_tokens": 181, "completion_tokens": 6,
         "cache_read_tokens": 20, "prompt_tokens_unreported": 0,
         "completion_tokens_unreported": 0, "cache_read_tokens_unreported": 0}
     assert verify_evidence(run, data, evidence_digest(data), SCENARIO).ok
@@ -318,7 +318,29 @@ def test_rejected_replies_count_transport_retries_and_unreported_counts():
                                 v021_row("r-1")])
     run_of(data)
     spent = rejected_replies(data)
-    assert spent["requests"] == 2 and spent["cache_read_tokens_unreported"] == 1
+    assert spent["requests"] == 2 and spent["attempts_unreported"] == 1
+    assert spent["cache_read_tokens_unreported"] == 1
+    from grimoire.evals.v021 import describe_rejected
+    assert describe_rejected(spent).endswith(
+        "; 1 earlier transport attempt left no usage (unreported)")
+
+
+@pytest.mark.parametrize("change", [
+    {"prompt_tokens": "90"}, {"prompt_tokens": -5}, {"attempts": 0}, {"attempts": True},
+])
+def test_a_rejected_row_s_counts_are_checked_like_a_kept_row_s(change):
+    rows = [v021_row("r-1", 90, 3, **change), v021_row("r-1")]
+    refused(retried_bundle(rows=rows), "malformed_evidence")
+
+
+def test_a_rejected_row_from_another_model_is_refused():
+    refused(retried_bundle(rows=[v021_row("r-1", model="other-model"), v021_row("r-1")]),
+            "model_mismatch")
+
+
+def test_a_failed_call_is_not_a_rejected_reply():
+    refused(retried_bundle(rows=[v021_row("r-1", status="error"), v021_row("r-1")]),
+            "retry_unaccounted")
 
 
 def test_a_v2_bundle_with_no_retries_is_a_v1_play():

@@ -306,9 +306,9 @@ def test_a_capture_with_retries_is_a_baseline_and_the_report_says_what_was_left_
     out = tmp_path / "out"
     assert run("--baseline", first, "--baseline", retried, "--out", out, "--dry-run") == 0
     report = outputs(out)["comparison-report.txt"]
-    assert ("0.2.1 rejected 1 replies as empty in 1 of the 2 captures, and its own Retry asked "
-            "again. Those 1 requests (700 input tokens, 9 output tokens, 0 cache reads) are not "
-            "in the 0.2.1 side") in report
+    assert ("0.2.1 rejected 1 reply as empty in 1 of the 2 captures, and its own Retry asked "
+            "again. Those replies took 1 request, input tokens 700, output tokens 9, cache reads 0. "
+            "They are not in the 0.2.1 side") in report
     assert "story-quality gate: PASS" in report
 
 

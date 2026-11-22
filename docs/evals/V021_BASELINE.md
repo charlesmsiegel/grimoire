@@ -379,7 +379,7 @@ route (`character_turns.retry`) asks the model again for the one reply 0.2.1 rej
 same saved prompt snapshot and under the same response id, and then carries the round on to any
 speaker still to come. Nothing else in the scene is asked again.
 
-`--retry-empty-replies` has the driver press it. After each turn, while 0.2.1's stream ends with
+`--retry-empty-replies` has the driver press it. After each turn, while 0.2.1's stream holds
 exactly one error and that error is `empty_response` on a reply it had started, the driver waits
 for the run to finish and calls that route, as a player would. It stops pressing when one more
 Retry would not leave one request for every reply the scene still owes, inside the same ceiling
@@ -392,6 +392,8 @@ What is recorded:
 
 - The evidence is `grimoire.v021-capture-evidence/2`: the `/1` bundle plus `retries`, one entry
   (turn, response id, `empty_response`) per Retry pressed. `/1` bundles still convert unchanged.
+  Every usage row is checked, rejected or kept: its counts, its served model, and, for a rejected
+  reply, that 0.2.1 booked it as served (`ok`); a failed call is never taken for a rejection.
 - 0.2.1 books one usage row per reply it received, so a retried response has one row more than
   its Retries, in ledger order; conversion refuses any other count (`retry_unaccounted`,
   `multi_call_contribution`). The last row is the reply 0.2.1 kept and becomes the run's call;
@@ -399,8 +401,11 @@ What is recorded:
 - **Rejected replies stay out of the run.** The run's calls, cost and latency are those of the
   play 0.2.1 kept, so as a baseline it is a lower bound on what its player paid, and the gates
   that compare V2 against it (cost, latency) stay conservative for V2. The rejected replies are
-  not hidden: `capture-report.txt` gives their number, requests and token counts, and the
-  comparison report of `python -m grimoire.capture.v2` gives them summed over its baselines.
+  not hidden: `capture-report.txt` gives their number, requests and token counts (an earlier
+  transport attempt of a rejected reply is counted as unreported, never free), the comparison
+  report of `python -m grimoire.capture.v2` gives them summed over its baselines, and
+  `python -m grimoire.evals.story_quality` adds a line for each side whose verified evidence has
+  any.
 - How often 0.2.1 rejects a reply stays a 0.2.1 measurement: rejected replies over all replies
   received, per turn and per speaker, from the evidence.
 
@@ -417,9 +422,15 @@ one Retry listed); when every Retry is rejected too, the driver stops at the cei
 Retries with 14 of 18 requests sent and nothing is written
 ([`test_v021_real_dry_run.py`](../../backend/tests/test_v021_real_dry_run.py)).
 
-At the per-turn rejection rates measured above (small samples: 7 of 10 in turn 1, 1 of 3 in turn 2,
-1 of 2 in turn 3), a capture needs about three to four Retries on average, each about the cost of one call, instead of restarting the play about ten times. It has
-not been run live.
+At the per-turn rejection rates measured above (small samples: 7 of 10 in turn 1, 1 of 3 in turn
+2, 1 of 2 in turn 3), a capture would need about three to four Retries on average, each about the
+cost of one call, instead of restarting the play about ten times. That assumes a Retry is
+rejected about as often as a fresh play's reply, which is not known: those rates were measured on
+plays whose earlier replies differed, while a Retry asks the very same prompt again. If one
+prompt is rejected far more often (9 times in 10, say), a turn needs about nine Retries and a
+quarter of such turns would run out of Retries. A failed capture also costs more with the flag:
+up to the whole ceiling of 18 requests, against about 2 when a turn-1 rejection simply ends the
+capture. It has not been run live.
 
 ## Privacy
 

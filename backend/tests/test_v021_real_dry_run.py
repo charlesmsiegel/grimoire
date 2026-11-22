@@ -121,7 +121,7 @@ def test_real_dry_run_retries_a_rejected_reply_with_0_2_1_s_own_retry(kind, tmp_
     run = parse_run_v2(json.loads((out / "run.json").read_text()), scenario)
     assert len(run.calls) == 6 and run.usage.total.attempts == 6 and run.usage.complete
     report = (out / "capture-report.txt").read_text()
-    assert "0.2.1 rejected 1 replies as empty and Retry asked again: 1 requests" in report
+    assert "0.2.1 rejected 1 reply as empty and Retry asked again: 1 request," in report
     assert "findings (0):" in report
     kept = [c.text for t in run.turns for c in t.contributions if c.call_id == "t1-npc-bellamy"]
     assert kept and "ledger is on the hook" not in kept[0]

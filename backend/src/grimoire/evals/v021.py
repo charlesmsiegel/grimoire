@@ -152,12 +152,14 @@ def rejected_replies(bundle: Mapping) -> dict[str, int]:
 
     Valid only for a bundle ``convert`` accepts. Keys: ``replies``, ``requests`` (their
     transport attempts) and the token fields, each summed over the reported counts, with
-    ``*_unreported`` counting the replies that left one out.
+    ``*_unreported`` counting the replies that left one out. 0.2.1 counts only the attempt that
+    served a reply, so ``attempts_unreported`` counts the earlier transport attempts, whose usage
+    is unknown: missing, never free.
     """
     retried: dict[str, int] = {}
     for entry in bundle.get("retries", []):
         retried[entry["response_id"]] = retried.get(entry["response_id"], 0) + 1
-    totals = {"replies": 0, "requests": 0}
+    totals = {"replies": 0, "requests": 0, "attempts_unreported": 0}
     fields = ("prompt_tokens", "completion_tokens", "cache_read_tokens")
     for name in fields:
         totals[name] = totals[f"{name}_unreported"] = 0
@@ -171,6 +173,7 @@ def rejected_replies(bundle: Mapping) -> dict[str, int]:
             continue  # the last row is the reply 0.2.1 kept
         totals["replies"] += 1
         totals["requests"] += row.get("attempts", 1)
+        totals["attempts_unreported"] += row.get("attempts", 1) - 1
         for name in fields:
             if row.get(name) is None:
                 totals[f"{name}_unreported"] += 1
@@ -211,6 +214,22 @@ def _attempts(row: Mapping, mode: str, route: str) -> list[dict]:
     if row.get("cost_usd") is not None and row.get("cost_basis"):  # no basis: unreported
         served["cost"] = {"usd": row["cost_usd"], "basis": row["cost_basis"]}
     return [*attempts, served]
+
+
+def describe_rejected(spent: Mapping[str, int]) -> str:
+    """``rejected_replies`` totals as one clause of counts: requests, then tokens."""
+    def plural(count: int, word: str) -> str:
+        return f"{count} {word}{'' if count == 1 else 's'}"
+    counts = ", ".join(
+        f"{label} {spent[name]}" + (f" ({spent[name + '_unreported']} unreported)"
+                                    if spent[name + "_unreported"] else "")
+        for name, label in (("prompt_tokens", "input tokens"),
+                            ("completion_tokens", "output tokens"),
+                            ("cache_read_tokens", "cache reads")))
+    earlier = spent["attempts_unreported"]
+    return (f"{plural(spent['requests'], 'request')}, {counts}"
+            + (f"; {plural(earlier, 'earlier transport attempt')} left no usage (unreported)"
+               if earlier else ""))
 
 
 def convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
@@ -286,6 +305,7 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
 
     retried = _retries(bundle, responses)
     rows_by_response: dict[str, Mapping] = {}
+    rows_of: dict[str, list[Mapping]] = {}
     seen: dict[str, int] = {}
     for index, row in enumerate(bundle["usage_rows"]):
         if not isinstance(row, Mapping):
@@ -311,12 +331,19 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
         if seen[response_id] > 1 + retried.get(response_id, 0):
             raise CaptureConversionError("multi_call_contribution",
                                          f"response {response_id} took more than one call")
+        _attempts(row, mode, route)  # every row's counts are checked, kept or rejected
+        rows_of.setdefault(response_id, []).append(row)
         rows_by_response[response_id] = row  # in ledger order: the last is the reply kept
     for response_id, count in retried.items():
         if seen.get(response_id, 0) != 1 + count:
             raise CaptureConversionError("retry_unaccounted",
                                          f"response {response_id} was retried {count} times but "
                                          f"has {seen.get(response_id, 0)} usage rows")
+        if any(row.get("status", "ok") != "ok" for row in rows_of[response_id][:-1]):
+            # 0.2.1 books a reply it rejected as empty as served (ok); anything else is a
+            # failed call, which a Retry does not account for.
+            raise CaptureConversionError("retry_unaccounted",
+                                         f"a rejected reply of {response_id} is not booked ok")
 
     calls = []
     for response_id, (turn, actor_id) in responses.items():
@@ -340,7 +367,8 @@ def _convert(bundle: Mapping, scenario: Scenario, *, digest: str, run_id: str,
         "source": {"kind": "v0.2.1-capture", "mode": mode, "v1_commit": bundle["v1_commit"],
                    "harness": HARNESS, "evidence_sha256": digest, "profile": PROFILE,
                    "llm_retries": bundle["llm_retries"], "route": route},
-        "conditions": {"model": _served_model(list(rows_by_response.values()), bundle["model"]),
+        "conditions": {"model": _served_model([row for rows in rows_of.values() for row in rows],
+                                              bundle["model"]),
                        "budget": bundle["budget"]},
         "policy": {"per_turn_call_caps": {}, "max_attempts_per_call": 1 + bundle["llm_retries"]},
         "turns": turns,

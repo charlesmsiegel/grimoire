@@ -502,7 +502,7 @@ def test_retry_flag_reaches_the_driver_and_the_report(checkout, scratch_tmp, sce
         capsys.readouterr().err
     assert "--retry-empty" in json.loads(seen.read_text())
     report = (out / "capture-report.txt").read_text()
-    assert ("0.2.1 rejected 1 replies as empty and Retry asked again: 1 requests, input tokens "
+    assert ("0.2.1 rejected 1 reply as empty and Retry asked again: 1 request, input tokens "
             "90, output tokens 3, cache reads 0; not in the run below") in report
     run = parse_run_v2(json.loads((out / "run.json").read_text()),
                        parse_scenario(minimal_scenario()))

@@ -73,7 +73,7 @@ from grimoire.evals.policy import GatePolicy
 from grimoire.evals.report import render_samples, render_v2
 from grimoire.evals.runtime_record import record_runtime_run
 from grimoire.evals.sampled import compare_samples
-from grimoire.evals.v021 import rejected_replies, verify_evidence
+from grimoire.evals.v021 import describe_rejected, rejected_replies, verify_evidence
 from grimoire.generation import (
     GenerationError,
     HeardLine,
@@ -485,21 +485,14 @@ def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup:
 def _rejected_note(baselines: Sequence[Baseline]) -> str:
     """What the 0.2.1 replies its captures rejected as empty and Retried cost, or ``""``."""
     spent = [rejected_replies(each.bundle) for each in baselines]
-    replies = sum(each["replies"] for each in spent)
-    if not replies:
+    if not any(each["replies"] for each in spent):
         return ""
-    with_any = sum(1 for each in spent if each["replies"])
-    totals = {name: sum(each[name] for each in spent)
-              for name in ("requests", "prompt_tokens", "completion_tokens", "cache_read_tokens")}
-    unreported = sum(each[f"{name}_unreported"] for each in spent
-                     for name in ("prompt_tokens", "completion_tokens", "cache_read_tokens"))
-    return (f"0.2.1 rejected {replies} replies as empty in {with_any} of the "
-            f"{len(baselines)} captures, and its own Retry asked again. Those "
-            f"{totals['requests']} requests ({totals['prompt_tokens']} input tokens, "
-            f"{totals['completion_tokens']} output tokens, {totals['cache_read_tokens']} cache "
-            f"reads{f', {unreported} counts unreported' if unreported else ''}) are not in the "
-            "0.2.1 side: its cost and latency are those of the play 0.2.1 kept, a lower bound on "
-            "what its player paid.")
+    totals = {name: sum(each[name] for each in spent) for name in spent[0]}
+    replies, with_any = totals["replies"], sum(1 for each in spent if each["replies"])
+    return (f"0.2.1 rejected {replies} repl{'y' if replies == 1 else 'ies'} as empty in "
+            f"{with_any} of the {len(baselines)} captures, and its own Retry asked again. Those "
+            f"replies took {describe_rejected(totals)}. They are not in the 0.2.1 side: its cost "
+            "and latency are those of the play 0.2.1 kept, a lower bound on what its player paid.")
 
 
 def _report(options: CompareOptions, baselines: Sequence[Baseline], scenario: Scenario,

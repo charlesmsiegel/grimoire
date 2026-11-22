@@ -37,8 +37,8 @@ from grimoire.evals.gate2 import compare_v2
 from grimoire.evals.loader import benchmark_file, evidence_digest, load_json, load_scenario, loads_strict
 from grimoire.evals.report import render_v2
 from grimoire.evals.v021 import (
-    PINNED_V021_COMMIT, PROVIDER_KINDS, convert, partial_ledger, rejected_replies,
-    verify_evidence,
+    PINNED_V021_COMMIT, PROVIDER_KINDS, convert, describe_rejected, partial_ledger,
+    rejected_replies, verify_evidence,
 )
 from grimoire.library import (
     DEFAULT_DIRNAME, V1_DEFAULT_DIRNAME, V1_HOME_ENV, V2_HOME_ENV, LibraryPathError,
@@ -317,14 +317,9 @@ def _rejected_line(bundle: Mapping) -> str:
     spent = rejected_replies(bundle)
     if not spent["replies"]:
         return "0.2.1 rejected no reply as empty; no Retry was pressed\n"
-    counts = ", ".join(
-        f"{label} {spent[name]}" + (f" ({spent[name + '_unreported']} unreported)"
-                                    if spent[name + "_unreported"] else "")
-        for name, label in (("prompt_tokens", "input tokens"),
-                            ("completion_tokens", "output tokens"),
-                            ("cache_read_tokens", "cache reads")))
-    return (f"0.2.1 rejected {spent['replies']} replies as empty and Retry asked again: "
-            f"{spent['requests']} requests, {counts}; not in the run below\n")
+    replies = spent["replies"]
+    return (f"0.2.1 rejected {replies} repl{'y' if replies == 1 else 'ies'} as empty and Retry "
+            f"asked again: {describe_rejected(spent)}; not in the run below\n")
 
 
 def _write(out: Path, files: Mapping[str, str]) -> None:

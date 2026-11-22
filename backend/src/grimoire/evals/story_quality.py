@@ -19,7 +19,7 @@ from .gate2 import compare_v2
 from .loader import load_any_run, load_evidence, load_scenario
 from .policy import GatePolicy
 from .report import render, render_v2
-from .v021 import verify_evidence
+from .v021 import describe_rejected, rejected_replies, verify_evidence
 
 
 class _Parser(argparse.ArgumentParser):
@@ -65,7 +65,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if _format(baseline) != _format(candidate):
             raise ValueError("baseline and candidate must have the same run format "
                              "(/1, /2 or /3)")
-        evidence = {}
+        evidence, notes = {}, []
         for name, path, run in (("baseline", args.evidence_baseline, baseline),
                                 ("candidate", args.evidence_candidate, candidate)):
             if path is None:
@@ -74,6 +74,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ValueError(f"--evidence-{name} applies only to a /2 run")
             bundle, digest = load_evidence(path)
             evidence[name] = verify_evidence(run, bundle, digest, scenario)
+            if evidence[name].ok and isinstance(bundle, dict) and bundle.get("retries"):
+                spent = rejected_replies(bundle)
+                notes.append(f"{name}: 0.2.1 rejected {spent['replies']} of its replies as empty "
+                             f"and its own Retry asked again ({describe_rejected(spent)}); "
+                             "they are not in this run\n")
     except (BenchmarkFormatError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -81,7 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_v2 = compare_v2(scenario, baseline, candidate, policy,  # type: ignore[arg-type]
                                baseline_evidence=evidence.get("baseline"),
                                candidate_evidence=evidence.get("candidate"))
-        sys.stdout.write(render_v2(report_v2))
+        sys.stdout.write(render_v2(report_v2) + "".join(notes))
         return 0 if report_v2.passed else 1
     report = compare(scenario, baseline, candidate, policy)
     sys.stdout.write(render(report))
