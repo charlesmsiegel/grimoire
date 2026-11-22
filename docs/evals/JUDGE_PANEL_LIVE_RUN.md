@@ -91,23 +91,33 @@ keys that failed, keep 069 unchecked, and do not narrow the requirement.
 
 ## Next capture
 
-Parser version 3 re-asks a theory judge once when its answer puts a step off the rubric's
-ladder (see [CALIBRATION.md](../CALIBRATION.md#independent-judge-panel)). That is what left
-the 2026-11-22 capture's cohesive unit unscored. The prompts, the corpus and the panel did
-not change. The plan is 108 calls plus at most 18 re-asks, so `capture` takes
-`--max-calls 126`. A new capture needs:
+Parser version 4 re-asks a theory judge once when a step below 1.0 kept no listed line,
+as well as when a step is off the ladder (see
+[CALIBRATION.md](../CALIBRATION.md#independent-judge-panel)). The first fault is what left
+one cohesive trial of the 2026-11-22 parser 3 capture unscored. Each answer is re-asked at
+most once for both faults together, so the plan is still 108 calls plus at most 18 re-asks,
+and `capture` still takes `--max-calls 126`. The prompts, the corpus and the panel did not
+change. A new capture needs:
 
-- CMS's fresh approval of a cap that covers the worst case of about $11. The two runs so far
-  cost about $0.55 and $0.58.
+- CMS's fresh approval of a cap that covers the worst case of about $11. The three runs so
+  far cost about $0.55, $0.58 and $0.58.
 - A new, empty `capture` folder.
 - The score report's `proof.captured_for_this_parser` to be true: a capture taken by this
-  code records parser version 3 in its manifest. Check `parsing` per judge too. Name in the
-  audit any judge that was re-asked (`reasked`), was still off the ladder after a re-ask
-  (`off_ladder`), or had most of its answers read out of prose, `ambiguous` or missing
-  citations.
+  code records parser version 4 in its manifest. Check `parsing` per judge too. Name in the
+  audit any judge that was re-asked (`reasked`), was still off the ladder or uncited after a
+  re-ask (`off_ladder`, `uncited`), or had most of its answers read out of prose,
+  `ambiguous` or missing citations, and give each judge's `dropped_shapes`.
 
-Re-scoring the 2026-11-22 capture under version 3 makes no calls but changes nothing: it
-holds no re-asks, and its manifest names parser version 2.
+Re-scoring the 2026-11-22 parser 3 capture under version 4 makes no calls. Its trials are
+read as before: it holds no citation re-asks, and its manifest names parser version 3. It
+does report each judge's `dropped_shapes`, which shows what form the dropped citations took.
+
+### Parser version 3 (2026-11-22)
+
+Parser version 3 re-asks a theory judge once when its answer puts a step off the rubric's
+ladder. That is what left the 2026-11-22 parser 2 capture's cohesive unit unscored.
+Re-scoring that capture under version 3 makes no calls but changes nothing: it holds no
+re-asks, and its manifest names parser version 2.
 
 ### Parser version 2 (2026-11-20)
 

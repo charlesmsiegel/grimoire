@@ -74,12 +74,18 @@ copy its token exactly. Answer with one JSON object and nothing else:
 
 PROMPT_VERSION = hashlib.sha256((DEFECT_PROMPT + '\0' + THEORY_PROMPT).encode()).hexdigest()
 
-# Sent once, in the same conversation, to a theory judge whose answer put a step off the ladder. It
-# names the dimensions and restates the ladder, never which rung to pick. The text is in each re-ask
-# record's prompt digest, so a capture made with other wording is refused as stale.
-REASK_PROMPT = """Your answer gave {dimensions} a step that is not on the ladder. Every step must be
+# Sent once, in the same conversation, to a theory judge whose answer had only these faults: a step
+# off the ladder, or a lowered step none of whose citations is a listed line. It names the dimensions
+# and restates the rule, never which rung or line to pick. The text is in each re-ask record's prompt
+# digest, so a capture made with other wording is refused as stale. A re-ask for the ladder alone is
+# word for word what parser version 3 sent, so its captures still replay.
+REASK_LADDER = """Your answer gave {dimensions} a step that is not on the ladder. Every step must be
 exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between
-them. Answer again with one complete JSON object in the same format, and nothing else."""
+them."""
+REASK_CITATION = """Your answer gave {dimensions} a step below 1.0 with no citation of a line the listing
+has. Each citation must be exactly "{file}:<line>", where <line> is one line number the listing shows."""
+REASK_END = 'Answer again with one complete JSON object in the same format, and nothing else.'
+REASK_PROMPT = REASK_LADDER + ' ' + REASK_END
 
 
 def _digest(value: object) -> str:
@@ -222,8 +228,10 @@ def prompt_sha256(messages: list[tuple[str, str]]) -> str:
 # whole answer (or a fence holding it) to be that object. The prompts did not change, so a capture
 # made under version 1 replays and is re-read under version 2. Version 3 re-asks a theory judge once
 # when its answer puts a step off the ladder; a capture made before it has no re-asks and is read
-# with those answers ``unknown`` (``off_ladder``), as version 2 read them.
-PARSER_VERSION = 3
+# with those answers ``unknown`` (``off_ladder``), as version 2 read them. Version 4 also re-asks a
+# covered answer whose lowered step kept no listed line, and reports the shape of each dropped
+# citation; a version 3 capture has no such re-ask and is read with that answer ``citation``.
+PARSER_VERSION = 4
 
 
 def _decoded(text: str) -> dict | None:
@@ -325,27 +333,55 @@ def _listed(cite: object, name: str, count: int) -> bool:
     return file == name and line.isascii() and line.isdigit() and 1 <= int(line) <= count
 
 
-def _grounded(dimensions: dict, name: str, count: int) -> tuple[dict | None, int]:
-    """Each dimension with only its citations of listed lines, and how many were dropped.
+_RANGE = re.compile(r'\d+\s*-\s*\d+')
+
+
+def citation_shape(cite: object, name: str, count: int) -> str:
+    """What a dropped citation looks like, for the report: never its text, only its kind."""
+    if not isinstance(cite, str):
+        return 'not_text'
+    file, colon, line = cite.rpartition(':')
+    if not colon:
+        return 'no_line'
+    line = line.strip()
+    if file.strip() != name:
+        return 'other_file'
+    if line.isascii() and line.isdigit():
+        return 'unlisted_line'
+    return 'range' if line.isascii() and _RANGE.fullmatch(line) else 'malformed'
+
+
+def _grounded(dimensions: dict, name: str, count: int) -> tuple[dict | None, int, list[str], dict]:
+    """Each dimension with only its citations of listed lines, how many were dropped, which lowered
+    steps kept none, and the shape of each dropped citation.
 
     A citation of a line the listing lacks supports nothing, so it is dropped, never repaired. The
     judge's step is kept only if it still stands: a step below 1.0 must keep at least one listed
     line, as the pinned rubric requires of any lowered step. The dimensions are ``None`` when one
-    does not; the count is kept either way, so the report shows what was dropped.
+    does not; the counts are kept either way, so the report shows what was dropped. Evidence that is
+    not a list of citations names no lowered step, because nothing in it was a citation to drop.
     """
-    out: dict | None = {}
+    out: dict = {}
+    uncited: list[str] = []
+    shapes: dict[str, int] = {}
     dropped = 0
     for key, entry in dimensions.items():
         if not isinstance(entry, dict) or not isinstance(entry.get('evidence', []), list):
-            return None, dropped
+            return None, dropped, [], shapes
         evidence = entry.get('evidence', [])
         kept = [cite for cite in evidence if _listed(cite, name, count)]
+        for cite in evidence:
+            if not _listed(cite, name, count):
+                shape = citation_shape(cite, name, count)
+                shapes[shape] = shapes.get(shape, 0) + 1
         dropped += len(evidence) - len(kept)
         if kept != evidence and not kept and entry.get('step') != 1.0:
-            out = None
-        elif out is not None:
+            uncited.append(key)
+        else:
             out[key] = {**entry, 'evidence': kept} if 'evidence' in entry else dict(entry)
-    return out, dropped
+    order = {key: n for n, key in enumerate(DIMENSIONS)}
+    uncited.sort(key=lambda key: order.get(key, len(order)))
+    return (None if uncited else out), dropped, uncited, shapes
 
 
 def off_ladder(dimensions: object) -> list[str]:
@@ -369,18 +405,28 @@ def laddered(verdict: dict) -> dict:
     return {**verdict, 'dimensions': dimensions}
 
 
-def reask_messages(messages: list[tuple[str, str]], reply: str, keys: list[str]) -> list[tuple[str, str]]:
-    """The first conversation, the judge's own answer, and the ladder restated for ``keys``."""
-    return [*messages, ('assistant', reply), ('user', REASK_PROMPT.format(dimensions=', '.join(keys)))]
+def reask_text(off: list[str], uncited: list[str], file: str) -> str:
+    """The rule restated for each fault found, and the ask to answer again."""
+    parts = ([REASK_LADDER.format(dimensions=', '.join(off))] if off else []) + (
+        [REASK_CITATION.format(dimensions=', '.join(uncited), file=file)] if uncited else [])
+    return ' '.join([*parts, REASK_END])
+
+
+def reask_messages(messages: list[tuple[str, str]], reply: str, off: list[str],
+                   uncited: list[str] | None = None, file: str = '') -> list[tuple[str, str]]:
+    """The first conversation, the judge's own answer, and the rules it broke restated."""
+    return [*messages, ('assistant', reply), ('user', reask_text(off, uncited or [], file))]
 
 
 def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
     """The verdict without its coverage block. Upstream validation happens at scoring."""
     data, failure, outside = extract(text, THEORY_SCHEMA)
 
-    def result(state: str, reason: str | None, verdict: dict | None, dropped: int = 0) -> dict:
+    def result(state: str, reason: str | None, verdict: dict | None, dropped: int = 0,
+               shapes: dict | None = None) -> dict:
         return {'state': state, 'reason': reason, 'verdict': verdict, 'text_outside_json': outside,
-                'ambiguous': failure == 'ambiguous', 'citations_dropped': dropped}
+                'ambiguous': failure == 'ambiguous', 'citations_dropped': dropped,
+                'dropped_shapes': shapes or {}}
     if data is None:
         return result('unknown', failure or 'malformed', None)
     verdict = {key: value for key, value in data.items() if key != 'files'}
@@ -391,18 +437,22 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
     dimensions = data.get('dimensions')
     # Checked, never rounded onto the ladder: that would be the harness choosing the judge's step.
     off = {'off_ladder': off_ladder(dimensions)} if off_ladder(dimensions) else {}
-    grounded, dropped = _grounded(dimensions, name, count) if isinstance(dimensions, dict) else (None, 0)
+    grounded, dropped, uncited, shapes = (_grounded(dimensions, name, count) if isinstance(dimensions, dict)
+                                          else (None, 0, [], {}))
     if grounded is None:
-        return {**result('unknown', 'citation', verdict, dropped), **off}
+        # Named only when the canary was copied too, so a re-ask never gives an unread answer a
+        # second draw. With the ladder, these are the only faults a re-ask may cure.
+        fault = {'uncited': uncited} if uncited and covered(data, name, token) else {}
+        return {**result('unknown', 'citation', verdict, dropped, shapes), **off, **fault}
     verdict['dimensions'] = grounded
     if not covered(data, name, token):
         # Kept, so the report can show what an uncovered verdict would have been awarded.
-        return {**result('unknown', 'coverage', verdict, dropped), **off}
+        return {**result('unknown', 'coverage', verdict, dropped, shapes), **off}
     if off:
         # The only fault found here, so the one a re-ask may cure. The verdict is kept: scoring asks
         # the pinned rubric whether anything else in it would have been refused.
-        return {**result('unknown', 'off_ladder', verdict, dropped), **off}
-    return result('verdict', None, verdict, dropped)
+        return {**result('unknown', 'off_ladder', verdict, dropped, shapes), **off}
+    return result('verdict', None, verdict, dropped, shapes)
 
 
 # -- judges ------------------------------------------------------------------------------------
@@ -525,7 +575,7 @@ def planned(cases: list[dict], trials: int) -> int:
 
 
 def reasks_at_most(cases: list[dict], trials: int) -> int:
-    """One re-ask per theory answer, if every one of them put a step off the ladder."""
+    """One re-ask per theory answer, if every one of them had a fault a re-ask may cure."""
     return sum(PANEL_SIZE * trials for case in cases if case['task'] == 'theory' and _parses(case))
 
 
@@ -552,7 +602,7 @@ def trial_result(record: dict | None, pin: JudgePin, case: dict, token: str, nam
 
 
 # What ``parsing`` counts for each answer read, the first of a re-asked trial included.
-ANSWER_COUNTS = ('text_outside_json', 'ambiguous', 'citations_dropped')
+ANSWER_COUNTS = ('text_outside_json', 'ambiguous', 'citations_dropped', 'dropped_shapes')
 
 
 def _read(result: dict) -> bool:
@@ -583,22 +633,24 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
                 messages = messages_for(case, token, salt)
                 record = judge.respond(pin, case, trial, messages)
                 result = trial_result(record, pin, case, token, name)
-                if result.get('reason') == 'off_ladder':
+                if result.get('reason') == 'off_ladder' or result.get('uncited'):
                     # Once, never again: the re-asked answer is read on its own and stands as it is.
-                    again = judge.respond(pin, case, trial, reask_messages(messages, record['reply'],
-                                                                           result['off_ladder']), reask=True)
+                    off, uncited = result.get('off_ladder', []), result.get('uncited', [])
+                    again = judge.respond(pin, case, trial, reask_messages(messages, record['reply'], off,
+                                                                           uncited, name), reask=True)
                     if again is not None:
                         first = result
                         result = trial_result(again, pin, case, token, name)
-                        result.update(reasked=first['off_ladder'],
+                        order = {key: n for n, key in enumerate(DIMENSIONS)}
+                        result.update(reasked=sorted({*off, *uncited}, key=lambda k: order.get(k, len(order))),
                                       first_answer={**{key: first[key] for key in ANSWER_COUNTS},
                                                     'verdict': first['verdict']},
                                       observed_models=sorted({*first.get('observed_models', []),
                                                               *result.get('observed_models', [])}),
                                       measurement=_measured(first['measurement'], result['measurement']))
                         if not _read(result):
-                            # No second answer was read, so the trial's only answer is still off.
-                            result['off_ladder'] = first['off_ladder']
+                            # No second answer was read, so the trial's only answer keeps its faults.
+                            result.update({key: first[key] for key in ('off_ladder', 'uncited') if key in first})
                 results.append(result)
             entry['judges'][pin.judge_id] = results
         out.append(entry)
@@ -625,7 +677,8 @@ def parsing(cases: list[dict]) -> dict:
     for case in cases:
         for judge_id, results in case.get('judges', {}).items():
             row = out.setdefault(judge_id, {'answers': 0, 'text_outside_json': 0, 'ambiguous': 0,
-                                              'citations_dropped': 0, 'reasked': 0, 'off_ladder': 0})
+                                              'citations_dropped': 0, 'dropped_shapes': {}, 'reasked': 0,
+                                              'off_ladder': 0, 'uncited': 0})
             for result in results:
                 for answer in (result.get('first_answer'), result):
                     if answer is None:
@@ -634,8 +687,11 @@ def parsing(cases: list[dict]) -> dict:
                     row['text_outside_json'] += bool(answer.get('text_outside_json'))
                     row['ambiguous'] += bool(answer.get('ambiguous'))  # kept apart: drift rewrites reason
                     row['citations_dropped'] += answer.get('citations_dropped', 0)
+                    for shape, n in answer.get('dropped_shapes', {}).items():
+                        row['dropped_shapes'][shape] = row['dropped_shapes'].get(shape, 0) + n
                 row['reasked'] += bool(result.get('reasked'))
                 row['off_ladder'] += bool(result.get('off_ladder'))  # still off after any re-ask
+                row['uncited'] += bool(result.get('uncited'))  # still uncited after any re-ask
     return out
 
 

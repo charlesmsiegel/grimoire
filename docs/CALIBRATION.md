@@ -126,7 +126,17 @@ costs nothing. Evidence that is not a list is `citation` too. Defect findings ar
 treated this way: a finding's line is the verdict itself, so a finding on a line that does
 not exist stays `malformed`.
 
-**Off-ladder steps (parser version 3).** The pinned rubric refuses a verdict whose step is
+This check is stricter than the pinned rubric, which takes any non-empty evidence string. The
+report gives each dropped citation's shape, never its text, per judge in
+`parsing.<judge>.dropped_shapes`:
+- `unlisted_line`: the right file and a whole number outside the listing.
+- `range`: the right file and two numbers joined by a hyphen.
+- `other_file`: any other file name, such as the unit's name without `.py` or a path before it.
+- `no_line`: no colon at all.
+- `malformed`: the right file and anything else after the colon.
+- `not_text`: not a string.
+
+**Re-asks (parser versions 3 and 4).** The pinned rubric refuses a verdict whose step is
 not on its ladder (1.0, 0.5, 0.25, 0.0), so one such step leaves the whole trial's panel
 unscored. When a theory answer puts any step off the ladder (`step not in LADDER`, the
 rubric's own test), the harness asks that judge once more, in the same conversation. The
@@ -142,14 +152,25 @@ re-ask). Each re-ask is a billed call, written to its own capture record
 wording is refused as stale. The plan counts every theory answer as possibly re-asked:
 `max_calls` is 126 for the default corpus, and `capture` refuses a `--max-calls` below it.
 
-Only an answer whose every other check passed is re-asked: the unit, the citations and the
-coverage canary. An answer that also fails one of those keeps that reason (`coverage`,
-`citation`), is never re-asked, and still counts in `parsing.off_ladder`. So a re-ask cures
-one fault, a step between rungs, and never gives an unread or ungrounded answer a second
-draw. A re-ask that brings back no readable answer (refused, interrupted, or served by
-another model) leaves the trial `unknown` and still off the ladder. A re-asked trial keeps
-its first answer's parse counts and verdict (`first_answer`), and both answers count in
-`parsing`.
+Parser version 4 also re-asks an answer that is `citation` only because a step below 1.0
+kept no listed line. The 2026-11-22 parser 3 capture lost a cohesive trial that way. The
+message names those dimensions and restates the citation form, `"<alias>:<line>"`, with
+`<line>` one line number the listing shows, never which line to cite. An answer with both
+faults gets one re-ask that restates both rules. A re-ask for the ladder alone is word for
+word what version 3 sent, so a version 3 capture still replays. The re-asked answer must
+then pass every check on its own. A lowered step still uncited after it is `unknown`
+(`citation`) and counted in `parsing.uncited`. Each answer is re-asked at most once for both
+faults together, so the plan and `max_calls` are unchanged.
+
+Only an answer whose other checks passed is re-asked: the unit and the coverage canary, and
+for the ladder alone, the citations too. An answer that also fails one of those keeps that
+reason (`coverage`, `citation`), is never re-asked, and still counts in `parsing.off_ladder`.
+Evidence that is not a list of citations is never re-asked either. A re-ask cures one of two
+faults of form, a step between rungs or a lowered step with no listed line, and never gives
+an unread answer a second draw. A re-ask that brings back no readable answer (refused, interrupted, or served
+by another model) leaves the trial `unknown`, with the first answer's faults still counted.
+A re-asked trial keeps its first answer's parse counts, dropped-citation shapes and verdict
+(`first_answer`), and both answers count in `parsing`.
 
 The rubric checks more than the ladder: a lowered step needs evidence, a verdict needs at
 least three rehearsals, and the theory fields must not be empty. So, when the report is
@@ -161,7 +182,7 @@ comes from the re-asked answer alone.
 
 A re-asked answer counts as that judge's answer for the trial. The judge's first answer
 cannot be scored at all, and the second comes from the same judge in the same fresh
-conversation, with no other judge's work and no rung suggested. Its call is measured and
+conversation, with no other judge's work and no rung or line suggested. Its call is measured and
 watched for model drift with the trial. It is not a rerun for a better result: the second
 answer stands whatever it says. The proof keys are unchanged. Each theory trial in the report
 lists the judges whose answer came from a re-ask that was read (`theory.units.<unit>.trials[].reasked`),
