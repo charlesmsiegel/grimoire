@@ -516,6 +516,10 @@ def lowered_abstraction(step, evidence):
     # A key the rubric does not grade is the judge's own text, never echoed back in a re-ask.
     (lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'invented': {
         'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}, 'citation', []),
+    # Nor is the answer re-asked for its other uncited steps, which a second answer could cure
+    # while dropping the key.
+    (lambda reply: {**uncited_abstraction(reply), 'dimensions': {**uncited_abstraction(reply)['dimensions'],
+        'invented': {'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}, 'citation', ['abstraction']),
 ])
 def test_an_answer_with_another_fault_is_never_reasked_even_off_the_ladder(tmp_path, fault, reason, uncited):
     judge = Reasked(accurate, first=lambda reply: json.dumps(fault(reply)))
@@ -538,6 +542,9 @@ def test_dropped_citations_are_reported_by_shape_never_by_text():
         'unlisted_line', 'unlisted_line', 'other_file', 'other_file', 'other_file', 'range', 'range',
         'malformed', 'malformed', 'malformed', 'no_line', 'no_line', 'not_text', 'not_text',
         'spacing', 'spacing', 'spacing', 'spacing', 'unlisted_line', 'malformed']
+    # A number longer than Python turns into an int is outside the listing, never an error.
+    assert jp.citation_shape(f'{name}:' + '9' * 5000, name, count) == 'unlisted_line'
+    assert not jp._listed(f'{name}:' + '9' * 5000, name, count) and jp._listed(f'{name}:007', name, count)
     case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\nb = 2\n'}
     verdict = jp.perfect_uncovered_verdict('u')
     verdict['dimensions']['absorption']['evidence'] = ['f.py:9', 'f.py:1-2', 'f.py:1']
@@ -601,7 +608,7 @@ def test_a_step_still_uncited_after_its_reask_is_unknown_and_never_asked_again(t
     result = run_reasked(tmp_path, judge, stub_checkout)
     assert sum(call[-1] == 'reask' for call in judge.calls) == 1
     trial = cohesive_b(result)
-    assert trial['reason'] == 'citation' and trial['uncited'] == ['honest_limits']
+    assert trial['reason'] == 'citation' and trial['uncited'] == ['honest_limits'] and 'reaskable' not in trial
     assert result['parsing']['b']['uncited'] == 1 and result['parsing']['b']['citations_dropped'] == 4
     assert not result['proof']['theory_panel_scored_and_discriminates']
 

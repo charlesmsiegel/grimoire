@@ -327,10 +327,16 @@ def parse_defect(text: object, case: dict, token: str, name: str) -> dict:
             'text_outside_json': outside, 'ambiguous': False}
 
 
+def _in_listing(line: str, count: int) -> bool:
+    """Whether ASCII digits ``line`` name a line of a ``count``-line listing. Never turns a number
+    longer than the listing's into an int, which a judge can make long enough to raise."""
+    return len(line.lstrip('0')) <= len(str(count)) and 1 <= int(line) <= count
+
+
 def _listed(cite: object, name: str, count: int) -> bool:
     """``<file>:<line>`` on a line the listing has."""
     file, _, line = cite.rpartition(':') if isinstance(cite, str) else ('', '', '')
-    return file == name and line.isascii() and line.isdigit() and 1 <= int(line) <= count
+    return file == name and line.isascii() and line.isdigit() and _in_listing(line, count)
 
 
 _RANGE = re.compile(r'\d+\s*-\s*\d+')
@@ -350,7 +356,7 @@ def citation_shape(cite: object, name: str, count: int) -> str:
         return 'range'
     if not (bare.isascii() and bare.isdigit()):
         return 'malformed'
-    if not 1 <= int(bare) <= count:
+    if not _in_listing(bare, count):
         return 'unlisted_line'
     # A listed line of the right file, kept from the listing only by a space around one of them.
     return 'spacing'
@@ -660,7 +666,7 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
                     if again is not None:
                         first = result
                         result = trial_result(again, pin, case, token, name)
-                        result.pop('reaskable', None)  # never asked a third time
+                        result.pop('reaskable', None)  # only a gate for the first answer; kept out of the report
                         order = {key: n for n, key in enumerate(DIMENSIONS)}
                         result.update(reasked=sorted({*off, *uncited}, key=lambda k: order.get(k, len(order))),
                                       first_answer={**{key: first[key] for key in ANSWER_COUNTS},

@@ -91,8 +91,9 @@ keys that failed, keep 069 unchecked, and do not narrow the requirement.
 
 ## Next capture
 
-Parser version 4 re-asks a theory judge once when a step below 1.0 kept no listed line,
-as well as when a step is off the ladder (see
+Parser version 4 re-asks a theory judge once when a step below 1.0 kept no listed line
+but cites something the pinned rubric would accept, as well as when a step is off the
+ladder (see
 [CALIBRATION.md](../CALIBRATION.md#independent-judge-panel)). The first fault is what left
 one cohesive trial of the 2026-11-22 parser 3 capture unscored. Each answer is re-asked at
 most once for both faults together, so the plan is still 108 calls plus at most 18 re-asks,
