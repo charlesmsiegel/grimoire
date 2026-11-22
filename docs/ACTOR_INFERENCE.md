@@ -454,8 +454,9 @@ What the numbers leave out:
   ledger toward Wren` and the like, present and past). Acts that a refusal uses as readily (`takes
   the coin`, `opens the ledger`, `turns the ledger`, a bare `the ledger across` or `the ledger to
   Wren`) and a bare `ledger` ("Ledger's closed tonight") do not count, and neither does a `guest
-  list`, which is another thing. Matching is a phrase search with no sense of negation, so an act is
-  kept only if a refusal would rarely use it. A name of the book still counts wherever it appears
+  list`, which is another thing. Matching is a phrase search with no sense of negation or direction,
+  so an act is kept only if a refusal would rarely use it; "Oda never hands over the ledger" or a
+  ledger slid across to someone else still counts. A name of the book still counts wherever it appears
   after Wren's line, as `guest ledger` always did, so a flat refusal that names it ("No guest book
   for strangers") counts too; with more names that is now more likely. Negation markers are unchanged, so no reply that passed before can
   fail now. The full list is in the scenario file, and `backend/tests/test_evals_checks.py` holds
