@@ -522,6 +522,11 @@ def test_labels_must_be_this_comparisons_sheet_whole(tmp_path, capsys):
     swapped.write_text(json.dumps(other), "utf-8")  # labels moved onto other plays
     assert run(*flags, "--labels", whole, "--label-key", swapped, "--out", tmp_path / "out") == 2
     assert "not what the current scenario reads from this play" in capsys.readouterr().err
+    assert run("--baseline", first, "--baseline", second, "--label-sheet", earlier,
+               "--out", tmp_path / "second-sheet") == 0  # same plays, same ids, another key
+    assert run(*flags, "--labels", whole, "--label-key", tmp_path / "second-sheet" / "label-key.json",
+               "--out", tmp_path / "out") == 2
+    assert "the key was written with another sheet" in capsys.readouterr().err
     assert run(*flags, "--labels", whole, "--out", tmp_path / "out") == 2
     assert "--labels and --label-key go together" in capsys.readouterr().err
     assert not (tmp_path / "out").exists()

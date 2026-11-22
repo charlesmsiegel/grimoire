@@ -210,6 +210,7 @@ def _findings(findings) -> list[str]:
 LABELLED_ROWS = {
     "choices negated by label": "choices negated in the run's own record",
     "choices unrealized": "choices unrealized by phrase markers (not used)",
+    "choices unlabelled": "choices unlabelled in the run's own record",
 }
 
 

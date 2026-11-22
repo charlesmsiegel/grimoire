@@ -128,6 +128,8 @@ def test_the_sheet_is_blind_and_shows_each_choice_the_text_the_check_reads():
     assert [play["play"] for play in sheet["plays"]] == ["p01", "p02", "p03", "p04"]
     assert key["format"] == FORMAT_KEY and sorted(key["plays"]) == ["p01", "p02", "p03", "p04"]
     assert set(key["plays"].values()) == {play.digest for play in plays()}
+    assert sheet["sheet_id"] == key["sheet_id"] != label_sheet(SCENARIO, plays(), salt="two")[0][
+        "sheet_id"]
     for play in sheet["plays"]:
         assert set(play["choices"]) == set(CHOICES)
         assert all(entry["outcome"] is None for entry in play["choices"].values())
@@ -177,6 +179,9 @@ def test_a_filled_sheet_and_its_key_read_back_as_outcomes_by_run():
     (lambda sheet, key: sheet["choices"][0].update(act="Something else."), "acts"),
     (lambda sheet, key: sheet["plays"][0]["choices"]["ask-ledger"]["text"].pop(), "current scenario"),
     (lambda sheet, key: key.update(format="other"), "key format"),
+    (lambda sheet, key: key.update(sheet_id=label_sheet(SCENARIO, plays(), salt="y")[1]["sheet_id"]),
+     "another sheet"),
+    (lambda sheet, key: key.pop("sheet_id"), "another sheet"),
     (lambda sheet, key: key.update(scenario_id="other"), "key scenario_id"),
     (lambda sheet, key: key["plays"].update(p01="0" * 64), "not this comparison's key"),
     (lambda sheet, key: key["plays"].update(p01="not a digest"), "sha256"),

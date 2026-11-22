@@ -539,16 +539,19 @@ judge that: the same refusal passes or fails on one word. So, for every choice a
   salt that is not kept, under ids `p01`, `p02` and so on, with no side, kind, sample, run id or
   digest, and each choice's text exactly as the choice check reads it (the replies after the
   player's line on the choice's turn, then its window). A separate key binds each id to its run by
-  a digest (a capture's evidence digest, a V2 run's canonical-JSON digest). The reader is given the
-  sheet only: the comparison directory and its report show the captures' digests, so a reader who
-  can open them could tell the sides apart. The rescore refuses a filled sheet whose key is not this
-  comparison's, that misses, repeats or adds a play, leaves any choice unlabelled, or whose acts or
+  a digest (a capture's evidence digest, a V2 run's canonical-JSON digest), and the sheet and its
+  key share one random sheet id, so a key cannot be paired with another sheet. The reader is given
+  the sheet only: the comparison directory and its report show the captures' digests and the runs'
+  text, and the key is written beside the sheet, so a reader who can open them could tell the sides
+  apart. The rescore refuses a filled sheet whose key is not its own or not this comparison's, that
+  misses, repeats or adds a play, leaves any choice unlabelled, or whose acts or
   any choice's text differ from what the current scenario reads from that run. So a label cannot
   move to another run, and a change to a choice's turn, window or act needs a new sheet.
 - **In the report.** The per-sample tables still print the run's own recorded negations and the
   phrase-marker reading for information; under labels those rows are named "choices negated in the
-  run's own record" and "choices unrealized by phrase markers (not used)". A saved comparison with
-  the same V2 run twice is refused, since it would count one play twice.
+  run's own record", "choices unlabelled in the run's own record" and "choices unrealized by phrase
+  markers (not used)". A saved comparison with the same V2 run twice is refused, since it would
+  count one play twice.
 - **What stays the same.** Every hard check still reads the text: leaks, attribution, continuity,
   speakers and the negation markers ("never offered a coin", "coin vanishes", "refuses to sing"),
   any one of which fails its sample. The strict-majority rule and the voice, cost and latency rules

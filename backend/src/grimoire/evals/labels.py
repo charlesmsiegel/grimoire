@@ -124,8 +124,12 @@ def label_sheet(scenario: Scenario, plays: Sequence[Play], *, salt: str) -> tupl
     order = sorted(plays, key=lambda play: hashlib.sha256(
         f"{salt}:{play.digest}".encode()).hexdigest())
     ids = [f"p{index:02d}" for index in range(1, len(order) + 1)]
+    # One id for this sheet and its key, so a key cannot be paired with another sheet of the same
+    # comparison (their play ids are the same p01, p02 ...). A hash of the salt says nothing of it.
+    sheet_id = hashlib.sha256(f"sheet:{salt}".encode()).hexdigest()[:32]
     sheet = {
         "format": FORMAT_LABELS,
+        "sheet_id": sheet_id,
         "scenario_id": scenario.scenario_id,
         "instructions": (
             "Label every choice of every play with one outcome, from the model text shown for it "
@@ -139,7 +143,7 @@ def label_sheet(scenario: Scenario, plays: Sequence[Play], *, salt: str) -> tupl
                         for choice_id, lines in _shown(scenario, play.run).items()},
         } for play_id, play in zip(ids, order)],
     }
-    key = {"format": FORMAT_KEY, "scenario_id": scenario.scenario_id,
+    key = {"format": FORMAT_KEY, "sheet_id": sheet_id, "scenario_id": scenario.scenario_id,
            "plays": {play_id: play.digest for play_id, play in zip(ids, order)}}
     return sheet, key
 
@@ -148,7 +152,7 @@ def bind_labels(sheet: object, key: object, scenario: Scenario,
                 plays: Sequence[Play]) -> dict[str, dict[str, str]]:
     """A filled-in sheet joined to its key, as run digest -> choice id -> outcome.
 
-    Refused unless the sheet and key are for ``scenario``, the key names exactly ``plays``, every
+    Refused unless the sheet and key are for ``scenario`` and were written together, the key names exactly ``plays``, every
     choice of every play has one outcome, and the sheet's acts and each choice's text are what the
     current scenario reads from that run.
     """
@@ -173,6 +177,8 @@ def bind_labels(sheet: object, key: object, scenario: Scenario,
         raise fail("format", f"expected {FORMAT_LABELS!r}")
     if sheet.get("scenario_id") != scenario.scenario_id:
         raise fail("scenario_id", f"expected {scenario.scenario_id!r}")
+    if not isinstance(key.get("sheet_id"), str) or sheet.get("sheet_id") != key["sheet_id"]:
+        raise fail("sheet_id", "the key was written with another sheet")
     if sheet.get("choices") != _acts(scenario):
         raise fail("choices", "the acts are not the current scenario's; make a new sheet")
     entries = sheet.get("plays")
