@@ -1,0 +1,23 @@
+.authoring-lead { margin: 0 0 20px; overflow-wrap: anywhere; }
+.authoring-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.authoring-card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 14px; min-width: 0; }
+.authoring-card > p, .authoring-card .g-empty, .authoring-card .g-actions, .authoring-card .g-field, .authoring-card .g-unavailable { margin: 0; }
+.authoring-card p { margin: 0; overflow-wrap: anywhere; }
+.authoring-sub { font: 600 15px/1.3 var(--g-sans); margin: 4px 0 0; }
+.authoring-group { padding-top: 12px; border-top: 1px solid var(--g-line); min-width: 0; }
+.authoring-group:focus, .authoring-proposal:focus { outline: 2px solid var(--g-focus); outline-offset: 2px; }
+.authoring-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.authoring-lines > li { padding: 8px 0; border-top: 1px solid var(--g-line); min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.authoring-lines > li:first-child { border-top: 0; padding-top: 0; }
+.authoring-fields { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.authoring-fields > legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.authoring-row { border: 1px solid var(--g-line); border-radius: 10px; padding: 12px; }
+.authoring-ref { font-size: 13px; overflow-wrap: anywhere; word-break: break-all; }
+.authoring-proposal { padding: 12px; border: 1px solid var(--g-line); border-radius: 10px; gap: 8px; min-width: 0; }
+.authoring-mark { align-items: flex-start; gap: 10px; min-height: 44px; cursor: pointer; }
+.authoring-mark > input { width: 22px; height: 22px; flex: 0 0 auto; margin-top: 2px; }
+.authoring-more > summary { cursor: pointer; padding: 6px 0; min-height: 44px; display: flex; align-items: center; overflow-wrap: anywhere; }
+.authoring-bytes { margin: 0; padding: 10px; max-height: 320px; overflow: auto; font: 12px/1.5 var(--g-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--g-line); border-radius: 8px; }
+.authoring-quote { font-family: var(--g-serif); overflow-wrap: anywhere; }
+.authoring-card .g-row { flex-wrap: wrap; min-width: 0; }
+.authoring-card .g-button, .authoring-card select, .authoring-card input.g-input { min-height: 44px; }

@@ -171,6 +171,8 @@ function headerActions(ctx, page, attach) {
     nodes.push(ui.buttonLink("Start a chat", "start", [], { source: read.entity }, { kind: "primary" }));
   }
   nodes.push(el("a", { class: "g-button", href: address("edit") }, "Edit"));
+  // 116: the source's authoring tools (world proposals, a read-only audit, upgrade previews), docs/AUTHORING_PAGE.md
+  if (typeof read.source === "string" && ctx.registered("authoring")) nodes.push(ui.buttonLink("Authoring", "authoring", [read.source]));
   if (attach) {
     const toggle = ui.button("Attach to a chat", () => { toggle.setAttribute("aria-expanded", String(attach.toggle())); });
     toggle.setAttribute("aria-expanded", "false");

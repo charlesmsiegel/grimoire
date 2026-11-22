@@ -2,8 +2,9 @@
 
 Sprint 079's headless `grimoire.sourceupgrades` previews what removing or updating one source
 would do, and lets a source declare optional dependencies pinned to the version it was checked
-against. Nothing here rewrites a reference, moves a head, deletes a source or calls a model. UI
-controls belong to the Wave 9 UI exit; package distribution to 103.
+against. Nothing here rewrites a reference, moves a head, deletes a source or calls a model. The
+app's Authoring page (116, [AUTHORING_PAGE](AUTHORING_PAGE.md)) shows the removal preview and the
+dependency report and pins a dependency; package distribution is 103's.
 
 ## Removal and update previews
 
@@ -138,4 +139,5 @@ head or edited head bytes, re-pin, following and optional-absence behaviors and 
 Not built: applying an update or removal, rollback of an applied update, a follow-live versus
 pin-per-campaign policy beyond 042's pin by default, re-pinning non-actor bindings, recursive
 dependencies, campaign ledgers outside `sources/` and `campaigns/` (the scan covers what
-`store.scan()` covers), and any UI.
+`store.scan()` covers), and an update preview in the app (it needs a candidate library the app
+cannot open).

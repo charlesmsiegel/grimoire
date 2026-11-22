@@ -138,13 +138,16 @@ type(input(root, "key"), "OPENROUTER_API_KEY");
 const preparation = root.querySelector('input[data-focus-key="providers:preparation"]');
 assert.equal(preparation.checked, false, "scene preparation is off unless the settings turn it on");
 preparation.checked = true;
+// world suggestions (087 on Authoring, 116) are their own switch too, off until ticked, and saved as 0 while off
+const authoring = root.querySelector('input[data-focus-key="providers:authoring"]');
+assert.equal(authoring.checked, false, "world suggestions are off unless the settings turn them on");
 root.querySelector("form").dispatchEvent({ type: "submit", preventDefault() {} }); await tick();
 const ops = calls.map((c) => c[0]);
 for (const op of ["models", "chats", "diagnostics", "usage", "save_models"]) assert.ok(ops.includes(op), op);
 const sent = calls.filter((c) => c[0] === "save_models").pop()[1];
 assert.deepEqual(sent.expected, "sha256:x");
 assert.deepEqual(sent.settings, { provider_id: "local", base_url: "http://127.0.0.1:1/v1", model: "edited-model", fallbacks: ["n"],
-  max_output_tokens: 99, attempts: 2, director: 1, preparation: 1, decision: 0, planning: 0, critique: 1, agendas: [], key_env: "OPENROUTER_API_KEY", max_tokens_field: "max_tokens" },
+  max_output_tokens: 99, attempts: 2, director: 1, preparation: 1, authoring: 0, decision: 0, planning: 0, critique: 1, agendas: [], key_env: "OPENROUTER_API_KEY", max_tokens_field: "max_tokens" },
   "the key goes only as the name of its variable, and nothing else is added: an empty price is left out");
 assert.ok(!ops.some((op) => !["models", "chats", "diagnostics", "usage", "save_models", "check_models", "context"].includes(op)));
 assert.ok(root.querySelector("div.providers-live").textContent.startsWith("Saved."));

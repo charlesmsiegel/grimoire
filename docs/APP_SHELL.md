@@ -29,6 +29,8 @@ backend/src/grimoire/app/
                                campaign's catalog bindings, ruleset contracts and scene preparation
                                ([PREP](PREP.md)); table, ensemble and companions 115, a shared turn at one
                                screen, a previewed NPC exchange and reviewed captures ([TABLE](TABLE.md))
+                               authoring/ 116, a source's world proposals, read-only audit and upgrade
+                               previews ([AUTHORING_PAGE](AUTHORING_PAGE.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -185,6 +187,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `art` | 114 | `?scope=<scope>&subject=<subject>&limit=<n>` |
 | `sync` | 114 | |
 | `story` | 081 | `/<ChatRef>?audience=director&q=<words>&actor=<InstanceRef>&thread=<proposition id>` (one chat's story threads; see [STORY.md](STORY.md)) |
+| `authoring` | 116 | `/<source id>` (a source's authoring tools; see [AUTHORING_PAGE.md](AUTHORING_PAGE.md)) |
 
 A sprint may register other routes of its own (prefix them with its area, such as `source-history`).
 
