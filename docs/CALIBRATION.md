@@ -154,7 +154,7 @@ its first answer's parse counts and verdict (`first_answer`), and both answers c
 The rubric checks more than the ladder: a lowered step needs evidence, a verdict needs at
 least three rehearsals, and the theory fields must not be empty. So, when the report is
 scored, each re-asked trial's first answer is also put through the pinned rubric, with each
-off-ladder step read as a rung (1.0 at or above the top, 0.5 otherwise) for that check only.
+off-ladder step read as a rung (1.0 for a number at or above the top, 0.5 otherwise) for that check only.
 If the rubric refuses it for any other fault, the trial is `first_answer_invalid` and its
 panel is unscored, whatever the re-ask said. That check never scores anything: the profile
 comes from the re-asked answer alone.
