@@ -567,3 +567,119 @@ judge that: the same refusal passes or fails on one word. So, for every choice a
   Oda comply, which her card contradicts; that reply is a fixture for the dry run and is not used
   in a billed comparison.
 
+### Labelled comparison (2026-11-22)
+
+Three steps, with [choices decided by a reader's labels](#choices-decided-by-labels-2026-11-22):
+the saved sampled comparison scored with labels (A1, no calls), one fresh billed comparison (A2),
+and that comparison scored with labels (A3, no calls). Each sheet was labelled by a separate fresh
+model subagent that was given only the path of `label-sheet.json` and a fixed instruction: not the
+key, the comparison or the captures, and nothing about what the plays were or what result was
+hoped for. Both label files differ from their sheets in the `outcome` fields only.
+**A3's "V2 (one call per speaking NPC) against 0.2.1" section is PASS with no findings, so 068's
+proving scenario is established.**
+
+Same five 0.2.1 captures throughout, in the same order, on `claude-sonnet-4-5-20250929`.
+
+**A1: the earlier sampled comparison, labelled.** A measurement of a run read after the rule
+changed; it does not decide 068.
+
+| Section | Verdict | Findings |
+|---|---|---|
+| V2 against 0.2.1 | PASS | none |
+| V2 with planning against plain V2 | FAIL | `cost_regression`: mean weighted billed tokens 4,324.6 to 8,553.6 |
+
+Every choice is given effect in 5 of 5 samples on every side, in both sections.
+
+| Choice | Side | honored | complicated | ignored | negated |
+|---|---|---:|---:|---:|---:|
+| `ask-ledger` | 0.2.1 | 0 | 5 | 0 | 0 |
+| `ask-ledger` | plain V2 | 1 | 4 | 0 | 0 |
+| `ask-ledger` | planning | 0 | 5 | 0 | 0 |
+| `follow-bellamy` | 0.2.1 | 4 | 1 | 0 | 0 |
+| `follow-bellamy` | plain V2 | 4 | 1 | 0 | 0 |
+| `follow-bellamy` | planning | 5 | 0 | 0 | 0 |
+| `ask-song` | 0.2.1 | 2 | 3 | 0 | 0 |
+| `ask-song` | plain V2 | 4 | 1 | 0 | 0 |
+| `ask-song` | planning | 3 | 2 | 0 | 0 |
+
+**A2: the fresh billed comparison.** It printed a ceiling of 270 requests and made 90: 30 for
+plain V2 and 60 with planning, none retried, at `max_tokens=16000`.
+
+| Sample | 0.2.1 calls | 0.2.1 input / output | 0.2.1 distinguishability | V2 calls | V2 input / output | V2 distinguishability |
+|---:|---:|---|---:|---:|---|---:|
+| 1 | 6 | 15,618 / 1,396 | 0.833 | 6 | 3,040 / 737 | 1.000 |
+| 2 | 6 | 15,254 / 978 | 0.667 | 6 | 3,543 / 957 | 1.000 |
+| 3 | 6 | 14,972 / 773 | 0.500 | 6 | 3,525 / 977 | 0.833 |
+| 4 | 6 | 16,177 / 1,380 | 0.667 | 6 | 3,198 / 845 | 0.667 |
+| 5 | 6 | 15,409 / 1,188 | 0.667 | 6 | 3,398 / 911 | 0.500 |
+| Mean | 6 | 15,486 / 1,143 | 0.667 | 6 | 3,340.8 / 885.4 | 0.800 |
+
+| Sample | Plain V2 calls | Plain V2 input / output | Plain V2 distinguishability | Planning calls | Planning input / output | Planning distinguishability |
+|---:|---:|---|---:|---:|---|---:|
+| 1 | 6 | 3,040 / 737 | 1.000 | 12 | 7,614 / 1,675 | 1.000 |
+| 2 | 6 | 3,543 / 957 | 1.000 | 12 | 6,886 / 1,534 | 0.833 |
+| 3 | 6 | 3,525 / 977 | 0.833 | 12 | 6,863 / 1,459 | 0.667 |
+| 4 | 6 | 3,198 / 845 | 0.667 | 12 | 8,221 / 1,895 | 1.000 |
+| 5 | 6 | 3,398 / 911 | 0.500 | 12 | 7,498 / 1,604 | 0.833 |
+| Mean | 6 | 3,340.8 / 885.4 | 0.800 | 12 | 7,416.4 / 1,633.4 | 0.867 |
+
+Cache reads and writes are 0 in every sample on every side. Leak rate 0 and no unmetered call
+in every sample. Mean weighted billed tokens: 0.2.1 16,629, plain V2 4,226.2, planning 9,049.8.
+Noise allowance for voice: 0.221 for V2 against 0.2.1 and 0.231 for planning against plain V2,
+with an allowed drop of 0.000.
+
+A2's own report still reads choices by phrase markers, and by that reading it fails as before:
+V2 against 0.2.1 has `baseline_invalid` (`ask-ledger` in 2 of 5 on 0.2.1's side; V2 3 of 5,
+`ask-song` 4 / 4, `follow-bellamy` 4 / 5), and planning against plain V2 has `choice_negated`
+(`ask-ledger` in 2 of 5 planning samples) and `cost_regression`. The markers decide nothing
+under the labelled rule.
+
+**A3: the fresh comparison, labelled.** This decides 068.
+
+| Section | Verdict | Findings |
+|---|---|---|
+| V2 against 0.2.1 | **PASS** | none |
+| V2 with planning against plain V2 | FAIL | `cost_regression`: mean weighted billed tokens 4,226.2 to 9,049.8 |
+
+Every choice is given effect in 5 of 5 samples on every side, in both sections. Voice: mean
+distinguishability 0.667 for 0.2.1, 0.800 for V2 and 0.867 with planning; no voice finding.
+
+| Choice | Side | honored | complicated | ignored | negated |
+|---|---|---:|---:|---:|---:|
+| `ask-ledger` | 0.2.1 | 0 | 5 | 0 | 0 |
+| `ask-ledger` | plain V2 | 1 | 4 | 0 | 0 |
+| `ask-ledger` | planning | 0 | 5 | 0 | 0 |
+| `follow-bellamy` | 0.2.1 | 4 | 1 | 0 | 0 |
+| `follow-bellamy` | plain V2 | 5 | 0 | 0 | 0 |
+| `follow-bellamy` | planning | 5 | 0 | 0 | 0 |
+| `ask-song` | 0.2.1 | 2 | 3 | 0 | 0 |
+| `ask-song` | plain V2 | 3 | 2 | 0 | 0 |
+| `ask-song` | planning | 4 | 1 | 0 | 0 |
+
+The planning experiment fails on cost alone: it roughly doubles the tokens for no measured
+gain in choices and a voice difference inside the noise. That rejects optional planning on this
+scenario, not V2.
+
+What this pass does and does not show:
+
+- It meets the gate as now written, on a comparison made after the rule was set, with labels
+  from a reader that did not see the key.
+- The rule changed after earlier runs failed. Under phrase markers this same fresh comparison
+  fails. The pass rests on reading a choice as given effect when the scene answers the player's
+  act in character, a refusal included.
+- No label on either sheet is `ignored` or `negated`: all 90 are `honored` or `complicated`.
+  The labelled choice check therefore passed everything and separated nothing here; what it
+  shows is that no play dropped or contradicted a player's act. `ask-ledger` is `complicated`
+  in 14 of 15 plays on each sheet, the refusal the scenario's own card asks for.
+- The readers were model subagents of the session that ran the comparison, one per sheet, not
+  people. That they saw only the sheet rests on how they were briefed; the report cannot check
+  it. One noted that some replies carry one speaker's narration under the other's tag, which
+  can give a play's side away.
+- **The 0.2.1 side's cost and latency leave out its rejected replies**: 10 requests, 26,490 input
+  and 46 output tokens across 2 of the 5 captures. They are a lower bound on what its player paid.
+- The token sums are not like for like: the prompts differ, V2's usage is provider-reported with
+  no capture evidence of its own, and V2 reports no latency. Five samples a side on one
+  three-turn scenario and one model is a small sample.
+- No cost is in any run. At an assumed list price of 3 USD input and 15 USD output per million
+  tokens the 90 calls (53,786 input and 12,594 output tokens) come to about 0.35 USD, as an
+  estimate.
