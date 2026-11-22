@@ -330,7 +330,8 @@ def parse_defect(text: object, case: dict, token: str, name: str) -> dict:
 def _in_listing(line: str, count: int) -> bool:
     """Whether ASCII digits ``line`` name a line of a ``count``-line listing. Never turns a number
     longer than the listing's into an int, which a judge can make long enough to raise."""
-    return len(line.lstrip('0')) <= len(str(count)) and 1 <= int(line) <= count
+    digits = line.lstrip('0') or '0'
+    return len(digits) <= len(str(count)) and 1 <= int(digits) <= count
 
 
 def _listed(cite: object, name: str, count: int) -> bool:

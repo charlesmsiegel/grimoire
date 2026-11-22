@@ -166,7 +166,9 @@ faults gets one re-ask that restates both rules. A re-ask for the ladder alone i
 word what version 3 sent, so a version 3 capture still replays. The re-asked answer must
 then pass every check on its own. A lowered step still uncited after it is `unknown`
 (`citation`). `parsing.uncited` counts every trial whose final answer has a rubric dimension
-graded other than 1.0 with no listed line, whether or not it was re-askable. An uncited key
+graded other than 1.0 that cited something and kept no listed line, whether or not it was
+re-askable. A lowered step with no evidence at all drops nothing, so it is not counted there:
+the pinned rubric refuses it when the report is scored (`invalid_verdict`). An uncited key
 the rubric does not grade leaves the answer `citation` and shows only in `dropped_shapes`. Each answer is re-asked at most once for both
 faults together, so the plan and `max_calls` are unchanged.
 

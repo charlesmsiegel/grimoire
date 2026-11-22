@@ -545,6 +545,9 @@ def test_dropped_citations_are_reported_by_shape_never_by_text():
     # A number longer than Python turns into an int is outside the listing, never an error.
     assert jp.citation_shape(f'{name}:' + '9' * 5000, name, count) == 'unlisted_line'
     assert not jp._listed(f'{name}:' + '9' * 5000, name, count) and jp._listed(f'{name}:007', name, count)
+    for padded in (f'{name}:' + '0' * 5000 + '1', f'{name}: ' + '0' * 5000 + '1', f'{name}:' + '0' * 5000):
+        jp.citation_shape(padded, name, count)  # never raises, however many zeros lead
+    assert jp._listed(f'{name}:' + '0' * 5000 + '1', name, count) and not jp._listed(f'{name}:' + '0' * 5000, name, count)
     case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\nb = 2\n'}
     verdict = jp.perfect_uncovered_verdict('u')
     verdict['dimensions']['absorption']['evidence'] = ['f.py:9', 'f.py:1-2', 'f.py:1']
