@@ -118,7 +118,8 @@ object (even a broken one) or the object inside another (even one left unclosed)
 judge may have changed its mind or is quoting an example, so the answer is `ambiguous`
 (`parsing.ambiguous`), never the first or the last. So is an answer whose prose leaves a
 bracket open before the object.
-The prompts are unchanged, so a capture made under version 1 still replays.
+The prompts did not change in version 2, so under versions 2 to 5 a version 1 capture still
+replayed.
 
 **Theory citations.** A citation that is not `<alias>:<line>` on a listed line supports
 nothing, so it is dropped (`parsing.citations_dropped`), never repaired or moved. The
@@ -131,7 +132,7 @@ not exist stays `malformed`.
 
 This check is stricter than the pinned rubric, which takes any non-empty evidence string.
 A range of lines is never a citation, however short: CMS chose on 2026-11-22 to keep one line
-per citation rather than accept ranges, since one range could cite most of a file. Since
+per citation rather than accept ranges. Since
 parser version 6 the theory prompt says so up front: one line number per citation, a range
 such as `"<file>:<first>-<last>"` is not a citation, and several lines are listed one by one.
 The report gives each dropped citation's shape, never its text, per judge in

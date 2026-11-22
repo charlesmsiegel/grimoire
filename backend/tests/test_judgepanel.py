@@ -867,12 +867,15 @@ def test_a_reask_for_both_faults_restates_both_rules_and_says_a_range_is_not_a_c
         '0.25', '').replace('0.0', ''))
 
 
+# The prompts' digest before parser 6 added the range rule.
+PARSER_5_PROMPT_VERSION = '994e20b7b05039c6a3e1607f440511eb4168537cee82bd82226c7899367db202'
+
+
 def test_the_theory_prompt_says_up_front_that_a_range_is_not_a_citation():
     assert ('A step below 1.0 must cite evidence as "<file>:<line>", one line number per citation. A range\n'
             'such as "<file>:<first>-<last>" is not a citation; to cite several lines, list each one.'
             ) in jp.THEORY_PROMPT
     assert jp.PARSER_VERSION == 6
-
 
 
 @pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
@@ -1181,8 +1184,9 @@ def test_replay_reproduces_a_capture_and_refuses_a_stale_one(tmp_path, monkeypat
     other = panel_file(tmp_path, model='judge-model-2')
     with pytest.raises(ValueError, match='different pin'):
         jp.run(CORPUS, jp.load_panel(other)[0], trials, jp.ReplayJudge(capture), 'salt')
-    # The prompts are in every pin: a capture made before the range rule (parser 6) never replays.
-    monkeypatch.setattr(jp, 'PROMPT_VERSION', 'the version 5 prompts')
+    # The prompts are in every pin: a capture made with the parser 5 prompts never replays.
+    assert jp.PROMPT_VERSION != PARSER_5_PROMPT_VERSION
+    monkeypatch.setattr(jp, 'PROMPT_VERSION', PARSER_5_PROMPT_VERSION)
     with pytest.raises(ValueError, match='different pin'):
         jp.run(CORPUS, jp.load_panel(panel_file(tmp_path))[0], trials, jp.ReplayJudge(capture), 'salt')
 

@@ -543,8 +543,9 @@ class ReplayJudge:
             raise ValueError('not a judge-panel capture')
         self.salt = manifest['salt']
         self.pins = manifest['pins']
-        # The parser the capture was taken to be read by. A capture taken before a parser change
-        # replays under the new one, but it shaped that change, so it can never establish the proof.
+        # The parser the capture was taken to be read by. A capture taken before a parser change that
+        # kept the prompts replays under the new one, but it shaped that change, so it can never
+        # establish the proof.
         version = manifest.get('parser_version')
         self.parser_version = version if type(version) is int else None
 
