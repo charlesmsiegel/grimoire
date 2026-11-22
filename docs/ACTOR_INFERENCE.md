@@ -323,3 +323,6 @@ failed capture is recorded in [V021_BASELINE](evals/V021_BASELINE.md#sampled-cap
 
 068 now waits on five 0.2.1 captures, and a live 0.2.1 capture on this route has failed in turn 1
 on two of three attempts with this model.
+The cause was found offline afterwards: 0.2.1's own empty-response check, when the second speaker's
+reply is written under another speaker's label or leaves no text
+([why](evals/V021_BASELINE.md#why-turn-1-fails-offline-2026-11-22)). The capture now reports which.

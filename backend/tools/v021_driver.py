@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -67,6 +68,57 @@ def partial_ledger(rows: list[dict]) -> list[dict]:
             for row in rows if row.get("kind") == "llm"]
 
 
+#: 0.2.1's error kinds are identifiers; anything else is reported as unrecognised, never echoed.
+ERROR_KIND = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _chat_frames(text: str):
+    """The JSON objects of 0.2.1's own chat stream (``data:`` lines), skipping anything else."""
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            try:
+                frame = json.loads(line[5:])
+            except ValueError:
+                continue
+            if isinstance(frame, dict):
+                yield frame
+
+
+def turn_failure(text: str, actors: dict[str, str], labels: dict[str, str], markers) -> str:
+    """Why 0.2.1 failed a turn, as error kinds, actor ids and counts only (never text).
+
+    ``text`` is the turn's chat stream as 0.2.1 sent it to its client; ``actors`` maps 0.2.1's
+    actor refs to scenario actor ids, ``labels`` maps cast names to actor ids, and ``markers``
+    is 0.2.1's own speaker-label matcher (``store.scenes._markers``), so a label counts exactly
+    when 0.2.1's authority check reads it as one. Each reply is described by the actor it was
+    for, how many characters 0.2.1 streamed of it, and whose labels it was written under.
+    """
+    kinds: list[str] = []
+    replies: list[list] = []
+    for frame in _chat_frames(text):
+        error = frame.get("error")
+        start = frame.get("response_start")
+        if isinstance(error, dict):
+            kind = error.get("kind")
+            kinds.append(kind if isinstance(kind, str) and ERROR_KIND.fullmatch(kind)
+                         else "unrecognised")
+        elif isinstance(start, dict):
+            replies.append([actors.get(str(start.get("actor_ref")), "unknown"), ""])
+        elif isinstance(frame.get("delta"), str) and replies:
+            replies[-1][1] += frame["delta"]
+    parts = ["0.2.1 error " + (", ".join(kinds) if kinds else "not reported")]
+    for actor, reply in replies:
+        body = reply.strip()
+        found = []
+        for marker in markers(body):
+            name = marker.group(1)
+            found.append(labels.get(name, "you" if name == "You" else "another name"))
+        under = ("no label" if not found else
+                 ("the label " if len(found) == 1 else "the labels ") + ", ".join(found))
+        parts.append(f"{actor}'s reply: {len(body)} characters streamed, under {under}")
+    return "; ".join(parts)
+
+
 def encode_bundle(bundle: dict) -> bytes:
     """The evidence as ASCII-escaped JSON: the same bytes whatever the pipe's locale encoding."""
     return json.dumps(bundle, ensure_ascii=True).encode("ascii")
@@ -89,7 +141,7 @@ def _args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--model")
     parser.add_argument("--key-env")
     # Test-only fault injection for dry runs (the capture CLI never passes it).
-    parser.add_argument("--fault", choices=("retry-first",))
+    parser.add_argument("--fault", choices=("retry-first", "second-speaks-as-pc"))
     return parser.parse_args(argv)
 
 
@@ -185,6 +237,7 @@ def main(argv: list[str]) -> int:
 
     from grimoire import store  # noqa: PLC0415
     from grimoire.main import create_app  # noqa: PLC0415
+    from grimoire.store import scenes  # noqa: PLC0415  (0.2.1's speaker-label matcher)
 
     speakers = setup["speakers"]
     npcs = {npc["actor_id"]: npc for npc in setup["npcs"]}
@@ -196,6 +249,11 @@ def main(argv: list[str]) -> int:
         replies = setup["dry_run"]["replies"]
         bodies = [_sse(llm_fakes, args.provider, replies[str(t["turn"])][speaker])
                   for t in turns for speaker in speakers]
+        if args.fault == "second-speaks-as-pc":  # turn 1's second reply is the PC's line
+            first = turns[0]["turn"]
+            reply = dict(replies[str(first)][speakers[1]])
+            reply["text"] = f"\n\n**{setup['pc']['name']}:** I take the ledger and read it."
+            bodies[1] = _sse(llm_fakes, args.provider, reply)
         if args.fault == "retry-first":  # the first call fails once and 0.2.1 retries it
             bodies.insert(0, (429, "synthetic rate limit"))  # 0.2.1 retries rate limits
         sse = llm_fakes.SSEProvider(args.provider, bodies)
@@ -269,6 +327,8 @@ def main(argv: list[str]) -> int:
         refs[f"pcs:{pc['pc']}"] = setup["pc"]["actor_id"]
         _ok(client.post(f"{base}/cast", json={"id": pc["pc"], "kind": "pcs"}), "cast the PC")
 
+        cast_labels = {npcs[a]["name"]: a for a in npcs}
+        cast_labels[setup["pc"]["name"]] = setup["pc"]["actor_id"]
         speaker_refs = [ref for actor in speakers for ref, a in refs.items() if a == actor]
         silent_refs = [ref for ref, a in refs.items() if a in npcs and a not in speakers]
         _ok(client.put(f"{base}/group", json={"order": "list", "order_list": speaker_refs,
@@ -301,7 +361,8 @@ def main(argv: list[str]) -> int:
         for turn in turns:
             response = client.post(f"{base}/chat", json={"content": turn["player_text"]})
             if response.status_code >= 400 or '"error"' in response.text:
-                fail(f"turn {turn['turn']} failed: HTTP {response.status_code}")
+                why = turn_failure(response.text, refs, cast_labels, scenes._markers)
+                fail(f"turn {turn['turn']} failed: HTTP {response.status_code}; {why}")
             boundaries.append(len(store.scenes.read_scene(cid, sid)["messages"]))
         deadline = time.monotonic() + IDLE_TIMEOUT_SECONDS
         while app.state.runs.any_live() is not None:

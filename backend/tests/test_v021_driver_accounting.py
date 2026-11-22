@@ -1,6 +1,8 @@
 """The 0.2.1 driver's request accounting (its pure part; the driver imports 0.2.1 lazily)."""
 
 import importlib.util
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -70,3 +72,52 @@ def test_evidence_is_written_as_ascii_json_whatever_the_locale():
     assert data.isascii()
     import json
     assert json.loads(data.decode("ascii"))["text"] == "“Hush,” she said — ¡olé! 鍵"
+
+
+# 0.2.1's speaker-label matcher at the pinned commit (store/scenes/serialize.py), for these
+# tests only; the driver passes 0.2.1's own function.
+_MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
+
+
+def markers(body):
+    return [m for m in _MARKER.finditer(body)
+            if m.start() == 0 or body[max(0, m.start() - 2):m.start()] == "\n\n"]
+
+
+def stream(*frames):
+    return "".join(f"id: {i}\ndata: {json.dumps(f)}\n\n" for i, f in enumerate(frames))
+
+
+ACTORS = {"characters:oda": "npc-oda", "characters:bellamy": "npc-bellamy"}
+LABELS = {"Oda": "npc-oda", "Bellamy": "npc-bellamy", "Wren": "pc-wren"}
+
+
+def test_turn_failure_names_the_kind_and_whose_labels_each_reply_used():
+    d = driver()
+    text = stream(
+        {"response_start": {"id": "r1", "actor_ref": "characters:oda"}},
+        {"delta": "Coin first."}, {"response_end": {"id": "r1"}},
+        {"response_start": {"id": "r2", "actor_ref": "characters:bellamy"}},
+        {"delta": "\n\n**Wren:** I read "}, {"delta": "it.\n\n**Mystery (aside):** Hm."},
+        {"error": {"kind": "empty_response", "detail": "The model returned no response prose."}})
+    assert d.turn_failure(text, ACTORS, LABELS, markers) == (
+        "0.2.1 error empty_response; npc-oda's reply: 11 characters streamed, under no label; "
+        "npc-bellamy's reply: 46 characters streamed, under the labels pc-wren, another name")
+
+
+def test_turn_failure_never_echoes_text():
+    d = driver()
+    text = stream({"response_start": {"actor_ref": "characters:stranger"}},
+                  {"delta": "**You:** secret words"},
+                  {"error": {"kind": "Secret Words!", "detail": "secret words"}},
+                  "not a frame", {"error": "secret"})
+    text += "data: {not json\n"
+    said = d.turn_failure(text, ACTORS, LABELS, markers)
+    assert said == ("0.2.1 error unrecognised; unknown's reply: 21 characters streamed, "
+                    "under the label you")
+    assert "secret" not in said.lower()
+
+
+def test_turn_failure_with_nothing_reported():
+    d = driver()
+    assert d.turn_failure("", ACTORS, LABELS, markers) == "0.2.1 error not reported"

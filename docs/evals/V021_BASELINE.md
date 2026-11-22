@@ -55,6 +55,10 @@ in-process through FastAPI's `TestClient` (lifespan entered, as 0.2.1's own test
 - in a dry run only, forces 0.2.1's token counter onto its offline heuristic
   (`store.tokens._encoder`), so a `[desktop]` install does not download a tokenizer.
 
+When a turn fails, the driver reads that turn's chat stream as 0.2.1 sent it to its client and
+reports 0.2.1's error kind and each reply's length and labels, matching labels with 0.2.1's own
+`store.scenes._markers`. It changes nothing in the run.
+
 Prompt assembly, provider adapters, retry and the usage meter are 0.2.1's own.
 
 ## Capture prerequisites and spending approval
@@ -178,8 +182,9 @@ cannot verify the provider's own billing receipt. The report says both.
   fails the capture (`multi_call_contribution`).
 - **Live captures can fail.** Three of four live attempts failed; see
   [earlier attempts](#earlier-attempts-the-same-day) and the
-  [2026-11-22 attempt](#sampled-capture-attempt-2026-11-22). The driver reports a failed turn only as an
-  HTTP status, not 0.2.1's error kind.
+  [2026-11-22 attempt](#sampled-capture-attempt-2026-11-22). The failures in turn 1 are 0.2.1's
+  own empty-response check on the second speaker ([why](#why-turn-1-fails-offline-2026-11-22)).
+  The driver now reports a failed turn by 0.2.1's error kind and each reply's length and labels.
 - **Windows.** The real driver has been run on Linux only.
 - **Matched comparison.** A V2-vs-V0.2.1 comparison needs V2's provider adapter (013) and
   generation runtime (027); `/2` reserves a `v2-runtime` source for it.
@@ -268,8 +273,38 @@ list price of 3 USD input and 15 USD output per million tokens the two calls com
 0.02 USD, as an estimate.
 
 On this route the capture has now failed this way on two of three attempts with this model.
-Five captures in a row are unlikely to succeed until the cause is known, and the driver would
-have to report 0.2.1's error kind to find it.
+Five captures in a row are unlikely to succeed until the cause is known; it was found offline
+afterwards (below).
+
+## Why turn 1 fails (offline, 2026-11-22)
+
+Reproduced with no provider request, on the pinned 0.2.1 commit and its own test transport:
+
+- Each turn's second speaker is asked with a conversation that ends in the first speaker's reply,
+  as an assistant message carrying that speaker's label. On this model the second reply therefore
+  continues that message.
+- 0.2.1 keeps a reply's text only where it comes before any speaker label or under the speaker's
+  own label. Text under another cast member's label (the player's or the first speaker's) is
+  dropped, and a reply left with no text fails the turn with 0.2.1's `empty_response` error. An
+  empty reply, or one holding only a trailing `state` block, fails the same way.
+- A dry run whose turn-1 second reply has any of those shapes reproduces the live failures
+  exactly: both calls complete and are booked `ok`, and the turn is reported as failed with
+  HTTP 200. The same play with the second reply under its own label, or under no label, succeeds.
+
+So the live failures are 0.2.1's own behaviour on this route, not a fault in the capture. Which
+shape the model wrote is not known; a 19-token reply is about one short line under another
+speaker's label, but that is an inference. The driver now says it: a failed turn is reported by
+0.2.1's error kind and, for each reply of that turn, the actor it was for, how many characters
+0.2.1 streamed of it and whose labels it was written under (actor ids, `you` or `another name`,
+never text), for example `npc-bellamy's reply: 40 characters streamed, under the label pc-wren`.
+
+For 068 this means a capture can fail on any of its three turns (each second speaker's request
+ends the same way) whenever that reply keeps no text of its own, and that retrying a capture is
+playing 0.2.1 again, not repairing it. A failed capture
+writes nothing and costs its completed calls (about 0.02 USD in turn 1). Keeping only captures
+that finish makes the baseline 0.2.1's completed plays, which leaves V2 a harder baseline, not an
+easier one; the number of failed attempts is itself a measurement of 0.2.1 and is recorded with
+the captures.
 
 ## Privacy
 

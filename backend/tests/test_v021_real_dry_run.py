@@ -56,3 +56,21 @@ def test_real_dry_run_with_a_retry_is_captured_as_incomplete(tmp_path, monkeypat
     assert [a.outcome for a in run.calls[0].attempts] == ["failed", "completed"]
     assert not run.usage.complete
     assert "incomplete" in (out / "capture-report.txt").read_text()
+
+
+@pytest.mark.parametrize("kind", ["openrouter", "anthropic"])
+def test_real_dry_run_names_why_a_turn_failed(kind, tmp_path, monkeypatch):
+    # Turn 1's second speaker answers only under the PC's label: 0.2.1's authority check drops
+    # it, its empty-response check fails the turn, and the failure says so in kinds and ids.
+    monkeypatch.setattr(capture, "DRIVER_EXTRA_ARGS", ("--fault", "second-speaks-as-pc"))
+    out = tmp_path / "out"
+    with pytest.raises(capture.CaptureFailed) as failed:
+        capture.run_capture(capture.CaptureOptions(
+            scenario="guild_betrayal", v1_checkout=Path(CHECKOUT), v1_python=Path(PYTHON),
+            mode="dry_run", provider=kind, out=out))
+    message = str(failed.value)
+    assert "turn 1 failed: HTTP 200; 0.2.1 error empty_response" in message
+    assert "npc-oda's reply: 54 characters streamed, under no label" in message
+    assert "npc-bellamy's reply: 40 characters streamed, under the label pc-wren" in message
+    assert "ledger" not in message.split("partial ledger")[0]  # no reply text
+    assert not out.exists() or not any(out.iterdir())
