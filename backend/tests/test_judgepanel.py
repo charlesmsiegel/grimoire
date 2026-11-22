@@ -212,7 +212,7 @@ def test_the_report_counts_answers_read_out_of_prose_and_ambiguous_ones_even_aft
     cases = [{'judges': {'a': [{'text_outside_json': True, 'ambiguous': False},
                                {'reason': 'model_drift', 'ambiguous': True, 'citations_dropped': 2}]}}]
     assert jp.parsing(cases) == {'a': {'answers': 2, 'text_outside_json': 1, 'ambiguous': 1,
-                                       'citations_dropped': 2}}
+                                       'citations_dropped': 2, 'reasked': 0, 'off_ladder': 0}}
 
 
 def test_a_superscript_line_number_is_a_dropped_citation_not_a_crash():
@@ -281,8 +281,8 @@ class Scripted:
     def __init__(self, decide, served='judge-model'):
         self.decide, self.served, self.calls = decide, served, []
 
-    def respond(self, pin, case, trial, messages):
-        self.calls.append((pin.judge_id, case['id'], trial))
+    def respond(self, pin, case, trial, messages, reask=False):
+        self.calls.append((pin.judge_id, case['id'], trial) + (('reask',) if reask else ()))
         token = jp.canary('salt', pin.judge_id, case['id'], trial)
         assert token in messages[1][1]
         verdict, lines, covered = self.decide(pin.judge_id, case, trial)
@@ -337,8 +337,8 @@ class LikeTheLiveRun(Scripted):
     """The shapes the 2026-11-20 capture showed: judge ``b`` puts prose before every defect answer,
     and judge ``c`` cites a line past the end of the cohesive unit, beside a real one, in two trials."""
 
-    def respond(self, pin, case, trial, messages):
-        record = super().respond(pin, case, trial, messages)
+    def respond(self, pin, case, trial, messages, reask=False):
+        record = super().respond(pin, case, trial, messages, reask)
         if pin.judge_id == 'b' and case['task'] == 'defect':
             record['reply'] = 'The listing reads correctly from the top.\n\n```json\n' + record['reply'] + '\n```'
         if pin.judge_id == 'c' and case['id'] == 'ledger_cohesive' and trial < 2:
@@ -352,13 +352,254 @@ class LikeTheLiveRun(Scripted):
 def test_answers_shaped_like_the_live_run_now_complete_the_panel(tmp_path, stub_checkout):
     pins, trials, _ = jp.load_panel(panel_file(tmp_path))
     result = jp.run(CORPUS, pins, trials, LikeTheLiveRun(accurate), 'salt', stub_checkout)
-    assert result['parser_version'] == 2
+    assert result['parser_version'] == jp.PARSER_VERSION
     assert result['parsing']['b']['text_outside_json'] == 10 * 3   # every defect answer, read and reported
     assert result['parsing']['c']['citations_dropped'] == 2
     assert result['defects']['judges']['b']['unknown'] == 0
     proof = result['proof']
     assert proof['defect_panel_complete'] and proof['theory_panel_scored_and_discriminates']
     assert not proof['established']  # still synthetic
+
+
+class OffTheLadder(Scripted):
+    """The shape the 2026-11-22 capture showed: judge ``b`` grades the cohesive unit's honest_limits
+    0.75, between two rungs, in two trials. Asked again, it answers ``fixed`` (``None``: off again)."""
+
+    def __init__(self, decide, fixed=0.5, trials=(0, 1)):
+        super().__init__(decide)
+        self.fixed, self.trials, self.reasks = fixed, trials, []
+
+    def respond(self, pin, case, trial, messages, reask=False):
+        record = super().respond(pin, case, trial, messages, reask)
+        if pin.judge_id == 'b' and case['id'] == 'ledger_cohesive' and trial in self.trials:
+            reply = json.loads(record['reply'])
+            name = jp.alias('salt', case['id'])
+            step = 0.75 if not reask or self.fixed is None else self.fixed
+            reply['dimensions']['honest_limits'].update(step=step, evidence=[f'{name}:2'])
+            record['reply'] = json.dumps(reply)
+            if reask:
+                self.reasks.append(messages)
+            record['prompt_sha256'] = jp.prompt_sha256(messages)
+        return record
+
+
+def test_off_ladder_steps_are_found_as_the_pinned_rubric_would_refuse_them():
+    entry = {'rationale': 'r', 'evidence': ['u.py:1']}
+    assert jp.off_ladder({'honest_limits': {**entry, 'step': 0.75}, 'absorption': {**entry, 'step': 1.0},
+                          'abstraction': {**entry, 'step': '0.5'}, 'justification': {**entry, 'step': None},
+                          'world_mapping': {**entry, 'step': float('nan')}}) == [
+        'world_mapping', 'abstraction', 'justification', 'honest_limits']
+    # On the ladder by the rubric's own test (``step in LADDER``), so never re-asked.
+    assert jp.off_ladder({key: {**entry, 'step': step} for key, step in
+                          zip(jp.DIMENSIONS, (0, 0.25, 0.5, 1, 0.0))}) == []
+    # A missing or malformed dimension is the rubric's to refuse, not a reason to ask again.
+    assert jp.off_ladder({'absorption': 'holds'}) == [] and jp.off_ladder(None) == []
+
+
+def test_an_off_ladder_step_is_asked_about_once_and_the_new_answer_stands(tmp_path, stub_checkout):
+    pins, trials, _ = jp.load_panel(panel_file(tmp_path))
+    judge = OffTheLadder(accurate)
+    result = jp.run(CORPUS, pins, trials, judge, 'salt', stub_checkout)
+    reasked = [call for call in judge.calls if call[-1] == 'reask']
+    assert reasked == [('b', 'ledger_cohesive', 0, 'reask'), ('b', 'ledger_cohesive', 1, 'reask')]
+    assert len(judge.calls) == jp.planned(jp.load_corpus(CORPUS), trials) + 2
+    # The re-ask is the first conversation, the judge's own answer, and the ladder restated.
+    first = judge.reasks[0]
+    cohesive = next(c for c in jp.load_corpus(CORPUS) if c['id'] == 'ledger_cohesive')
+    assert first[:2] == jp.messages_for(cohesive, jp.canary('salt', 'b', 'ledger_cohesive', 0), 'salt')
+    assert first[2][0] == 'assistant' and '0.75' in first[2][1]
+    assert first[3] == ('user', jp.REASK_PROMPT.format(dimensions='honest_limits'))
+    assert result['parsing']['b']['reasked'] == 2 and result['parsing']['b']['off_ladder'] == 0
+    trial = result['cases'][[c['id'] for c in result['cases']].index('ledger_cohesive')]['judges']['b'][0]
+    assert trial['state'] == 'verdict' and trial['reasked'] == ['honest_limits']
+    assert trial['verdict']['dimensions']['honest_limits']['step'] == 0.5
+    assert result['proof']['theory_panel_scored_and_discriminates']
+    assert not result['proof']['established']  # still synthetic
+
+
+@pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
+                    reason='set GRIMOIRE_CODING_SKILLS to a clean checkout at the calibration pin')
+def test_the_pinned_rubric_scores_the_panel_once_the_off_ladder_judge_is_reasked(tmp_path):
+    pins, trials, _ = jp.load_panel(panel_file(tmp_path))
+    checkout = Path(os.environ['GRIMOIRE_CODING_SKILLS'])
+    without = jp.run(CORPUS, pins, trials, OffTheLadder(accurate, fixed=None), 'salt', checkout)
+    assert not without['theory']['units']['ledger_cohesive']['scored']
+    result = jp.run(CORPUS, pins, trials, OffTheLadder(accurate), 'salt', checkout)
+    unit = result['theory']['units']['ledger_cohesive']
+    assert unit['scored'] and unit['discriminates'] is True
+    assert result['proof']['theory_panel_scored_and_discriminates']
+
+
+def test_a_step_still_off_the_ladder_after_one_reask_is_unknown_and_never_asked_again(tmp_path, stub_checkout):
+    pins, trials, _ = jp.load_panel(panel_file(tmp_path))
+    judge = OffTheLadder(accurate, fixed=None)
+    result = jp.run(CORPUS, pins, trials, judge, 'salt', stub_checkout)
+    assert sum(call[-1] == 'reask' for call in judge.calls) == 2
+    trial = result['cases'][[c['id'] for c in result['cases']].index('ledger_cohesive')]['judges']['b'][0]
+    assert trial['state'] == 'unknown' and trial['reason'] == 'off_ladder'
+    assert trial['verdict']['dimensions']['honest_limits']['step'] == 0.75  # kept as answered, never rounded
+    assert result['parsing']['b'] == {**result['parsing']['b'], 'reasked': 2, 'off_ladder': 2}
+    unit = result['theory']['units']['ledger_cohesive']
+    assert not unit['scored'] and unit['trials'][0]['reason'] == 'off_ladder'
+    assert not result['proof']['theory_panel_scored_and_discriminates']
+
+
+class Reasked(Scripted):
+    """Judge ``b`` answers the cohesive unit in trial 0 with honest_limits at 0.75, shaped by ``first``;
+    its re-ask is the accurate answer, shaped by ``again`` (a function of the record)."""
+
+    def __init__(self, decide, first=None, again=None, measurement='synthetic'):
+        super().__init__(decide)
+        self.first, self.again, self.measurement = first, again, measurement
+
+    def respond(self, pin, case, trial, messages, reask=False):
+        record = super().respond(pin, case, trial, messages, reask)
+        record['attempts'] = [{'outcome': 'ok', 'measurement': self.measurement}]
+        if pin.judge_id != 'b' or case['id'] != 'ledger_cohesive' or trial != 0:
+            return record
+        if reask:
+            return self.again(record) if self.again else record
+        reply = json.loads(record['reply'])
+        reply['dimensions']['honest_limits'].update(step=0.75, evidence=[jp.alias('salt', case['id']) + ':2'])
+        record['reply'] = self.first(reply) if self.first else json.dumps(reply)
+        return record
+
+
+def cohesive_b(result):
+    return next(c for c in result['cases'] if c['id'] == 'ledger_cohesive')['judges']['b'][0]
+
+
+def run_reasked(tmp_path, judge, checkout=None):
+    pins, trials, _ = jp.load_panel(panel_file(tmp_path))
+    return jp.run(CORPUS, pins, trials, judge, 'salt', checkout)
+
+
+def test_the_reask_names_the_dimensions_and_restates_the_ladder_without_choosing_a_rung():
+    assert jp.REASK_PROMPT.format(dimensions='abstraction, honest_limits') == (
+        'Your answer gave abstraction, honest_limits a step that is not on the ladder. Every step must be\n'
+        'exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between\n'
+        'them. Answer again with one complete JSON object in the same format, and nothing else.')
+
+
+@pytest.mark.parametrize('fault, reason', [
+    (lambda reply: {**reply, 'files': [{**reply['files'][0], 'canary': 'skipped'}]}, 'coverage'),
+    (lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
+        'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}, 'citation'),
+])
+def test_an_answer_with_another_fault_is_never_reasked_even_off_the_ladder(tmp_path, fault, reason):
+    judge = Reasked(accurate, first=lambda reply: json.dumps(fault(reply)))
+    result = run_reasked(tmp_path, judge)
+    assert not any(call[-1] == 'reask' for call in judge.calls)
+    trial = cohesive_b(result)
+    assert trial['reason'] == reason and trial['off_ladder'] == ['honest_limits'] and 'reasked' not in trial
+    assert result['parsing']['b']['off_ladder'] == 1 and result['parsing']['b']['reasked'] == 0
+
+
+def test_a_reasked_trial_still_reports_what_its_first_answer_needed(tmp_path):
+    def messy(reply):
+        reply['dimensions']['absorption']['evidence'] = ['elsewhere.py:1']  # dropped; 1.0 needs none
+        return 'Reading it through first.\n' + json.dumps(reply)
+    result = run_reasked(tmp_path, Reasked(accurate, first=messy))
+    trial = cohesive_b(result)
+    assert trial['state'] == 'verdict' and trial['reasked'] == ['honest_limits']
+    assert {k: v for k, v in trial['first_answer'].items() if k != 'verdict'} == {
+        'text_outside_json': True, 'ambiguous': False, 'citations_dropped': 1}
+    assert trial['first_answer']['verdict']['dimensions']['honest_limits']['step'] == 0.75
+    row = result['parsing']['b']
+    assert row['answers'] == 37 and row['text_outside_json'] == 1 and row['citations_dropped'] == 1
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reasked'] == ['b']
+    assert result['theory']['units']['ledger_cohesive']['trials'][1]['reasked'] == []
+
+
+def test_a_reask_with_no_answer_leaves_the_trial_off_the_ladder(tmp_path):
+    def refused(record):
+        return {**record, 'status': 'refused', 'reply': None}
+    result = run_reasked(tmp_path, Reasked(accurate, again=refused))
+    trial = cohesive_b(result)
+    assert trial['reason'] == 'call_refused' and trial['off_ladder'] == ['honest_limits']
+    assert result['parsing']['b']['reasked'] == 1 and result['parsing']['b']['off_ladder'] == 1
+    assert result['parsing']['b']['answers'] == 37  # the first answer was read; the re-ask gave none
+    # Asked again, but no answer came from the re-ask, so the trial names no re-asked judge.
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reasked'] == []
+
+
+def test_off_ladder_steps_are_read_as_the_rung_the_rubric_checks_most():
+    entry = {'rationale': 'r', 'evidence': []}
+    verdict = {'unit': 'u', 'dimensions': {'absorption': {**entry, 'step': 0.75}, 'world_mapping': {**entry, 'step': 1.5},
+                                           'abstraction': {**entry, 'step': '1.0'},
+                                           'justification': {**entry, 'step': float('nan')},
+                                           'honest_limits': {**entry, 'step': 0.25}}}
+    steps = {key: e['step'] for key, e in jp.laddered(verdict)['dimensions'].items()}
+    assert steps == {'absorption': 0.5, 'world_mapping': 1.0, 'abstraction': 0.5, 'justification': 0.5,
+                     'honest_limits': 0.25}
+    assert verdict['dimensions']['absorption']['step'] == 0.75  # the answer itself is never changed
+
+
+def test_a_reask_counts_only_if_the_pinned_rubric_accepts_the_first_answer(tmp_path, stub_checkout, monkeypatch):
+    real, seen = jp.upstream_score, []
+
+    def refuses_two_rehearsals(checkout, verdicts, size):
+        seen.append(verdicts)
+        if any(len(v.get('rehearsals', [])) < 3 for v in verdicts):
+            return {'error': 'absorption needs at least 3 rehearsal(s)'}
+        return real(checkout, verdicts, size)
+    monkeypatch.setattr(jp, 'upstream_score', refuses_two_rehearsals)
+
+    def two_rehearsals(reply):
+        return json.dumps({**reply, 'rehearsals': reply['rehearsals'][:2]})
+    result = run_reasked(tmp_path, Reasked(accurate, first=two_rehearsals), stub_checkout)
+    assert cohesive_b(result)['state'] == 'verdict'  # the re-asked answer itself is fine
+    trial = result['theory']['units']['ledger_cohesive']['trials'][0]
+    assert trial['reason'] == 'first_answer_invalid' and trial['profile_score'] is None
+    assert not result['proof']['theory_panel_scored_and_discriminates']
+    checked = [v for v in seen if v[0].get('rehearsals') and len(v[0]['rehearsals']) == 2]
+    assert checked and checked[0][0]['dimensions']['honest_limits']['step'] == 0.5  # read as a rung
+
+    clean = run_reasked(tmp_path, Reasked(accurate), stub_checkout)
+    assert clean['theory']['units']['ledger_cohesive']['trials'][0]['reason'] is None
+
+
+@pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
+                    reason='set GRIMOIRE_CODING_SKILLS to a clean checkout at the calibration pin')
+@pytest.mark.parametrize('fault', [
+    lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
+        'step': 0.5, 'rationale': 'r', 'evidence': []}}},
+    lambda reply: {**reply, 'rehearsals': reply['rehearsals'][:2]},
+    lambda reply: {**reply, 'theory': ''},
+])
+def test_the_pinned_rubric_refuses_a_reask_whose_first_answer_had_another_fault(tmp_path, fault):
+    checkout = Path(os.environ['GRIMOIRE_CODING_SKILLS'])
+    result = run_reasked(tmp_path, Reasked(accurate, first=lambda reply: json.dumps(fault(reply))), checkout)
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reason'] == 'first_answer_invalid'
+    assert not result['proof']['theory_panel_scored_and_discriminates']
+
+
+def test_a_reask_is_measured_and_watched_for_drift_with_its_trial(tmp_path):
+    reported = run_reasked(tmp_path, Reasked(accurate, measurement='provider_reported'))
+    assert cohesive_b(reported)['measurement'] == 'provider_reported'
+    assert reported['proof']['provider_reported_only']
+
+    class Estimated(Reasked):
+        def respond(self, pin, case, trial, messages, reask=False):
+            record = super().respond(pin, case, trial, messages, reask)
+            if reask:
+                record['attempts'] = [{'outcome': 'ok', 'measurement': 'estimated'}]
+            return record
+    estimated = run_reasked(tmp_path, Estimated(accurate, measurement='provider_reported'))
+    assert cohesive_b(estimated)['measurement'] == 'mixed'
+    assert not estimated['proof']['provider_reported_only']
+
+    class Moved(Reasked):
+        """The first answer alone was served by another snapshot; the re-ask by the usual one."""
+        def respond(self, pin, case, trial, messages, reask=False):
+            record = super().respond(pin, case, trial, messages, reask)
+            if (pin.judge_id, case['id'], trial, reask) == ('b', 'ledger_cohesive', 0, False):
+                record['served_model'] = 'judge-model-2026-01-01'
+            return record
+    for again in (None, lambda r: {**r, 'served_model': 'judge-model-2026-01-01'}):
+        moved = run_reasked(tmp_path, (Moved if again is None else Reasked)(accurate, again=again))
+        assert moved['served_models']['b'] == ['judge-model', 'judge-model-2026-01-01']
+        assert all(t['reason'] == 'model_drift' for c in moved['cases'] for t in c.get('judges', {}).get('b', []))
 
 
 def test_a_penalized_facade_is_a_false_positive(tmp_path):
@@ -632,10 +873,57 @@ def test_replay_reproduces_a_capture_and_refuses_a_stale_one(tmp_path, monkeypat
         jp.run(CORPUS, jp.load_panel(other)[0], trials, jp.ReplayJudge(capture), 'salt')
 
 
+def test_a_reask_is_captured_counted_against_the_ceiling_and_replayed(tmp_path, monkeypatch, stub_checkout):
+    from grimoire.testing.providers import Reply, ScriptedTransport
+
+    monkeypatch.setenv('SYNTHETIC_JUDGE_KEY', 'sk-synthetic')
+    pins, trials, configs = jp.load_panel(panel_file(tmp_path))
+    cases = jp.load_corpus(CORPUS)
+    # The same answers, call by call, as a provider would stream them.
+    replies: dict[str, list] = {}
+
+    class Recording(OffTheLadder):
+        def respond(self, pin, case, trial, messages, reask=False):
+            record = super().respond(pin, case, trial, messages, reask)
+            replies.setdefault(pin.judge_id, []).append(Reply(deltas=(record['reply'],), model='judge-model'))
+            return record
+    jp.collect(cases, pins, trials, Recording(accurate), 'salt')
+    base = jp.planned(cases, trials)
+
+    def live(out, ceiling):
+        transports = {judge_id: ScriptedTransport(list(steps)) for judge_id, steps in replies.items()}
+        return jp.LiveJudge(pins, configs, tmp_path / out, 'salt', ceiling, spend_cap='0 USD',
+                            transports=transports), transports
+    # The plan's own ceiling is never reached by the base calls alone: a re-ask is a billed call.
+    short, _ = live('short', base)
+    with pytest.raises(RuntimeError, match='ceiling'):
+        jp.collect(cases, pins, trials, short, 'salt')
+    judge, transports = live('capture', base + jp.reasks_at_most(cases, trials))
+    jp.collect(cases, pins, trials, judge, 'salt')
+    assert judge.calls == base + 2 and all(t.remaining == 0 for t in transports.values())
+    capture = tmp_path / 'capture'
+    assert sorted(p.name for p in (capture / 'calls/b/ledger_cohesive').iterdir()) == [
+        '0.json', '0.reask.json', '1.json', '1.reask.json', '2.json']
+    replayed = jp.run(CORPUS, pins, trials, jp.ReplayJudge(capture), 'salt', stub_checkout)
+    assert replayed['parsing']['b']['reasked'] == 2 and replayed['parsing']['b']['off_ladder'] == 0
+    assert replayed['proof']['theory_panel_scored_and_discriminates']
+    # A capture without the re-asks (one taken before them) reads those answers as unknown.
+    (capture / 'calls/b/ledger_cohesive/0.reask.json').unlink()
+    older = jp.run(CORPUS, pins, trials, jp.ReplayJudge(capture), 'salt', stub_checkout)
+    trial = next(c for c in older['cases'] if c['id'] == 'ledger_cohesive')['judges']['b'][0]
+    assert trial['reason'] == 'off_ladder' and 'reasked' not in trial
+    assert not older['proof']['theory_panel_scored_and_discriminates']
+    # A re-ask recorded for other words, or for another first answer, is stale.
+    record = capture / 'calls/b/ledger_cohesive/1.reask.json'
+    record.write_text(record.read_text().replace('"prompt_sha256": "', '"prompt_sha256": "0'))
+    with pytest.raises(ValueError, match='stale'):
+        jp.run(CORPUS, pins, trials, jp.ReplayJudge(capture), 'salt')
+
+
 @pytest.mark.parametrize('extra', [[], ['--confirm-billing'], ['--confirm-billing', '--spend-cap', '5 USD'],
                                    ['--confirm-billing', '--spend-cap', ' ', '--max-calls', '108'],
                                    ['--confirm-billing', '--spend-cap', 'lots', '--max-calls', '108'],
-                                   ['--confirm-billing', '--spend-cap', '5 USD', '--max-calls', '107']])
+                                   ['--confirm-billing', '--spend-cap', '5 USD', '--max-calls', '125']])
 def test_capture_is_refused_before_any_call_without_every_guard(tmp_path, extra, capsys):
     out = tmp_path / 'out'
     with pytest.raises(SystemExit) as stop:
@@ -648,7 +936,9 @@ def test_capture_is_refused_before_any_call_without_every_guard(tmp_path, extra,
 def test_plan_names_the_calls_and_bounds(tmp_path, capsys):
     jp.main(['plan', '--corpus', str(CORPUS), '--panel', str(panel_file(tmp_path))])
     plan = json.loads(capsys.readouterr().out)
-    assert plan['planned_calls'] == 108 and plan['request_ceiling'] == 108
+    # 12 cases, 3 judges, 3 trials; each of the 18 theory answers may be re-asked once.
+    assert plan['planned_calls'] == 108 and plan['reasks_at_most'] == 18
+    assert plan['max_calls'] == 126 and plan['request_ceiling'] == 126
     assert plan['max_output_tokens'] == {'a': 512, 'b': 512, 'c': 512}
 
 

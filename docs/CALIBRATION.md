@@ -76,7 +76,7 @@ in at least three fresh trials, through the 013 provider adapter. It is report-o
 ```sh
 python -m grimoire.judgepanel plan    --corpus backend/tests/fixtures/calibration/panel --panel panel.json
 python -m grimoire.judgepanel capture --corpus ... --panel panel.json --out capture \
-    --confirm-billing --spend-cap "5 USD" --max-calls 108
+    --confirm-billing --spend-cap "5 USD" --max-calls 126
 python -m grimoire.judgepanel score   --corpus ... --panel panel.json --capture capture \
     --coding-skills /path/to/pinned/coding-skills
 ```
@@ -126,6 +126,47 @@ costs nothing. Evidence that is not a list is `citation` too. Defect findings ar
 treated this way: a finding's line is the verdict itself, so a finding on a line that does
 not exist stays `malformed`.
 
+**Off-ladder steps (parser version 3).** The pinned rubric refuses a verdict whose step is
+not on its ladder (1.0, 0.5, 0.25, 0.0), so one such step leaves the whole trial's panel
+unscored. When a theory answer puts any step off the ladder (`step not in LADDER`, the
+rubric's own test), the harness asks that judge once more, in the same conversation. The
+re-ask holds the first prompt, the judge's own answer, and a fixed message that names the
+off-ladder dimensions and restates the ladder, never which rung to choose. The re-asked
+answer is read on its own, in full, and stands as it is. It is never asked again: a step
+still off the ladder is `unknown` (`off_ladder`), and so is any off-ladder step whose re-ask
+was not captured. A step is never rounded onto the ladder, because that would be the harness
+choosing the judge's grade. Defect answers have no steps and are never re-asked. The report
+counts both per judge: `parsing.reasked` and `parsing.off_ladder` (still off after any
+re-ask). Each re-ask is a billed call, written to its own capture record
+(`<trial>.reask.json`). Its digest covers the re-ask message, so a capture made with other
+wording is refused as stale. The plan counts every theory answer as possibly re-asked:
+`max_calls` is 126 for the default corpus, and `capture` refuses a `--max-calls` below it.
+
+Only an answer whose every other check passed is re-asked: the unit, the citations and the
+coverage canary. An answer that also fails one of those keeps that reason (`coverage`,
+`citation`), is never re-asked, and still counts in `parsing.off_ladder`. So a re-ask cures
+one fault, a step between rungs, and never gives an unread or ungrounded answer a second
+draw. A re-ask that brings back no readable answer (refused, interrupted, or served by
+another model) leaves the trial `unknown` and still off the ladder. A re-asked trial keeps
+its first answer's parse counts and verdict (`first_answer`), and both answers count in
+`parsing`.
+
+The rubric checks more than the ladder: a lowered step needs evidence, a verdict needs at
+least three rehearsals, and the theory fields must not be empty. So, when the report is
+scored, each re-asked trial's first answer is also put through the pinned rubric, with each
+off-ladder step read as a rung (1.0 for a number at or above the top, 0.5 otherwise) for that check only.
+If the rubric refuses it for any other fault, the trial is `first_answer_invalid` and its
+panel is unscored, whatever the re-ask said. That check never scores anything: the profile
+comes from the re-asked answer alone.
+
+A re-asked answer counts as that judge's answer for the trial. The judge's first answer
+cannot be scored at all, and the second comes from the same judge in the same fresh
+conversation, with no other judge's work and no rung suggested. Its call is measured and
+watched for model drift with the trial. It is not a rerun for a better result: the second
+answer stands whatever it says. The proof keys are unchanged. Each theory trial in the report
+lists the judges whose answer came from a re-ask that was read (`theory.units.<unit>.trials[].reasked`),
+and the audit names them.
+
 **Defects.** A judge's verdict on a case is settled only when all trials agree;
 otherwise it is `inconsistent` and excluded, and counted. A defect counts as found
 only when the flagged lines include a labelled defect line. Per trial, the panel says
@@ -170,8 +211,12 @@ needs a fresh capture.
 ### Spending approval
 
 The default corpus plans **108 calls** (12 sent cases × 3 judges ×
-3 trials; the unparseable case is never sent), about 17,000 prompt characters per
-judge per trial round, with each reply bounded by the judge's `max_output_tokens`.
+3 trials; the unparseable case is never sent), about 17,000 prompt characters per judge per
+trial round, with each reply bounded by the judge's `max_output_tokens`. It also allows at
+most **18 re-asks**, one per theory answer if every one put a step off the ladder. Each
+re-ask sends the first prompt again with the judge's own answer, up to its
+`max_output_tokens`, so `capture` needs `--max-calls 126`. The `plan` command's
+`prompt_characters_per_judge_trial` counts the first prompts only.
 The operator needs explicitly approved providers and exact models, credentials in
 named environment variables (never pasted anywhere), and an approved maximum spend
 backed by a provider-enforced limit. `--spend-cap` only records that approval and
@@ -300,6 +345,12 @@ score withheld.
 
 Still unproven: theory discrimination, and a score range and repeating grade for the
 cohesive unit. The requirement is unchanged. An off-ladder step is a judge's answer the
-rubric will not score, not a reading fault, and the harness does not flag it before the
-rubric does. Closing the proof needs another capture with its own approval.
+rubric will not score, not a reading fault, and parser version 2 did not flag it before the
+rubric did. Closing the proof needs another capture with its own approval.
+
+**After this capture.** [Parser version 3](#independent-judge-panel) re-asks a judge once
+when a theory step is off the ladder, so an answer like `sonnet`'s two would get one more
+chance to be scored instead of voiding its trial. Re-scoring this capture under version 3
+changes nothing: it holds no re-asks, so those two answers stay `unknown` (`off_ladder`), and
+its manifest names parser version 2, so `captured_for_this_parser` is false.
 
