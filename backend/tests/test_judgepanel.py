@@ -819,6 +819,12 @@ def test_a_reasked_malformed_answer_must_pass_every_check_on_its_own(tmp_path, s
     # A mis-tagged object that names files without the canary: unread, so no second draw.
     (lambda reply: json.dumps(uncovered({**reply, 'schema': 'theory_verdict/1'})), 'malformed'),
     (lambda reply: 'Here: ' + json.dumps(uncovered({**reply, 'schema': 'theory_verdict/1'})), 'malformed'),
+    # Broken JSON, or a wrapper under another tag, that names files and never copies the canary.
+    (lambda reply: json.dumps(uncovered(reply))[:-1] + ',}', 'malformed'),
+    (lambda reply: json.dumps(uncovered(reply))[:-25], 'malformed'),
+    (lambda reply: json.dumps({'answer': uncovered({**reply, 'schema': 'theory_verdict/1'})}), 'malformed'),
+    (lambda reply: 'So: ' + json.dumps({'answer': uncovered({**reply, 'schema': 'theory_verdict/1'})}),
+     'malformed'),
 ])
 def test_an_empty_or_ambiguous_answer_is_never_reasked(tmp_path, first, reason):
     judge = Reasked(accurate, first=first)

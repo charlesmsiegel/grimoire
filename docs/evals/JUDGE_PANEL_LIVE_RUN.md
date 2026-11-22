@@ -111,8 +111,8 @@ change. A new capture needs:
   answers read out of prose, `ambiguous` or missing citations, and give each judge's
   `dropped_shapes`.
 
-Re-scoring the 2026-11-22 parser 4 capture under version 5 makes no calls and changes no
-trial's state, reason or score: it holds no re-ask for the unreadable answer, and its manifest names parser
+Re-scoring the 2026-11-22 parser 4 capture under version 5 makes no calls and cannot close
+the proof: it holds no re-ask for the unreadable answer, and its manifest names parser
 version 4.
 
 ### Parser version 4 (2026-11-22)

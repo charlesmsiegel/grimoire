@@ -316,7 +316,11 @@ def _objects(text: str) -> list[dict]:
 
 
 def _uncovered_object(text: str, name: str, token: str) -> bool:
-    """Whether an object in an unreadable answer gives files but none of them copied the canary."""
+    """Whether an unreadable answer gives files but never copied the canary: a ``"files"`` key with
+    the canary nowhere in the text, broken JSON included, or a parsed object with files, none of
+    which is covered."""
+    if token not in text and re.search(r'"files"\s*:', text):
+        return True
     objects = [o for o in _objects(text) if 'files' in o]
     return bool(objects) and not any(covered(o, name, token) for o in objects)
 
