@@ -494,7 +494,8 @@ def _report(options: CompareOptions, baselines: Sequence[Baseline], scenario: Sc
     sampled = options.samples > 1 or len(baselines) > 1
     if sampled:
         parts.append(f"Samples: {len(baselines)} 0.2.1 capture{'s' if len(baselines) > 1 else ''}, "
-                     f"{options.samples} V2 play{'s' if options.samples > 1 else ''} of each kind. "
+                     f"{options.samples} V2 play{'s' if options.samples > 1 else ''}"
+                     f"{' of each kind' if options.with_planning else ''}. "
                      "One reply is one draw from the model, so each side is read over all its samples.")
     if options.mode == "dry_run":
         parts.append("Dry run: scripted replies and synthetic numbers; nothing was sent.")
@@ -550,7 +551,8 @@ def run_compare(options: CompareOptions) -> Path:
         ceiling = planned_requests(scenario, first, with_planning=options.with_planning,
                                    samples=options.samples)
         print(f"live: at most {ceiling} billed requests to {first.provider} ({first.model}) "
-              f"over {options.samples} sample{'s' if options.samples > 1 else ''}", file=sys.stderr)
+              f"over {options.samples} sample{'s' if options.samples > 1 else ''}; "
+              "if any play fails or is stopped, nothing is written", file=sys.stderr)
     meters: list[TurnMeter] = []
     numbered = options.samples > 1
     kinds = [False, True] if options.with_planning else [False]

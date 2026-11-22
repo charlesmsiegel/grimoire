@@ -206,8 +206,7 @@ def _findings(findings) -> list[str]:
 
 
 def _sample_table(title: str, ids, cards) -> list[str]:
-    columns = [[value if label != "usage status" else card.status for label, value in _rows_v2(card)]
-               for card in cards]
+    columns = [[value for _, value in _rows_v2(card)] for card in cards]
     labels = [label for label, _ in _rows_v2(cards[0])]
     heads = [f"sample {index}" for index in range(1, len(cards) + 1)]
     width = max(len(label) for label in [*labels, "metric"])
@@ -234,7 +233,7 @@ def render_samples(report: SampledReport) -> str:
         "rule: every hard invariant must hold in every sample; a choice must be given effect in a "
         "strict majority of each side's samples; voice compares mean cast distinguishability, "
         f"allowing {NOISE_STANDARD_ERRORS} standard errors of the difference for sampling noise "
-        f"when both sides have at least {MIN_SAMPLES_FOR_NOISE} samples; cost compares means.",
+        f"when both sides have at least {MIN_SAMPLES_FOR_NOISE} samples; cost and latency compare means.",
         "", *_findings(report.findings), "",
         "choices given effect (samples realizing it, baseline / candidate):"]
     for choice_id, (base, cand) in sorted(report.realized.items()):

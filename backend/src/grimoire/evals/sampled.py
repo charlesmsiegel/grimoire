@@ -114,8 +114,10 @@ def compare_samples(scenario: Scenario, baselines: Sequence[RunV2], candidates: 
     findings: list[Finding] = []
     for sample, run in enumerate(baselines[1:], start=2):
         for finding in pair_findings(scenario, first, run, policy):
-            findings.append(_in(sample, baseline_invalid(finding))
-                            if finding.check != "incomparable" else _in(sample, finding))
+            findings.append(_in(sample, finding) if finding.check == "incomparable" else Finding(
+                "baseline_invalid", "comparison",
+                f"sample {sample}: {finding.message}, unlike the first baseline sample",
+                finding.turn, finding.check, finding.subject))
     for sample, run in enumerate(candidates, start=1):
         findings.extend(_in(sample, finding) for finding in pair_findings(scenario, first, run, policy))
     for side, evidences in (("baseline", baseline_evidence), ("candidate", candidate_evidence)):
