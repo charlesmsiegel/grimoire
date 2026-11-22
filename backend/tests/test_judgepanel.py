@@ -210,9 +210,11 @@ def test_text_around_an_answer_never_supplies_or_repairs_it(text, reason):
 
 def test_the_report_counts_answers_read_out_of_prose_and_ambiguous_ones_even_after_drift():
     cases = [{'judges': {'a': [{'text_outside_json': True, 'ambiguous': False},
-                               {'reason': 'model_drift', 'ambiguous': True, 'citations_dropped': 2}]}}]
+                               {'reason': 'model_drift', 'ambiguous': True, 'citations_dropped': 2,
+                                'dropped_shapes': {'range': 1, 'other_file': 1}}]}}]
     assert jp.parsing(cases) == {'a': {'answers': 2, 'text_outside_json': 1, 'ambiguous': 1,
-                                       'citations_dropped': 2, 'reasked': 0, 'off_ladder': 0}}
+                                       'citations_dropped': 2, 'dropped_shapes': {'range': 1, 'other_file': 1},
+                                       'reasked': 0, 'off_ladder': 0, 'uncited': 0}}
 
 
 def test_a_superscript_line_number_is_a_dropped_citation_not_a_crash():
@@ -450,7 +452,7 @@ class Reasked(Scripted):
 
     def __init__(self, decide, first=None, again=None, measurement='synthetic'):
         super().__init__(decide)
-        self.first, self.again, self.measurement = first, again, measurement
+        self.first, self.again, self.measurement, self.asked = first, again, measurement, []
 
     def respond(self, pin, case, trial, messages, reask=False):
         record = super().respond(pin, case, trial, messages, reask)
@@ -458,6 +460,7 @@ class Reasked(Scripted):
         if pin.judge_id != 'b' or case['id'] != 'ledger_cohesive' or trial != 0:
             return record
         if reask:
+            self.asked.append(messages)
             return self.again(record) if self.again else record
         reply = json.loads(record['reply'])
         reply['dimensions']['honest_limits'].update(step=0.75, evidence=[jp.alias('salt', case['id']) + ':2'])
@@ -481,18 +484,157 @@ def test_the_reask_names_the_dimensions_and_restates_the_ladder_without_choosing
         'them. Answer again with one complete JSON object in the same format, and nothing else.')
 
 
-@pytest.mark.parametrize('fault, reason', [
-    (lambda reply: {**reply, 'files': [{**reply['files'][0], 'canary': 'skipped'}]}, 'coverage'),
-    (lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
-        'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}, 'citation'),
+def uncovered(reply):
+    return {**reply, 'files': [{**reply['files'][0], 'canary': 'skipped'}]}
+
+
+def uncited_abstraction(reply):
+    return {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
+        'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}
+
+
+def lowered_abstraction(step, evidence):
+    def fault(reply):
+        return {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
+            'step': step, 'rationale': 'r', 'evidence': evidence}}}
+    return fault
+
+
+@pytest.mark.parametrize('fault, reason, uncited', [
+    (uncovered, 'coverage', []),
+    # A lowered step with no listed line is re-asked only in an answer that copied the canary,
+    # though the report still counts it.
+    (lambda reply: uncovered(uncited_abstraction(reply)), 'citation', ['abstraction']),
+    # Evidence that is not a list of citations is not a citation to restate.
+    (lowered_abstraction(0.5, 'elsewhere.py:2'), 'citation', []),
+    # Blank evidence is no citation the pinned rubric would accept, so a re-ask cannot cure it.
+    (lowered_abstraction(0.5, ['', ' ']), 'citation', ['abstraction']),
+    # A step that is not a number below 1.0 is off the ladder too, and no citation can ground it.
+    (lowered_abstraction('0.5', ['elsewhere.py:2']), 'citation', ['abstraction']),
+    (lowered_abstraction(None, ['elsewhere.py:2']), 'citation', ['abstraction']),
+    (lowered_abstraction(1.5, ['elsewhere.py:2']), 'citation', ['abstraction']),
+    # A key the rubric does not grade is the judge's own text, never echoed back in a re-ask.
+    (lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'invented': {
+        'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}, 'citation', []),
+    # Nor is the answer re-asked for its other uncited steps, which a second answer could cure
+    # while dropping the key.
+    (lambda reply: {**uncited_abstraction(reply), 'dimensions': {**uncited_abstraction(reply)['dimensions'],
+        'invented': {'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}, 'citation', ['abstraction']),
 ])
-def test_an_answer_with_another_fault_is_never_reasked_even_off_the_ladder(tmp_path, fault, reason):
+def test_an_answer_with_another_fault_is_never_reasked_even_off_the_ladder(tmp_path, fault, reason, uncited):
     judge = Reasked(accurate, first=lambda reply: json.dumps(fault(reply)))
     result = run_reasked(tmp_path, judge)
     assert not any(call[-1] == 'reask' for call in judge.calls)
     trial = cohesive_b(result)
-    assert trial['reason'] == reason and trial['off_ladder'] == ['honest_limits'] and 'reasked' not in trial
+    assert trial['reason'] == reason and 'honest_limits' in trial['off_ladder'] and 'reasked' not in trial
+    assert trial.get('uncited', []) == uncited and 'reaskable' not in trial
     assert result['parsing']['b']['off_ladder'] == 1 and result['parsing']['b']['reasked'] == 0
+    assert result['parsing']['b']['uncited'] == bool(uncited)
+
+
+def test_dropped_citations_are_reported_by_shape_never_by_text():
+    name, count = 'unit_0123456789.py', 20
+    shapes = {cite: jp.citation_shape(cite, name, count) for cite in (
+        f'{name}:21', f'{name}:0', 'unit_0123456789:3', f'src/{name}:3', 'other.py:3', f'{name}:3-5',
+        f'{name}: 4 - 6', f'{name}:L3', f'{name}:3,4', f'{name}:', 'line 3', name, 3, None,
+        f'{name}: 3', f' {name}:3', f'{name} :3', f'{name}:3 ', f'{name}: 99', f'{name}:\u0663')}
+    assert list(shapes.values()) == [
+        'unlisted_line', 'unlisted_line', 'other_file', 'other_file', 'other_file', 'range', 'range',
+        'malformed', 'malformed', 'malformed', 'no_line', 'no_line', 'not_text', 'not_text',
+        'spacing', 'spacing', 'spacing', 'spacing', 'unlisted_line', 'malformed']
+    # A number longer than Python turns into an int is outside the listing, never an error.
+    assert jp.citation_shape(f'{name}:' + '9' * 5000, name, count) == 'unlisted_line'
+    assert not jp._listed(f'{name}:' + '9' * 5000, name, count) and jp._listed(f'{name}:007', name, count)
+    for padded in (f'{name}:' + '0' * 5000 + '1', f'{name}: ' + '0' * 5000 + '1', f'{name}:' + '0' * 5000):
+        jp.citation_shape(padded, name, count)  # never raises, however many zeros lead
+    assert jp._listed(f'{name}:' + '0' * 5000 + '1', name, count) and not jp._listed(f'{name}:' + '0' * 5000, name, count)
+    case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\nb = 2\n'}
+    verdict = jp.perfect_uncovered_verdict('u')
+    verdict['dimensions']['absorption']['evidence'] = ['f.py:9', 'f.py:1-2', 'f.py:1']
+    result = jp.parse_theory(theory_answer(verdict), case, 'tok', 'f.py')
+    assert result['citations_dropped'] == 2 and result['dropped_shapes'] == {'unlisted_line': 1, 'range': 1}
+
+
+def test_a_ladder_only_reask_is_word_for_word_what_parser_version_3_sent():
+    # Parser version 3's text, written out, so a v3 capture's re-asks still replay under v4.
+    assert jp.reask_text(['honest_limits'], [], 'f.py') == (
+        'Your answer gave honest_limits a step that is not on the ladder. Every step must be\n'
+        'exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between\n'
+        'them. Answer again with one complete JSON object in the same format, and nothing else.')
+
+
+def unlisted(step):
+    def first(reply):
+        count = len(next(c for c in jp.load_corpus(CORPUS) if c['id'] == 'ledger_cohesive')['source'].splitlines())
+        name = jp.alias('salt', 'ledger_cohesive')
+        reply['dimensions']['honest_limits'].update(step=step, evidence=[f'{name}:{count + 4}', f'{name}:2-3'])
+        return json.dumps(reply)
+    return first
+
+
+def test_a_lowered_step_with_no_listed_line_is_reasked_once_and_the_new_answer_stands(tmp_path, stub_checkout):
+    judge = Reasked(accurate, first=unlisted(0.5))
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert [call for call in judge.calls if call[-1] == 'reask'] == [('b', 'ledger_cohesive', 0, 'reask')]
+    name = jp.alias('salt', 'ledger_cohesive')
+    assert judge.asked[0][-1] == ('user', (
+        'Your answer gave honest_limits a step below 1.0 with no citation of a line the listing\n'
+        f'has. Each citation must be exactly "{name}:<line>", where <line> is one line number the listing shows. '
+        'Answer again with one complete JSON object in the same format, and nothing else.'))
+    trial = cohesive_b(result)
+    assert trial['state'] == 'verdict' and trial['reasked'] == ['honest_limits']
+    assert trial['first_answer']['citations_dropped'] == 2
+    assert trial['first_answer']['dropped_shapes'] == {'unlisted_line': 1, 'range': 1}
+    row = result['parsing']['b']
+    assert row['reasked'] == 1 and row['uncited'] == 0 and row['dropped_shapes'] == {'unlisted_line': 1, 'range': 1}
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reasked'] == ['b']
+    assert result['proof']['theory_panel_scored_and_discriminates']
+
+
+def test_an_off_ladder_and_uncited_step_gets_one_reask_naming_both(tmp_path, stub_checkout):
+    judge = Reasked(accurate, first=unlisted(0.75))
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert sum(call[-1] == 'reask' for call in judge.calls) == 1
+    text = judge.asked[0][-1][1]
+    assert text == jp.reask_text(['honest_limits'], ['honest_limits'], jp.alias('salt', 'ledger_cohesive'))
+    assert text.startswith(jp.REASK_LADDER.format(dimensions='honest_limits') + ' Your answer gave honest_limits a step below')
+    trial = cohesive_b(result)
+    assert trial['state'] == 'verdict' and trial['reasked'] == ['honest_limits']
+    assert result['proof']['theory_panel_scored_and_discriminates']
+
+
+def test_a_step_still_uncited_after_its_reask_is_unknown_and_never_asked_again(tmp_path, stub_checkout):
+    def still(record):
+        record['reply'] = unlisted(0.5)(json.loads(record['reply']))
+        return record
+    judge = Reasked(accurate, first=unlisted(0.5), again=still)
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert sum(call[-1] == 'reask' for call in judge.calls) == 1
+    trial = cohesive_b(result)
+    assert trial['reason'] == 'citation' and trial['uncited'] == ['honest_limits'] and 'reaskable' not in trial
+    assert result['parsing']['b']['uncited'] == 1 and result['parsing']['b']['citations_dropped'] == 4
+    assert not result['proof']['theory_panel_scored_and_discriminates']
+
+
+def test_an_uncited_step_is_counted_even_in_an_answer_that_skipped_the_canary(tmp_path, stub_checkout):
+    def still_uncovered(record):
+        record['reply'] = json.dumps(uncovered(json.loads(unlisted(0.5)(json.loads(record['reply'])))))
+        return record
+    judge = Reasked(accurate, first=unlisted(0.5), again=still_uncovered)
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert sum(call[-1] == 'reask' for call in judge.calls) == 1
+    trial = cohesive_b(result)
+    assert trial['reason'] == 'citation' and trial['uncited'] == ['honest_limits'] and 'reaskable' not in trial
+    assert result['parsing']['b']['uncited'] == 1
+
+
+def test_a_refused_reask_keeps_the_first_answers_uncited_step(tmp_path, stub_checkout):
+    def refused(record):
+        return {**record, 'status': 'refused', 'reply': None}
+    result = run_reasked(tmp_path, Reasked(accurate, first=unlisted(0.5), again=refused), stub_checkout)
+    trial = cohesive_b(result)
+    assert trial['reason'] == 'call_refused' and trial['uncited'] == ['honest_limits'] and 'off_ladder' not in trial
+    assert result['parsing']['b']['uncited'] == 1
 
 
 def test_a_reasked_trial_still_reports_what_its_first_answer_needed(tmp_path):
@@ -503,7 +645,8 @@ def test_a_reasked_trial_still_reports_what_its_first_answer_needed(tmp_path):
     trial = cohesive_b(result)
     assert trial['state'] == 'verdict' and trial['reasked'] == ['honest_limits']
     assert {k: v for k, v in trial['first_answer'].items() if k != 'verdict'} == {
-        'text_outside_json': True, 'ambiguous': False, 'citations_dropped': 1}
+        'text_outside_json': True, 'ambiguous': False, 'citations_dropped': 1,
+        'dropped_shapes': {'other_file': 1}}
     assert trial['first_answer']['verdict']['dimensions']['honest_limits']['step'] == 0.75
     row = result['parsing']['b']
     assert row['answers'] == 37 and row['text_outside_json'] == 1 and row['citations_dropped'] == 1
@@ -559,9 +702,46 @@ def test_a_reask_counts_only_if_the_pinned_rubric_accepts_the_first_answer(tmp_p
     assert clean['theory']['units']['ledger_cohesive']['trials'][0]['reason'] is None
 
 
+def test_an_uncited_reask_counts_only_if_the_pinned_rubric_accepts_the_first_answer(
+        tmp_path, stub_checkout, monkeypatch):
+    real = jp.upstream_score
+
+    def refuses_two_rehearsals(checkout, verdicts, size):
+        if any(len(v.get('rehearsals', [])) < 3 for v in verdicts):
+            return {'error': 'absorption needs at least 3 rehearsal(s)'}
+        return real(checkout, verdicts, size)
+    monkeypatch.setattr(jp, 'upstream_score', refuses_two_rehearsals)
+
+    def two_rehearsals(reply):
+        reply = json.loads(unlisted(0.5)(reply))
+        return json.dumps({**reply, 'rehearsals': reply['rehearsals'][:2]})
+    judge = Reasked(accurate, first=two_rehearsals)
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert sum(call[-1] == 'reask' for call in judge.calls) == 1
+    assert cohesive_b(result)['state'] == 'verdict' and cohesive_b(result)['reasked'] == ['honest_limits']
+    trial = result['theory']['units']['ledger_cohesive']['trials'][0]
+    assert trial['reason'] == 'first_answer_invalid' and trial['profile_score'] is None
+    assert not result['proof']['theory_panel_scored_and_discriminates']
+
+
+@pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
+                    reason='set GRIMOIRE_CODING_SKILLS to a clean checkout at the calibration pin')
+def test_the_pinned_rubric_accepts_a_first_answer_whose_only_fault_was_an_unlisted_citation(tmp_path):
+    checkout = Path(os.environ['GRIMOIRE_CODING_SKILLS'])
+    result = run_reasked(tmp_path, Reasked(accurate, first=unlisted(0.5)), checkout)
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reason'] is None
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reasked'] == ['b']
+
+
+def unlisted_two_rehearsals(reply):
+    reply = json.loads(unlisted(0.5)(reply))
+    return {**reply, 'rehearsals': reply['rehearsals'][:2]}
+
+
 @pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
                     reason='set GRIMOIRE_CODING_SKILLS to a clean checkout at the calibration pin')
 @pytest.mark.parametrize('fault', [
+    unlisted_two_rehearsals,
     lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
         'step': 0.5, 'rationale': 'r', 'evidence': []}}},
     lambda reply: {**reply, 'rehearsals': reply['rehearsals'][:2]},
