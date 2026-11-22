@@ -472,8 +472,6 @@ What the numbers leave out:
   captures again with the new markers, at no cost. That rescore shows whether the markers explain the
   failure. A fresh billed comparison then decides 068, so its verdict does not rest on a run read
   after the markers changed.
-<<<<<<< HEAD
-=======
 
 ### Billed comparison (2026-11-22, sampled, wider ask-ledger markers)
 
@@ -506,4 +504,3 @@ The wider markers moved one V2 sample and no 0.2.1 sample. So the markers do not
 failure: in three of five 0.2.1 plays, and in three of five plain V2 plays, no reply is read as
 giving effect to the request for the ledger under either set of markers. Whether those replies
 truly ignore the request has not been checked by a person. Planning realizes it in 4 of 5.
->>>>>>> origin/v2
