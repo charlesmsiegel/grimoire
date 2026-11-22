@@ -26,6 +26,9 @@ from grimoire.textapi import ApiRefused
 MAX_PROPOSALS = 32
 #: Audit reports the app keeps in memory, oldest forgotten first.
 MAX_AUDITS = 16
+#: Suggestion requests (and the calls they spent) remembered for replay; past that the oldest is forgotten, and
+#: asking it again needs a new estimate and a new approval like any new request.
+MAX_REQUESTS = 256
 _REASON = "abcdefghijklmnopqrstuvwxyz_0123456789"
 
 
@@ -102,9 +105,13 @@ class Memory:
         self.proposals: OrderedDict[str, object] = OrderedDict()
         self.audits: OrderedDict[str, object] = OrderedDict()
         #: a suggestion's request id -> what it was asked with and the proposal it gave (a retry sends nothing)
-        self.requests: dict[str, tuple[tuple, str]] = {}
+        self.requests: OrderedDict[str, tuple[tuple, str]] = OrderedDict()
         #: every suggestion call sent, refused replies included
         self.spent: list[dict] = []
+
+    def spend(self, entry: dict) -> None:
+        self.spent.append(entry)
+        del self.spent[:-MAX_REQUESTS]
 
     def keep(self, table: OrderedDict, key: str, value: object, limit: int) -> None:
         table[key] = value
@@ -124,5 +131,5 @@ def memory(ctx: AdapterContext) -> Memory:
     return found
 
 
-__all__ = ["MAX_AUDITS", "MAX_PROPOSALS", "Memory", "keys_of", "memory", "reason_of", "refused", "segment",
+__all__ = ["MAX_AUDITS", "MAX_PROPOSALS", "MAX_REQUESTS", "Memory", "keys_of", "memory", "reason_of", "refused", "segment",
            "source_of", "text_of", "whole", "world_only"]

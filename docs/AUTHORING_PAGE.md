@@ -88,7 +88,10 @@ payload while that one call is made. It is one 048 trace, `world_authoring`.
 
 The same request asked again answers the proposal it already gave and sends nothing. Asked with another brief, it
 refuses `request_conflict`. A reply 087 refuses keeps nothing and keeps its reason (`unknown_record`, for one). The
-spent call is part of the next estimate, so the old token cannot approve a second send.
+spent call is part of the next estimate, so the old token cannot approve a second send. The app remembers the last
+256 requests for replay, 32 proposals and 16 audit reports; past that the oldest is forgotten. A forgotten proposal
+or report refuses `unknown_proposal` or `unknown_audit`; a request whose proposal was forgotten refuses `forgotten`;
+a forgotten request is a new one, which needs its own estimate and approval.
 
 **Review, decide, write.** Every proposal is reviewed when it is made, and again on **Review again**. 087's review
 shows each namesake of a record already in the world, and each link problem. The person ticks **Accept** on the

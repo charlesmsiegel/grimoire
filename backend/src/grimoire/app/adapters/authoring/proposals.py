@@ -79,6 +79,7 @@ from ..prep.preparation import (  # the app's one estimate and usage of a call
 )
 from .common import (
     MAX_PROPOSALS,
+    MAX_REQUESTS,
     keys_of,
     memory,
     reason_of,
@@ -437,12 +438,12 @@ def suggest(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
         armed["on"] = False
         used = _usage(generator, config)  # type: ignore[arg-type]
         if used["attempts"]:  # what was spent is said, whether or not a reply was kept
-            held.spent.append({"request": request_id, "kept": kept, **used})
+            held.spend({"request": request_id, "kept": kept, **used})
     entry = Entry(planned.source, proposal, "model", _names(planned.context), usage=used if used["attempts"] else None)
     _reviewed(ctx, entry)
     _keep(ctx, entry)
-    held.requests[request_id] = ((planned.source, planned.request.brief, planned.request.constraints,
-                                  planned.request.max_candidates), proposal.proposal_id)
+    asked = (planned.source, planned.request.brief, planned.request.constraints, planned.request.max_candidates)
+    held.keep(held.requests, request_id, (asked, proposal.proposal_id), MAX_REQUESTS)  # type: ignore[arg-type]
     return {"source": planned.source, "done": {"request": request_id, "replay": False},
             "proposal": proposal_view(ctx, entry)}
 
