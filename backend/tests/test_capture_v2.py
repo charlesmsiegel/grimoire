@@ -287,3 +287,32 @@ def test_a_live_sampled_run_sends_each_sample_and_prints_the_multiplied_ceiling(
     files = outputs(out)
     assert {"v2-baseline-1.run.json", "v2-baseline-2.run.json"} <= set(files)
     assert "samples: 1 baseline, 2 candidate" in files["comparison-report.txt"]
+
+
+def a_retried_reply(bundle):
+    """0.2.1 rejected turn 1's first reply once and kept the reply its Retry got."""
+    rid = bundle["turns"][0]["responses"][0]["response_id"]
+    row = next(r for r in bundle["usage_rows"] if r.get("response_id") == rid)
+    at = bundle["usage_rows"].index(row)
+    bundle["usage_rows"].insert(at, {**row, "prompt_tokens": 700, "completion_tokens": 9,
+                                     "cache_read_tokens": 0})
+    bundle["format"] = "grimoire.v021-capture-evidence/2"
+    bundle["retries"] = [{"turn": 1, "response_id": rid, "kind": "empty_response"}]
+
+
+def test_a_capture_with_retries_is_a_baseline_and_the_report_says_what_was_left_out(tmp_path):
+    first = baseline(tmp_path)
+    retried = baseline(tmp_path, vary=a_retried_reply, name="-retried")
+    out = tmp_path / "out"
+    assert run("--baseline", first, "--baseline", retried, "--out", out, "--dry-run") == 0
+    report = outputs(out)["comparison-report.txt"]
+    assert ("0.2.1 rejected 1 reply as empty in 1 of the 2 captures, and its own Retry asked "
+            "again. Those replies took 1 request, input tokens 700, output tokens 9, cache reads 0. "
+            "They are not in the 0.2.1 side") in report
+    assert "story-quality gate: PASS" in report
+
+
+def test_captures_without_retries_say_nothing_about_them(tmp_path):
+    out = tmp_path / "out"
+    assert run("--baseline", baseline(tmp_path), "--out", out, "--dry-run") == 0
+    assert "Retry" not in outputs(out)["comparison-report.txt"]

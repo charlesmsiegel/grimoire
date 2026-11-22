@@ -1,10 +1,11 @@
 # Coding-skills calibration (069, partial)
 
 Two offline-safe tools: deterministic specialist calibration (below) and an
-[independent judge panel](#independent-judge-panel) whose four live captures
+[independent judge panel](#independent-judge-panel) whose five live captures
 did not establish the proof ([2026-11-20](#live-capture-2026-11-20), [2026-11-22](#live-capture-2026-11-22),
 [2026-11-22 under parser 3](#live-capture-2026-11-22-parser-3),
-[2026-11-22 under parser 4](#live-capture-2026-11-22-parser-4)).
+[2026-11-22 under parser 4](#live-capture-2026-11-22-parser-4),
+[2026-11-22 under parser 5](#live-capture-2026-11-22-parser-5)).
 
 The offline `grimoire.calibration` command runs two deterministic specialists
 from an explicit, clean checkout of `charlesmsiegel/coding-skills` pinned to
@@ -557,3 +558,81 @@ with its own approval.
 answer once when it holds no readable object. Re-scoring this capture under version 5 makes
 no calls and cannot close the proof: it holds no such re-ask, and its manifest names parser
 version 4, so `captured_for_this_parser` is false.
+
+### Live capture (2026-11-22, parser 5)
+
+A fifth capture, approved by CMS under a cap of 12 USD and at most 126 calls, run once under
+parser version 5 with the same panel. **111 billed calls**: the 108 planned and 3 re-asks,
+none retried, all accepted and provider-reported, each served by its pinned model.
+`capture_parser_version` is 5 and `captured_for_this_parser` is true. `proof.established` is
+still **false**, on one key, so 069 stays unchecked.
+
+| Judge | Pinned and served model | Calls | Input tokens | Output tokens |
+|---|---|---:|---:|---:|
+| `opus` | `claude-opus-5-5` | 36 | 20,402 | 15,379 |
+| `sonnet` | `claude-sonnet-5-5` | 38 | 25,474 | 16,072 |
+| `haiku` | `claude-haiku-5-5` | 37 | 23,032 | 27,108 |
+
+No reasoning or cache token counts were reported and no cost is in the capture. At list
+prices of 2026-11-03 these counts (68,908 input and 58,559 output tokens) come to about
+0.62 USD; that is an estimate, not a receipt.
+
+| Key | Result |
+|---|---|
+| `compatibility_facade_not_penalized` | true |
+| `planted_defect_found` | true |
+| `missing_analysis_not_perfect` | true |
+| `provider_reported_only` | true |
+| `captured_for_this_parser` | true |
+| `defect_panel_complete` | true |
+| `theory_panel_scored_and_discriminates` | **false** |
+
+**Defects (10 cases).** The panel settled every case: 5 of 5 real defects found on a
+labelled line and 5 of 5 correct cases cleared. False-positive rate 0.0 and false-negative
+rate 0.0, for the panel and for each judge. All three judges agreed on 9 of 10 cases.
+
+| Judge | Repeatable | Unknown | Inconsistent | False positives | False negatives |
+|---|---|---|---|---|---|
+| `opus` | 10 of 10 | 0 | 0 | 0 | 0 |
+| `sonnet` | 10 of 10 | 0 | 0 | 0 | 0 |
+| `haiku` | 9 of 10 | 0 | 1 | 0 | 0 |
+
+`haiku` flagged the correct `fail_closed` case as a defect in one of three trials, so it is
+inconsistent there for the fourth capture of five; the panel still cleared the case.
+
+**Parsing.** `citations_dropped` and `dropped_shapes` count citations; the other columns
+count answers.
+
+| Judge | Answers | `text_outside_json` | `ambiguous` | `citations_dropped` | `dropped_shapes` | `reasked` | `off_ladder` | `uncited` | `malformed` |
+|---|---:|---:|---:|---:|---|---:|---:|---:|---:|
+| `opus` | 36 | 4 | 0 | 0 | none | 0 | 0 | 0 | 0 |
+| `sonnet` | 38 | 16 | 0 | 0 | none | 2 | 0 | 0 | 0 |
+| `haiku` | 37 | 0 | 0 | 10 | `range` 10 | 1 | 0 | 1 | 0 |
+
+- Re-asked: `sonnet` twice, on `ledger_cohesive` trials 1 and 2 of 3, and `haiku` once, on
+  `ledger_cohesive` trial 1 (`theory.units.ledger_cohesive.trials[0].reasked` is `haiku` and
+  `sonnet`; `trials[1].reasked` is `sonnet`). No `ledger_scrambled` trial was re-asked.
+- Still uncited after its re-ask: `haiku`, on that first trial. Its dropped citations there are
+  line ranges, and the re-ask cited line ranges again.
+- No judge is still off the ladder and none is malformed.
+- No judge had most of its answers affected. `sonnet` put text outside the JSON in 16 of 38
+  answers.
+
+**Theory.** `ledger_scrambled` was scored in all three trials: 22.5, 22.5 and 32.5, grade F
+each time, a score range of 10.0 with a repeating grade. `ledger_cohesive` was scored in two
+trials, 62.5 (D-) and 87.5 (B+). Its first trial was not scored, with trial reason `citation`:
+`haiku` gave a step below 1.0 with no listed line, was re-asked once, and still cited none, so
+that answer is `unknown` and the trial's panel is incomplete (the pinned rubric alone would
+have scored the trial 80.0). No trial had reason `off_ladder`, `malformed`,
+`first_answer_invalid` or `invalid_verdict`. Because one trial is unscored the cohesive unit
+counts as unscored: it has no score range, its grade is not reported as repeating (the two
+scored grades differ), and `theory_panel_scored_and_discriminates` is false. Both scored
+cohesive trials are above every scrambled trial. The missing-analysis probe again read
+upstream 100.0 with the profile score withheld.
+
+Still unproven: theory discrimination. The requirement is unchanged. Five captures have each
+failed this key. Three of the five involved a `haiku` citation on the cohesive unit, and this
+time the re-ask added for it did not help: `haiku` cited line ranges both
+times, a shape the check does not accept. The cohesive unit's scored trials also ranged from
+62.5 to 87.5 here, wider than in earlier captures. Closing the proof needs another capture
+with its own approval.

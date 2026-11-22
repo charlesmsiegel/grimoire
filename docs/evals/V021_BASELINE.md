@@ -54,6 +54,8 @@ in-process through FastAPI's `TestClient` (lifespan entered, as 0.2.1's own test
   `tests/llm_fakes.SSEProvider` (dry run);
 - in a dry run only, forces 0.2.1's token counter onto its offline heuristic
   (`store.tokens._encoder`), so a `[desktop]` install does not download a tokenizer.
+- with `--retry-empty-replies` only, presses 0.2.1's own Retry when 0.2.1 rejects a reply as
+  empty, as a player would ([retrying a rejected reply](#retrying-a-rejected-reply-offline-2026-11-22)).
 
 The counting transport also keeps each provider reply in memory (never written or printed). When
 a turn fails, the driver reports 0.2.1's error kind and each reply's shape: its status, its
@@ -125,6 +127,10 @@ python -m grimoire.capture.v021 --scenario guild_betrayal --v1-checkout ../grimo
     --v1-python ../v021-venv/bin/python --live --provider openrouter --model MODEL \
     --api-key-env OPENROUTER_API_KEY --confirm-billing --out ../capture-live
 ```
+
+Add `--retry-empty-replies` to either command to press 0.2.1's own Retry whenever 0.2.1 rejects a
+reply as empty, within the same request ceiling; see
+[retrying a rejected reply](#retrying-a-rejected-reply-offline-2026-11-22).
 
 `--out` must be a new or empty directory outside this repository, the 0.2.1 checkout, 0.2.1's
 machine-local state directory and every Grimoire library. `--api-key-env` must name an ordinary
@@ -363,6 +369,99 @@ with 0.2.1 error `empty_response`, and each call that completed was billed.
   0.28 USD, as an estimate.
 
 The measured baseline of 2026-11-20 is still the only capture with no single-run finding.
+
+## Retrying a rejected reply (offline, 2026-11-22)
+
+Restarting a whole capture after every `empty_response` repeats calls that already succeeded,
+and on this route a whole play finished 1 time in 10. 0.2.1 has its own answer to that error: its
+client shows a Retry button on it, which calls `POST /campaigns/{cid}/scenes/{sid}/retry`. That
+route (`character_turns.retry`) asks the model again for the one reply 0.2.1 rejected, from the
+same saved prompt snapshot and under the same response id, and then carries the round on to any
+speaker still to come. Nothing else in the scene is asked again.
+
+`--retry-empty-replies` has the driver press it. After each turn, while 0.2.1's stream holds
+exactly one error and that error is `empty_response` on a reply it had started, the driver waits
+for the run to finish and calls that route, as a player would. It stops pressing when one more
+Retry would not leave one request for every reply the scene still owes, inside the same ceiling
+as before (`planned calls × (1 + llm_retries)`, 18 requests here); then the turn fails and the
+failure line says `after N Retries` and `no Retry left`. Any other error, an HTTP status of 400
+or more, or more than one error is reported as before, never retried. The flag is off by
+default; without it the capture behaves exactly as before.
+
+What is recorded:
+
+- The evidence is `grimoire.v021-capture-evidence/2`: the `/1` bundle plus `retries`, one entry
+  (turn, response id, `empty_response`) per Retry pressed. `/1` bundles still convert unchanged.
+  Every usage row is checked, rejected or kept: its counts, its served model, and, for a rejected
+  reply, that 0.2.1 booked it as served (`ok`); a failed call is never taken for a rejection.
+- 0.2.1 books one usage row per reply it received, so a retried response has one row more than
+  its Retries, in ledger order; conversion refuses any other count (`retry_unaccounted`,
+  `multi_call_contribution`). The last row is the reply 0.2.1 kept and becomes the run's call;
+  the earlier rows are replies 0.2.1 rejected.
+- **Rejected replies stay out of the run.** The run's calls, cost and latency are those of the
+  play 0.2.1 kept, so as a baseline it is a lower bound on what its player paid, and the gates
+  that compare V2 against it (cost, latency) stay conservative for V2. The rejected replies are
+  not hidden: `capture-report.txt` gives their number, requests and token counts (an earlier
+  transport attempt of a rejected reply is counted as unreported, never free), the comparison
+  report of `python -m grimoire.capture.v2` gives them summed over its baselines, and
+  `python -m grimoire.evals.story_quality` adds a line for each side whose verified evidence has
+  any.
+- How often 0.2.1 rejects a reply stays a 0.2.1 measurement: rejected replies over all replies
+  received, per turn and per speaker, from the evidence.
+
+What kind of sample this is: a capture with Retries is the play a 0.2.1 player gets by pressing
+Retry until a reply is kept. It is not the same distribution as restarting the whole play until
+every reply is kept, which favours openings that later replies tend to accept; pressing Retry is
+how 0.2.1 itself recovers, so it is the closer reading of a 0.2.1 player's play. Both kinds are
+plays 0.2.1 completed under the same conditions, and the comparison accepts them side by side.
+
+Proved offline on the pinned commit, with no provider request: in a dry run whose turn-1 second
+reply holds only fences, 0.2.1 rejects it, the Retry asks the same prompt under the same response
+id, 0.2.1 keeps the scripted reply and the capture writes a complete six-call run (seven usage rows,
+one Retry listed); when every Retry is rejected too, the driver stops at the ceiling after 12
+Retries with 14 of 18 requests sent and nothing is written
+([`test_v021_real_dry_run.py`](../../backend/tests/test_v021_real_dry_run.py)).
+
+At the per-turn rejection rates measured above (small samples: 7 of 10 in turn 1, 1 of 3 in turn
+2, 1 of 2 in turn 3), a capture would need about three to four Retries on average, each about the
+cost of one call, instead of restarting the play about ten times. That assumes a Retry is
+rejected about as often as a fresh play's reply, which is not known: those rates were measured on
+plays whose earlier replies differed, while a Retry asks the very same prompt again. If one
+prompt is rejected far more often (9 times in 10, say), a turn needs about nine Retries and a
+quarter of such turns would run out of Retries. A failed capture also costs more with the flag:
+up to the whole ceiling of 18 requests, against about 2 when a turn-1 rejection simply ends the
+capture. It has not been run live.
+
+## Captures with Retry (2026-11-22)
+
+Three more baseline samples were needed and up to five attempts were approved, each with
+`--retry-empty-replies` and at most 18 requests. **All three attempts succeeded**, so two
+attempts went unused. Same model (`claude-sonnet-4-5-20250929`), profile and budget as before.
+
+| Attempt | Result | Retries pressed | Calls in the run | Input / output tokens in the run | Rejected replies: requests, input / output tokens | Cast distinguishability | Single-run gate |
+|---:|---|---:|---:|---|---|---:|---|
+| 1 | success | 9 | 6 | 14,972 / 773 | 9, 24,093 / 27 | 0.500 | FAIL: 3 choices unrealized |
+| 2 | success | 1 | 6 | 16,177 / 1,380 | 1, 2,397 / 19 | 0.667 | PASS |
+| 3 | success | 0 | 6 | 15,409 / 1,188 | 0, 0 / 0 | 0.667 | FAIL: `ask-ledger` unrealized |
+
+- Evidence sha256, in order: `e2f0bf35…163887e5d`, `8f0c2a7e…836941822`, `837a59e2…6c9692a0`.
+  Each verifies as measured with both evidence options, has 6 `npc_generation` calls, no cache
+  tokens, leak rate 0 and no unmetered call.
+- **How often 0.2.1 rejected a reply, as a 0.2.1 measurement:** 10 of the 28 replies it
+  requested in these three plays (36%) were rejected as empty and asked again with its own
+  Retry, in two of the three plays. Attempt 1 needed 9 Retries for its 6 kept replies, 15 of its
+  18 allowed requests. The rejected replies cost 10 requests, 26,490 input and 46 output tokens,
+  which are **not in the runs**: about as much input again as one whole play.
+- With the Retry, three of three attempts completed, against one of ten without it.
+- The single-run gate is recorded for each capture but does not disqualify a sample: the sampled
+  comparison settles a choice by strict majority across the side
+  ([result](../ACTOR_INFERENCE.md#billed-comparison-2026-11-22-sampled)). Attempt 1 gives effect to
+  none of the three choices and has the lowest voice score of the five samples.
+- Tokens and cost: 28 billed requests, 73,048 input and 3,387 output tokens. At an assumed list
+  price of 3 USD input and 15 USD output per million tokens that is about 0.27 USD, as an estimate.
+
+There are now five baseline samples: the 2026-11-20 capture, attempt 4 of the ten earlier
+attempts, and these three.
 
 ## Privacy
 

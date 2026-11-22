@@ -344,3 +344,90 @@ this scene on 1 of 10 attempts, so five baseline samples would take on the order
 at this rate. The one new capture is a valid completed sample. Scored alone it has an unrealized
 choice (`ask-ledger`, turn 1), but the sampled gate does not judge that per sample: a choice
 counts against a side only if it is realized in no strict majority of that side's five samples.
+
+A cheaper route to the missing samples is now in place, proved offline only: the 0.2.1 capture
+can press 0.2.1's own Retry on a reply it rejects as empty (`--retry-empty-replies`), which asks
+that one reply again from the same prompt instead of replaying the whole play. The rejected
+replies are recorded and reported but kept out of the baseline run, so 0.2.1's side stays a lower
+bound on its cost ([how](evals/V021_BASELINE.md#retrying-a-rejected-reply-offline-2026-11-22)).
+
+### Billed comparison (2026-11-22, sampled)
+
+The sampled comparison was run once, with `--samples 5 --with-planning`, against five 0.2.1
+captures (the 2026-11-20 capture, the one success of the ten earlier attempts, and
+[three made with Retry](evals/V021_BASELINE.md#captures-with-retry-2026-11-22)). It printed a
+ceiling of 270 requests and made 90: 30 for plain V2 and 60 with planning, none retried, all on
+`claude-sonnet-4-5-20250929` at `max_tokens=16000`.
+**V2 against 0.2.1 failed the gate, so 068's proving scenario is not established.**
+
+**V2 (one call per speaking NPC) against 0.2.1: FAIL.** This comparison decides 068.
+
+| Sample | 0.2.1 calls | 0.2.1 input / output | 0.2.1 distinguishability | V2 calls | V2 input / output | V2 distinguishability |
+|---:|---:|---|---:|---:|---|---:|
+| 1 | 6 | 15,618 / 1,396 | 0.833 | 6 | 3,484 / 937 | 0.833 |
+| 2 | 6 | 15,254 / 978 | 0.667 | 6 | 3,612 / 917 | 1.000 |
+| 3 | 6 | 14,972 / 773 | 0.500 | 6 | 3,469 / 1,005 | 0.833 |
+| 4 | 6 | 16,177 / 1,380 | 0.667 | 6 | 3,258 / 874 | 0.833 |
+| 5 | 6 | 15,409 / 1,188 | 0.667 | 6 | 3,231 / 836 | 0.833 |
+| Mean | 6 | 15,486 / 1,143 | 0.667 | 6 | 3,410.8 / 913.8 | 0.867 |
+
+Cache reads and writes are 0 in every sample on both sides. Mean weighted billed tokens:
+0.2.1 16,629, V2 4,324.6. Leak rate 0 and no unmetered call in every sample.
+
+| Choice | 0.2.1 samples realizing it | V2 samples realizing it |
+|---|---:|---:|
+| `ask-ledger` (turn 1) | 2 of 5 | 1 of 5 |
+| `follow-bellamy` (turn 2) | 4 of 5 | 5 of 5 |
+| `ask-song` (turn 3) | 4 of 5 | 5 of 5 |
+
+Findings (2):
+- `baseline_invalid`, turn 1, `ask-ledger`: the 0.2.1 side gives effect to the choice in 2 of 5
+  samples, not a majority.
+- `choice_negated`, turn 1, `ask-ledger` (unrealized): V2 gives effect to it in 1 of 5 samples,
+  not a majority.
+
+Voice did not regress: mean distinguishability rose from 0.667 to 0.867, with an allowed drop of
+0.000 and a noise allowance of 0.125. Cost did not regress. Both findings are the same choice. It
+fails on 0.2.1's side as well, and that baseline finding alone fails the gate whatever V2 does.
+
+**V2 with planning against plain V2: FAIL.** An experiment; it does not decide 068.
+
+| Sample | Plain V2 calls | Plain V2 input / output | Plain V2 distinguishability | Planning calls | Planning input / output | Planning distinguishability |
+|---:|---:|---|---:|---:|---|---:|
+| 1 | 6 | 3,484 / 937 | 0.833 | 12 | 6,372 / 1,412 | 0.667 |
+| 2 | 6 | 3,612 / 917 | 1.000 | 12 | 6,944 / 1,522 | 0.667 |
+| 3 | 6 | 3,469 / 1,005 | 0.833 | 12 | 7,028 / 1,380 | 0.833 |
+| 4 | 6 | 3,258 / 874 | 0.833 | 12 | 7,901 / 1,665 | 1.000 |
+| 5 | 6 | 3,231 / 836 | 0.833 | 12 | 7,090 / 1,454 | 1.000 |
+| Mean | 6 | 3,410.8 / 913.8 | 0.867 | 12 | 7,067 / 1,486.6 | 0.833 |
+
+Cache reads and writes are 0 throughout. Each planning sample is 6 planning and 6 generation
+calls. Mean weighted billed tokens: plain 4,324.6, planning 8,553.6.
+
+| Choice | Plain V2 samples realizing it | Planning samples realizing it |
+|---|---:|---:|
+| `ask-ledger` | 1 of 5 | 4 of 5 |
+| `follow-bellamy` | 5 of 5 | 5 of 5 |
+| `ask-song` | 5 of 5 | 4 of 5 |
+
+Findings (2):
+- `baseline_invalid`, turn 1, `ask-ledger`: plain V2 gives effect to the choice in 1 of 5 samples.
+- `cost_regression`: mean weighted billed tokens rose from 4,324.6 to 8,553.6.
+
+Mean distinguishability went from 0.867 to 0.833, inside the noise allowance of 0.163, so there
+is no voice finding. Planning realized `ask-ledger` in 4 of 5 samples against 1 of 5 without it,
+for about twice the tokens.
+
+What the numbers leave out:
+- **0.2.1's side is a lower bound on what its player paid.** 0.2.1 rejected 10 replies as empty in
+  2 of the 5 captures and its own Retry asked again: 10 requests, 26,490 input and 46 output
+  tokens that are not in its runs. Its cost and latency here are those of the play it kept.
+- The token sums are not like for like: the prompts differ, and V2's usage is provider-reported
+  with no capture evidence of its own. V2 reports no latency.
+- Two of the five baseline samples came from earlier attempts made without the Retry.
+- Choices are unlabelled and judged on marker phrases. `ask-ledger` is realized in a minority of
+  samples on both sides, which is what failed; whether that is the play or its markers is not
+  settled here, and the markers were not changed.
+- No cost is in any run. At an assumed list price of 3 USD input and 15 USD output per million
+  tokens the 90 V2 calls (52,389 input and 12,002 output tokens) come to about 0.34 USD, and
+  the whole rerun with its captures to about 0.61 USD, as estimates.

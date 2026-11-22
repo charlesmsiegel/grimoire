@@ -8,7 +8,7 @@ from grimoire.evals.format import parse_scenario
 from grimoire.evals.format2 import FORMAT_V2, parse_run_v2
 from grimoire.evals.gate2 import compare_v2
 from grimoire.evals.loader import benchmark_file, load_json
-from grimoire.evals.v021 import EVIDENCE_FORMAT
+from grimoire.evals.v021 import EVIDENCE_FORMATS
 
 ROOT = Path(__file__).resolve().parents[2]
 # The measured baseline reports tokens, not money: neither doc may claim cost parity.
@@ -65,7 +65,7 @@ def _measurements(data):
 def test_no_checked_in_v2_run_is_live_or_provider_reported():
     seen = 0
     for path, data in _checked_in_json():
-        if not isinstance(data, dict) or data.get("format") not in (FORMAT_V2, EVIDENCE_FORMAT):
+        if not isinstance(data, dict) or data.get("format") not in (FORMAT_V2, *EVIDENCE_FORMATS):
             continue
         seen += 1
         mode = data.get("mode") or (data.get("source") or {}).get("mode")
