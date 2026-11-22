@@ -493,32 +493,51 @@ def uncited_abstraction(reply):
         'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}
 
 
-@pytest.mark.parametrize('fault, reason', [
-    (uncovered, 'coverage'),
-    # A lowered step with no listed line is re-asked only in an answer that copied the canary.
-    (lambda reply: uncovered(uncited_abstraction(reply)), 'citation'),
+def lowered_abstraction(step, evidence):
+    def fault(reply):
+        return {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
+            'step': step, 'rationale': 'r', 'evidence': evidence}}}
+    return fault
+
+
+@pytest.mark.parametrize('fault, reason, uncited', [
+    (uncovered, 'coverage', []),
+    # A lowered step with no listed line is re-asked only in an answer that copied the canary,
+    # though the report still counts it.
+    (lambda reply: uncovered(uncited_abstraction(reply)), 'citation', ['abstraction']),
     # Evidence that is not a list of citations is not a citation to restate.
-    (lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
-        'step': 0.5, 'rationale': 'r', 'evidence': 'elsewhere.py:2'}}}, 'citation'),
+    (lowered_abstraction(0.5, 'elsewhere.py:2'), 'citation', []),
+    # Blank evidence is no citation the pinned rubric would accept, so a re-ask cannot cure it.
+    (lowered_abstraction(0.5, ['', ' ']), 'citation', ['abstraction']),
+    # A step that is not a number below 1.0 is off the ladder too, and no citation can ground it.
+    (lowered_abstraction('0.5', ['elsewhere.py:2']), 'citation', ['abstraction']),
+    (lowered_abstraction(None, ['elsewhere.py:2']), 'citation', ['abstraction']),
+    (lowered_abstraction(1.5, ['elsewhere.py:2']), 'citation', ['abstraction']),
+    # A key the rubric does not grade is the judge's own text, never echoed back in a re-ask.
+    (lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'invented': {
+        'step': 0.5, 'rationale': 'r', 'evidence': ['elsewhere.py:2']}}}, 'citation', []),
 ])
-def test_an_answer_with_another_fault_is_never_reasked_even_off_the_ladder(tmp_path, fault, reason):
+def test_an_answer_with_another_fault_is_never_reasked_even_off_the_ladder(tmp_path, fault, reason, uncited):
     judge = Reasked(accurate, first=lambda reply: json.dumps(fault(reply)))
     result = run_reasked(tmp_path, judge)
     assert not any(call[-1] == 'reask' for call in judge.calls)
     trial = cohesive_b(result)
-    assert trial['reason'] == reason and trial['off_ladder'] == ['honest_limits'] and 'reasked' not in trial
-    assert 'uncited' not in trial
+    assert trial['reason'] == reason and 'honest_limits' in trial['off_ladder'] and 'reasked' not in trial
+    assert trial.get('uncited', []) == uncited and 'reaskable' not in trial
     assert result['parsing']['b']['off_ladder'] == 1 and result['parsing']['b']['reasked'] == 0
+    assert result['parsing']['b']['uncited'] == bool(uncited)
 
 
 def test_dropped_citations_are_reported_by_shape_never_by_text():
     name, count = 'unit_0123456789.py', 20
     shapes = {cite: jp.citation_shape(cite, name, count) for cite in (
         f'{name}:21', f'{name}:0', 'unit_0123456789:3', f'src/{name}:3', 'other.py:3', f'{name}:3-5',
-        f'{name}: 4 - 6', f'{name}:L3', f'{name}:3,4', f'{name}:', 'line 3', name, 3, None)}
+        f'{name}: 4 - 6', f'{name}:L3', f'{name}:3,4', f'{name}:', 'line 3', name, 3, None,
+        f'{name}: 3', f' {name}:3', f'{name} :3', f'{name}:3 ', f'{name}: 99', f'{name}:\u0663')}
     assert list(shapes.values()) == [
         'unlisted_line', 'unlisted_line', 'other_file', 'other_file', 'other_file', 'range', 'range',
-        'malformed', 'malformed', 'malformed', 'no_line', 'no_line', 'not_text', 'not_text']
+        'malformed', 'malformed', 'malformed', 'no_line', 'no_line', 'not_text', 'not_text',
+        'spacing', 'spacing', 'spacing', 'spacing', 'unlisted_line', 'malformed']
     case = {'id': 'u', 'task': 'theory', 'source': 'a = 1\nb = 2\n'}
     verdict = jp.perfect_uncovered_verdict('u')
     verdict['dimensions']['absorption']['evidence'] = ['f.py:9', 'f.py:1-2', 'f.py:1']
@@ -527,7 +546,11 @@ def test_dropped_citations_are_reported_by_shape_never_by_text():
 
 
 def test_a_ladder_only_reask_is_word_for_word_what_parser_version_3_sent():
-    assert jp.reask_text(['honest_limits'], [], 'f.py') == jp.REASK_PROMPT.format(dimensions='honest_limits')
+    # Parser version 3's text, written out, so a v3 capture's re-asks still replay under v4.
+    assert jp.reask_text(['honest_limits'], [], 'f.py') == (
+        'Your answer gave honest_limits a step that is not on the ladder. Every step must be\n'
+        'exactly one of 1.0 (holds), 0.5 (partial), 0.25 (strained) or 0.0 (absent); there is no step between\n'
+        'them. Answer again with one complete JSON object in the same format, and nothing else.')
 
 
 def unlisted(step):
@@ -581,6 +604,18 @@ def test_a_step_still_uncited_after_its_reask_is_unknown_and_never_asked_again(t
     assert trial['reason'] == 'citation' and trial['uncited'] == ['honest_limits']
     assert result['parsing']['b']['uncited'] == 1 and result['parsing']['b']['citations_dropped'] == 4
     assert not result['proof']['theory_panel_scored_and_discriminates']
+
+
+def test_an_uncited_step_is_counted_even_in_an_answer_that_skipped_the_canary(tmp_path, stub_checkout):
+    def still_uncovered(record):
+        record['reply'] = json.dumps(uncovered(json.loads(unlisted(0.5)(json.loads(record['reply'])))))
+        return record
+    judge = Reasked(accurate, first=unlisted(0.5), again=still_uncovered)
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert sum(call[-1] == 'reask' for call in judge.calls) == 1
+    trial = cohesive_b(result)
+    assert trial['reason'] == 'citation' and trial['uncited'] == ['honest_limits'] and 'reaskable' not in trial
+    assert result['parsing']['b']['uncited'] == 1
 
 
 def test_a_refused_reask_keeps_the_first_answers_uncited_step(tmp_path, stub_checkout):
@@ -657,9 +692,46 @@ def test_a_reask_counts_only_if_the_pinned_rubric_accepts_the_first_answer(tmp_p
     assert clean['theory']['units']['ledger_cohesive']['trials'][0]['reason'] is None
 
 
+def test_an_uncited_reask_counts_only_if_the_pinned_rubric_accepts_the_first_answer(
+        tmp_path, stub_checkout, monkeypatch):
+    real = jp.upstream_score
+
+    def refuses_two_rehearsals(checkout, verdicts, size):
+        if any(len(v.get('rehearsals', [])) < 3 for v in verdicts):
+            return {'error': 'absorption needs at least 3 rehearsal(s)'}
+        return real(checkout, verdicts, size)
+    monkeypatch.setattr(jp, 'upstream_score', refuses_two_rehearsals)
+
+    def two_rehearsals(reply):
+        reply = json.loads(unlisted(0.5)(reply))
+        return json.dumps({**reply, 'rehearsals': reply['rehearsals'][:2]})
+    judge = Reasked(accurate, first=two_rehearsals)
+    result = run_reasked(tmp_path, judge, stub_checkout)
+    assert sum(call[-1] == 'reask' for call in judge.calls) == 1
+    assert cohesive_b(result)['state'] == 'verdict' and cohesive_b(result)['reasked'] == ['honest_limits']
+    trial = result['theory']['units']['ledger_cohesive']['trials'][0]
+    assert trial['reason'] == 'first_answer_invalid' and trial['profile_score'] is None
+    assert not result['proof']['theory_panel_scored_and_discriminates']
+
+
+@pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
+                    reason='set GRIMOIRE_CODING_SKILLS to a clean checkout at the calibration pin')
+def test_the_pinned_rubric_accepts_a_first_answer_whose_only_fault_was_an_unlisted_citation(tmp_path):
+    checkout = Path(os.environ['GRIMOIRE_CODING_SKILLS'])
+    result = run_reasked(tmp_path, Reasked(accurate, first=unlisted(0.5)), checkout)
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reason'] is None
+    assert result['theory']['units']['ledger_cohesive']['trials'][0]['reasked'] == ['b']
+
+
+def unlisted_two_rehearsals(reply):
+    reply = json.loads(unlisted(0.5)(reply))
+    return {**reply, 'rehearsals': reply['rehearsals'][:2]}
+
+
 @pytest.mark.skipif(not os.environ.get('GRIMOIRE_CODING_SKILLS'),
                     reason='set GRIMOIRE_CODING_SKILLS to a clean checkout at the calibration pin')
 @pytest.mark.parametrize('fault', [
+    unlisted_two_rehearsals,
     lambda reply: {**reply, 'dimensions': {**reply['dimensions'], 'abstraction': {
         'step': 0.5, 'rationale': 'r', 'evidence': []}}},
     lambda reply: {**reply, 'rehearsals': reply['rehearsals'][:2]},

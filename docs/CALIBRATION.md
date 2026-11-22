@@ -131,11 +131,15 @@ This check is stricter than the pinned rubric, which takes any non-empty evidenc
 report gives each dropped citation's shape, never its text, per judge in
 `parsing.<judge>.dropped_shapes`:
 - `unlisted_line`: the right file and a whole number outside the listing.
+- `spacing`: the right file and a listed line, with a space around the file or the number.
 - `range`: the right file and two numbers joined by a hyphen.
 - `other_file`: any other file name, such as the unit's name without `.py` or a path before it.
 - `no_line`: no colon at all.
 - `malformed`: the right file and anything else after the colon.
 - `not_text`: not a string.
+
+Only these counts give shapes. A verdict kept in the report keeps the citations it was
+given, because the pinned rubric scores the raw evidence.
 
 **Re-asks (parser versions 3 and 4).** The pinned rubric refuses a verdict whose step is
 not on its ladder (1.0, 0.5, 0.25, 0.0), so one such step leaves the whole trial's panel
@@ -153,20 +157,24 @@ re-ask). Each re-ask is a billed call, written to its own capture record
 wording is refused as stale. The plan counts every theory answer as possibly re-asked:
 `max_calls` is 126 for the default corpus, and `capture` refuses a `--max-calls` below it.
 
-Parser version 4 also re-asks an answer that is `citation` only because a step below 1.0
-kept no listed line. The 2026-11-22 parser 3 capture lost a cohesive trial that way. The
+Parser version 4 also re-asks an answer that is `citation` only because a rubric dimension
+graded below 1.0, on a number, kept no listed line while it cites something the pinned
+rubric would accept. The 2026-11-22 parser 3 capture lost a cohesive trial that way. The
 message names those dimensions and restates the citation form, `"<alias>:<line>"`, with
 `<line>` one line number the listing shows, never which line to cite. An answer with both
 faults gets one re-ask that restates both rules. A re-ask for the ladder alone is word for
 word what version 3 sent, so a version 3 capture still replays. The re-asked answer must
 then pass every check on its own. A lowered step still uncited after it is `unknown`
-(`citation`) and counted in `parsing.uncited`. Each answer is re-asked at most once for both
+(`citation`). `parsing.uncited` counts every trial whose final answer has such a step,
+whether or not it was re-askable. Each answer is re-asked at most once for both
 faults together, so the plan and `max_calls` are unchanged.
 
 Only an answer whose other checks passed is re-asked: the unit and the coverage canary, and
 for the ladder alone, the citations too. An answer that also fails one of those keeps that
 reason (`coverage`, `citation`), is never re-asked, and still counts in `parsing.off_ladder`.
-Evidence that is not a list of citations is never re-asked either. A re-ask cures one of two
+Evidence that is not a list of citations is never re-asked either, nor is a lowered step whose
+evidence is blank, whose step is not a number below 1.0, or that sits under a key the rubric
+does not grade. A re-ask cures one of two
 faults of form, a step between rungs or a lowered step with no listed line, and never gives
 an unread answer a second draw. A re-ask that brings back no readable answer (refused, interrupted, or served
 by another model) leaves the trial `unknown`, with the first answer's faults still counted.

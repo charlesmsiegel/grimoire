@@ -343,31 +343,44 @@ def citation_shape(cite: object, name: str, count: int) -> str:
     file, colon, line = cite.rpartition(':')
     if not colon:
         return 'no_line'
-    line = line.strip()
     if file.strip() != name:
         return 'other_file'
-    if line.isascii() and line.isdigit():
+    bare = line.strip()
+    if bare.isascii() and _RANGE.fullmatch(bare):
+        return 'range'
+    if not (bare.isascii() and bare.isdigit()):
+        return 'malformed'
+    if not 1 <= int(bare) <= count:
         return 'unlisted_line'
-    return 'range' if line.isascii() and _RANGE.fullmatch(line) else 'malformed'
+    # A listed line of the right file, kept from the listing only by a space around one of them.
+    return 'spacing'
 
 
-def _grounded(dimensions: dict, name: str, count: int) -> tuple[dict | None, int, list[str], dict]:
-    """Each dimension with only its citations of listed lines, how many were dropped, which lowered
-    steps kept none, and the shape of each dropped citation.
+def _curable(key: str, entry: dict) -> bool:
+    """Whether an uncited step is one a re-ask may cure: a rubric dimension, graded on a number
+    below 1.0, whose evidence holds something the pinned rubric would count as cited."""
+    step = entry.get('step')
+    return (key in DIMENSIONS and type(step) in (int, float) and step < 1.0
+            and any(str(cite).strip() for cite in entry.get('evidence', [])))
+
+
+def _grounded(dimensions: dict, name: str, count: int) -> tuple[dict | None, int, list[str], bool, dict]:
+    """Each dimension with only its citations of listed lines, how many were dropped, which steps
+    kept none, whether a re-ask may cure every one of them, and the shape of each dropped citation.
 
     A citation of a line the listing lacks supports nothing, so it is dropped, never repaired. The
     judge's step is kept only if it still stands: a step below 1.0 must keep at least one listed
     line, as the pinned rubric requires of any lowered step. The dimensions are ``None`` when one
     does not; the counts are kept either way, so the report shows what was dropped. Evidence that is
-    not a list of citations names no lowered step, because nothing in it was a citation to drop.
+    not a list of citations names no step and is not curable, because nothing in it was a citation.
     """
     out: dict = {}
     uncited: list[str] = []
     shapes: dict[str, int] = {}
-    dropped = 0
+    dropped, curable = 0, True
     for key, entry in dimensions.items():
         if not isinstance(entry, dict) or not isinstance(entry.get('evidence', []), list):
-            return None, dropped, [], shapes
+            return None, dropped, [], False, shapes
         evidence = entry.get('evidence', [])
         kept = [cite for cite in evidence if _listed(cite, name, count)]
         for cite in evidence:
@@ -376,12 +389,16 @@ def _grounded(dimensions: dict, name: str, count: int) -> tuple[dict | None, int
                 shapes[shape] = shapes.get(shape, 0) + 1
         dropped += len(evidence) - len(kept)
         if kept != evidence and not kept and entry.get('step') != 1.0:
-            uncited.append(key)
+            curable = curable and _curable(key, entry)
+            if key in DIMENSIONS:  # another key is the judge's own text, never echoed back to it
+                uncited.append(key)
         else:
             out[key] = {**entry, 'evidence': kept} if 'evidence' in entry else dict(entry)
+    if out.keys() == dimensions.keys():
+        return out, dropped, [], False, shapes
     order = {key: n for n, key in enumerate(DIMENSIONS)}
-    uncited.sort(key=lambda key: order.get(key, len(order)))
-    return (None if uncited else out), dropped, uncited, shapes
+    uncited.sort(key=order.__getitem__)
+    return None, dropped, uncited, curable and bool(uncited), shapes
 
 
 def off_ladder(dimensions: object) -> list[str]:
@@ -437,12 +454,14 @@ def parse_theory(text: object, case: dict, token: str, name: str) -> dict:
     dimensions = data.get('dimensions')
     # Checked, never rounded onto the ladder: that would be the harness choosing the judge's step.
     off = {'off_ladder': off_ladder(dimensions)} if off_ladder(dimensions) else {}
-    grounded, dropped, uncited, shapes = (_grounded(dimensions, name, count) if isinstance(dimensions, dict)
-                                          else (None, 0, [], {}))
+    grounded, dropped, uncited, curable, shapes = (
+        _grounded(dimensions, name, count) if isinstance(dimensions, dict) else (None, 0, [], False, {}))
     if grounded is None:
-        # Named only when the canary was copied too, so a re-ask never gives an unread answer a
-        # second draw. With the ladder, these are the only faults a re-ask may cure.
-        fault = {'uncited': uncited} if uncited and covered(data, name, token) else {}
+        # Re-askable only when the canary was copied too, so a re-ask never gives an unread answer
+        # a second draw. With the ladder, an uncited lowered step is the only fault a re-ask cures.
+        fault = {'uncited': uncited} if uncited else {}
+        if curable and covered(data, name, token):
+            fault['reaskable'] = True
         return {**result('unknown', 'citation', verdict, dropped, shapes), **off, **fault}
     verdict['dimensions'] = grounded
     if not covered(data, name, token):
@@ -633,7 +652,7 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
                 messages = messages_for(case, token, salt)
                 record = judge.respond(pin, case, trial, messages)
                 result = trial_result(record, pin, case, token, name)
-                if result.get('reason') == 'off_ladder' or result.get('uncited'):
+                if result.get('reason') == 'off_ladder' or result.pop('reaskable', False):
                     # Once, never again: the re-asked answer is read on its own and stands as it is.
                     off, uncited = result.get('off_ladder', []), result.get('uncited', [])
                     again = judge.respond(pin, case, trial, reask_messages(messages, record['reply'], off,
@@ -641,6 +660,7 @@ def collect(cases: list[dict], pins: list[JudgePin], trials: int, judge, salt: s
                     if again is not None:
                         first = result
                         result = trial_result(again, pin, case, token, name)
+                        result.pop('reaskable', None)  # never asked a third time
                         order = {key: n for n, key in enumerate(DIMENSIONS)}
                         result.update(reasked=sorted({*off, *uncited}, key=lambda k: order.get(k, len(order))),
                                       first_answer={**{key: first[key] for key in ANSWER_COUNTS},
@@ -815,8 +835,9 @@ def _score_trial(results: list[dict], size: dict, checkout: Path | None) -> dict
     """Profile rule: a panel is scored only when all three judges are covered and valid.
 
     ``upstream_score`` is what the pinned rubric alone would award the same verdicts, coverage aside.
-    A re-asked answer counts only if its judge's first answer had no fault but the ladder: the
-    pinned rubric must accept that first answer once its off-ladder steps are read as rungs.
+    A re-asked answer counts only if its judge's first answer had no fault but the ones a re-ask
+    may cure: the pinned rubric must accept that first answer once its off-ladder steps are read as
+    rungs. The rubric sees the first answer's citations as given, so only its own faults count.
     """
     verdicts = [r['verdict'] for r in results]
     upstream = upstream_score(checkout, verdicts, size) if checkout is not None and all(verdicts) else None

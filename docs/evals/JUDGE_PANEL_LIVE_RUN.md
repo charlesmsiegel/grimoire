@@ -32,12 +32,12 @@ Save this as a file outside the repository, and set `PANEL` to its absolute path
 
 Checked offline: this panel loads and plans 108 calls, about 16.7k prompt characters per
 judge per trial round, which is about 43k input tokens for the whole run. Under parser
-version 3, each of the 18 theory answers may be re-asked once if it puts a step off the
-ladder, so a capture makes at most **126 calls**. At list prices on 2026-11-03, the worst
+version 4, each of the 18 theory answers may be re-asked once if it puts a step off the
+ladder or leaves a lowered step with no listed line, so a capture makes at most **126 calls**. At list prices on 2026-11-03, the worst
 case for 108 calls (every answer at its 8000-token limit) is about $9. The 18 re-asks, each
 carrying the judge's first answer back and bounded the same way, add at most about $2, so the
-worst case for 126 calls is about **$11**. The two live captures cost about $0.55 and $0.58,
-and the second would have needed 2 re-asks.
+worst case for 126 calls is about **$11**. The three live captures cost about $0.55, $0.58
+and $0.58. The second would have needed 2 re-asks, and the third made them.
 
 ## Commands
 
