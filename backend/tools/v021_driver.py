@@ -10,8 +10,10 @@ gives the app's gateway client a transport that counts and bounds every provider
 ``dry_run`` that transport is 0.2.1's own ``tests.llm_fakes.SSEProvider`` answering with scripted
 provider-shaped streams (synthetic usage); in ``live`` it is a real HTTPS transport.
 
-Prints one JSON evidence bundle (``grimoire.v021-capture-evidence/1``) on stdout and nothing
-else. No prompt text and no credential is written to it.
+Prints one JSON evidence bundle on stdout and nothing else. No prompt text and no credential is
+written to it. The bundle is ``grimoire.v021-capture-evidence/1``, or ``/2`` with ``--retry-empty``:
+then, when 0.2.1 rejects a reply as empty (its ``empty_response`` error), the driver presses
+0.2.1's own Retry, as a player would, and ``/2`` lists every Retry it pressed.
 """
 
 from __future__ import annotations
@@ -27,6 +29,10 @@ import zlib
 from pathlib import Path
 
 EVIDENCE_FORMAT = "grimoire.v021-capture-evidence/1"
+#: With ``--retry-empty``: the same bundle plus ``retries``, one entry per Retry pressed.
+EVIDENCE_FORMAT_RETRIES = "grimoire.v021-capture-evidence/2"
+#: The only 0.2.1 error the driver retries: a reply 0.2.1 kept no prose of.
+RETRIED_KIND = "empty_response"
 CHAT_PATHS = {"openrouter": "/chat/completions", "anthropic": "/messages",
               "openai_compatible": "/chat/completions"}
 IDLE_TIMEOUT_SECONDS = 120
@@ -190,6 +196,38 @@ def turn_failure(text: str, actors: dict[str, str], *, status: int = 200,
     return "; ".join(parts)
 
 
+def rejected_reply(text: str) -> str | None:
+    """The response id 0.2.1 rejected as empty in this ``/chat`` or ``/retry`` stream, or None.
+
+    Only a stream whose one error is ``empty_response``, raised on a reply it had started, is a
+    rejected reply. Any other error (or more than one) is a failure to report, never to retry.
+    """
+    errors, started = [], None
+    for frame in _chat_frames(text):
+        error, start = frame.get("error"), frame.get("response_start")
+        if isinstance(error, dict):
+            errors.append(error.get("kind"))
+        elif isinstance(start, dict) and isinstance(start.get("id"), str) and not errors:
+            started = start["id"]
+    return started if errors == [RETRIED_KIND] else None
+
+
+def completed_replies(text: str) -> int:
+    """How many replies this stream completed (0.2.1's ``response_end`` with status complete)."""
+    return sum(1 for frame in _chat_frames(text)
+               if isinstance(frame.get("response_end"), dict)
+               and frame["response_end"].get("status") == "complete")
+
+
+def may_retry(*, forwarded: int, owed: int, budget: int) -> bool:
+    """Whether one more Retry still leaves a request for every reply the scene still owes.
+
+    ``owed`` counts the rejected reply itself. The guard's budget is the planned calls times
+    (1 + 0.2.1's own transport retries); a Retry never raises it.
+    """
+    return forwarded + owed <= budget
+
+
 def encode_bundle(bundle: dict) -> bytes:
     """The evidence as ASCII-escaped JSON: the same bytes whatever the pipe's locale encoding."""
     return json.dumps(bundle, ensure_ascii=True).encode("ascii")
@@ -213,7 +251,10 @@ def _args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--key-env")
     # Test-only fault injection for dry runs (the capture CLI never passes it).
     parser.add_argument("--fault", choices=("retry-first", "second-speaks-as-pc",
-                                                "second-only-fences"))
+                                                "second-only-fences", "second-rejected-once",
+                                                "second-always-rejected"))
+    parser.add_argument("--retry-empty", action="store_true",
+                        help="press 0.2.1's own Retry when it rejects a reply as empty")
     return parser.parse_args(argv)
 
 
@@ -350,11 +391,17 @@ def main(argv: list[str]) -> int:
             reply = dict(replies[str(first)][speakers[1]])
             reply["text"] = f"\n\n**{setup['pc']['name']}:** I take the ledger and read it."
             bodies[1] = _sse(llm_fakes, args.provider, reply)
-        if args.fault == "second-only-fences":  # turn 1's second reply holds no prose at all
-            reply = dict(replies[str(turns[0]["turn"])][speakers[1]])
-            reply["text"] = ("```perception\nThe ledger is on the hook.\n```\n\n"
-                             "```handoff\n{\"next\": null}\n```")
-            bodies[1] = _sse(llm_fakes, args.provider, reply)
+        fenced = dict(replies[str(turns[0]["turn"])][speakers[1]])
+        fenced["text"] = ("```perception\nThe ledger is on the hook.\n```\n\n"
+                          "```handoff\n{\"next\": null}\n```")
+        if args.fault in ("second-only-fences", "second-rejected-once",
+                          "second-always-rejected"):  # turn 1's second reply holds no prose
+            bodies[1] = _sse(llm_fakes, args.provider, fenced)
+        if args.fault == "second-rejected-once":  # ... and its Retry is the scripted reply
+            bodies.insert(2, _sse(llm_fakes, args.provider,
+                                  replies[str(turns[0]["turn"])][speakers[1]]))
+        if args.fault == "second-always-rejected":  # ... and so is every Retry of it
+            bodies[2:2] = [_sse(llm_fakes, args.provider, fenced)] * (planned * (1 + retries))
         if args.fault == "retry-first":  # the first call fails once and 0.2.1 retries it
             bodies.insert(0, (429, "synthetic rate limit"))  # 0.2.1 retries rate limits
         sse = llm_fakes.SSEProvider(args.provider, bodies)
@@ -475,10 +522,34 @@ def main(argv: list[str]) -> int:
         if store.config.llm_retries() != retries:
             fail("llm_retries changed during setup")
 
-        boundaries = []
+        def settle() -> None:
+            deadline = time.monotonic() + IDLE_TIMEOUT_SECONDS
+            while app.state.runs.any_live() is not None:
+                if time.monotonic() > deadline:
+                    fail("0.2.1 still has a live run")
+                time.sleep(0.05)
+
+        boundaries, pressed, completed = [], [], 0
         for turn in turns:
             first_call = len(guard.replies)
             response = client.post(f"{base}/chat", json={"content": turn["player_text"]})
+            completed += completed_replies(response.text)
+            retried, note = 0, ""
+            # 0.2.1's own Retry (the button its client shows on this error): the same snapshot,
+            # the same prompt, the same response id; only the rejected reply is asked again.
+            while args.retry_empty and response.status_code < 400 and (
+                    rejected := rejected_reply(response.text)) is not None:
+                if not may_retry(forwarded=guard.forwarded, owed=planned - completed,
+                                 budget=guard.budget):
+                    note = (f"; no Retry left: {guard.forwarded} of {guard.budget} requests sent "
+                            f"and {planned - completed} replies still owed")
+                    break
+                settle()
+                pressed.append({"turn": turn["turn"], "response_id": rejected,
+                                "kind": RETRIED_KIND})
+                retried += 1
+                response = client.post(f"{base}/retry", json={})
+                completed += completed_replies(response.text)
             if response.status_code >= 400 or '"error"' in response.text:
                 calls = [(reply["status"], None if reply["body"] is None
                           else provider_text(reply, args.provider))
@@ -486,13 +557,11 @@ def main(argv: list[str]) -> int:
                 why = turn_failure(response.text, refs, status=response.status_code,
                                    calls=calls, labels=cast_labels, markers=scenes._markers,
                                    read=read)
-                fail(f"turn {turn['turn']} failed: HTTP {response.status_code}; {why}")
+                after = f" after {retried} Retr{'y' if retried == 1 else 'ies'}" if retried else ""
+                fail(f"turn {turn['turn']} failed{after}: HTTP {response.status_code}; "
+                     f"{why}{note}")
             boundaries.append(len(store.scenes.read_scene(cid, sid)["messages"]))
-        deadline = time.monotonic() + IDLE_TIMEOUT_SECONDS
-        while app.state.runs.any_live() is not None:
-            if time.monotonic() > deadline:
-                fail("0.2.1 still has a live run")
-            time.sleep(0.05)
+        settle()
 
     messages = store.scenes.read_scene(cid, sid)["messages"]
     usage_rows = _usage_rows()
@@ -520,7 +589,7 @@ def main(argv: list[str]) -> int:
     choice_outcomes = (dict(setup["dry_run"]["choice_outcomes"]) if args.mode == "dry_run"
                        else {choice: "unlabelled" for choice in setup["choice_ids"]})
     bundle = {
-        "format": EVIDENCE_FORMAT,
+        "format": EVIDENCE_FORMAT_RETRIES if args.retry_empty else EVIDENCE_FORMAT,
         "scenario_id": setup["scenario_id"],
         "mode": args.mode,
         "provider_kind": args.provider,
@@ -536,6 +605,8 @@ def main(argv: list[str]) -> int:
         "turns": turn_records,
         "usage_rows": usage_rows,
     }
+    if args.retry_empty:
+        bundle["retries"] = pressed
     sys.stdout.buffer.write(encode_bundle(bundle))
     sys.stdout.buffer.flush()
     return 0

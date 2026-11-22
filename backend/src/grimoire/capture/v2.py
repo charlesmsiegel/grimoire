@@ -73,7 +73,7 @@ from grimoire.evals.policy import GatePolicy
 from grimoire.evals.report import render_samples, render_v2
 from grimoire.evals.runtime_record import record_runtime_run
 from grimoire.evals.sampled import compare_samples
-from grimoire.evals.v021 import verify_evidence
+from grimoire.evals.v021 import describe_rejected, rejected_replies, verify_evidence
 from grimoire.generation import (
     GenerationError,
     HeardLine,
@@ -482,6 +482,19 @@ def play(options: CompareOptions, baseline: Baseline, scenario: Scenario, setup:
     return document
 
 
+def _rejected_note(baselines: Sequence[Baseline]) -> str:
+    """What the 0.2.1 replies its captures rejected as empty and Retried cost, or ``""``."""
+    spent = [rejected_replies(each.bundle) for each in baselines]
+    if not any(each["replies"] for each in spent):
+        return ""
+    totals = {name: sum(each[name] for each in spent) for name in spent[0]}
+    replies, with_any = totals["replies"], sum(1 for each in spent if each["replies"])
+    return (f"0.2.1 rejected {replies} repl{'y' if replies == 1 else 'ies'} as empty in "
+            f"{with_any} of the {len(baselines)} captures, and its own Retry asked again. Those "
+            f"replies took {describe_rejected(totals)}. They are not in the 0.2.1 side: its cost "
+            "and latency are those of the play 0.2.1 kept, a lower bound on what its player paid.")
+
+
 def _report(options: CompareOptions, baselines: Sequence[Baseline], scenario: Scenario,
             runs: Mapping[str, Sequence[dict]]) -> str:
     first = baselines[0]
@@ -499,6 +512,9 @@ def _report(options: CompareOptions, baselines: Sequence[Baseline], scenario: Sc
                      "One reply is one draw from the model, so each side is read over all its samples.")
     if options.mode == "dry_run":
         parts.append("Dry run: scripted replies and synthetic numbers; nothing was sent.")
+    rejected = _rejected_note(baselines)
+    if rejected:
+        parts.append(rejected)
     if first.max_tokens is None:
         parts.append("0.2.1 sent no output cap (max_tokens=unset) and V2 always sends one, so the "
                      "budgets differ and the gate reports the runs as incomparable.")

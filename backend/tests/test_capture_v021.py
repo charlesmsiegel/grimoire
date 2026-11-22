@@ -483,3 +483,38 @@ def test_timed_out_capture_reports_what_was_already_spent(checkout, scratch_tmp,
     err = capsys.readouterr().err
     assert "timed out" in err and "partial ledger" in err and "0.0042" in err and "123" in err
     assert leftovers(scratch_tmp) == []
+
+
+def test_retry_flag_reaches_the_driver_and_the_report(checkout, scratch_tmp, scenario_files,
+                                                      tmp_path, monkeypatch, capsys):
+    seen = tmp_path / "args.json"
+    fake_driver(tmp_path, monkeypatch, textwrap.dedent(f"""
+        open({str(seen)!r}, 'w').write(json.dumps(argv))
+        if '--retry-empty' in argv:
+            rejected = dict(bundle['usage_rows'][0], prompt_tokens=90, completion_tokens=3)
+            bundle.update(format='grimoire.v021-capture-evidence/2',
+                          usage_rows=[rejected, *bundle['usage_rows']],
+                          retries=[{{'turn': 1, 'response_id': 'r-1',
+                                     'kind': 'empty_response'}}])
+    """) + PRINT)
+    out = tmp_path / "out"
+    assert capture.main(dry(checkout, out) + ["--retry-empty-replies"]) == 0, \
+        capsys.readouterr().err
+    assert "--retry-empty" in json.loads(seen.read_text())
+    report = (out / "capture-report.txt").read_text()
+    assert ("0.2.1 rejected 1 reply as empty and Retry asked again: 1 request, input tokens "
+            "90, output tokens 3, cache reads 0; not in the run below") in report
+    run = parse_run_v2(json.loads((out / "run.json").read_text()),
+                       parse_scenario(minimal_scenario()))
+    assert run.usage.total.attempts == 1
+
+
+def test_without_the_retry_flag_the_driver_is_not_asked_to_retry(checkout, scratch_tmp,
+                                                                 scenario_files, tmp_path,
+                                                                 monkeypatch):
+    seen = tmp_path / "args.json"
+    fake_driver(tmp_path, monkeypatch, f"open({str(seen)!r}, 'w').write(json.dumps(argv))\n" + PRINT)
+    out = tmp_path / "out"
+    assert capture.main(dry(checkout, out)) == 0
+    assert "--retry-empty" not in json.loads(seen.read_text())
+    assert "Retry" not in (out / "capture-report.txt").read_text()

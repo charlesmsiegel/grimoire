@@ -344,3 +344,9 @@ this scene on 1 of 10 attempts, so five baseline samples would take on the order
 at this rate. The one new capture is a valid completed sample. Scored alone it has an unrealized
 choice (`ask-ledger`, turn 1), but the sampled gate does not judge that per sample: a choice
 counts against a side only if it is realized in no strict majority of that side's five samples.
+
+A cheaper route to the missing samples is now in place, proved offline only: the 0.2.1 capture
+can press 0.2.1's own Retry on a reply it rejects as empty (`--retry-empty-replies`), which asks
+that one reply again from the same prompt instead of replaying the whole play. The rejected
+replies are recorded and reported but kept out of the baseline run, so 0.2.1's side stays a lower
+bound on its cost ([how](evals/V021_BASELINE.md#retrying-a-rejected-reply-offline-2026-11-22)).

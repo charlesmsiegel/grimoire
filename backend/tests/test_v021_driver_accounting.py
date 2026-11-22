@@ -204,3 +204,44 @@ def test_provider_text_refuses_what_it_cannot_decode():
     assert d.provider_text({"body": bytearray(b"x"), "encoding": "br"}, "anthropic") is None
     assert d.provider_text({"body": bytearray(b"not gzip"), "encoding": "gzip"},
                            "anthropic") is None
+
+
+START = {"response_start": {"id": "r-2", "speaker": "Bellamy", "actor_ref": "characters:b"}}
+EMPTY = {"error": {"kind": "empty_response", "detail": "The model returned no response prose."}}
+
+
+def test_a_reply_rejected_as_empty_is_named_for_retry():
+    d = driver()
+    done = {"response_end": {"id": "r-1", "status": "complete"}}
+    text = stream({"response_start": {"id": "r-1"}}, {"delta": "Hi."}, done, START,
+                  {"delta": "\n"}, EMPTY)
+    assert d.rejected_reply(text) == "r-2"
+    assert d.completed_replies(text) == 1
+
+
+@pytest.mark.parametrize("frames", [
+    (START, {"delta": "Hi."}, {"response_end": {"id": "r-2", "status": "complete"}}),
+    (START, {"error": {"kind": "provider_error"}}),          # another failure: report it
+    (START, EMPTY, {"error": {"kind": "empty_response"}}),   # more than one error
+    (EMPTY,),                                                # no reply was started
+])
+def test_only_one_empty_rejection_of_a_started_reply_is_retried(frames):
+    assert driver().rejected_reply(stream(*frames)) is None
+
+
+def test_completed_replies_count_only_complete_ends():
+    d = driver()
+    text = stream({"response_end": {"id": "a", "status": "complete"}},
+                  {"response_end": {"id": "b", "status": "stopped"}})
+    assert d.completed_replies(text) == 1
+
+
+@pytest.mark.parametrize("forwarded, owed, allowed", [
+    (2, 5, True),     # turn 1's second reply was rejected: plenty left
+    (13, 5, True),    # the last Retry that still leaves one request per owed reply
+    (14, 5, False),
+    (17, 1, True),
+    (18, 1, False),
+])
+def test_a_retry_never_eats_the_requests_later_replies_need(forwarded, owed, allowed):
+    assert driver().may_retry(forwarded=forwarded, owed=owed, budget=18) is allowed

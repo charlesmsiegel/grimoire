@@ -119,7 +119,7 @@ def test_deeply_nested_json_is_invalid_input(tmp_path, capsys):
 
 from pathlib import Path  # noqa: E402
 
-from evals_helpers import bundle, guild_run_v2, minimal_scenario  # noqa: E402
+from evals_helpers import bundle, guild_run_v2, minimal_scenario, v021_row  # noqa: E402
 from grimoire.evals.format import parse_scenario  # noqa: E402
 from grimoire.evals.loader import evidence_digest  # noqa: E402
 from grimoire.evals.report import MEASURED_NOTICE, UNVERIFIED_NOTICE  # noqa: E402
@@ -172,3 +172,20 @@ def test_cli_bad_evidence_exit_2(tmp_path, capsys):
     v1 = write(tmp_path, "evidence.json", bundle())
     assert main([shipped("scenario.json"), shipped("baseline.json"), shipped("baseline.json"),
                  "--evidence-baseline", v1]) == 2
+
+
+def test_cli_says_when_a_verified_capture_had_rejected_replies(tmp_path, capsys):
+    scenario_path = write(tmp_path, "scenario.json", minimal_scenario())
+    data = bundle(format="grimoire.v021-capture-evidence/2",
+                  usage_rows=[v021_row("r-1", 90, 3), v021_row("r-1")],
+                  retries=[{"turn": 1, "response_id": "r-1", "kind": "empty_response"}])
+    run = convert(data, parse_scenario(minimal_scenario()), digest=evidence_digest(data),
+                  run_id="cap", label="capture")
+    run_path = write(tmp_path, "run.json", run)
+    evidence = write(tmp_path, "evidence.json", data)
+    assert main([scenario_path, run_path, run_path, "--evidence-baseline", evidence]) == 0
+    out = capsys.readouterr().out
+    assert ("baseline: 0.2.1 rejected 1 of its replies as empty and its own Retry asked again "
+            "(1 request, input tokens 90, output tokens 3, cache reads 0); they are not in this "
+            "run") in out
+    assert "candidate: 0.2.1 rejected" not in out
