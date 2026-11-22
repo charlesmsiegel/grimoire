@@ -19,9 +19,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+import zlib
 from pathlib import Path
 
 EVIDENCE_FORMAT = "grimoire.v021-capture-evidence/1"
@@ -67,6 +69,127 @@ def partial_ledger(rows: list[dict]) -> list[dict]:
             for row in rows if row.get("kind") == "llm"]
 
 
+#: 0.2.1's error kinds are identifiers; anything else is reported as unrecognised, never echoed.
+ERROR_KIND = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _chat_frames(text: str):
+    """The JSON objects of 0.2.1's own chat stream (``data:`` lines), skipping anything else."""
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            try:
+                frame = json.loads(line[5:])
+            except ValueError:
+                continue
+            if isinstance(frame, dict):
+                yield frame
+
+
+def provider_text(reply: dict, provider: str) -> str | None:
+    """The reply text of one recorded provider response, or None if it cannot be read.
+
+    ``reply`` is what the counting transport kept (``body``, its ``encoding``). Held in memory
+    only, to describe a failed turn's shape; never written or printed.
+    """
+    body, encoding = reply.get("body"), (reply.get("encoding") or "identity").lower()
+    if body is None:
+        return None
+    try:
+        if encoding == "gzip":
+            body = zlib.decompressobj(47).decompress(bytes(body))
+        elif encoding == "deflate":  # zlib-wrapped, or raw as some servers send (as httpx does)
+            try:
+                body = zlib.decompressobj(zlib.MAX_WBITS).decompress(bytes(body))
+            except zlib.error:
+                body = zlib.decompressobj(-zlib.MAX_WBITS).decompress(bytes(body))
+        elif encoding != "identity":
+            return None
+    except zlib.error:
+        return None
+    text = []
+    for frame in _chat_frames(bytes(body).decode("utf-8", errors="replace")):
+        if provider == "openrouter":
+            for choice in frame.get("choices") or []:
+                delta = choice.get("delta") if isinstance(choice, dict) else None
+                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                    text.append(delta["content"])
+        elif frame.get("type") == "content_block_delta":
+            delta = frame.get("delta")
+            if isinstance(delta, dict) and delta.get("type") == "text_delta" and isinstance(
+                    delta.get("text"), str):
+                text.append(delta["text"])
+    return "".join(text)
+
+
+def _labels(text: str, labels: dict[str, str], markers) -> str:
+    found = []
+    for marker in markers(text):
+        name = marker.group(1)
+        found.append(labels.get(name, "you" if name == "You" else "another name"))
+    if not found:
+        return "under no label"
+    return ("under the label " if len(found) == 1 else "under the labels ") + ", ".join(found)
+
+
+def _kind(kind) -> str:
+    return kind if isinstance(kind, str) and ERROR_KIND.fullmatch(kind) else "unrecognised"
+
+
+def turn_failure(text: str, actors: dict[str, str], *, status: int = 200,
+                 calls: list[tuple[int | None, str | None]] = (),
+                 labels: dict[str, str] | None = None, markers=None, read=None) -> str:
+    """Why 0.2.1 failed a turn, as error kinds, actor ids and counts only (never text).
+
+    ``text`` is the turn's ``/chat`` response as 0.2.1 sent it to its client, and ``actors``
+    maps 0.2.1's actor refs to scenario actor ids. Each reply 0.2.1 streamed is described by the
+    actor it was for and how many characters its client saw (0.2.1 hides its control fences).
+
+    ``calls`` are the turn's provider requests in order, each ``(HTTP status or None if no
+    response came, reply text or None if unreadable)``. A reply is described by its length, by
+    ``read(text) -> (prose, fence names)`` (0.2.1's own reading of a reply: the prose its
+    authority check sees, and which hidden fences the reply held) and by whose speaker labels
+    that prose is written under, matched with ``markers``, 0.2.1's label matcher.
+    """
+    kinds: list[str] = []
+    replies: list[list] = []
+    if status >= 400:
+        try:
+            detail = json.loads(text).get("detail")
+        except (ValueError, AttributeError):
+            detail = None
+        kinds.append(_kind(detail.get("kind") if isinstance(detail, dict) else None))
+    for frame in [] if status >= 400 else _chat_frames(text):
+        error = frame.get("error")
+        start = frame.get("response_start")
+        if isinstance(error, dict):
+            kinds.append(_kind(error.get("kind")))
+        elif isinstance(start, dict):
+            replies.append([actors.get(str(start.get("actor_ref")), "unknown"), 0])
+        elif isinstance(frame.get("delta"), str) and replies:
+            replies[-1][1] += len(frame["delta"])
+    parts = ["0.2.1 error " + (", ".join(kinds) if kinds else "not reported")]
+    parts += [f"{actor}'s reply: {count} characters streamed" for actor, count in replies]
+    for number, (code, call) in enumerate(calls, 1):
+        lead = f"provider reply {number}: "
+        if code is None:
+            parts.append(lead + "no response")
+        elif not 200 <= code < 300:
+            parts.append(lead + f"HTTP {code}")
+        elif call is None:
+            parts.append(lead + "unreadable")
+        else:
+            try:
+                prose, held = read(call) if read else (call.strip(), [])
+            except Exception:  # noqa: BLE001 -- a description must never fail the report
+                parts.append(lead + f"{len(call.strip())} characters, not parsed")
+                continue
+            under = _labels(prose, labels or {}, markers) if markers else "labels not read"
+            fences = "fences " + ", ".join(held) if held else "no fence"
+            parts.append(lead + f"{len(call.strip())} characters, {len(prose)} of prose, "
+                         f"{fences}, prose {under}")
+    return "; ".join(parts)
+
+
 def encode_bundle(bundle: dict) -> bytes:
     """The evidence as ASCII-escaped JSON: the same bytes whatever the pipe's locale encoding."""
     return json.dumps(bundle, ensure_ascii=True).encode("ascii")
@@ -89,7 +212,8 @@ def _args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--model")
     parser.add_argument("--key-env")
     # Test-only fault injection for dry runs (the capture CLI never passes it).
-    parser.add_argument("--fault", choices=("retry-first",))
+    parser.add_argument("--fault", choices=("retry-first", "second-speaks-as-pc",
+                                                "second-only-fences"))
     return parser.parse_args(argv)
 
 
@@ -119,6 +243,10 @@ class Guard:
         self.httpx, self.inner, self.path, self.budget = httpx, inner, CHAT_PATHS[provider], budget
         self.forwarded = 0
         self.max_tokens: set[object] = set()
+        #: One record per forwarded request, in order: its HTTP status (None if no response
+        #: came), its raw body and content encoding. In memory only, so a failed turn can be
+        #: described by its shape; never written or printed.
+        self.replies: list[dict] = []
 
     def transport(self):
         guard = self
@@ -134,10 +262,30 @@ class Guard:
                     guard.max_tokens.add(json.loads(request.content).get("max_tokens"))
                 except ValueError:
                     guard.max_tokens.add("unreadable")
-                return await guard.inner.handle_async_request(request)
+                guard.replies.append(reply := {"status": None, "body": None, "encoding": ""})
+                response = await guard.inner.handle_async_request(request)
+                reply["status"], reply["body"] = response.status_code, bytearray()
+                try:
+                    reply["body"] += response.content  # already read and decoded (a test transport)
+                except guard.httpx.ResponseNotRead:
+                    reply["encoding"] = response.headers.get("content-encoding", "")
+                    response.stream = Recording(response.stream, reply["body"])
+                return response
 
             async def aclose(self):
                 await guard.inner.aclose()
+
+        class Recording(guard.httpx.AsyncByteStream):
+            def __init__(self, inner, sink):
+                self.inner, self.sink = inner, sink
+
+            async def __aiter__(self):
+                async for chunk in self.inner:
+                    self.sink += chunk
+                    yield chunk
+
+            async def aclose(self):
+                await self.inner.aclose()
 
         return Transport()
 
@@ -185,6 +333,7 @@ def main(argv: list[str]) -> int:
 
     from grimoire import store  # noqa: PLC0415
     from grimoire.main import create_app  # noqa: PLC0415
+    from grimoire.store import response_protocol, scenes, state_fence  # noqa: PLC0415
 
     speakers = setup["speakers"]
     npcs = {npc["actor_id"]: npc for npc in setup["npcs"]}
@@ -196,6 +345,16 @@ def main(argv: list[str]) -> int:
         replies = setup["dry_run"]["replies"]
         bodies = [_sse(llm_fakes, args.provider, replies[str(t["turn"])][speaker])
                   for t in turns for speaker in speakers]
+        if args.fault == "second-speaks-as-pc":  # turn 1's second reply is the PC's line
+            first = turns[0]["turn"]
+            reply = dict(replies[str(first)][speakers[1]])
+            reply["text"] = f"\n\n**{setup['pc']['name']}:** I take the ledger and read it."
+            bodies[1] = _sse(llm_fakes, args.provider, reply)
+        if args.fault == "second-only-fences":  # turn 1's second reply holds no prose at all
+            reply = dict(replies[str(turns[0]["turn"])][speakers[1]])
+            reply["text"] = ("```perception\nThe ledger is on the hook.\n```\n\n"
+                             "```handoff\n{\"next\": null}\n```")
+            bodies[1] = _sse(llm_fakes, args.provider, reply)
         if args.fault == "retry-first":  # the first call fails once and 0.2.1 retries it
             bodies.insert(0, (429, "synthetic rate limit"))  # 0.2.1 retries rate limits
         sse = llm_fakes.SSEProvider(args.provider, bodies)
@@ -269,6 +428,25 @@ def main(argv: list[str]) -> int:
         refs[f"pcs:{pc['pc']}"] = setup["pc"]["actor_id"]
         _ok(client.post(f"{base}/cast", json={"id": pc["pc"], "kind": "pcs"}), "cast the PC")
 
+        def read(text: str) -> tuple[str, list[str]]:
+            """A reply as 0.2.1 reads it for a speaking NPC: its own watcher (perception on,
+            as ``_rounds`` sets it for an NPC) takes the prose before the handoff, then
+            ``_persistence._normalise``'s steps up to the label check."""
+            watcher = response_protocol.ResponseWatcher(perception=True)
+            watcher.feed(text)
+            watcher.finish()
+            held = [name for name, present in (
+                ("perception", bool(watcher.preparation.body.strip())),
+                ("handoff", bool(response_protocol._HANDOFF.search(watcher.raw))),
+                ("state", bool(state_fence._OPEN.search(watcher.raw)))) if present]
+            prose = store.context.expand_macros(
+                store.context.resolve_art_handles(
+                    cid, state_fence.split_block(watcher.narration)[0], sid),
+                store.context.scene_substitutions(cid, sid), cid, sid).strip()
+            return prose, held
+
+        cast_labels = {npcs[a]["name"]: a for a in npcs}
+        cast_labels[setup["pc"]["name"]] = setup["pc"]["actor_id"]
         speaker_refs = [ref for actor in speakers for ref, a in refs.items() if a == actor]
         silent_refs = [ref for ref, a in refs.items() if a in npcs and a not in speakers]
         _ok(client.put(f"{base}/group", json={"order": "list", "order_list": speaker_refs,
@@ -299,9 +477,16 @@ def main(argv: list[str]) -> int:
 
         boundaries = []
         for turn in turns:
+            first_call = len(guard.replies)
             response = client.post(f"{base}/chat", json={"content": turn["player_text"]})
             if response.status_code >= 400 or '"error"' in response.text:
-                fail(f"turn {turn['turn']} failed: HTTP {response.status_code}")
+                calls = [(reply["status"], None if reply["body"] is None
+                          else provider_text(reply, args.provider))
+                         for reply in guard.replies[first_call:]]
+                why = turn_failure(response.text, refs, status=response.status_code,
+                                   calls=calls, labels=cast_labels, markers=scenes._markers,
+                                   read=read)
+                fail(f"turn {turn['turn']} failed: HTTP {response.status_code}; {why}")
             boundaries.append(len(store.scenes.read_scene(cid, sid)["messages"]))
         deadline = time.monotonic() + IDLE_TIMEOUT_SECONDS
         while app.state.runs.any_live() is not None:

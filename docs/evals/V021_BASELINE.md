@@ -55,6 +55,12 @@ in-process through FastAPI's `TestClient` (lifespan entered, as 0.2.1's own test
 - in a dry run only, forces 0.2.1's token counter onto its offline heuristic
   (`store.tokens._encoder`), so a `[desktop]` install does not download a tokenizer.
 
+The counting transport also keeps each provider reply in memory (never written or printed). When
+a turn fails, the driver reports 0.2.1's error kind and each reply's shape: its status, its
+length, the prose 0.2.1 reads from it (0.2.1's own `ResponseWatcher`, state-block split and macro
+expansion), its hidden fences and whose labels that prose uses (0.2.1's own
+`store.scenes._markers`). It changes nothing in the run.
+
 Prompt assembly, provider adapters, retry and the usage meter are 0.2.1's own.
 
 ## Capture prerequisites and spending approval
@@ -178,8 +184,11 @@ cannot verify the provider's own billing receipt. The report says both.
   fails the capture (`multi_call_contribution`).
 - **Live captures can fail.** Three of four live attempts failed; see
   [earlier attempts](#earlier-attempts-the-same-day) and the
-  [2026-11-22 attempt](#sampled-capture-attempt-2026-11-22). The driver reports a failed turn only as an
-  HTTP status, not 0.2.1's error kind.
+  [2026-11-22 attempt](#sampled-capture-attempt-2026-11-22). The two with
+  `claude-sonnet-4-5-20250929` match what 0.2.1's own empty-response check produces, which is
+  reproduced offline but not confirmed live; the Sonnet 5.5 one was the prefill 400
+  ([why](#why-turn-1-fails-offline-2026-11-22)). The driver now reports a failed turn by 0.2.1's
+  error kind and the shape of each reply.
 - **Windows.** The real driver has been run on Linux only.
 - **Matched comparison.** A V2-vs-V0.2.1 comparison needs V2's provider adapter (013) and
   generation runtime (027); `/2` reserves a `v2-runtime` source for it.
@@ -268,8 +277,49 @@ list price of 3 USD input and 15 USD output per million tokens the two calls com
 0.02 USD, as an estimate.
 
 On this route the capture has now failed this way on two of three attempts with this model.
-Five captures in a row are unlikely to succeed until the cause is known, and the driver would
-have to report 0.2.1's error kind to find it.
+Five captures in a row are unlikely to succeed until the cause is known; it was found offline
+afterwards (below).
+
+## Why turn 1 fails (offline, 2026-11-22)
+
+Two of the three live failures, both with `claude-sonnet-4-5-20250929`, failed in turn 1 with both
+calls completed, a short second reply (19 output tokens) and HTTP 200. Their error kind was not
+recorded live. Offline, with no provider request, on the pinned 0.2.1 commit and its own test
+transport, 0.2.1's own `empty_response` check produces exactly that result:
+
+- Each turn's second speaker is asked with a conversation that ends in the first speaker's reply, as
+  an assistant message carrying that speaker's label, so the second reply continues it.
+- 0.2.1 reads a reply's prose as what comes after its leading `perception` block and before its
+  `handoff` fence, with a trailing `state` block split off and macros such as `{{user}}` expanded.
+  It keeps that prose only where it comes before any speaker label or under the speaker's own label.
+  Text under another label (the player's, the first speaker's or `You`) is dropped, and a reply left
+  with no text fails the turn with `empty_response`.
+- A dry run whose turn-1 second reply is empty, or holds only the fences 0.2.1's prompt asks for
+  (the `perception` block it asks every reply to open with, the `handoff` fence it asks every reply
+  to end with, or a `state` block), or is written only under another label, fails like the live
+  runs: both calls complete and are booked `ok`, and the turn fails with HTTP 200. The same play
+  with the second reply under its own label, or under no label, succeeds.
+
+So the live failures are consistent with 0.2.1's own behaviour on this route, not with a fault in
+the capture; that is not confirmed. A 19-token reply fits more than one of those shapes (a `handoff`
+fence alone, or one short line under another label, for example), so which one the model wrote is
+not known. The third failure (`claude-sonnet-5-5`) was different: the provider refused the prefilled
+request with a 400 and no usage was booked.
+
+The driver now records it. A failed turn is reported by 0.2.1's error kind; for each reply 0.2.1
+streamed, the actor it was for and how many characters its client saw; and for each provider reply
+of that turn, its HTTP status if it was not a success, else its length, how much of it 0.2.1 reads
+as prose (with 0.2.1's own response watcher and normalising steps), which of the fences 0.2.1 hides
+it held (`perception`, `handoff`, `state`) and whose labels that prose is written under (actor ids,
+`you` or `another name`; never text). For example: `provider reply 2: 40 characters, 40 of prose, no
+fence, prose under the label pc-wren`.
+
+For 068 this means a capture can fail on any of its three turns (each second speaker's request ends
+the same way) whenever that reply keeps no text of its own, and that retrying a capture is playing
+0.2.1 again, not repairing it. A failed capture writes nothing and costs its completed calls (about
+0.02 USD in turn 1). The comparison can only use captures that finish, so its baseline is 0.2.1's
+completed plays; how often 0.2.1 fails a play is a separate measurement of 0.2.1, to be recorded
+with the captures.
 
 ## Privacy
 
