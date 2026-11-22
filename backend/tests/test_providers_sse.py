@@ -1,4 +1,4 @@
-"""OpenAI-compatible SSE parsing and usage normalization (no I/O)."""
+"""SSE parsing (OpenAI-compatible chat and Anthropic Messages) and usage normalization (no I/O)."""
 
 import json
 
@@ -156,3 +156,77 @@ def test_a_bad_delta_beside_a_finish_reason_is_rejected_before_the_finish_counts
     with pytest.raises(ProviderError):
         feed_line(state, chunk(5, "stop"))
     assert not finished(state)
+
+
+def event(name, obj):
+    return [b"event: " + name.encode() + b"\n", b"data: " + json.dumps(obj).encode() + b"\n", b"\n"]
+
+
+def messages(*events):
+    state = StreamState(protocol="anthropic_messages")
+    deltas = [feed_line(state, line) for name, obj in events for line in event(name, obj)]
+    return state, [d for d in deltas if d is not None]
+
+
+START = ("message_start", {"type": "message_start", "message": {
+    "model": "claude-x", "usage": {"input_tokens": 90, "cache_read_input_tokens": 10,
+                                   "cache_creation_input_tokens": 5, "output_tokens": 1}}})
+
+
+def text(value):
+    return ("content_block_delta", {"type": "content_block_delta", "index": 1,
+                                    "delta": {"type": "text_delta", "text": value}})
+
+
+def stop(reason="end_turn", output=12):
+    return ("message_delta", {"type": "message_delta", "delta": {"stop_reason": reason},
+                              "usage": {"output_tokens": output}})
+
+
+def test_a_messages_stream_keeps_only_reply_text_and_counts_cache_reads_and_writes():
+    thinking = ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                        "delta": {"type": "thinking_delta", "thinking": "plan"}})
+    state, deltas = messages(START, ("ping", {"type": "ping"}), thinking, text("Hel"), text("lo"),
+                             stop(), ("message_stop", {"type": "message_stop"}))
+    assert deltas == ["Hel", "lo"] and state.text == "Hello" and state.served_model == "claude-x"
+    assert finished(state) and state.finish_reason == "stop" and state.done
+    usage, note = normalize_usage(state.usage_block, state.protocol)
+    assert note is None
+    assert usage == TokenUsage(105, 12, cache_read_tokens=10, cache_write_tokens=5)
+
+
+@pytest.mark.parametrize("reason, finish", [("max_tokens", "length"), ("refusal", "refusal"),
+                                            ("odd reason!", "other")])
+def test_a_messages_stop_reason_other_than_end_turn_is_never_a_normal_stop(reason, finish):
+    state, _ = messages(START, text("Hi"), stop(reason))
+    assert state.finish_reason == finish and not state.done
+
+
+def test_a_messages_usage_missing_a_cache_count_leaves_the_whole_prompt_unreported():
+    usage, _ = normalize_usage({"input_tokens": 90, "output_tokens": 3}, "anthropic_messages")
+    assert usage == TokenUsage(None, 3)
+    usage, _ = normalize_usage({"input_tokens": 90, "cache_read_input_tokens": 0,
+                                "cache_creation_input_tokens": 0, "output_tokens": 3},
+                               "anthropic_messages")
+    assert usage == TokenUsage(90, 3, cache_read_tokens=0, cache_write_tokens=0)
+
+
+@pytest.mark.parametrize("error_type, kind", [("overloaded_error", "server_error"),
+                                              ("api_error", "server_error"),
+                                              ("rate_limit_error", "rate_limit"),
+                                              ("invalid_request_error", "provider_error")])
+def test_a_messages_error_event_is_classified_by_its_type(error_type, kind):
+    with pytest.raises(ProviderError) as raised:
+        messages(START, ("error", {"type": "error", "error": {"type": error_type, "message": "x"}}))
+    assert raised.value.kind == kind
+
+
+@pytest.mark.parametrize("bad", [{"no": "type"}, {"type": "message_start", "message": "x"},
+                                 {"type": "content_block_delta", "delta": "x"},
+                                 {"type": "content_block_delta",
+                                  "delta": {"type": "text_delta", "text": 3}},
+                                 {"type": "message_delta", "usage": "x"}])
+def test_a_malformed_messages_event_fails_the_attempt(bad):
+    with pytest.raises(ProviderError) as raised:
+        messages(START, ("x", bad))
+    assert raised.value.kind == "bad_response"

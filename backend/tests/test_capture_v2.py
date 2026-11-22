@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
-from provider_servers import base_url, sse_lines, sse_server, stream
+from provider_servers import base_url, messages_lines, sse_lines, sse_server, stream
 
 from grimoire.capture import v2
 from grimoire.evals.loader import (
@@ -157,22 +157,33 @@ def test_a_live_run_uses_the_real_transport_reads_only_the_named_key_and_never_w
     assert "provider-reported (declared by capture, unverified)" in files["comparison-report.txt"]
 
 
-def test_the_anthropic_protocol_gap_is_stated_on_a_live_run(tmp_path, monkeypatch):
-    monkeypatch.setenv("CAPTURE_TEST_KEY", "sk-loopback-only-0001")
-
-    def reply(handler):  # Anthropic's compatible endpoint leaves the cached-token details empty
-        stream(sse_lines(deltas=("Hm, a quiet evening at the hall.",), model="synthetic-rp-model",
-                         usage={"prompt_tokens": 100, "completion_tokens": 10}))(handler)
-
+def test_an_anthropic_baseline_is_played_over_the_messages_api_with_cache_counts_reported(
+        tmp_path, monkeypatch):
+    key = "sk-loopback-only-0001"
+    monkeypatch.setenv("CAPTURE_TEST_KEY", key)
+    reply = stream(messages_lines(deltas=("Hm, a quiet evening at the hall.",),
+                                  model="synthetic-rp-model"))
     out = tmp_path / "out"
     with sse_server(reply) as server:
         monkeypatch.setitem(v2.ENDPOINTS, "anthropic", base_url(server))
         assert run("--baseline", baseline(tmp_path, "anthropic", live=True), "--out", out, "--live",
                    "--confirm-billing", "--api-key-env", "CAPTURE_TEST_KEY") == 0
-    report = outputs(out)["comparison-report.txt"]
-    assert v2.PROTOCOL_NOTES["anthropic"] in report
-    assert "usage_incomplete (comparison)" in report
-    assert all(json.loads(body)["max_tokens"] == 16000 for _, _, body in server.requests)
+    assert len(server.requests) == 6
+    for path, headers, body in server.requests:
+        sent = json.loads(body)
+        assert path == "/v1/messages" and headers["x-api-key"] == key
+        assert "Authorization" not in headers and headers["anthropic-version"] == "2023-06-01"
+        assert sent["max_tokens"] == 16000 and sent["stream"] is True and sent["system"]
+        assert [m["role"] for m in sent["messages"]] == ["user"]
+        assert "stream_options" not in sent and key not in body.decode("utf-8")
+    files = outputs(out)
+    assert not any(key in text for text in files.values())
+    played = json.loads(files["v2-baseline.run.json"])
+    usage = [a["usage"] for c in played["calls"] for a in c["attempts"]]
+    assert all(u["input_tokens"] == 100 and u["cache_read_tokens"] == 10 and u["output_tokens"] == 10
+               for u in usage)
+    report = files["comparison-report.txt"]
+    assert v2.PROTOCOL_NOTES["anthropic"] in report and "usage_incomplete" not in report
 
 
 def test_a_reply_from_another_model_is_recorded_as_served_and_never_compared_as_matched(tmp_path, monkeypatch):

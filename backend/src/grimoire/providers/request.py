@@ -57,8 +57,31 @@ def _dumps(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode("ascii")
 
 
+def _messages_body(request: ModelRequest, model: str) -> dict[str, object]:
+    """Anthropic's Messages API: leading system messages become the top-level ``system``."""
+    messages = list(request.messages)
+    system = []
+    while messages and messages[0].role == "system":
+        system.append(messages.pop(0).content)
+    if not messages or any(m.role == "system" for m in messages):
+        raise ValueError("the Messages API takes system text only before the first turn, "
+                         "and needs at least one turn after it")
+    body: dict[str, object] = {"model": model, "max_tokens": request.max_output_tokens}
+    joined = "\n\n".join(text for text in system if text)
+    if joined:  # the API refuses an empty system block
+        body["system"] = joined
+    body["messages"] = [{"role": m.role, "content": m.content} for m in messages]
+    body["stream"] = True
+    return body
+
+
 def request_body(request: ModelRequest, endpoint: ProviderEndpoint, model: str) -> bytes:
     """Compact, deterministic, ASCII-only JSON for one streaming completion."""
+    if endpoint.protocol == "anthropic_messages":
+        body = _messages_body(request, model)
+        if request.temperature is not None:
+            body["temperature"] = request.temperature
+        return _dumps(body)
     body: dict[str, object] = {
         "model": model,
         "messages": [{"role": m.role, "content": m.content} for m in request.messages],
