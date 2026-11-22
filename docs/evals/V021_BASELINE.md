@@ -432,6 +432,37 @@ quarter of such turns would run out of Retries. A failed capture also costs more
 up to the whole ceiling of 18 requests, against about 2 when a turn-1 rejection simply ends the
 capture. It has not been run live.
 
+## Captures with Retry (2026-11-22)
+
+Three more baseline samples were needed and up to five attempts were approved, each with
+`--retry-empty-replies` and at most 18 requests. **All three attempts succeeded**, so two
+attempts went unused. Same model (`claude-sonnet-4-5-20250929`), profile and budget as before.
+
+| Attempt | Result | Retries pressed | Calls in the run | Input / output tokens in the run | Rejected replies: requests, input / output tokens | Cast distinguishability | Single-run gate |
+|---:|---|---:|---:|---|---|---:|---|
+| 1 | success | 9 | 6 | 14,972 / 773 | 9, 24,093 / 27 | 0.500 | FAIL: 3 choices unrealized |
+| 2 | success | 1 | 6 | 16,177 / 1,380 | 1, 2,397 / 19 | 0.667 | PASS |
+| 3 | success | 0 | 6 | 15,409 / 1,188 | 0, 0 / 0 | 0.667 | FAIL: `ask-ledger` unrealized |
+
+- Evidence sha256, in order: `e2f0bf35…163887e5d`, `8f0c2a7e…836941822`, `837a59e2…6c9692a0`.
+  Each verifies as measured with both evidence options, has 6 `npc_generation` calls, no cache
+  tokens, leak rate 0 and no unmetered call.
+- **How often 0.2.1 rejected a reply, as a 0.2.1 measurement:** 10 of the 28 replies it
+  requested in these three plays (36%) were rejected as empty and asked again with its own
+  Retry, in two of the three plays. Attempt 1 needed 9 Retries for its 6 kept replies, 15 of its
+  18 allowed requests. The rejected replies cost 10 requests, 26,490 input and 46 output tokens,
+  which are **not in the runs**: about as much input again as one whole play.
+- With the Retry, three of three attempts completed, against one of ten without it.
+- The single-run gate is recorded for each capture but does not disqualify a sample: the sampled
+  comparison settles a choice by strict majority across the side
+  ([result](../ACTOR_INFERENCE.md#billed-comparison-2026-11-22-sampled)). Attempt 1 gives effect to
+  none of the three choices and has the lowest voice score of the five samples.
+- Tokens and cost: 28 billed requests, 73,048 input and 3,387 output tokens. At an assumed list
+  price of 3 USD input and 15 USD output per million tokens that is about 0.27 USD, as an estimate.
+
+There are now five baseline samples: the 2026-11-20 capture, attempt 4 of the ten earlier
+attempts, and these three.
+
 ## Privacy
 
 No credential, prompt or private library content may enter this repository, CI logs or the
