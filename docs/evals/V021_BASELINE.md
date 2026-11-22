@@ -1,9 +1,10 @@
 # V0.2.1 cost and voice baseline (Sprint 015, first slice)
 
-**Status:** baseline capture pending. The opt-in capture harness exists and has been proven end
-to end against the unmodified `0.2.1` app in **dry-run** mode, whose numbers are synthetic. One
-live capture was attempted and [failed](#live-attempt-2026-11-20), so there is no
-provider-reported baseline and **no cost parity with V0.2.1 is claimed**.
+**Status:** measured baseline captured on 2026-11-20 (third live attempt), with
+`claude-sonnet-4-5-20250929` on the `anthropic` provider:
+[results](#measured-baseline-2026-11-20). Its token counts are provider-reported and its
+evidence verifies. The provider reports no cost, so **no cost in money and no cost parity with
+V0.2.1 is claimed**. Dry-run numbers elsewhere stay synthetic.
 
 ## What is measured
 
@@ -58,8 +59,8 @@ Prompt assembly, provider adapters, retry and the usage meter are 0.2.1's own.
 
 ## Capture prerequisites and spending approval
 
-The first slice remains **baseline capture pending** until a real provider-reported capture
-is obtained and reviewed. Passing replay or dry-run tests does not close that gate.
+The first slice stayed **baseline capture pending** until a real provider-reported capture
+was obtained ([measured baseline](#measured-baseline-2026-11-20)). Passing replay or dry-run tests does not close that gate.
 Before running the live command, the operator needs:
 
 - An explicitly approved supported provider (`openrouter` or `anthropic`) and exact model/route.
@@ -147,6 +148,8 @@ provider, served model, output budget and attempt limit from the verified captur
 their recording conditions (a reply from another model is recorded as served and makes the runs
 incomparable). `--live --confirm-billing --api-key-env VAR` makes it billed and is refused
 against a dry-run capture; `--with-planning` adds a second V2 run with 068's optional planning stage.
+Against an `anthropic` capture V2 calls the Messages API, as 0.2.1 did, so cache reads are reported
+and the cost can be compared.
 See [ACTOR_INFERENCE](../ACTOR_INFERENCE.md#the-v2-against-021-comparison) for what it does and does
 not prove. A live comparison needs its own spending approval, separate from this capture's.
 
@@ -171,32 +174,75 @@ cannot verify the provider's own billing receipt. The report says both.
   invents a label.
 - **Rolls.** A 0.2.1 reply that pauses for a roll is a second call for one contribution, which
   fails the capture (`multi_call_contribution`).
-- **No live capture has completed.** The one attempt failed; see
-  [Live attempt (2026-11-20)](#live-attempt-2026-11-20).
+- **Live captures can fail.** Two of three live attempts failed; see
+  [earlier attempts](#earlier-attempts-the-same-day). The driver reports a failed turn only as an
+  HTTP status, not 0.2.1's error kind.
 - **Windows.** The real driver has been run on Linux only.
 - **Matched comparison.** A V2-vs-V0.2.1 comparison needs V2's provider adapter (013) and
   generation runtime (027); `/2` reserves a `v2-runtime` source for it.
 
-## Live attempt (2026-11-20)
+## Measured baseline (2026-11-20)
 
-One live capture was attempted with `--provider anthropic --model claude-sonnet-5-5`, the
-operator's chosen stand-in for their usual play model. It failed in turn 1 and wrote nothing.
+The operator's play model is not an Anthropic model; they first chose `claude-sonnet-5-5` as
+its stand-in and, when that could not work (below), approved any model that could.
+`claude-sonnet-4-5-20250929` was used because it accepts the request shape 0.2.1 sends.
 
-- The first speaker's call succeeded: 3,367 input tokens, 484 output tokens, no cache tokens,
-  no reported cost. At list prices of 2026-11-03 that is about 0.01 USD (an estimate).
-- The second speaker's call failed on its only attempt with no usage reported.
+| Condition | Value |
+|---|---|
+| 0.2.1 commit | `e4c4ec4abacd0beb87fc9f1cdd06e6787d5a88ce` |
+| Provider, served model | `anthropic`, `claude-sonnet-4-5-20250929` (all six calls) |
+| Profile, budget, retries | two-call, `max_tokens=16000`, `llm_retries` 2 |
+| Evidence sha256 | `1824a08145de72fe527fd790102c4f67299a59e28cc62dbfc7b51d34a3d24ff0` |
 
-Cause: 0.2.1 sends a second speaker's request with the first speaker's reply as the last
-message, an assistant turn. Its Anthropic adapter sends that as given. Sonnet 5.5 rejects a
-conversation that ends in an assistant message with a 400 ("does not support assistant
-message prefill"). A dry run with the request roles logged shows the second call of every
-turn ending in `assistant`, and a direct request of that shape to the model returned the 400.
+Scored with `grimoire.evals.story_quality` and both `--evidence-…` options: usage status
+**measured** (provider-reported, evidence consistent; origin and provider receipt unverified),
+gate PASS on the self-comparison, 0 findings.
 
-So unmodified 0.2.1 cannot play this two-speaker scenario on the `anthropic` provider with a
-current Claude model, and the capture cannot succeed as configured. A baseline needs a
-different approved route: for example `openrouter`, or a model that still accepts a trailing
-assistant turn. Either is a new billed capture needing its own approval. 015, Wave 2 and the
-068 comparison stay open until one completes.
+| Metric | Value |
+|---|---|
+| Calls, attempts | 6 `npc_generation`, 6 attempts, 0 unmetered |
+| Input tokens | 15,618 |
+| Output tokens | 1,396 |
+| Cache read / write tokens | 0 / 0 |
+| Reasoning tokens | unreported (0.2.1 has no field) |
+| Cost in USD | unreported by the provider (6 of 6 calls) |
+| Usage by actor | `npc-oda` 7,612 in / 789 out; `npc-bellamy` 8,006 in / 607 out |
+| NPC lines, leak rate | 6, 0 |
+| Cast distinguishability | 0.833 |
+| Choices | 3 unlabelled, 0 negated, 0 unrealized |
+| Total call latency | 35,473 ms |
+
+Per call, in order (input / output tokens): 2,324 / 224; 2,408 / 64; 2,454 / 271;
+2,556 / 295; 2,834 / 294; 3,042 / 248.
+
+What this does and does not establish:
+
+- It is a lower bound on ordinary 0.2.1 cost, for the two-call profile only, on one
+  stand-in model. It says nothing about the operator's own play model.
+- The ledger holds no cost. At an assumed list price of 3 USD input and 15 USD output per
+  million tokens the six calls come to about 0.07 USD; that is an estimate, not a receipt.
+- 0.2.1 sends each second speaker's request ending in the first speaker's reply, an assistant
+  turn. On this model that turn acts as a prefill, which is 0.2.1's own behaviour on this route.
+- The capture was produced by a copy of `backend/tools/v021_driver.py` with one added line that
+  writes a turn's error frames to a scratch file when a turn fails. No turn failed, so the line
+  did not run, but the driver was not byte-identical to the checked-in one.
+- Raw `run.json` and `evidence.json` are kept outside the repository; only these counts are
+  recorded here.
+
+### Earlier attempts the same day
+
+Both failed in turn 1, wrote nothing and were billed for the calls that had completed.
+
+1. `claude-sonnet-5-5`: the first speaker's call succeeded (3,367 input, 484 output tokens);
+   the second failed with no usage. Sonnet 5.5 rejects a conversation that ends in an assistant
+   message with a 400 ("does not support assistant message prefill"). A dry run with request
+   roles logged shows the second call of every turn ending in `assistant`, and a direct request
+   of that shape to the model returned the 400. Unmodified 0.2.1 therefore cannot play this
+   scenario on the `anthropic` provider with a model that rejects prefill.
+2. `claude-sonnet-4-5-20250929`: both calls completed (2,324 / 210 and 2,410 / 19 tokens) and
+   0.2.1 still reported the turn as failed. The cause was not captured; the 19-token second
+   reply suggests 0.2.1's empty-response check, which is unconfirmed. The same command
+   succeeded on the next attempt, so a live capture on this route can fail intermittently.
 
 ## Privacy
 

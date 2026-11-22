@@ -195,10 +195,13 @@ class _Connection:
         self.peer_loopback = transport.peer_loopback
         self.closed = False
 
-    def send(self, body: bytes, headers: Mapping[str, str], key: Secret | None) -> _Response:
+    def send(self, body: bytes, headers: Mapping[str, str], key: Secret | None, *,
+             key_scheme: str = "bearer") -> _Response:
         self._transport.sends.append(Send(
             self._url, body, hashlib.sha256(body).hexdigest(),
-            tuple(sorted(headers)) + (("Authorization",) if key is not None else ()),
+            tuple(sorted(headers)) + (
+                (("x-api-key",) if key_scheme == "x-api-key" else ("Authorization",))
+                if key is not None else ()),
             key is not None))
         step = self._step
         if isinstance(step, WriteFail):

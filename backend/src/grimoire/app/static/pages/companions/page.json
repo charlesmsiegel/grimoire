@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "companions",
+  "route": "companions",
+  "title": "Companions",
+  "slot": "hidden",
+  "order": 31,
+  "owner": "115",
+  "entry": "page.js",
+  "requires": ["companions.roster", "companions.capture_plan", "companions.capture_commit"],
+  "unavailable": null
+}

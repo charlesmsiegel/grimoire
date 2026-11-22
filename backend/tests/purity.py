@@ -72,16 +72,23 @@ CAPABILITY_MODULES = NETWORK_MODULES + ("threading", "tempfile", "shutil", "glob
 #: grimoire packages that are adapters or test infrastructure, not pure.
 #: Calendar arithmetic (055) is deterministic but adapts datetime and third-party pyluach,
 #: so calendars is outside this dependency-free pure boundary; calendarstore also performs I/O.
-ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.archaeologystore", "grimoire.calendars", "grimoire.calendarstore", "grimoire.calibration", "grimoire.campaignapi", "grimoire.capture", "grimoire.cardstore", "grimoire.catalogs", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.companions", "grimoire.contextstore", "grimoire.continuitystore", "grimoire.continuitywire", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
+#: Downtime (074) plans calendar advances, so it sits outside it too; downtimestore performs I/O.
+ADAPTERS = frozenset({"grimoire.adjudicationstore", "grimoire.app", "grimoire.archaeologystore", "grimoire.authoring", "grimoire.authoringstore", "grimoire.calendars", "grimoire.calendarstore", "grimoire.downtime", "grimoire.downtimestore", "grimoire.calibration", "grimoire.campaignapi", "grimoire.capture", "grimoire.cardstore", "grimoire.catalogs", "grimoire.changesetstore", "grimoire.chatstore", "grimoire.commitmentstore", "grimoire.companions", "grimoire.contextstore", "grimoire.continuitystore", "grimoire.continuitywire", "grimoire.decisionstore", "grimoire.devicetag", "grimoire.effective", "grimoire.effectstore",
                       "grimoire.evidencestore", "grimoire.graphstore", "grimoire.holdingstore", "grimoire.imagestore",
                       # Inference orchestration owns runtime/provider calls and replay locks.
                       "grimoire.actor_inference", "grimoire.ensemble",
-                      "grimoire.import_v1", "grimoire.judgepanel", "grimoire.ledgers", "grimoire.library", "grimoire.mediaapi", "grimoire.migrate_v1",
-                      "grimoire.memorystore", "grimoire.rumorledger", "grimoire.rumorstore", "grimoire.narration_review", "grimoire.obstaclestore", "grimoire.offscreen", "grimoire.offscreenstore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
+                      "grimoire.import_v1", "grimoire.investigationstore", "grimoire.judgepanel", "grimoire.ledgers", "grimoire.library", "grimoire.mechanicsstore", "grimoire.mediaapi", "grimoire.migrate_v1",
+                      "grimoire.memorystore", "grimoire.rollstore", "grimoire.rumorledger", "grimoire.rumorstore", "grimoire.narration_review", "grimoire.obstaclestore", "grimoire.offscreen", "grimoire.offscreenstore", "grimoire.partystore", "grimoire.peersync", "grimoire.possessionstore", "grimoire.providers",
                       "grimoire.play", "grimoire.preparation", "grimoire.quickstart", "grimoire.rebasestore", "grimoire.reviewapi",
-                      "grimoire.runtime", "grimoire.scenestore", "grimoire.shelfstore", "grimoire.sourceapi", "grimoire.speech",
+                      "grimoire.runtime", "grimoire.scenestore",
+                      # Scene transfer (084) reads and writes through the store.
+                      "grimoire.scenetransfer", "grimoire.shelfstore", "grimoire.sourceapi", "grimoire.speech",
                       "grimoire.store", "grimoire.sync", "grimoire.testing", "grimoire.textapi",
-                      "grimoire.topologystore"})
+                      # Source upgrade previews (079) read a whole library through the store.
+                      "grimoire.sourceupgrades",
+                      "grimoire.topologystore",
+                      # 083: the casting's file and the local speech engines (``ffmpeg``) of voice performance.
+                      "grimoire.voicecaststore", "grimoire.voiceengines"})
 
 
 @dataclass(frozen=True)
@@ -104,6 +111,9 @@ class PurePackage:
 
 
 PURE_PACKAGES = (
+    # Authored mechanics modules (086): validation, sheets and recorded-dice grading; drafts and revisions are
+    # the adapter ``grimoire.mechanicsstore``.
+    PurePackage("grimoire.mechanics", ("grimoire.mechanics",)),
     # Rules-family proposals (062): recorded arithmetic only, no resolution or I/O.
     PurePackage("grimoire.rulesets", ("grimoire.rulesets", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
@@ -160,6 +170,9 @@ PURE_PACKAGES = (
     # Fiction-first adjudication (029): frames, assessment, decisions and codecs; the service is an adapter.
     PurePackage("grimoire.adjudication", ("grimoire.adjudication", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
+    # Recorded rolls (075): dice, results from faces and codecs; drawing and the ledger are ``grimoire.rollstore``.
+    PurePackage("grimoire.rolls", ("grimoire.rolls", "grimoire.rulesets", "grimoire.adjudication", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Open obstacles (040): obstacles, the frame rules, codecs and derivation over 029's values;
     # the service is an adapter. A consequence's authored changes are 017 predicates and 023 lines.
     PurePackage("grimoire.obstacles", ("grimoire.obstacles", "grimoire.adjudication", "grimoire.core",
@@ -168,6 +181,10 @@ PURE_PACKAGES = (
     PurePackage("grimoire.security", ("grimoire.security",)),
     # Tags, pins and saved filters: values, tag rules and codec; the files are the adapter ``grimoire.shelfstore``.
     PurePackage("grimoire.shelf", ("grimoire.shelf", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Voice performance (083): the casting, the plan of a chat's accepted text and its rendering through an engine it
+    # is given; the casting's file is ``grimoire.voicecaststore`` and the engines are ``grimoire.voiceengines``.
+    PurePackage("grimoire.voicecast", ("grimoire.voicecast", "grimoire.core", "grimoire.scene"),
+                never_import=("grimoire.core.inference",)),
     # World Change Sets (043): values, codec and diffs; reviewing and applying is an adapter.
     PurePackage("grimoire.changesets", ("grimoire.changesets", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
@@ -186,7 +203,7 @@ PURE_PACKAGES = (
     # Narration continuity referee (047): checks labelled claims against 041, 023, 034, 012, 029 and 040 values.
     PurePackage("grimoire.referee", ("grimoire.referee", "grimoire.core", "grimoire.staging", "grimoire.comms",
                                       "grimoire.holdings", "grimoire.possessions", "grimoire.obstacles",
-                                      "grimoire.goals"),
+                                      "grimoire.goals", "grimoire.commitments"),
                 never_import=("grimoire.core.inference",)),
     # Voice evidence: shares the gate's text matcher so screening and scoring agree.
     PurePackage("grimoire.voice", ("grimoire.voice", "grimoire.core", "grimoire.evals.text",
@@ -195,11 +212,21 @@ PURE_PACKAGES = (
     # NPC goals (039): authored agendas and the deterministic policy that chooses from the NPC's own
     # knowledge. It calls no model, so it never touches the inference contracts.
     PurePackage("grimoire.goals", ("grimoire.goals", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # 081: a story thread is computed over a read of the 012/020 ledger; it reads nothing itself.
+    PurePackage("grimoire.story", ("grimoire.story", "grimoire.core"), never_import=("grimoire.core.inference",)),
+    # Quests and commitments (077): a cited ledger and its fold; 055 deadlines and 020/021 support are read by
+    # the commitmentstore adapter and passed in.
+    PurePackage("grimoire.commitments", ("grimoire.commitments", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
     # Institutional decisions (057) consume canonical graph membership, never store or deliver knowledge.
     PurePackage("grimoire.institutions", ("grimoire.institutions", "grimoire.core", "grimoire.graph"),
                 never_import=("grimoire.core.inference",)),
     # Social hypotheses (060) consume actor evidence, never providers or another actor's actual mind.
     PurePackage("grimoire.social_hypotheses", ("grimoire.social_hypotheses", "grimoire.core"),
+                never_import=("grimoire.core.inference",)),
+    # Relationships (078): per-holder attitudes grounded in the holder's own 012 evidence; never providers,
+    # graph membership or another actor's mind.
+    PurePackage("grimoire.relationships", ("grimoire.relationships", "grimoire.core"),
                 never_import=("grimoire.core.inference",)),
     # Recorded NPC decisions (045): the record of a 039 choice, its evidence and codec, and replay; the
     # ledger is an adapter. It calls no model, so it never touches the inference contracts.
@@ -227,6 +254,9 @@ PURE_PACKAGES = (
     PurePackage("grimoire.scene", ("grimoire.scene", "grimoire.core", "grimoire.core.inference",
                                    "grimoire.comms", "grimoire.generation", "grimoire.transcripts",
                                    "grimoire.adjudication", "grimoire.effects", "grimoire.goals")),
+    # Read-only investigation jobs (082): actions, evidence checks, the bounded job loop and the built-in auditor.
+    # The clock and cancellation are passed in, and its trace is 048's; the store toolbox is an adapter.
+    PurePackage("grimoire.investigations", ("grimoire.investigations", "grimoire.core", "grimoire.tracing")),
     # Operational tracing (048): spans, call samples and cost attribution; the clock and prices are passed in.
     PurePackage("grimoire.tracing", ("grimoire.tracing", "grimoire.core.inference")),
     # Offline evaluation: of the domain core it uses only the inference contracts (sprint 015);

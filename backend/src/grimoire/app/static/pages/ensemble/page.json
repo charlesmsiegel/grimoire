@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "ensemble",
+  "route": "ensemble",
+  "title": "Several NPCs answering",
+  "slot": "hidden",
+  "order": 30,
+  "owner": "115",
+  "entry": "page.js",
+  "requires": ["ensemble.exchange", "ensemble.preview"],
+  "unavailable": null
+}

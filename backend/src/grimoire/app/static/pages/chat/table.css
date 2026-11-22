@@ -1,0 +1,22 @@
+/* The shared turn above the composer (pages/chat/table.js, 058): only chat- classes. No fixed widths: it fits a
+   360px-wide phone. */
+.chat-table { border: 1px solid var(--g-line); border-radius: 12px; background: var(--g-card); min-width: 0; }
+.chat-table-summary { cursor: pointer; padding: 8px 12px; min-height: 44px; display: flex; align-items: center;
+  font: 600 14px/1.3 var(--g-sans); }
+.chat-table-summary:focus-visible { outline: 2px solid var(--g-focus); outline-offset: 2px; }
+.chat-table-body { padding: 0 12px 12px; gap: 10px; max-height: 50vh; overflow-y: auto; }
+.chat-table-note { margin: 0; font-size: 13px; }
+.chat-table-keyboard { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.chat-table-label { font-size: 13px; color: var(--g-muted); }
+.chat-table-part { padding: 8px 0; border-top: 1px solid var(--g-line); gap: 6px; }
+.chat-table-actions { flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.chat-table-actions .g-field { margin: 0; min-width: 0; }
+.chat-table-status { font-size: 13px; }
+.chat-table-heading { font: 600 14px/1.3 var(--g-sans); margin: 4px 0; }
+.chat-table-list { margin: 0; padding: 0 0 0 4px; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.chat-table-held { padding: 6px 0; border-top: 1px solid var(--g-line); min-width: 0; }
+.chat-table-held .g-row { flex-wrap: wrap; gap: 4px 8px; }
+.chat-table-text { margin: 4px 0; font-family: var(--g-serif); overflow-wrap: anywhere; white-space: pre-wrap; }
+.chat-table-seating > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.chat-table-seat { flex-wrap: wrap; gap: 6px 10px; align-items: flex-end; }
+.chat-table-seat .g-field { margin: 0; flex: 1 1 180px; min-width: 0; }

@@ -31,6 +31,40 @@ def sse_lines(deltas=("Hel", "lo", "!"), *, finish="stop", usage=None, model="sy
     return lines
 
 
+def messages_lines(deltas=("Hel", "lo", "!"), *, stop="end_turn", model="synthetic-model",
+                   usage=None, final_output=None, thinking=None, stop_event=True) -> list[bytes]:
+    """Events as Anthropic's Messages API streams them: named events, usage at start and end."""
+    def event(name, data):
+        return b"event: " + name.encode() + b"\ndata: " + json.dumps(data).encode() + b"\n\n"
+    lines = [event("message_start", {"type": "message_start", "message": {
+        "id": "msg_synthetic", "type": "message", "role": "assistant", "model": model,
+        "content": [], "stop_reason": None, "usage": usage if usage is not None else {
+            "input_tokens": 90, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 10,
+            "output_tokens": 1}}})]
+    index = 0
+    if thinking is not None:
+        lines.append(event("content_block_start", {"type": "content_block_start", "index": 0,
+                                                   "content_block": {"type": "thinking", "thinking": ""}}))
+        lines.append(event("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                                   "delta": {"type": "thinking_delta", "thinking": thinking}}))
+        lines.append(event("content_block_stop", {"type": "content_block_stop", "index": 0}))
+        index = 1
+    lines.append(event("content_block_start", {"type": "content_block_start", "index": index,
+                                               "content_block": {"type": "text", "text": ""}}))
+    lines.append(event("ping", {"type": "ping"}))
+    for delta in deltas:
+        lines.append(event("content_block_delta", {"type": "content_block_delta", "index": index,
+                                                   "delta": {"type": "text_delta", "text": delta}}))
+    lines.append(event("content_block_stop", {"type": "content_block_stop", "index": index}))
+    end_usage = {"output_tokens": final_output if final_output is not None else 10}
+    lines.append(event("message_delta", {"type": "message_delta",
+                                         "delta": {"stop_reason": stop, "stop_sequence": None},
+                                         "usage": end_usage}))
+    if stop_event:
+        lines.append(event("message_stop", {"type": "message_stop"}))
+    return lines
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 

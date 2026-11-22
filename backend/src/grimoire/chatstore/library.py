@@ -33,6 +33,7 @@ from grimoire.chats import (
 from grimoire.core.entity import EntityInstance
 from grimoire.core.entity_codec import ENTITY_SCHEMA, instance_from_payload, instance_to_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, paired_instances, validate_segment
+from grimoire.commitmentstore import commitment_party_ids
 from grimoire.decisionstore import decision_actor_ids
 from grimoire.devicetag import DeviceIdentityUnusable, device_tag
 from grimoire.effectstore import accepted_instance_ids
@@ -46,6 +47,7 @@ from grimoire.library import LibraryPathError
 from grimoire.memorystore import memory_actor_ids
 from grimoire.rumorstore import rumor_actor_ids
 from grimoire.obstaclestore import obstacle_actor_ids
+from grimoire.rollstore import roll_actor_ids
 from grimoire.possessions import POSSESSION_KEY, party_ids
 from grimoire.security import payload_digest
 from grimoire.store import (
@@ -82,7 +84,7 @@ def campaign_taken_ids(store: LibraryStore, campaign_id: str, *,
     allocator (107 here; 024, 026, 037 later) must use this at plan time and again under the store
     lock at commit, and any later record family that names instance ids must extend it. Its cost
     grows with play history: it reads every instance, relation, chat, transcript page, accepted-event, knowledge,
-    holder and turn file and every sovereignty, adjudication, obstacle, memory and rumor batch of the campaign, and every security
+    holder and turn file and every sovereignty, adjudication, obstacle, memory, rumor and roll batch of the campaign, and every security
     batch of the library.
 
     ``spent`` is ``(approval id, address, payload digest)`` of the approvals a commit supplies for
@@ -112,6 +114,8 @@ def _taken_ids(store: LibraryStore, campaign_id: str, *, security: bool,
     taken |= decision_actor_ids(store, campaign_id)
     taken |= memory_actor_ids(store, campaign_id)
     taken |= rumor_actor_ids(store, campaign_id)
+    taken |= commitment_party_ids(store, campaign_id)
+    taken |= roll_actor_ids(store, campaign_id)
     if security:  # skipped only by _fresh_campaign_taken_ids
         taken |= security_instance_ids(store, campaign_id, spent=spent)
     return frozenset(taken)

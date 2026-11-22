@@ -55,3 +55,7 @@ clock advancement, resource simulation or world economy are implemented. Existin
 graph records remain canonical; future adapters must use existing effects and
 evidence delivery contracts for accepted outcomes. Wave 8 UI integration belongs
 to 115. These tests demonstrate headless contracts, not a playable institutional UI.
+
+## On screen
+
+The director's World page (115) previews `decide` for a group laid out from a chat's cast and saves nothing; see [WORLD](WORLD.md).

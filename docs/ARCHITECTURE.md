@@ -37,6 +37,13 @@ Pinned catalog records compose qualified members and dependencies with local exc
 return bounded discovery and require explicit selections before chat/context use.
 See [CATALOGS.md](CATALOGS.md) for provenance, limits and integration dependencies.
 
+### Source upgrades and dependencies (headless first slice: `grimoire.sourceupgrades`)
+
+Read-only previews of removing or updating one source list every reference to it from other
+files, resolved by exact qualified id on both sides, never by name or a lookalike source id; a
+source may declare optional dependencies pinned to their manifest etag. See
+[SOURCE_UPGRADES.md](SOURCE_UPGRADES.md).
+
 ### Context packing (first slice implemented: `grimoire.context`, `grimoire.contextstore`)
 
 One actor's bounded context from its own card, its own knowledge and the triggered common lore of the chat's bound sources, deterministic and model-free, with provenance and omissions beside each line. See [CONTEXT.md](CONTEXT.md).
@@ -46,6 +53,12 @@ One actor's bounded context from its own card, its own knowledge and the trigger
 Persistent source-qualified hierarchy and paths, with campaign-local path overrides and
 director-only deterministic queries, live in `grimoire.topology` and `grimoire.topologystore`.
 See [TOPOLOGY](TOPOLOGY.md) for ownership, failure behavior and separate map/travel/UI consumers.
+
+### World authoring proposals (087 headless first slice: `grimoire.authoring`, `grimoire.authoringstore`)
+
+A bounded proposal of suggested places and groups, from a person or one metered PLANNING call, is reviewed against
+the world for namesakes and broken links. Only the candidates an author accepts are written, with their links in the
+world topology, as one reviewed change set; brainstorms and rejected ideas leave nothing. See [AUTHORING](AUTHORING.md).
 
 ### Device sync (first slice implemented: `grimoire.sync`)
 
@@ -61,6 +74,13 @@ Explicit campaign-local advancement and one-shot deadline flags share the native
 one retained operation receipt. Gregorian, Hebrew and bounded portable custom calendars use one
 fixed-day axis. Retries do not advance twice; unresolved scope sync conflicts refuse authority.
 Historical scene dates and actor knowledge stay untouched. See [CALENDARS.md](CALENDARS.md).
+
+### Downtime and long activities (headless first slice: `grimoire.downtime`, `grimoire.downtimestore`)
+
+An actor's bounded long activity (study, research, recovery, travel) records its effort
+requirement and progress beside the calendar in the same scope record. Each pursuit spends an exact
+span of campaign time as a 055 advance with its own operation id and credits effort in the same
+write, so a retry neither spends time nor adds progress twice. See [DOWNTIME.md](DOWNTIME.md).
 
 ### Offscreen faction plans (headless first slice: `grimoire.offscreen`, `grimoire.offscreenstore`)
 
@@ -111,6 +131,7 @@ and teach no character. See [OFFSCREEN.md](OFFSCREEN.md).
     images/, placements/              # the campaign's own image objects and placements (018)
   assets/blobs/                       # content-addressed image bytes (018)
   config/shelf/                       # the person's tags, pins and saved filters (SHELF.md); not synced yet
+  config/mechanics/                   # authored mechanics drafts and immutable revisions (MECHANICS_AUTHORING.md); not synced yet
   .txn/, .conflicts/, .sync/          # writer journal, preserved conflict versions, device-local sync state
 ```
 

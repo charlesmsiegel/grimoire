@@ -56,7 +56,8 @@ def test_proving_scenario_mislabelled_negations_are_rejected(bench):
             for entry in turn["contributions"]:
                 if entry["author"] == "model":
                     entry["text"] = entry["text"].replace("uest ledger", "uest book").replace(
-                        "alcony", "allroom").replace("sings", "hums").replace("song", "tune")
+                        "alcony", "allroom").replace("sings", "whispers").replace("song", "rumor").replace(
+                        "tune", "whisper").replace("Singing", "Gossip")
     report = gate(bench, negate_everything)
     assert checks(report) == {"choice_negated"}
     assert report.candidate.unrealized == 3 and report.candidate.negated_by_label == 0

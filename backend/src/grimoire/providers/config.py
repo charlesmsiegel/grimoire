@@ -17,6 +17,11 @@ from urllib.parse import urlsplit
 from grimoire.security import InvalidResourcePath, ResourcePath
 
 MAX_TOKENS_FIELDS = ("max_tokens", "max_completion_tokens")
+#: The wire protocols an endpoint may speak: OpenAI-compatible chat completions, or Anthropic's
+#: own Messages API (which reports cache reads and writes; its compatible endpoint does not).
+PROTOCOLS = ("openai_chat", "anthropic_messages")
+#: The Messages API version every ``anthropic_messages`` request names.
+ANTHROPIC_VERSION = "2023-06-01"
 
 
 class Secret:
@@ -107,6 +112,7 @@ class ProviderEndpoint:
     needs_key: bool = True
     max_tokens_field: str = "max_tokens"
     timeouts: Timeouts = field(default_factory=Timeouts)
+    protocol: str = "openai_chat"
 
     def __post_init__(self) -> None:
         provider_resource(self.provider_id)
@@ -128,6 +134,10 @@ class ProviderEndpoint:
             raise ValueError("needs_key must be a bool")
         if not isinstance(self.timeouts, Timeouts):
             raise ValueError("timeouts must be Timeouts")
+        if self.protocol not in PROTOCOLS:
+            raise ValueError(f"protocol must be one of {PROTOCOLS}")
+        if self.protocol == "anthropic_messages" and self.max_tokens_field != "max_tokens":
+            raise ValueError("the Messages API takes max_tokens only")
         object.__setattr__(self, "base_url", self.base_url.rstrip("/"))
 
     @property
@@ -146,6 +156,9 @@ class ProviderEndpoint:
 
     @property
     def completions_url(self) -> str:
+        """Where one completion is posted: ``/chat/completions``, or ``/messages``."""
+        if self.protocol == "anthropic_messages":
+            return f"{self.base_url}/messages"
         return f"{self.base_url}/chat/completions"
 
 

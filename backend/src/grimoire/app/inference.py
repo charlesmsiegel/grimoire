@@ -37,11 +37,12 @@ from grimoire.library import LibraryPathError, check_report_destination, check_w
 from grimoire.core.inference import InferencePolicy, InferenceStage, UsageTotals
 from grimoire.core.inference.usage import TOKEN_FIELDS
 from grimoire.providers.config import ProviderEndpoint, route_label
+from grimoire.play.preview import DraftRefused, preview_context
 from grimoire.scene import SceneRefused
 from grimoire.store import LibraryLocked, LockUnavailable, OsLocker, StoreError
 from grimoire.store.jsonfmt import etag, is_etag
 from grimoire.textapi.continuity import configure_extractor
-from grimoire.textapi import ApiRefused
+from grimoire.textapi import MAX_POST_CHARS, ApiRefused
 from grimoire.tracing import TraceLog, call_costs
 
 from .config import (
@@ -109,6 +110,8 @@ _NOT_WIRED = {
     InferenceStage.RECALL: "memory recall is deterministic in V2; no model-assisted recall exists yet",
     InferenceStage.GRAPH_LOOKUP: "graph traversal is deterministic in V2; no model-assisted lookup exists yet",
 }
+#: The runner's refusals of an actor that is not a present, voiced director NPC (``SceneRunner._speakers``).
+_NOT_AN_NPC = frozenset({"not_present", "not_an_npc", "not_on_stage"})
 #: Features of the settings screen that have no V2 service behind them, with the reason the screen shows.
 UNAVAILABLE = (
     ("director_model", "027's runtime calls one list of models for every call, so the director uses the NPC models"),
@@ -116,7 +119,8 @@ UNAVAILABLE = (
     ("fallback_prices", "the prices are the configured model's; an attempt a fallback model answered is left "
                         "out of the cost, which is then a lower bound"),
     ("session_budget", "004 caps calls per turn only; session budgets are a later milestone"),
-    ("prompt_history", "historical prompt snapshots are not retained; current context is rebuilt on request"),
+    ("prompt_history", "historical prompt snapshots are not retained; current context is rebuilt on request, and a "
+                       "draft preview is an estimate of the next one"),
     ("presets", "no provider presets exist in V2; name the endpoint and model"),
 )
 
@@ -305,7 +309,7 @@ class InferenceApi:
         self._ops: dict[str, Callable[[Mapping[str, object]], dict]] = {
             "models": self._models, "check_models": self._check, "save_models": self._save,
             "usage": self._usage, "diagnostics": self._diagnostics, "test_call": self._test_call,
-            "context": self._context, "save_agenda": self._save_agenda,
+            "context": self._context, "save_agenda": self._save_agenda, "preview_context": self._preview,
         }
         with self._lock:
             self._load()
@@ -397,6 +401,7 @@ class InferenceApi:
         view.setdefault("key_env", None)
         view.setdefault("critique", 0)
         view.setdefault("planning", 0)
+        view.setdefault("preparation", 0)
         for name in PRICE_KEYS:
             view.setdefault(name, None)
         view["key_set"] = None if config.key_env is None else bool(self.environ.get(config.key_env))
@@ -424,6 +429,11 @@ class InferenceApi:
                        "note": "one short presentation suggestion before a speaking NPC's reply, capped per take; "
                                "it never chooses actions, is never stored, and is skipped for an NPC with a "
                                "decided choice"})
+        preparation = 0 if config is None else config.preparation_calls
+        stages.append({"stage": "scene_preparation", "kind": "optional", "enabled": preparation > 0,
+                       "cap": 1 if preparation else None, "available": True,
+                       "note": "one planning call on Prep, sent only when the director approves its estimate for "
+                               "one prepared scene; the proposal is never saved"})
         for stage, reason in _NOT_WIRED.items():
             stages.append({"stage": stage.value, "kind": "optional", "enabled": False, "cap": None,
                            "available": False, "note": reason})
@@ -449,7 +459,8 @@ class InferenceApi:
                 "attempts_per_call": config.attempts, "max_output_tokens": config.max_output_tokens,
                 "director_calls_per_turn": min(config.director_calls, 1),
                 "critique_calls_per_take": config.critique_calls, "decision_calls_per_turn": config.decision_calls,
-                "planning_calls_per_take": config.planning_calls},
+                "planning_calls_per_take": config.planning_calls,
+                "preparation_calls_per_scene": config.preparation_calls},
             "prices": self._prices_view(config), "test_call": self._test_view(config),
             "unavailable": [{"feature": feature, "reason": reason} for feature, reason in UNAVAILABLE],
             "bounds": {"fallbacks": MAX_FALLBACKS, "attempts": MAX_ATTEMPTS, "max_output_tokens": MAX_OUTPUT_TOKENS,
@@ -598,6 +609,31 @@ class InferenceApi:
                 "reason": "This policy comes from campaign startup configuration; edit that file and restart to change it."}
                 if startup is not None else simple_view(agenda))
         return result
+
+    def _preview(self, args: Mapping[str, object]) -> dict:
+        """085: the selected NPC's likely context if the owner's player character posted ``draft`` now. Nothing is
+        posted, kept, written or sent; a draft ``post`` would refuse is refused with ``post``'s own reason."""
+        draft = args.get("draft")
+        if type(draft) is not str or not draft.strip():
+            raise ApiRefused("no_content", "write a draft to preview")
+        if len(draft) > MAX_POST_CHARS:
+            raise ApiRefused("invalid_field", f"a draft is at most {MAX_POST_CHARS} characters")
+        try:  # not ``_selected``: opening a chat may write pending 020 knowledge, and a preview writes nothing
+            chat = ChatRef.parse(args.get("chat"))
+            actor = InstanceRef.parse(args.get("actor"))
+        except (ValueError, TypeError, AttributeError):
+            raise ApiRefused("invalid_field", "choose a valid chat and NPC") from None
+        try:
+            preview = preview_context(self.text_api.runner, chat, self.text_api.player_handle, actor, draft)
+        except DraftRefused as refused:  # post's own player-facing reason: the draft, never the NPC's context
+            raise ApiRefused(refused.reason, str(refused)) from None
+        except SceneRefused as refused:
+            if refused.reason in _NOT_AN_NPC:
+                raise ApiRefused("not_npc", "choose a director-controlled NPC present in this chat") from None
+            raise ApiRefused("context_unavailable", "this NPC's context cannot be safely built") from None
+        except (ValueError, StoreError):
+            raise ApiRefused("context_unavailable", "this NPC's context cannot be safely built") from None
+        return {"chat": str(chat), "sent": False, "written": False, **preview}
 
     def _save_agenda(self, args: Mapping[str, object]) -> dict:
         shown = self._models({})

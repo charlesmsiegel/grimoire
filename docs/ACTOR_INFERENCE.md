@@ -185,16 +185,94 @@ findings and token usage, reported apart), then V2 with planning against plain V
   prints the request ceiling (planned calls times attempts: 18 for the scenario at three attempts, 54
   with planning) before sending, reads the key only from the named variable and writes nothing that
   contains it. If it fails or is stopped, nothing is written and it prints what was already sent, as
-  counts only. Running it needs CMS's own spending approval, separate from 015's.
-- V2 speaks only the OpenAI-compatible protocol. Against an `anthropic` capture it calls Anthropic's
-  OpenAI-compatible endpoint, which offers no prompt caching and reports no cached-token counts,
-  while 0.2.1 called the Messages API. The report says so, the cost comparison is `usage_incomplete`,
-  and the token sums are not like for like. A capture whose budget is `max_tokens=unset` is
-  reported incomparable, since V2 always sends an output cap.
+  counts only. Running it needs CMS's own spending approval, separate from 015's; the one
+  approved run is [recorded below](#billed-comparison-2026-11-20).
+- Against an `anthropic` capture V2 calls Anthropic's own Messages API, as 0.2.1 did, so cache reads
+  and writes are provider-reported and the cost can be compared. The prompts still differ, so the
+  report says the token sums are not like for like. (Until 2026-11-22 V2 used Anthropic's
+  OpenAI-compatible endpoint, which reports no cached-token counts; that is why the first billed run
+  said `usage_incomplete`.) A capture whose budget is `max_tokens=unset` is reported incomparable,
+  since V2 always sends an output cap.
+- The first comparison (V2 against 0.2.1) is 068's proving scenario. The second, with planning, is
+  an experiment: a failure there rejects the optional stage, not V2, and the report says so.
 - The V2 run has no capture evidence of its own, so its usage is provider-reported and unverified,
   and its choices are unlabelled (judged on marker evidence only). Voice is the existing lexical
   distinguishability measure; no semantic characterization score exists.
 
 Proofs: `backend/tests/test_presentation_planning.py` (runtime, play and app) and
 `backend/tests/test_capture_v2.py` (dry runs against 015's committed dry-run evidence, refusals, and
-the real HTTP transport against a loopback server). No billed comparison has been run.
+the real HTTP transport against a loopback server).
+
+### Billed comparison (2026-11-20)
+
+One billed comparison was run with `--live --with-planning` against 015's
+[measured baseline](evals/V021_BASELINE.md#measured-baseline-2026-11-20): 18 calls to
+`claude-sonnet-4-5-20250929` at `max_tokens=16000`, none retried, under a request ceiling of 54.
+**The gate failed both comparisons, so 068's proving scenario is not established.**
+
+| Run | Calls | Input tokens | Output tokens | Cast distinguishability | Choices unrealized |
+|---|---:|---:|---:|---:|---:|
+| 0.2.1 baseline (measured) | 6 | 15,618 | 1,396 | 0.833 | 0 |
+| V2, one call per speaking NPC | 6 | 3,110 | 788 | 1.000 | 1 |
+| V2 with planning | 12 (6 planning) | 7,111 | 1,585 | 0.833 | 2 |
+
+- **V2 against 0.2.1: FAIL**, two findings. `choice_negated` on turn 3 (`ask-song`, unrealized:
+  no model text gives effect to the choice), and `usage_incomplete`: the OpenAI-compatible
+  endpoint reported no cached-token counts, so cost cannot be compared. Leak rate 0 on both.
+- **Planning against plain V2: FAIL**, six findings. The baseline's own turn-3 finding
+  (`baseline_invalid`), `choice_negated` on turn 1 (`ask-ledger`) and turn 3, `usage_incomplete`
+  on both runs, and `voice_regression`: cast distinguishability fell from 1.000 to 0.833.
+  Planning added 6 calls and roughly doubled input and output tokens.
+- The token sums are not like for like: 0.2.1 called the Messages API with its own prompt
+  assembly, and V2's usage is provider-reported without capture evidence. V2's lower input
+  count is not a cost claim. Choices are unlabelled and judged on exact marker phrases, which
+  live text rarely contains, so the unrealized-choice findings may reflect the markers.
+- No cost is in either run. At an assumed list price of 3 USD input and 15 USD output per
+  million tokens the 18 calls come to about 0.07 USD, as an estimate.
+
+One three-turn scenario on one model is a single sample. It does not show that planning helps,
+and here it measured worse on both voice and choices.
+
+### What changed after the first billed run (2026-11-22)
+
+- **Cost.** `usage_incomplete` came from the protocol, not from the run: Anthropic's OpenAI-compatible
+  endpoint reports no cached-token counts, and the gate never reads a missing count as zero. V2 now
+  calls the Messages API for an `anthropic` capture (see [PROVIDERS](PROVIDERS.md)), which reports
+  cache reads and writes.
+- **Choices.** `ask-song` was judged only on `sings` or `song`, so a bard who "sang", or answered with
+  a verse or a tune, counted as unrealized. Its effect markers now take those forms too. Negation
+  markers are unchanged, so no reply that passed before can fail now, and `ask-ledger` is unchanged
+  (a bare "ledger" would also match a refusal).
+- **Planning.** The voice regression is an experiment result, not a scoring fault, and stays.
+
+A rerun is needed before 068's box can be checked.
+
+### Billed comparison (2026-11-22)
+
+The rerun, approved by CMS on 2026-11-22 and run once with `--live --with-planning` against the
+same 015 capture (evidence sha256 `1824a081…d24ff0`, not recaptured): 18 calls to
+`claude-sonnet-4-5-20250929` at `max_tokens=16000`, none retried, under a request ceiling of 54.
+**V2 against 0.2.1 failed the gate again, so 068's proving scenario is not established.**
+
+| Run | Calls | Input tokens | Output tokens | Cache read / write | Weighted billed tokens | Cast distinguishability | Choices unrealized |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0.2.1 baseline (measured) | 6 | 15,618 | 1,396 | 0 / 0 | 17,014 | 0.833 | 0 |
+| V2, one call per speaking NPC | 6 | 3,646 | 995 | 0 / 0 | 4,641 | 0.667 | 1 |
+| V2 with planning | 12 (6 planning) | 7,352 | 1,497 | 0 / 0 | 8,849 | 1.000 | 1 |
+
+- **V2 against 0.2.1: FAIL**, two findings. `choice_negated` on turn 1 (`ask-ledger`, unrealized:
+  no model text gives effect to the choice), and `voice_regression`: cast distinguishability fell
+  from 0.833 to 0.667. Leak rate 0 on both. This comparison decides 068.
+- **Planning against plain V2: FAIL**, three findings (an experiment; it does not decide 068).
+  `baseline_invalid` for the baseline's own turn-1 finding, `choice_negated` on turn 1
+  (`ask-ledger`) in the planning run too, and `cost_regression`: weighted billed tokens rose from
+  4,641 to 8,849. Cast distinguishability rose from 0.667 to 1.000.
+- `usage_incomplete` is gone: both sides called the Messages API and cache counts are reported
+  (all zero). The token sums are still not like for like, because the prompts differ, and V2's
+  usage has no capture evidence of its own.
+- The 2026-11-20 findings did not repeat and these are different ones. Then plain V2 scored 1.000
+  on voice and failed `ask-song` on turn 3; now it scores 0.667 and fails `ask-ledger` on turn 1,
+  and planning moved voice the other way. Two single samples disagree, so neither shows a stable
+  effect of planning, and six lines is too few for the voice measure to be steady.
+- No cost is in either run. At an assumed list price of 3 USD input and 15 USD output per million
+  tokens the 18 calls (10,998 input and 2,492 output tokens) come to about 0.07 USD, as an estimate.

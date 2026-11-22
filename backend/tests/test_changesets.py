@@ -43,6 +43,15 @@ def test_the_json_form_round_trips_exactly():
     assert [change.action for change in value.changes] == ["create", "revise"]
 
 
+def test_a_created_schema_round_trips_and_is_omitted_when_absent():
+    # 087: a created entity names the payload schema its envelope declares; the form without one is unchanged
+    value = changeset(docks(schema="grimoire.entity/0"), guild())
+    data = encode(value)
+    assert data["changes"][0]["schema"] == "grimoire.entity/0" and "schema" not in data["changes"][1]
+    assert decode(data) == value
+    assert "schema" not in encode(changeset())["changes"][0]
+
+
 def test_payload_types_are_kept_strictly():
     # true, 1 and 1.0 are different authored values; a reviewer must never see one become another
     value = changeset(docks(payload={"a": True, "b": 1, "c": 1.0}))
@@ -86,6 +95,9 @@ def test_decoding_is_strict(edit, reason):
     (lambda: docks(payload=None), "invalid_field"),  # null is not an empty object, as in decode
     (lambda: changeset(changeset_id="CS 1"), "invalid_field"),
     (lambda: changeset(author=" "), "invalid_field"),
+    (lambda: guild(schema="grimoire.entity/0"), "invalid_field"),  # a revise keeps its base's schema
+    (lambda: docks(schema=" "), "invalid_field"),
+    (lambda: docks(schema="x" * 129), "invalid_field"),
 ])
 def test_values_refuse_what_cannot_be_reviewed(build, reason):
     with pytest.raises(ChangeSetError) as caught:

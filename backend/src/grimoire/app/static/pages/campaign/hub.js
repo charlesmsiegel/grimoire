@@ -50,7 +50,22 @@ export async function showHub(root, ctx, campaign, asked, audience) {
     ui.buttonLink("Browse in Chats", "chats", [], { filter: "campaign", campaign }, { size: "small" }),
     found && found.world ? ui.buttonLink("Chats in this world", "chats", [], { filter: "world", world: found.world }, { size: "small" }) : null,
   ] : [];
-  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse,
+  // the campaign's clock and its characters' memory (115), for the same chat and view
+  const chronicle = ctx.registered("chronicle") ? ui.buttonLink("Chronicle", "chronicle", [campaign],
+    { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
+  // who has captured whom, and recording a capture (050, 115), for the same chat and view
+  const companions = ctx.registered("companions") ? ui.buttonLink("Companions", "companions", [campaign],
+    { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
+  // the campaign's places, rumors, factions and NPC minds (115): the director's alone
+  const world = ctx.registered("world") && audience === "director" && chat
+    ? ui.buttonLink("World", "world", [campaign], { chat, audience: "director" }, { size: "small" }) : null;
+  // its divergent offline scenes and the review of a retcon or fork (115), the director's
+  const forks = ctx.registered("forks") ? ui.buttonLink("Forks", "forks", [campaign],
+    { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
+  // preparing it (115): its catalog bindings, ruleset contracts and a prepared scene, for the same chat and view
+  const prep = ctx.registered("prep") ? ui.buttonLink("Prep", "prep", [campaign],
+    { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
+  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, companions, world, forks, prep,
     chats.length ? el("span", { class: "g-muted" }, count(chats.length, "chat") + " in this campaign") : null,
     el("nav", { class: "g-chips", "aria-label": "This campaign's chats" }, chips));
   root.append(el("div", { class: "g-stack campaign-top" }, cover, nav));
@@ -64,7 +79,9 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   const views = ui.segments("Whose view", AUDIENCES, { value: audience, onchange: (value) => ctx.navigate(address({ audience: value })) });
   const view = el("div", { class: "g-stack campaign-hub" });
   root.append(el("div", { class: "g-row campaign-views" }, views.node, el("span", { class: "g-grow g-muted" }, NOTES[audience]),
-    ctx.registered("chat") ? ui.buttonLink("Open the chat", "chat", [chat]) : null), view);
+    ctx.registered("chat") ? ui.buttonLink("Open the chat", "chat", [chat]) : null,
+    // 081: follow one thread of the story (a promise, a rumour) to how canon says it ended
+    ctx.registered("story") ? ui.buttonLink("Story threads", "story", [chat], { audience }) : null), view);
 
   const call = (op, args) => ctx.api("campaign." + op, { chat, audience, ...args });
   // Every write answers the hub as it now stands: show that, never the one from before the write.

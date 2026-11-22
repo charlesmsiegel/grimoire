@@ -119,3 +119,7 @@ written here. Weighted routes and hazards remain the later third milestone;
 this first slice uses shortest hop count only. Removing this implementation
 requires no migration: canonical JSON remains on disk, and older clients should
 leave these unfamiliar records untouched.
+
+## On screen
+
+The director's World page (115) lists a topology's places and roads, finds every place a name matches, asks a route between exact places and blocks or opens a road in one campaign, reviewed first; see [WORLD](WORLD.md).

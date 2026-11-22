@@ -24,6 +24,7 @@ Each is called as `providers.<op>`.
 | `save_models` | `settings`, `expected` (the `etag` `models` gave; `null` when there was no file) | `models`' answer, after the file is written and the runner given what it configures |
 | `usage` | `chat`, `limit` (turns listed, 1 to 1000, default 200), `skip` (the newest turns left out, default 0: how earlier turns are listed); the totals always cover every turn | `turns` (each `turn`, `number`, `set_aside`, `calls`), `skip`, `listed`, `of`, `total`, `by_stage`, `complete`, `problems` |
 | `context` | `chat`, optional `actor` (full InstanceRef) | Present director-controlled NPCs; for the selected NPC, current brief, selected items/provenance, budget omissions/estimate, effective routes and editable tactics. No model call or write |
+| `preview_context` | `chat`, `actor`, `draft` (1 to 20,000 characters) | 085: the NPC's likely context if the owner's player character posted `draft` now ([Draft preview](#draft-preview-085)): `draft` (`heard`, `kind`), `context` (the inspector's view), `recalls`, `shed_recalls`, `more_recalls`, `changes` (`added`, `removed`), `tokens` (`now`, `with_draft`), `estimated: true`, `sent: false`, `written: false`. Nothing is posted, kept, written or sent |
 | `save_agenda` | `chat`, `actor`, `expected`, `aim`, `actions` (1–8 lines), or `remove: true` | Saves only this NPC’s simple tactics in the settings file; returns `models`. Refuses player/foreign actors and advanced policies |
 | `diagnostics` | none | `available`, `traces`: this process's last runner calls and test calls, newest first |
 | `test_call` | `expected` (the `etag` `models` gave) | How one test request to the saved model ended: see [The test call](#the-test-call) |
@@ -40,6 +41,7 @@ The file is 044's model configuration ([MOBILE](MOBILE.md#answers-from-a-model))
 
 - `critique`: independent prose extraction calls per take, 0 or 1 (default 0, off). Existing file configuration is preserved by model and tactics saves; this page does not edit it.
 - `decision`: optional decision calls per turn, 0–16 (default 0, off). A call is requested only for a speaking NPC with an authored agenda and no recorded decision for this scene turn.
+- `preparation`: 0 or 1 (default 0, off). On, the Prep page may send one optional, billed `planning` call for each scene the director approves after its estimate (064, [PREP](PREP.md)); shown as the *Scene preparation* stage. It is never part of a turn.
 - `planning`: optional presentation planning calls per turn, 0–16 (default 0, off). 068: before a speaking NPC's own reply, one short call shows that NPC only its own brief and what it heard before the turn, and asks for a presentation note on its own voice; the screened note reaches only that NPC's reply prompt, labelled untrusted. It never chooses an action, is never stored, and is skipped for an NPC with a decided choice. Each take (a reroll included) plans again and is billed again ([ACTOR_INFERENCE](ACTOR_INFERENCE.md#runtime-adoption)).
 - `agendas`: at most 64 actor-qualified, director-authored policies on this device. Each has `actor`, `goals` (`id`, `aim`, `priority`, `approaches` with `id`, `action`, `needs`, `tags`) and `limits` (`id`, `rule`, `forbids`, `when`). Conditions are `{"present": "<InstanceRef>"}` or `{"holds": "<proposition id>", "stances": [...]}`; existing 039 validation applies. The UI edits one simple goal with ordered actions and preserves unrelated policies. Policies with typed conditions/limits or custom priorities remain read-only in this simple editor, so no authored constraint is silently dropped.
 - `price_prompt`, `price_reply` and `price_cached`: optional prices per million prompt tokens, reply tokens and
@@ -215,7 +217,7 @@ shell's `mount(root, ctx)` and calls `providers.<op>` and the text API's `chats`
   and "Unknown" when none of the chat's calls went to the priced model. With prices set, a line under the tiles
   says the costs are estimates at the prices set now, past calls included, and that the provider's bill is what
   counts.
-- **Current context**: choose a chat and an NPC, then inspect its current brief, authorized source provenance and budget omissions. **Refresh context** rebuilds from saved state; it neither generates nor retains a prompt. Failed requests and changed selections clear the previous context. The **NPC tactics** form sets one goal and ordered candidate actions for the selected actor on this device.
+- **Current context**: choose a chat and an NPC, then inspect its current brief, authorized source provenance and budget omissions. **Refresh context** rebuilds from saved state; it neither generates nor retains a prompt. Failed requests and changed selections clear the previous context. Under it, **Preview a draft** takes a draft and **Preview with draft** shows that NPC's likely context if the draft were posted now ([Draft preview](#draft-preview-085)); choosing another NPC or chat clears the preview but keeps the draft, so one draft can be compared across NPCs. The **NPC tactics** form sets one goal and ordered candidate actions for the selected actor on this device.
 - **Recent calls on this device** and, folded away, **Not available yet**.
 
 Every library and provider text is set as text, never markup. `backend/tests/test_app_inference_page.py` runs the
@@ -233,9 +235,53 @@ fills its form from its own):
   the cost, which is then a lower bound.
 - **A kept record of test calls.** A test call is traced in memory like every runner call; no file keeps it.
 - **Session budgets.** 004 caps calls per turn only.
-- **Historical prompt snapshots and draft retrieval preview.** The inspector rebuilds current saved context only. It cannot reconstruct what an earlier call saw or preview an unsaved draft. Each inspected NPC sees its own evidence; withheld evidence and its identifiers/counts are not exposed.
+- **Historical prompt snapshots.** The inspector rebuilds current saved context, and the [draft preview](#draft-preview-085) estimates the next one; neither can reconstruct what an earlier call saw. Each inspected NPC sees its own evidence; withheld evidence and its identifiers/counts are not exposed.
 - **Provider presets** kept by the app. The page's own presets only fill its form.
 
+
+## Draft preview (085)
+
+First slice of [Live Context Preview](roadmap/sprints/live-context-preview.md): a player sees which of an NPC's
+memories and which lore an unsent draft is likely to bring into that NPC's context, without paying for a turn.
+`providers.preview_context` is `grimoire.play.preview.preview_context` behind the inspector's own checks. It runs
+when the person presses **Preview with draft**, never per keystroke, and calls no provider and no embedding: it is
+two or three runs of the deterministic packer generation itself uses ([CONTEXT](CONTEXT.md)).
+
+- **The draft is read as a post.** Through the reading `SceneRunner.post` saves from, in its order: play not
+  paused, the persona present and on stage, 035's `read_post` (008 routes it, 003 checks that the player
+  controls the chat's persona, 032 says who would hear it), the last turn closed. What `post` would refuse (an
+  open turn, an unknown addressee, a paused table, a persona off the stage) is refused with `post`'s own reason
+  and words, and nothing is packed; a table request such as "Grimoire, pause", which `post` would run, is
+  `table_request`; the open turn's own post retried is that saved turn, as `post` would return it. The preview
+  acts as the owner's handle, as the app's `post` does.
+- **The same assembly twice.** The NPC's context is packed from the saved turns (exactly the inspector's answer),
+  then again with the draft as a new, unsaved turn after them, so the draft is in what the NPC heard and triggers
+  lore just as a posted line does. With nothing changed in between, posting the draft gives the context the
+  preview showed (`test_context_preview.py` proves it).
+- **Privacy.** The answer is the inspector's safe view of the selected NPC's own pack. An NPC that would not hear
+  the draft (a whisper to someone else, a note it cannot see) gets no second pack: `draft.heard` is `false`, its
+  saved context is returned unchanged, and who would hear the draft is not said. Like the inspector it is the
+  owner's tool on this device; a player who does not own the library is not offered it.
+- **`changes`.** The packed lines that appear (`added`) and disappear (`removed`, with the budget's reason) with
+  the draft.
+- **`recalls`.** What the draft likely brings to mind, packed items first, then those the budget shed (`included:
+  false`, with `reason` `lane_cap` or `over_budget`): a lore entry the draft triggers (`why: triggered`: exact, it
+  was not a candidate without the draft), and a memory whose own words the draft shares (`why: shared_words`, with
+  `words`). Memory is ranked by recency and by who is present, never by the draft, so shared words are an estimate
+  that the NPC will hold both in view, not a ranking. Words of fewer than three letters and common English words
+  are ignored; other languages match on every word of three letters or more. A shed recall is the preview's
+  warning: the draft points at context the NPC will not get. Its line comes from one more pack of the same
+  candidates without a budget limit, so it is still only the NPC's own authorized context. Shed recalls are
+  listed first and `shed_recalls` counts them all; at most 50 recalls are listed, and `more_recalls` counts the
+  rest.
+- **An estimate.** The turn's prompt is rebuilt from saved state when it is generated: another post, a kept line,
+  new knowledge, edited settings or sources change it, and token counts are the pack's estimate, not provider
+  usage. The page says so above every preview. No snapshot of the prompt a turn was sent is retained (see
+  *Not available yet*).
+
+Not in this slice: deltas between two phrasings of a draft side by side (milestone 2), cheap incremental previews
+as one types (milestone 3), the director's lore and player-character packs, a combined turn's several drafts, and a
+preview from the chat page's own composer (116 decides where the wave's UI exposes it).
 
 ## Runner integration and boundaries
 

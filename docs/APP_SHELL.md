@@ -22,7 +22,13 @@ backend/src/grimoire/app/
                                campaign 113, media 114, shell 108; inbox, what waits on the person
                                ([INBOX](INBOX.md)); shelf, tags, pins and saved filters ([SHELF](SHELF.md));
                                speech 067, one listening window, captions, read-aloud, and voice 061, private
-                               local voice input ([SPEECH](SPEECH.md))
+                               local voice input ([SPEECH](SPEECH.md)); chronicle 115, a campaign's clock and
+                               sourced memory ([CHRONICLE](CHRONICLE.md)); world/ 115, the director's places,
+                               rumors, faction decisions and NPC minds ([WORLD](WORLD.md)); forks 115, divergent
+                               offline scenes and the review of a fork or retcon ([FORKS](FORKS.md)); prep/ 115, a
+                               campaign's catalog bindings, ruleset contracts and scene preparation
+                               ([PREP](PREP.md)); table, ensemble and companions 115, a shared turn at one
+                               screen, a previewed NPC exchange and reviewed captures ([TABLE](TABLE.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -170,8 +176,15 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `import` | 110 | |
 | `providers` | 112 | |
 | `campaign` | 113 | `/<campaign id>` |
+| `chronicle` | 115 | `/<campaign id>?chat=<ChatRef>&actor=<ActorRef>&audience=director` |
+| `world` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` (the director's; the table's view says only that) |
+| `forks` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` |
+| `prep` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` |
+| `ensemble` | 115 | `/<ChatRef>?audience=director` |
+| `companions` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` |
 | `art` | 114 | `?scope=<scope>&subject=<subject>&limit=<n>` |
 | `sync` | 114 | |
+| `story` | 081 | `/<ChatRef>?audience=director&q=<words>&actor=<InstanceRef>&thread=<proposition id>` (one chat's story threads; see [STORY.md](STORY.md)) |
 
 A sprint may register other routes of its own (prefix them with its area, such as `source-history`).
 
