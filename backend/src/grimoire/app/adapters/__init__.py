@@ -59,4 +59,8 @@ from . import rules  # noqa: E402 -- 116's Rules page: mechanics authoring (086)
 
 ADAPTERS = tuple(sorted((*ADAPTERS, rules.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import authoring  # noqa: E402 -- 116's Authoring page: 087 proposals, 082 audits, 079 upgrades (docs/AUTHORING_PAGE.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, authoring.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]

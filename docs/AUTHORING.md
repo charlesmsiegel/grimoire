@@ -4,7 +4,7 @@
 - `grimoire.authoring`: pure values (a request, a proposal of candidates and links, a decision) and the provider-backed proposer;
 - `grimoire.authoringstore`: the store-backed `AuthoringLibrary`, which gives the proposer a world's context, reviews a proposal against the world, and writes only the accepted subset through a [World Change Set](CHANGESETS.md) (043).
 
-There is no app or UI (that is [116](roadmap/sprints/wave-9-ui-exit.md)). Tests use a scripted transport and synthetic worlds; no live model is called.
+The app's Authoring page (116, [AUTHORING_PAGE](AUTHORING_PAGE.md)) builds, suggests, reviews and accepts proposals over it. Tests use a scripted transport and synthetic worlds; no live model is called.
 
 ## What it means
 
@@ -74,7 +74,6 @@ Failure behavior: a conflict, stale manifest or denied write writes nothing (043
 | Persisting pending proposals across restarts | 087 later, with 043 milestone 3 |
 | Canon conflicts beyond namesakes (contradicting facts) | 087 open question |
 | Retrieval of more than names and kinds into the prompt | [Catalog Composition](roadmap/sprints/catalog-composition.md) and later 087 work |
-| The review UI | [116](roadmap/sprints/wave-9-ui-exit.md) |
 
 A map revision moves the head of the world topology; campaign path overrides stay with the revision they were made against (059), and the draft does not yet tell the reviewer about them.
 

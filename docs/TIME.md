@@ -147,15 +147,15 @@ screen is a page is checked by `test_app_time.py` to be a registered page.
 | 076 | Offscreen faction plans | Time | `test_app_time.py`, `js/time.e2e.mjs`, `js/time.test.mjs` | the table's view refuses `director_only`; adoption with no group (`no_group`), no leader the director controls (`no_leader`) or a pending advance is named as not available; a player's character as leader refuses `npc_authority`; only the first pending advance is offered; a skip writes only the scope |
 | 077 | Quests and commitments | Time | `test_app_time.py`, `js/time.e2e.mjs`, `js/time.test.mjs` | the table's view refuses `director_only`; another player's character's decision is named as not available (`not_your_character`); the owner's own is made on the page with **Make this change with my key**, its review showing the words it rests on, and needs the key (`player_key_required`); a decision committed without its reviewed controls refuses `review_required`, and under other controls, or with a key it no longer rests on, `changed` |
 | 078 | Relationships and attitudes | not on a screen yet (a chat's Details, a later part of 116) | | named on the page as not available |
-| 079 | Source upgrades | not on a screen yet (Authoring, a later part of 116) | | named on the page as not available |
+| 079 | Source upgrades | a source's Authoring page (`authoring`), from its page in Characters and lore (`sources`) | `test_app_authoring.py` | see [AUTHORING_PAGE.md](AUTHORING_PAGE.md) |
 | 080 | Speech to draft | in a chat: Dictate in the composer (`chats`) | `test_app_dictation.py`, `js/dictate.e2e.mjs` | voice off, no microphone or no recognizer: the strip says why and shows no Dictate |
 | 081 | Story threads | `story`, for this chat | `test_story_page.py`, `js/story.e2e.mjs` | an unknown thread refuses `no_thread`; with no chat chosen the row says to open one |
-| 082 | Read-only world audits | not on a screen yet (Authoring, a later part of 116) | | named on the page as not available |
+| 082 | Read-only world audits | a source's Authoring page (`authoring`), from its page in Characters and lore (`sources`) | `test_app_authoring.py` | see [AUTHORING_PAGE.md](AUTHORING_PAGE.md) |
 | 083 | Character voice performance | in a chat (`chat`): Listen, the kept lines in their cast voices; voices cast on Voices (`voices`) | `test_app_listen.py` | with no voice or no audio, each line is shown as text for its time |
 | 084 | Cross-campaign scene transfer | not on a screen yet (a chat's Details, a later part of 116) | | named on the page as not available |
 | 085 | Live context preview | in a chat, the director's view (`chat`): Preview context in the composer; also Models and costs (`providers`) | `test_app_listen.py`, `test_context_preview.py` | nothing is posted, kept or sent; the table's view shows no NPC's context |
 | 086 | Mechanics module authoring | Rules, in the rail under Library (`rules`, `#/rules`) | `test_app_rules.py`, `js/rules.e2e.mjs`, `js/rules.test.mjs` | a draft with problems is `invalid_module`, each problem by its path; a stale save or publish is `changed`; a filled sheet and a graded check are shown as not saved |
-| 087 | World authoring proposals | not on a screen yet (Authoring, a later part of 116) | | named on the page as not available |
+| 087 | World authoring proposals | a source's Authoring page (`authoring`), from its page in Characters and lore (`sources`) | `test_app_authoring.py` | see [AUTHORING_PAGE.md](AUTHORING_PAGE.md) |
 
 A later part of Sprint 116 that builds one of these screens flips its row to `screen` with its route, and the
 page-registration test then checks it.
