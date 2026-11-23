@@ -9,9 +9,9 @@ this chat's, ``campaign`` or ``chat``:
   links the route alone (``chats``, for something done in a chat).
 - ``unavailable``: said plainly with ``reason``, never offered as a button.
 
-A later part of Sprint 116 that builds one of these screens flips its row to ``screen`` with its route (and the
-page-registration test then checks that the route is a registered page). docs/TIME.md keeps the same table with
-each row's integration test and its failure behaviour.
+Every row is on a screen once Sprint 116 is complete; the page-registration test checks that each ``screen`` row's
+route is a registered page. docs/TIME.md keeps the same table with each row's integration test and its failure
+behaviour.
 """
 
 from __future__ import annotations
@@ -19,8 +19,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from grimoire.app.adapter import AdapterContext
-
-LATER = "a later part of this sprint"
 
 FEATURES: tuple[dict, ...] = (
     {"slice": "073", "title": "Hypothetical reply", "status": "screen", "route": "chats", "where":
@@ -33,21 +31,25 @@ FEATURES: tuple[dict, ...] = (
      "reason": None},
     {"slice": "077", "title": "Quests and commitments", "status": "here", "route": "time", "where": "this page",
      "reason": None},
-    {"slice": "078", "title": "Relationships and attitudes", "status": "unavailable", "route": None, "where": None,
-     "reason": f"its place (a chat's Details) is built in {LATER}"},
+    {"slice": "078", "title": "Relationships and attitudes", "status": "screen", "route": "attitudes", "chat": True,
+     "where": "this chat's Attitudes, from its Details, the director's: an NPC's attitude checked against its own "
+     "evidence, never saved", "reason": None},
     {"slice": "079", "title": "Source upgrades", "status": "screen", "route": "sources", "where":
-     "Characters and lore, in the rail under Library: a source's page, Authoring, its upgrade previews and optional dependencies", "reason": None},
+     "Characters and lore, in the rail under Library: a source's page, Authoring, "
+     "its upgrade previews and optional dependencies", "reason": None},
     {"slice": "080", "title": "Speech to draft", "status": "screen", "route": "chats", "where":
      "in a chat: Dictate in the composer, a transcript that is only ever a draft", "reason": None},
     {"slice": "081", "title": "Story threads", "status": "screen", "route": "story", "chat": True, "where":
      "Story threads, for this chat: a thread of the story followed to how it ended", "reason": None},
     {"slice": "082", "title": "Read-only world audits", "status": "screen", "route": "sources", "where":
-     "Characters and lore, in the rail under Library: a source's page, Authoring, its read-only consistency audit", "reason": None},
+     "Characters and lore, in the rail under Library: a source's page, Authoring, "
+     "its read-only consistency audit", "reason": None},
     {"slice": "083", "title": "Character voice performance", "status": "screen", "route": "chat", "chat": True, "where":
      "in this chat: Listen to the scene, its kept lines in their cast voices (voices are cast on Voices, in Settings)",
      "reason": None},
-    {"slice": "084", "title": "Cross-campaign scene transfer", "status": "unavailable", "route": None, "where": None,
-     "reason": f"its place (a chat's Details) is built in {LATER}"},
+    {"slice": "084", "title": "Cross-campaign scene transfer", "status": "screen", "route": "transfer", "chat": True,
+     "where": "this chat's Copy into another campaign, from its Details, the director's: the transcript copied into "
+     "a new chat there, every actor's identity reviewed", "reason": None},
     {"slice": "085", "title": "Live context preview", "status": "screen", "route": "chat", "chat": True, "where":
      "in this chat, the director's view: Preview context in the composer, the draft read as Post would read it "
      "against an NPC's current context (also on Models and costs, in Settings)", "reason": None},
@@ -55,7 +57,8 @@ FEATURES: tuple[dict, ...] = (
      "Rules, in the rail under Library: a rules module drafted, checked, saved and published as reviewed",
      "reason": None},
     {"slice": "087", "title": "World authoring proposals", "status": "screen", "route": "sources", "where":
-     "Characters and lore, in the rail under Library: a source's page, Authoring, its world proposals, built by hand or suggested", "reason": None},
+     "Characters and lore, in the rail under Library: a source's page, Authoring, "
+     "its world proposals, built by hand or suggested", "reason": None},
 )
 
 

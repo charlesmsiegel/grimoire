@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "attitudes",
+  "route": "attitudes",
+  "title": "Attitudes",
+  "slot": "hidden",
+  "order": 41,
+  "owner": "116",
+  "entry": "page.js",
+  "requires": ["attitudes.cast", "attitudes.grounds", "attitudes.check"],
+  "unavailable": null
+}

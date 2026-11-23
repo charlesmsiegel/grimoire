@@ -274,7 +274,10 @@ test("a campaign's downtime, offscreen plans and commitments, each change review
   const rolls = byText(features, "a", "Recorded rolls");
   assert.ok(rolls.length && rolls[0].getAttribute("href").startsWith("#/rules/"), "recorded rolls, on this campaign's Rules page");
   assert.ok(byText(features, "a", "World authoring proposals").length, "world authoring, from the library");
-  assert.ok(byText(features, "strong", "Relationships and attitudes is not available yet.").length);
+  const attitudes = byText(features, "a", "Relationships and attitudes");
+  assert.ok(attitudes.length && attitudes[0].getAttribute("href").startsWith("#/attitudes/" + encodeURIComponent(chat)), "attitudes, for this chat");
+  assert.ok(byText(features, "a", "Cross-campaign scene transfer").length);
+  assert.ok(!features.textContent.includes("is not available yet"), "every Wave 9 first slice is on a screen");
   assert.ok(features.textContent.includes("Downtime") && features.textContent.includes("Quests and commitments"));
 
   // the table's view: only that these are the director's

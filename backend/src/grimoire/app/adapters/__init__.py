@@ -63,4 +63,8 @@ from . import authoring  # noqa: E402 -- 116's Authoring page: 087 proposals, 08
 
 ADAPTERS = tuple(sorted((*ADAPTERS, authoring.ADAPTER), key=lambda adapter: adapter.name))
 
+from . import attitudes, transfer  # noqa: E402 -- 116: a chat copied into another campaign (084), an NPC attitude (078)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, attitudes.ADAPTER, transfer.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]

@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "transfer",
+  "route": "transfer",
+  "title": "Copy into another campaign",
+  "slot": "hidden",
+  "order": 40,
+  "owner": "116",
+  "entry": "page.js",
+  "requires": ["transfer.targets", "transfer.scan", "transfer.plan", "transfer.commit"],
+  "unavailable": null
+}

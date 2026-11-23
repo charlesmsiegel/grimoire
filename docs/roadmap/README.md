@@ -44,7 +44,7 @@ These are **functional gates**, not dates. Import and phone play cannot be descr
 
 ## Implementation checkmarks
 
-Historical audit: [`b54b2bd8`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), **2026-11-20**, recorded **62 of 119 scheduled first-useful slices** and **4 of 12 scoped waves**. The bounded reconciliation at landed base [`0f7adcfb`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) recognizes **65 of 119 slices**, including 047, 050 and 112. The 049/054 proofs bring the current rows to **67 of 119 slices**, and 056's shared-bestiary proof with 064's scenario preparation to **69 of 119**; 053’s consolidation and 063’s delayed-rumor proofs bring them to 71, the 070 proof to 72, 067’s voice proof to 73, 072’s VN cue timeline to 74, 061’s local voice proof to 75, and 058’s two-player turn to **76 of 119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the current rows to 80, and the 073, 074, 077, 078, 079, 080, 081, 082, 083, 084, 085 and 086 proofs to **92 of 119**. 087, 115's Wave 8 UI exit and 069's live judge-panel proof bring them to **95 of 119**, and 068's labelled sampled comparison to **96 of 119**; with Wave 2 **5 of 12 scoped waves** are complete. Historical verification results remain pinned to their original snapshots.
+Historical audit: [`b54b2bd8`](https://github.com/charlesmsiegel/grimoire/commit/b54b2bd898752684a2ad00b9fd7f1f02ff544326), **2026-11-20**, recorded **62 of 119 scheduled first-useful slices** and **4 of 12 scoped waves**. The bounded reconciliation at landed base [`0f7adcfb`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) recognizes **65 of 119 slices**, including 047, 050 and 112. The 049/054 proofs bring the current rows to **67 of 119 slices**, and 056's shared-bestiary proof with 064's scenario preparation to **69 of 119**; 053’s consolidation and 063’s delayed-rumor proofs bring them to 71, the 070 proof to 72, 067’s voice proof to 73, 072’s VN cue timeline to 74, 061’s local voice proof to 75, and 058’s two-player turn to **76 of 119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the current rows to 80, and the 073, 074, 077, 078, 079, 080, 081, 082, 083, 084, 085 and 086 proofs to **92 of 119**. 087, 115's Wave 8 UI exit and 069's live judge-panel proof bring them to **95 of 119**, and 068's labelled sampled comparison to **96 of 119**, and 116's Wave 9 UI exit to **97 of 119**; with Wave 2 **5 of 12 scoped waves** are complete. Historical verification results remain pinned to their original snapshots.
 
 **☑** means the scheduled first-useful implementation and its required first-proof additions were found in code and executable tests. It does **not** mean all subsequent milestones or the moonshot are complete, nor does it certify live providers or physical devices. **☐** means a required implementation or proving scenario is missing or not established; it does not mean no work exists. Existing functionality can satisfy a slice even when delivered by an earlier sprint.
 
@@ -316,7 +316,7 @@ The wave is not **user-visible complete** until its implemented user-facing doma
 
 ### Wave 9 — Advanced mechanics, authoring and audio foundations
 
-- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (15/16 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
+- [ ] **Wave 9 complete for its scheduled first slices and exit gate** (16/16 slices checked; real-browser, screen-reader and phone pass unverified). [Audit](IMPLEMENTATION_AUDIT.md#wave-9)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
@@ -341,7 +341,7 @@ The wave is not **user-visible complete** until its implemented user-facing doma
 
 | # | Complete | UI exit sprint | Priority | Delivery order | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
-| 116 | [☐](IMPLEMENTATION_AUDIT.md#slice-116) | [Wave 9 UI Exit: Mechanics, Authoring and Audio](sprints/wave-9-ui-exit.md) | **P0 (wave gate)** | After 108–114 and this wave's relevant domain first slices; integrate only merged features | frontend / tools, writing and voice panels | Resolve a recorded roll and edit a validated sheet, inspect a story/history link and review a world suggestion; expose remaining Wave 9 user-facing slices |
+| 116 | [☑](IMPLEMENTATION_AUDIT.md#slice-116) | [Wave 9 UI Exit: Mechanics, Authoring and Audio](sprints/wave-9-ui-exit.md) | **P0 (wave gate)** | After 108–114 and this wave's relevant domain first slices; integrate only merged features | frontend / tools, writing and voice panels | Resolve a recorded roll and edit a validated sheet, inspect a story/history link and review a world suggestion; expose remaining Wave 9 user-facing slices |
 
 The wave is not **user-visible complete** until its implemented user-facing domain first slices pass the UI acceptance in [UI coverage](UI_COVERAGE.md#later-wave-ui-exit-matrix); do not block domain merges or show unavailable capabilities as working.
 

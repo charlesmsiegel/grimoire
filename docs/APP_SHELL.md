@@ -33,7 +33,9 @@ backend/src/grimoire/app/
                                campaign's downtime, offscreen plans and commitments ([TIME](TIME.md)); rules/ 116,
                                mechanics module authoring and recorded rolls ([RULES_PAGE](RULES_PAGE.md));
                                authoring/ 116, a source's world proposals, read-only audit and upgrade
-                               previews ([AUTHORING_PAGE](AUTHORING_PAGE.md))
+                               previews ([AUTHORING_PAGE](AUTHORING_PAGE.md));
+                               transfer 116, a chat copied into another campaign ([TRANSFER_PAGE](TRANSFER_PAGE.md));
+                               attitudes 116, an NPC's attitude checked, never saved ([ATTITUDES_PAGE](ATTITUDES_PAGE.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -194,6 +196,8 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `voices` | 116 | `?chat=<ChatRef>` (that chat's speakers, to cast; see [LISTEN.md](LISTEN.md)) |
 | `story` | 081 | `/<ChatRef>?audience=director&q=<words>&actor=<InstanceRef>&thread=<proposition id>` (one chat's story threads; see [STORY.md](STORY.md)) |
 | `authoring` | 116 | `/<source id>` (a source's authoring tools; see [AUTHORING_PAGE.md](AUTHORING_PAGE.md)) |
+| `transfer` | 116 | `/<ChatRef>?audience=director` (copy this chat into another campaign; see [TRANSFER_PAGE.md](TRANSFER_PAGE.md)) |
+| `attitudes` | 116 | `/<ChatRef>?audience=director` (an NPC's attitude, checked; see [ATTITUDES_PAGE.md](ATTITUDES_PAGE.md)) |
 
 A sprint may register other routes of its own (prefix them with its area, such as `source-history`).
 
