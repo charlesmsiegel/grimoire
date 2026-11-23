@@ -1,0 +1,11 @@
+/* 116: Preview context beside the composer: read-only, set apart from the story by a dashed edge like 073's panel. */
+.chat-preview { padding: .75rem; border: 1px dashed var(--g-line, currentColor); border-radius: .5rem; min-width: 0; }
+.chat-preview summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+.chat-preview-body, .chat-preview-director { display: grid; gap: .5rem; min-width: 0; }
+.chat-preview-director[hidden], .chat-preview-note[hidden] { display: none; }
+.chat-preview .g-segment, .chat-preview .g-button, .chat-preview select { min-height: 44px; }
+.chat-preview-note, .chat-preview-status { margin: 0; overflow-wrap: anywhere; }
+.chat-preview-status { min-height: 1.2em; }
+.chat-preview-heading { font-size: 1rem; margin: .4rem 0 .2rem; }
+.chat-preview-list { margin: 0; padding-inline-start: 1.2rem; display: grid; gap: .3rem; }
+.chat-preview-line { white-space: pre-wrap; overflow-wrap: anywhere; }

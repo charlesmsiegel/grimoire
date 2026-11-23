@@ -8,8 +8,10 @@ It is implemented as three parts:
 - the file adapter `grimoire.voicecaststore`.
 
 The app's `voicecast` adapter ops (`backend/src/grimoire/app/adapters/voicecast.py`) put them together. A scene's
-**accepted** text is read aloud, with each speaker in its own voice and every voice choice explained. The page
-that plays it is sprint 116's: this slice exposes the typed API, which a client can already call.
+**accepted** text is read aloud, with each speaker in its own voice and every voice choice explained. Sprint 116
+puts it on a screen ([LISTEN](LISTEN.md)): **Listen to the scene** beside a chat's composer plans and plays it, and
+the **Voices** page in Settings casts and uncasts, each change reviewed first (`voices.review`) and made with the
+etag the review read.
 
 This is not 014's *voice*. That is how an actor **writes** (docs/VOICE.md), and it reaches the model's prompt.
 Nothing here reaches a prompt or a model. It is also not 061's speech recognition or the chat page's "Read aloud"
@@ -200,7 +202,6 @@ The following are left for later:
 - Splitting a cue longer than 4000 characters into several syntheses.
 - Syncing a casting between devices.
 - Engines with licensed or consented voices: the casting records their rights, but this slice ships no such engine.
-- The page that plays a scene, which is sprint 116's.
 - A run with real speakers and listeners, to judge whether the voices can be told apart by ear.
 - Recording `actor_revision` on a card chat's opening greeting (the runner's change), so the greeting keeps the
   voice of the revision it was spoken in rather than following the instance's revision now.
