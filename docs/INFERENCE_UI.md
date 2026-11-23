@@ -24,7 +24,7 @@ Each is called as `providers.<op>`.
 | `save_models` | `settings`, `expected` (the `etag` `models` gave; `null` when there was no file) | `models`' answer, after the file is written and the runner given what it configures |
 | `usage` | `chat`, `limit` (turns listed, 1 to 1000, default 200), `skip` (the newest turns left out, default 0: how earlier turns are listed); the totals always cover every turn | `turns` (each `turn`, `number`, `set_aside`, `calls`), `skip`, `listed`, `of`, `total`, `by_stage`, `complete`, `problems` |
 | `context` | `chat`, optional `actor` (full InstanceRef) | Present director-controlled NPCs; for the selected NPC, current brief, selected items/provenance, budget omissions/estimate, effective routes and editable tactics. No model call or write |
-| `preview_context` | `chat`, `actor`, `draft` (1 to 20,000 characters) | 085: the NPC's likely context if the owner's player character posted `draft` now ([Draft preview](#draft-preview-085)): `draft` (`heard`, `kind`), `context` (the inspector's view), `recalls`, `shed_recalls`, `more_recalls`, `changes` (`added`, `removed`), `tokens` (`now`, `with_draft`), `estimated: true`, `sent: false`, `written: false`. Nothing is posted, kept, written or sent |
+| `preview_context` | `chat`, `actor`, `draft` (1 to 20,000 characters), optional `mode` (`auto`, `speech` or `action`, as `play.post` takes; default `auto`) | 085: the NPC's likely context if the owner's player character posted `draft` now ([Draft preview](#draft-preview-085)): `draft` (`heard`, `kind`), `context` (the inspector's view), `recalls`, `shed_recalls`, `more_recalls`, `changes` (`added`, `removed`), `tokens` (`now`, `with_draft`), `estimated: true`, `sent: false`, `written: false`. Nothing is posted, kept, written or sent |
 | `save_agenda` | `chat`, `actor`, `expected`, `aim`, `actions` (1–8 lines), or `remove: true` | Saves only this NPC’s simple tactics in the settings file; returns `models`. Refuses player/foreign actors and advanced policies |
 | `diagnostics` | none | `available`, `traces`: this process's last runner calls and test calls, newest first |
 | `test_call` | `expected` (the `etag` `models` gave) | How one test request to the saved model ended: see [The test call](#the-test-call) |
@@ -280,8 +280,9 @@ two or three runs of the deterministic packer generation itself uses ([CONTEXT](
   *Not available yet*).
 
 Not in this slice: deltas between two phrasings of a draft side by side (milestone 2), cheap incremental previews
-as one types (milestone 3), the director's lore and player-character packs, a combined turn's several drafts, and a
-preview from the chat page's own composer (116 decides where the wave's UI exposes it).
+as one types (milestone 3), the director's lore and player-character packs, and a combined turn's several drafts.
+Sprint 116 also offers the preview beside the chat page's own composer (**Preview context**, in that panel's
+director view; see [LISTEN](LISTEN.md#preview-context-085)).
 
 ## Runner integration and boundaries
 

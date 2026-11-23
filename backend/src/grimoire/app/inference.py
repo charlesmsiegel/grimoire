@@ -612,19 +612,29 @@ class InferenceApi:
 
     def _preview(self, args: Mapping[str, object]) -> dict:
         """085: the selected NPC's likely context if the owner's player character posted ``draft`` now. Nothing is
-        posted, kept, written or sent; a draft ``post`` would refuse is refused with ``post``'s own reason."""
+        posted, kept, written or sent; a draft ``post`` would refuse is refused with ``post``'s own reason.
+        ``mode`` is the composer's typed intent (``play.post``'s own ``auto``/``speech``/``action``), read as post
+        reads it; left out, ``auto``."""
+        from grimoire.app.adapters.play import POST_MODES  # here, not at the top: that package imports this one
+
         draft = args.get("draft")
         if type(draft) is not str or not draft.strip():
             raise ApiRefused("no_content", "write a draft to preview")
         if len(draft) > MAX_POST_CHARS:
             raise ApiRefused("invalid_field", f"a draft is at most {MAX_POST_CHARS} characters")
+        mode = args.get("mode")
+        if mode is None:
+            mode = "auto"
+        if type(mode) is not str or mode not in POST_MODES:
+            raise ApiRefused("invalid_field", f"mode must be one of {', '.join(POST_MODES)}")
         try:  # not ``_selected``: opening a chat may write pending 020 knowledge, and a preview writes nothing
             chat = ChatRef.parse(args.get("chat"))
             actor = InstanceRef.parse(args.get("actor"))
         except (ValueError, TypeError, AttributeError):
             raise ApiRefused("invalid_field", "choose a valid chat and NPC") from None
         try:
-            preview = preview_context(self.text_api.runner, chat, self.text_api.player_handle, actor, draft)
+            preview = preview_context(self.text_api.runner, chat, self.text_api.player_handle, actor, draft,
+                                      mode=mode)
         except DraftRefused as refused:  # post's own player-facing reason: the draft, never the NPC's context
             raise ApiRefused(refused.reason, str(refused)) from None
         except SceneRefused as refused:

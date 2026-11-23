@@ -28,7 +28,8 @@ backend/src/grimoire/app/
                                offline scenes and the review of a fork or retcon ([FORKS](FORKS.md)); prep/ 115, a
                                campaign's catalog bindings, ruleset contracts and scene preparation
                                ([PREP](PREP.md)); table, ensemble and companions 115, a shared turn at one
-                               screen, a previewed NPC exchange and reviewed captures ([TABLE](TABLE.md))
+                               screen, a previewed NPC exchange and reviewed captures ([TABLE](TABLE.md));
+                               voices 116, the review of a voice casting change ([LISTEN](LISTEN.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -184,6 +185,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `companions` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` |
 | `art` | 114 | `?scope=<scope>&subject=<subject>&limit=<n>` |
 | `sync` | 114 | |
+| `voices` | 116 | `?chat=<ChatRef>` (that chat's speakers, to cast; see [LISTEN.md](LISTEN.md)) |
 | `story` | 081 | `/<ChatRef>?audience=director&q=<words>&actor=<InstanceRef>&thread=<proposition id>` (one chat's story threads; see [STORY.md](STORY.md)) |
 
 A sprint may register other routes of its own (prefix them with its area, such as `source-history`).

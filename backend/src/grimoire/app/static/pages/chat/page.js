@@ -10,6 +10,8 @@ import { makeVoice } from "./voice.js";
 import { makeStaging } from "./staging.js";
 import { makeCompare } from "./compare.js";
 import { makeImagine } from "./imagine.js";
+import { makeListen } from "./listen.js";
+import { makePreview } from "./preview.js";
 import { makeStory } from "./story.js";
 import { makeTray } from "./tray.js";
 import { makeBackdrop } from "./backdrop.js";
@@ -92,6 +94,11 @@ export async function mount(root, ctx) {
   const imagine = makeImagine(ctx, chat,
     { composer, generates, mode: () => (posting === "play.post" ? page.mode : "auto") });  // read as Post reads it
   if (imagine.node) foot.prepend(imagine.node);
+  // 116: the scene in its cast voices (./listen.js, 083) and an NPC's likely context with the draft (./preview.js, 085)
+  const listen = makeListen(ctx, chat);
+  if (listen.node) foot.prepend(listen.node);
+  const preview = makePreview(ctx, chat, { composer, mode: () => (posting === "play.post" ? page.mode : "auto") });
+  if (preview.node) foot.prepend(preview.node);
   // voice as an optional assist beside the composer (./voice.js, 067): shown only where the app serves it
   const voice = makeVoice(ctx, { composer });
   if (voice.node) foot.prepend(voice.node);
@@ -221,6 +228,8 @@ export async function mount(root, ctx) {
     story.update(scene);
     staging.update(scene);
     imagine.update(scene);
+    listen.update(scene);
+    preview.update(scene);
     table.update(scene);
     drawHeader(scene);
     bars.replaceChildren(...holds(scene));

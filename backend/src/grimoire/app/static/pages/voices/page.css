@@ -1,0 +1,12 @@
+/* 116: the Voices page. One column of cards; every control is a full-size target and nothing is wider than a phone. */
+.voices-card { display: grid; gap: .6rem; min-width: 0; }
+.voices-live { margin: 0; min-height: 1.2em; overflow-wrap: anywhere; }
+.voices-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.voices-list > li, .voices-speaker { padding: .5rem .75rem; border: 1px solid var(--g-line, currentColor); border-radius: .5rem;
+  min-width: 0; overflow-wrap: anywhere; }
+.voices-speaker { display: grid; gap: .4rem; }
+.voices-form, .voices-review { display: grid; gap: .5rem; min-width: 0; }
+.voices-review { padding: .5rem .75rem; border-inline-start: 4px solid var(--g-accent, currentColor); background: var(--g-card); }
+.voices-card .g-button, .voices-card select, .voices-card input { min-height: 44px; }
+.voices-card select, .voices-card input { max-width: 100%; }
+.voices-later { display: grid; gap: .5rem; }

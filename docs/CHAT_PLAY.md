@@ -44,6 +44,11 @@ gone with the tab. While play is held up, while a turn is open and with no model
 beside its buttons, which stay pressable (`aria-disabled`): play's own controls are the only ones turned off while
 a turn waits. It is shown only where the app serves `play.imagine`. It is `pages/chat/imagine.js`.
 
+Beside the composer too (116, [LISTEN](LISTEN.md)): **Listen to the scene** (`pages/chat/listen.js`) plays the
+chat's kept lines in the voices cast for each speaker (083), and **Preview context** (`pages/chat/preview.js`) shows,
+in its director view, what one NPC's context would likely hold if the unsent draft were posted (085). Neither
+writes anything or changes the composer.
+
 Not in this slice: a director instruction typed as a post (035 refuses it), conflict resolution beyond keeping one
 device's version (Sync, 114), costs (112), and campaigns with a world (113).
 

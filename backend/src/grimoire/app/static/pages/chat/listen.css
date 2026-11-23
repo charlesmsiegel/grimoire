@@ -1,0 +1,24 @@
+/* 116: Listen to the scene, beside the composer. The cue being read is marked by more than colour (a bar and a
+   heavier weight), and the list scrolls inside the panel so a long scene never pushes the composer away. */
+.chat-listen { padding: .75rem; border: 1px solid var(--g-line, currentColor); border-radius: .5rem; min-width: 0; }
+.chat-listen summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+.chat-listen-body { display: grid; gap: .5rem; min-width: 0; }
+.chat-listen-plain { margin: 0; }
+.chat-listen-audio { display: flex; align-items: center; gap: .5rem; min-height: 44px; }
+.chat-listen-audio input { width: 22px; height: 22px; flex: none; }
+.chat-listen-audio label { min-height: 44px; display: flex; align-items: center; flex: 1; min-width: 0; cursor: pointer; }
+.chat-listen-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.chat-listen-actions .g-button { min-height: 44px; }
+.chat-listen-status { margin: 0; min-height: 1.2em; overflow-wrap: anywhere; }
+.chat-listen-warnings:empty, .chat-listen-now[hidden] { display: none; }
+.chat-listen-now { padding: .5rem .75rem; border-inline-start: 4px solid var(--g-accent, currentColor); background: var(--g-card); }
+.chat-listen-cues { list-style: none; padding: 0; margin: 0; display: grid; gap: .4rem; max-height: 40vh; overflow-y: auto; }
+.chat-listen-cue { padding: .4rem .6rem; border: 1px solid var(--g-line, currentColor); border-radius: .4rem; min-width: 0; }
+.chat-listen-current { border-inline-start-width: 4px; border-color: var(--g-accent, currentColor); font-weight: 600; }
+.chat-listen-head { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.chat-listen-speaker { font-weight: 600; }
+.chat-listen-head .g-button { margin-inline-start: auto; min-height: 44px; }
+.chat-listen-text { margin: .3rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-listen-reason { margin: .2rem 0 0; }
+.chat-listen-why { margin-top: .3rem; overflow-wrap: anywhere; }
+.chat-listen-why ul { margin: .2rem 0 0; padding-inline-start: 1.2rem; }

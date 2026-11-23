@@ -47,4 +47,8 @@ from . import companions, ensemble, table  # noqa: E402 -- 115's play at the tab
 ADAPTERS = tuple(sorted((*ADAPTERS, companions.ADAPTER, ensemble.ADAPTER, table.ADAPTER),
                         key=lambda adapter: adapter.name))
 
+from . import voices  # noqa: E402 -- 116's review of a voice casting change (docs/LISTEN.md)
+
+ADAPTERS = tuple(sorted((*ADAPTERS, voices.ADAPTER), key=lambda adapter: adapter.name))
+
 __all__ = ["ADAPTERS"]
