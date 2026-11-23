@@ -280,6 +280,36 @@ test("an unchanged editor refused as changed shows the newer draft, and never sa
   root.remove();
 });
 
+test("text typed while the draft is read again is kept as an edit, against the draft it was begun from", async () => {
+  const state = { current: { text: TEXT, etag: "sha256:e1" } };
+  const saves = [];
+  let release, gate = null, waiting = false;
+  const inner = draftApi(state, saves);
+  const api = async (op, args) => {
+    if (op === "rules.module" && gate) { waiting = true; await gate; }
+    return inner(op, args);
+  };
+  const root = ui.el("div", {});
+  document.body.append(root);
+  await page.mount(root, context([], { module: "duel" }, api, new Store()));
+  await settle(() => editorReady(root));
+  state.current = { text: '{"id": "duel", "name": "theirs"}', etag: "sha256:e2" };
+  gate = new Promise((resolve) => { release = resolve; });
+  button(root, "Save").click();
+  await settle(() => waiting);
+  assert.ok(waiting, "the draft is being read again");
+  const editor = input(root, "Module JSON");
+  const typed = '{"id": "duel", "name": "typed meanwhile"}';
+  editor.value = typed;
+  editor.dispatchEvent(new Event("input"));
+  release();
+  gate = null;
+  await settle(() => root.textContent.includes("The saved draft changed since you began editing"));
+  assert.equal(input(root, "Module JSON").value, typed, "the text typed meanwhile is not replaced");
+  assert.ok(root.textContent.includes("The saved draft changed since you began editing"), root.textContent);
+  root.remove();
+});
+
 const TWO = { ...ROLLS, actors: [...ROLLS.actors, { actor: "campaign:c1/character/bea", name: "Bea Quill", role: "player" }] };
 
 test("a roll answered after another character is chosen is still shown, and the next review is a new request", async () => {

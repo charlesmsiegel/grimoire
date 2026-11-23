@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 from prep_app_fixtures import DIRECTOR, cast_of
+from scene_fixtures import BOB
 from store_helpers import OWNER
 from textapi_fixtures import Device, desktop_library, keep, say
 
@@ -29,6 +30,7 @@ from grimoire.app import AppServer
 from grimoire.app.adapters import rules
 from grimoire.app.appapi import AppApi
 from grimoire.app.pages import load_pages
+from grimoire.core.identity import InstanceRef
 from grimoire.mechanicsstore import MechanicsStore
 from grimoire.rollstore import RollLibrary
 from grimoire.testing.fileops import snapshot as files_of
@@ -298,6 +300,17 @@ def test_an_npcs_roll_is_the_directors_and_the_table_never_sees_or_makes_one(des
         table = app.call("rules.rolls", {"campaign": chat.campaign_id, "chat": str(chat)})
         assert [item["attempt"] for item in table["rolls"]] == ["sneak-1"]
         assert "Mara" not in json.dumps(table["rolls"]) and mara not in json.dumps(table)
+
+        # Mara handed to a player since: the director's identical retry still reads the recorded roll back (a lost
+        # answer is recovered), and draws nothing; a new roll for her is her player's alone
+        device.api.runner.seat_player(chat, device.table.owner, InstanceRef.parse(mara), BOB)
+        recorded = files_of(root)
+        again = app.call("rules.roll", {**npc, **DIRECTOR, "review": plan["review"]})
+        assert again["done"] == {"attempt": "director:notice", "drawn": False} and again["roll"] == rolled
+        assert refused(app, "rules.roll", **npc, review=plan["review"]).reason == "not_your_character"
+        fresh = _ask(chat, mara, request_id="listen", action={**STEALTH, "ability": "wisdom", "skill": "perception"})
+        assert refused(app, "rules.roll_plan", **{**fresh, **DIRECTOR}).reason == "not_your_character"
+        assert files_of(root) == recorded and dice.asked == [20, 20]
 
 
 def test_rolls_the_domain_or_the_page_would_not_take_are_refused_before_a_die_is_drawn(desk):

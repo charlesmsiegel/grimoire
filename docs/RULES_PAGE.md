@@ -94,7 +94,10 @@ for a player's roll, the action that backs it.
   dice once and records them before the answer is shown.
 - **Asking again.** The same request asked again (a retry, or **Ask again**) reads the same roll back and draws no
   die (`drawn: false`). The page keeps the request id while the values stay the same, until a roll is shown; the
-  next review after that is a new request. Another request under the same attempt refuses `already_rolled`.
+  next review after that is a new request. Another request under the same attempt refuses `already_rolled`. A retry
+  is read back even if the character's control changed since it was rolled (075 reads an identical request back
+  before it checks control), for the player whose words backed it, or for the director's view of an NPC's roll.
+  Any new roll is the current controller's alone.
 - **Earlier attempts in a turn.** 075 does not yet limit how many attempts one actor makes in a turn
   ([ROLLS](ROLLS.md), "One roll per attempt, not per turn"), and this page adds no limit of its own. Instead the
   review lists the actor's earlier rolls in the same chat and turn (`plan.earlier`), as "Anya Rook already rolled

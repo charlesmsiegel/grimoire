@@ -189,6 +189,20 @@ def _values(kind: type, raw: object) -> dict:
     return dict(raw)
 
 
+def _recorded_by(ctx: AdapterContext, campaign: str, actor: object, request_id: str, audience: str) -> str | None:
+    """Whose recorded roll of ``actor`` under ``request_id`` this view may read back: "player" for one this player's
+    own words backed, "npc" for an NPC's roll in the director's view, or None."""
+    for roll in _library(ctx, _no_draw).state(campaign).rolls.values():
+        if roll.request.request_id != request_id or roll.request.actor != actor:
+            continue
+        if roll.contribution is None:
+            if audience == "director":
+                return "npc"
+        elif roll.contribution.submitted_by == ctx.owner:
+            return "player"
+    return None
+
+
 def _request(ctx: AdapterContext, args: Mapping[str, object], *, reviewing: bool):  # type: ignore[no-untyped-def]
     """The chat, its scene, the actor's name, the 062 request and the 003 contribution backing it (or None), and the
     digest naming exactly that pair."""
@@ -199,23 +213,28 @@ def _request(ctx: AdapterContext, args: Mapping[str, object], *, reviewing: bool
     actor = parse.actor_of(args.get("actor"), "actor", campaign.campaign_id)
     if actor not in scene.cast:
         raise ApiRefused("no_actor", f"{actor} is not in this chat's cast")
+    request_id = segment(args, "request_id")
     controller = scene.controller(actor)
-    if controller == DIRECTOR:
-        if audience != "director":
-            raise ApiRefused("director_only", "an NPC's rolls are the director's")
+    if controller == DIRECTOR and audience == "director":
         whose = "npc"
     elif controller == ctx.owner:
         whose = "player"
-    elif controller is None:
-        raise ApiRefused("no_controller", "nobody controls this character, so nothing rolls for it here")
     else:
-        raise ApiRefused("not_your_character", "only the character's own player rolls for it")
+        # A roll already recorded under this request id for this actor, by this view, is read back as asked
+        # again, even if control changed since: 075 returns an identical recorded request before it checks control,
+        # so a lost answer is recovered. Anything else is a new roll, and only the current controller rolls.
+        whose = _recorded_by(ctx, campaign.campaign_id, actor, request_id, audience)
+        if whose is None:
+            if controller == DIRECTOR:
+                raise ApiRefused("director_only", "an NPC's rolls are the director's")
+            if controller is None:
+                raise ApiRefused("no_controller", "nobody controls this character, so nothing rolls for it here")
+            raise ApiRefused("not_your_character", "only the character's own player rolls for it")
     family = args.get("family")
     if family == "ars":
         raise ApiRefused("no_roll", NO_ROLL)
     if family not in ROLLED:
         raise ApiRefused("invalid_field", "family must be d20, wod or pbta")
-    request_id = segment(args, "request_id")
     module = reference_module(family)  # type: ignore[arg-type]
     kind = ACTION_TYPES[family]  # type: ignore[index]
     try:
