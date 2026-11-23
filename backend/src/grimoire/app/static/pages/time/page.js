@@ -168,10 +168,10 @@ async function showBoard(slot, ctx, { campaign, chat }) {
       if (node.getAttribute("type") === "checkbox") {
         if (node.checked === value) continue;
         node.checked = value;
-        node.dispatchEvent({ type: "change" });
+        node.dispatchEvent(new Event("change"));
       } else if (node.value !== value) {
         node.value = value;
-        node.dispatchEvent({ type: node.tagName === "SELECT" ? "change" : "input" });
+        node.dispatchEvent(new Event(node.tagName === "SELECT" ? "change" : "input"));  // a real Event: a browser refuses a plain object
       }
     }
   }
