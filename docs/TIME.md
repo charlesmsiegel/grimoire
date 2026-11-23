@@ -151,9 +151,9 @@ screen is a page is checked by `test_app_time.py` to be a registered page.
 | 080 | Speech to draft | in a chat: Dictate in the composer (`chats`) | `test_app_dictation.py`, `js/dictate.e2e.mjs` | voice off, no microphone or no recognizer: the strip says why and shows no Dictate |
 | 081 | Story threads | `story`, for this chat | `test_story_page.py`, `js/story.e2e.mjs` | an unknown thread refuses `no_thread`; with no chat chosen the row says to open one |
 | 082 | Read-only world audits | not on a screen yet (Authoring, a later part of 116) | | named on the page as not available |
-| 083 | Character voice performance | not on a screen yet (in a chat, a later part of 116) | | named on the page as not available |
+| 083 | Character voice performance | in a chat (`chat`): Listen, the kept lines in their cast voices; voices cast on Voices (`voices`) | `test_app_listen.py` | with no voice or no audio, each line is shown as text for its time |
 | 084 | Cross-campaign scene transfer | not on a screen yet (a chat's Details, a later part of 116) | | named on the page as not available |
-| 085 | Live context preview | Models and costs (`providers`): an NPC's context and a draft previewed against it | `test_context_preview.py` | nothing is posted, kept or sent; the composer's own entry point is a later part of 116 |
+| 085 | Live context preview | in a chat, the director's view (`chat`): Preview context in the composer; also Models and costs (`providers`) | `test_app_listen.py`, `test_context_preview.py` | nothing is posted, kept or sent; the table's view shows no NPC's context |
 | 086 | Mechanics module authoring | Rules, in the rail under Library (`rules`, `#/rules`) | `test_app_rules.py`, `js/rules.e2e.mjs`, `js/rules.test.mjs` | a draft with problems is `invalid_module`, each problem by its path; a stale save or publish is `changed`; a filled sheet and a graded check are shown as not saved |
 | 087 | World authoring proposals | not on a screen yet (Authoring, a later part of 116) | | named on the page as not available |
 
