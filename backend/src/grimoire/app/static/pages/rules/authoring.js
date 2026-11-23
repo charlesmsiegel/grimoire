@@ -256,11 +256,13 @@ async function showDraft(slot, revisionsSlot, ctx, info, moduleId) {
     });
   };
   const reread = async () => {
-    const unchanged = editor.value === saved();
+    const before = editor.value;
+    const unchanged = before === saved();
     answer = await ctx.api("rules.module", { module: moduleId });
     // with no edits of its own, the editor shows the draft as it is now: an unchanged editor is never a stale copy
-    // that a later save could put back over the newer draft unseen
-    if (unchanged && answer.draft && typeof answer.draft.text === "string") {
+    // that a later save could put back over the newer draft unseen. Text typed while the draft was read again is
+    // an edit, kept with the base it was begun from.
+    if (unchanged && editor.value === before && answer.draft && typeof answer.draft.text === "string") {
       editor.value = answer.draft.text; unsent.clear(); base.clear(); cleared.clear();
       problems.replaceChildren(el("p", { class: "g-muted" }, "The draft was saved from somewhere else; it is shown as it is now."));
     }
