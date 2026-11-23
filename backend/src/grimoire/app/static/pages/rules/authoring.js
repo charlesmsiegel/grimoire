@@ -206,6 +206,10 @@ async function showDraft(slot, revisionsSlot, ctx, info, moduleId) {
   const base = ctx.draft("rules:base:" + moduleId);
   const editor = ui.field("Module JSON", { draft: unsent, value: answer.draft.text, multiline: true,
     hint: "The whole module as JSON. Saving keeps any text, even unfinished JSON; checking writes nothing." });
+  // the draft store keeps no empty text, so a cleared editor is remembered by a mark of its own: coming back shows
+  // the empty unsaved edit, not the saved text
+  const cleared = ctx.draft("rules:cleared:" + moduleId);
+  if (cleared.get() && !unsent.get()) editor.input.value = "";
   editor.input.classList.add("rules-editor");
   editor.input.setAttribute("spellcheck", "false");
   const status = el("p", { class: "rules-status", tabindex: "-1" });
@@ -216,12 +220,13 @@ async function showDraft(slot, revisionsSlot, ctx, info, moduleId) {
   let review = null;
   const saved = () => answer.draft.text;
   const track = () => {  // the unsaved text is based on the draft as it was when editing began
+    if (editor.value === "" && saved() !== "") cleared.set("1"); else cleared.clear();
     if (editor.value === saved()) base.clear();
     else if (!base.get()) base.set(answer.draft.etag);
   };
   const based = () => (editor.value === saved() ? answer.draft.etag : base.get() || answer.draft.etag);
   const stale = () => editor.value !== saved() && based() !== answer.draft.etag;
-  const discard = () => { editor.value = saved(); unsent.clear(); base.clear(); checks.bump(); problems.replaceChildren(); review = null; drawReview(); drawStatus(); };
+  const discard = () => { editor.value = saved(); unsent.clear(); base.clear(); cleared.clear(); checks.bump(); problems.replaceChildren(); review = null; drawReview(); drawStatus(); };
   const drawStatus = () => {
     status.replaceChildren(el("span", { class: "g-muted" }, "Saved draft: "), count(answer.draft.bytes, "byte"),
       el("span", { class: "g-muted" }, " · " + answer.file));
@@ -251,7 +256,14 @@ async function showDraft(slot, revisionsSlot, ctx, info, moduleId) {
     });
   };
   const reread = async () => {
+    const unchanged = editor.value === saved();
     answer = await ctx.api("rules.module", { module: moduleId });
+    // with no edits of its own, the editor shows the draft as it is now: an unchanged editor is never a stale copy
+    // that a later save could put back over the newer draft unseen
+    if (unchanged && answer.draft && typeof answer.draft.text === "string") {
+      editor.value = answer.draft.text; unsent.clear(); base.clear(); cleared.clear();
+      problems.replaceChildren(el("p", { class: "g-muted" }, "The draft was saved from somewhere else; it is shown as it is now."));
+    }
     drawRevisions();
     drawStatus();
   };
@@ -286,7 +298,7 @@ async function showDraft(slot, revisionsSlot, ctx, info, moduleId) {
     }
     review = null;
     // only what was saved is cleared from this tab; text typed meanwhile stays an unsaved change, now based on it
-    if (editor.value === args.text) { unsent.clear(); base.clear(); } else base.set(answer.draft.etag);
+    if (editor.value === args.text) { unsent.clear(); base.clear(); cleared.clear(); } else base.set(answer.draft.etag);
     ctx.notify(answer.done.already ? "That text was already saved; nothing was written again." : "The draft is saved.");
     drawReview();
     drawRevisions();
