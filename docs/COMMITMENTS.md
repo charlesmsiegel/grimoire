@@ -174,7 +174,7 @@ dropped to fit.
 
 | Not here | Owner |
 |---|---|
-| Commitment UI | 116 |
+| Commitment UI beyond the Time page ([TIME](TIME.md), 116), which offers, records and voids: a decision for a character another person plays, made with their own key | 116 later |
 | Labelling and runner capture of `fulfills` claims | 077 later / 047 |
 | Branching goals, quest stages and dependencies, and planning aids | 077 milestone 3 |
 | Delegating or transferring a commitment, scene transfer, ledger compaction | 077 later |

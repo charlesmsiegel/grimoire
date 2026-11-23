@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "id": "time",
+  "route": "time",
+  "title": "Time and commitments",
+  "slot": "hidden",
+  "order": 21,
+  "owner": "116",
+  "entry": "page.js",
+  "requires": ["campaign.chats", "time.overview", "time.coverage"],
+  "unavailable": null
+}
