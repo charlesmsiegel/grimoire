@@ -1,0 +1,14 @@
+{
+  "contract": 1,
+  "id": "rules",
+  "route": "rules",
+  "title": "Rules",
+  "slot": "library",
+  "order": 40,
+  "owner": "116",
+  "entry": "page.js",
+  "requires": ["campaign.chats", "rules.authoring", "rules.module", "rules.template", "rules.check", "rules.save_plan",
+               "rules.save", "rules.publish_plan", "rules.publish", "rules.revision", "rules.sheet", "rules.grade",
+               "rules.rolls", "rules.roll_plan", "rules.roll"],
+  "unavailable": null
+}

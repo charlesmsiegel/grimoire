@@ -68,7 +68,10 @@ export async function showHub(root, ctx, campaign, asked, audience) {
   // preparing it (115): its catalog bindings, ruleset contracts and a prepared scene, for the same chat and view
   const prep = ctx.registered("prep") ? ui.buttonLink("Prep", "prep", [campaign],
     { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
-  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, time, companions, world, forks, prep,
+  // its recorded rolls (075) and rolling a check (116), for the same chat and view
+  const rules = ctx.registered("rules") ? ui.buttonLink("Rules", "rules", [campaign],
+    { chat: chat || undefined, audience: audience === "director" ? "director" : undefined }, { size: "small" }) : null;
+  const nav = el("div", { class: "g-row" }, ui.buttonLink("All campaigns", "campaign", [], undefined, { size: "small" }), ...browse, chronicle, time, companions, world, forks, prep, rules,
     chats.length ? el("span", { class: "g-muted" }, count(chats.length, "chat") + " in this campaign") : null,
     el("nav", { class: "g-chips", "aria-label": "This campaign's chats" }, chips));
   root.append(el("div", { class: "g-stack campaign-top" }, cover, nav));
