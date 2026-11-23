@@ -43,13 +43,14 @@ FEATURES: tuple[dict, ...] = (
      "Story threads, for this chat: a thread of the story followed to how it ended", "reason": None},
     {"slice": "082", "title": "Read-only world audits", "status": "unavailable", "route": None, "where": None,
      "reason": f"its screen (Authoring) is built in {LATER}"},
-    {"slice": "083", "title": "Character voice performance", "status": "unavailable", "route": None, "where": None,
-     "reason": f"its place (in a chat) is built in {LATER}"},
+    {"slice": "083", "title": "Character voice performance", "status": "screen", "route": "chat", "chat": True, "where":
+     "in this chat: Listen to the scene, its kept lines in their cast voices (voices are cast on Voices, in Settings)",
+     "reason": None},
     {"slice": "084", "title": "Cross-campaign scene transfer", "status": "unavailable", "route": None, "where": None,
      "reason": f"its place (a chat's Details) is built in {LATER}"},
-    {"slice": "085", "title": "Live context preview", "status": "screen", "route": "providers", "where":
-     "Models and costs, in Settings: one NPC's current context and a draft previewed against it (the composer's "
-     f"own entry point is built in {LATER})", "reason": None},
+    {"slice": "085", "title": "Live context preview", "status": "screen", "route": "chat", "chat": True, "where":
+     "in this chat, the director's view: Preview context in the composer, the draft read as Post would read it "
+     "against an NPC's current context (also on Models and costs, in Settings)", "reason": None},
     {"slice": "086", "title": "Mechanics module authoring", "status": "screen", "route": "rules", "where":
      "Rules, in the rail under Library: a rules module drafted, checked, saved and published as reviewed",
      "reason": None},
