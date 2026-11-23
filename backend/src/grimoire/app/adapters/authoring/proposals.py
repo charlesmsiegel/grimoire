@@ -79,7 +79,6 @@ from ..prep.preparation import (  # the app's one estimate and usage of a call
 )
 from .common import (
     MAX_PROPOSALS,
-    MAX_REQUESTS,
     keys_of,
     memory,
     reason_of,
@@ -173,6 +172,19 @@ def _drop_draft(ctx: AdapterContext, entry: Entry) -> None:
         except (ChangeSetError, AuthoringError):
             pass  # already ended: nothing to revoke
     entry.draft, entry.digest = None, None
+
+
+def _end(ctx: AdapterContext, made: AcceptanceDraft) -> None:
+    """End a draft 043 refused to write (it conflicted, or cannot apply): its approvals are revoked and it can never
+    be applied later. One already decided is left as it is."""
+    try:
+        library(ctx).reject(made, ctx.authority)
+    except (ChangeSetError, AuthoringError):
+        pass  # already_decided: nothing left to revoke
+    # an authority that fails now: 043 withdraws the approvals on a later reject, and the person is answered with
+    # the write's own refusal, not this one
+    except Exception:  # noqa: BLE001, S110
+        pass
 
 
 def _reviewed(ctx: AdapterContext, entry: Entry) -> None:
@@ -363,21 +375,23 @@ def _planned(ctx: AdapterContext, args: Mapping[str, object]) -> _Planned:
     replay = None
     earlier = held.requests.get(request_id)  # type: ignore[arg-type]
     if earlier is not None:
-        if earlier[0] != ask:
+        if earlier["ask"] != ask:
             raise ApiRefused("request_conflict", "that request was made with another brief: suggest again under a new "
                                                  "request")
-        if earlier[1] not in held.proposals:
-            raise ApiRefused("forgotten", "this app no longer holds what that request suggested: suggest again under "
-                                          "a new request")
-        replay = earlier[1]
+        if earlier["proposal"] is not None:
+            if earlier["proposal"] not in held.proposals:
+                raise ApiRefused("forgotten", "this app no longer holds what that request suggested: suggest again "
+                                              "under a new request")
+            replay = earlier["proposal"]
     context = _authoring(lambda: library(ctx).context(source))
     config, etag, blocked = model_state(ctx)
     messages = _authoring(lambda: authoring_messages(request, context))
     estimate = _estimate(config, messages)
-    unkept = sum(1 for item in held.spent if item["request"] == request_id and not item["kept"])
+    unkept = len(earlier["spent"]) if earlier is not None else 0
     offered = [[str(record.ref), record.kind, record.name] for record in context.records]
     body = {"request": [request_id, *ask[:2], list(constraints), bound], "basis": context.basis, "title": context.title,
-            "records": offered, "truncated": context.truncated, "settings": etag, "estimate": estimate, "sent": unkept}
+            "records": offered, "truncated": context.truncated, "settings": etag, "estimate": estimate, "sent": unkept,
+            "nonce": held.nonce}  # salted: a token is had only from an estimate, never worked out by a client
     review = hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:32]
     return _Planned(source, request, context, config, blocked, estimate, review, replay)
 
@@ -409,6 +423,8 @@ def suggest(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                 "proposal": proposal_view(ctx, entry)}  # type: ignore[arg-type]
     if planned.blocked is not None:
         raise ApiRefused(planned.blocked["reason"], planned.blocked["message"])
+    if planned.review in held.consumed:
+        raise ApiRefused("changed", "that estimate was already used for a call; estimate again to approve another")
     config = planned.config
     assert config is not None
     armed: dict = {}
@@ -426,6 +442,9 @@ def suggest(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                 record_calls(meter)
 
     kept = False
+    asked = (planned.source, planned.request.brief, planned.request.constraints, planned.request.max_candidates)
+    record = held.request(request_id, asked)
+    held.consume(planned.review)  # one approval, one send: never taken again, whatever comes back
     armed["on"] = True
     try:
         runner = ctx.api.runner
@@ -437,15 +456,20 @@ def suggest(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     finally:
         armed["on"] = False
         used = _usage(generator, config)  # type: ignore[arg-type]
-        if used["attempts"]:  # what was spent is said, whether or not a reply was kept
-            held.spend({"request": request_id, "kept": kept, **used})
+        if used["attempts"] and not kept:  # what was spent is said, whether or not a reply was kept
+            record["spent"].append(used)
+    # the paid reply is kept, and the request answers it, before anything else can fail: a review that fails leaves
+    # a kept proposal with no review (the page reviews it again), never a lost reply
     entry = Entry(planned.source, proposal, "model", _names(planned.context), usage=used if used["attempts"] else None)
-    _reviewed(ctx, entry)
     _keep(ctx, entry)
-    asked = (planned.source, planned.request.brief, planned.request.constraints, planned.request.max_candidates)
-    held.keep(held.requests, request_id, (asked, proposal.proposal_id), MAX_REQUESTS)  # type: ignore[arg-type]
-    return {"source": planned.source, "done": {"request": request_id, "replay": False},
-            "proposal": proposal_view(ctx, entry)}
+    record["proposal"] = proposal.proposal_id
+    done = {"request": request_id, "replay": False, "review_problem": None}
+    try:
+        _reviewed(ctx, entry)
+    except ApiRefused as error:
+        entry.review = None
+        done["review_problem"] = error.reason
+    return {"source": planned.source, "done": done, "proposal": proposal_view(ctx, entry)}
 
 
 # -- review, decide, write -----------------------------------------------------------------------------------------
@@ -503,12 +527,14 @@ def apply(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
                      if made.changes.needs_approval else None)  # this op is the person's own press on the draft
         accepted = authoring.apply(made, approvals)
     except ChangeSetConflict as error:
+        _end(ctx, made)
         entry.draft, entry.digest = None, None
         raise ApiRefused("conflict", "the world changed since the draft; nothing was written. Review the proposal "
                                      "again: " + "; ".join(f"{c.target} {c.reason}" for c in error.conflicts)) from None
     except WriteDenied:
         raise ApiRefused("denied", "the library's authority refused this write; nothing was written") from None
-    except ChangeSetError as error:
+    except ChangeSetError as error:  # not_applicable from approve among them: the draft can never be written
+        _end(ctx, made)
         entry.draft, entry.digest = None, None
         raise refused(error, "changeset_refused") from None
     except AuthoringError as error:

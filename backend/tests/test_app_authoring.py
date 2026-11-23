@@ -19,10 +19,12 @@ import shutil
 import subprocess
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from authoring_app_fixtures import (
     COAST,
+    COAST_MAP,
     GUILD,
     HALL,
     LANTERN,
@@ -30,6 +32,7 @@ from authoring_app_fixtures import (
     VALE,
     entity,
     reply,
+    seed_maps,
     seed_vale,
     settings,
     towns,
@@ -39,6 +42,7 @@ from textapi_fixtures import Device, desktop_library
 
 from grimoire.app import AppServer
 from grimoire.app.adapters import providers
+from grimoire.app.adapters.authoring import common, proposals
 from grimoire.app.appapi import AppApi
 from grimoire.app.config import authoring_policy, config_json, parse_model_config
 from grimoire.app.pages import load_pages
@@ -81,6 +85,11 @@ def configured(device, path: Path, replies=()) -> ScriptedTransport:
 
 def record(ref: SourceRef) -> str:
     return f"sources/world/vale/_source/records/{ref.kind}/{ref.entity_id}/{ref.revision}.json"
+
+
+def held(device) -> common.Memory:
+    """The app's in-memory proposals and requests for ``device``'s library (what the ops keep)."""
+    return common.memory(SimpleNamespace(api=device.api))  # type: ignore[arg-type]
 
 
 def accept(app: AppApi, proposal: dict, *keys: str, distinct=()) -> dict:
@@ -211,9 +220,11 @@ def test_a_review_the_world_outran_refuses_and_the_proposal_is_reviewed_again(de
                                           {**stored.manifest.heads, "location/saltmarch-coast": "r2"}), stored.etag)
         txn.commit(device.table.owner)
         before = canonical(device)
+        made = held(device).proposals[again["proposal"]].draft
         assert refused(app, "authoring.apply", source=VALE, proposal=again["proposal"],
                        draft=drafted["draft"]["digest"]).reason == "conflict"
         assert canonical(device) == before
+        assert made.changes.state == "rejected", "the refused draft is ended in 043, its approvals revoked"
         problems = app.call("authoring.review", {"source": VALE, "proposal": again["proposal"]})["proposal"]
         assert {item["link"]: item["problem"] for item in problems["links"] if item["problem"]} == {
             "brinewick-in": "endpoint_moved", "gullhaven-in": "endpoint_moved", "tidemoor-in": "endpoint_moved"}
@@ -325,7 +336,8 @@ def test_a_suggestion_is_one_call_sent_only_as_estimated_and_approved(desk, tmp_
 
         traces = len(app.call("providers.diagnostics", {})["traces"])
         done = app.call("authoring.suggest", {**ask, "expected": plan["expected"]})
-        assert done["done"] == {"request": "coast-1", "replay": False} and len(transport.sends) == 1
+        assert done["done"] == {"request": "coast-1", "replay": False, "review_problem": None}
+        assert len(transport.sends) == 1
         # one 048 trace of its own, like every other model call
         shown = app.call("providers.diagnostics", {})["traces"]
         assert len(shown) == traces + 1
@@ -382,6 +394,94 @@ def test_a_reply_087_refuses_keeps_nothing_and_says_what_was_spent(desk, tmp_pat
         assert len(transport.sends) == 1
         shown = app.call("authoring.source", {"source": VALE})
         assert shown["proposals"] == []
+
+
+def test_a_world_with_several_maps_names_the_one_a_draft_extends(desk):
+    folder, _chat = desk
+    with Device(folder) as device:
+        seed_vale(device)
+        seed_maps(device)
+        app = AppApi(device.api)
+        shown = app.call("authoring.source", {"source": VALE})
+        assert shown["maps"] == [{"topology": "coast-map", "ref": str(COAST_MAP), "name": "Coast map"},
+                                 {"topology": "sea-map", "ref": str(COAST_MAP).replace("coast-map", "sea-map"),
+                                  "name": "Sea map"}]
+        proposal = app.call("authoring.build", {"source": VALE, **towns()})["proposal"]
+        before = canonical(device)
+        args = {"source": VALE, "proposal": proposal["proposal"], "accept": ["brinewick", "gullhaven"]}
+        assert refused(app, "authoring.draft", **args).reason == "ambiguous_topology"
+        drafted = app.call("authoring.draft", {**args, "topology": "coast-map"})["proposal"]["draft"]
+        assert drafted["topology"] == str(COAST_MAP.at("r2"))
+        assert [item["change"] for item in drafted["files"] if "/topology/" in item["path"]] == ["revise"]
+        assert canonical(device) == before
+        done = app.call("authoring.apply", {"source": VALE, "proposal": proposal["proposal"],
+                                            "draft": drafted["digest"]})["proposal"]["applied"]
+        assert done["topology"] == str(COAST_MAP.at("r2"))
+        graph = decode_topology(COAST_MAP.at("r2"),
+                                device.table.store.load().index.resolve(COAST_MAP.at("r2")).envelope.payload)
+        assert {place.ref.entity_id for place in graph.places} == {"saltmarch-coast", "port-lantern", "brinewick",
+                                                                  "gullhaven"}
+
+
+def test_an_estimate_approves_one_send_only_even_once_its_request_is_forgotten(desk, tmp_path, monkeypatch):
+    folder, _chat = desk
+    with Device(folder) as device:
+        seed_vale(device)
+        app = AppApi(device.api)
+        monkeypatch.setattr(common, "MAX_REQUESTS", 1)
+        invented = {"candidates": [{"key": "a", "kind": "location", "name": "A", "role": "individual",
+                                    "description": ""}],
+                    "links": [{"id": "x", "relation": "road", "subject": "a", "object": f"{VALE}/location/nowhere@r1"}],
+                    "rationale": ""}
+        transport = configured(device, settings(tmp_path / "model.json"), [reply(invented), reply(suggestion())])
+        first = {"source": VALE, "request_id": "first", "brief": "A town"}
+        token = app.call("authoring.suggest_plan", first)["plan"]["expected"]
+        assert refused(app, "authoring.suggest", **first, expected=token).reason == "unknown_record"
+        second = {"source": VALE, "request_id": "second", "brief": "Some towns"}
+        app.call("authoring.suggest", {**second, "expected": app.call("authoring.suggest_plan", second)["plan"]["expected"]})
+        assert len(transport.sends) == 2
+        assert list(held(device).requests) == ["second"], "the first request is forgotten, with what it spent"
+        # everything the first token covered is the same again, but the approval it carried was used
+        assert app.call("authoring.suggest_plan", first)["plan"]["expected"] == token
+        assert refused(app, "authoring.suggest", **first, expected=token).reason == "changed"
+        assert len(transport.sends) == 2
+
+
+def test_a_token_is_had_only_from_an_estimate(tmp_path):
+    tokens = []
+    for name in ("one", "two"):
+        folder, _chat = desktop_library(tmp_path / name)
+        with Device(folder) as device:
+            seed_vale(device)
+            configured(device, settings(tmp_path / (name + ".json")))
+            tokens.append(AppApi(device.api).call("authoring.suggest_plan", dict(ASK))["plan"]["expected"])
+    assert tokens[0] != tokens[1], "the same request in another library (or after a restart) has another token"
+
+
+def test_a_paid_reply_is_kept_even_when_its_review_fails(desk, tmp_path, monkeypatch):
+    folder, _chat = desk
+    with Device(folder) as device:
+        seed_vale(device)
+        app = AppApi(device.api)
+        transport = configured(device, settings(tmp_path / "model.json"), [reply(suggestion())])
+        real = proposals._reviewed
+
+        def failing(ctx, entry):  # type: ignore[no-untyped-def]
+            raise proposals.ApiRefused("unreadable_topology", "the map cannot be read")
+
+        monkeypatch.setattr(proposals, "_reviewed", failing)
+        plan = app.call("authoring.suggest_plan", dict(ASK))["plan"]
+        done = app.call("authoring.suggest", {**ASK, "expected": plan["expected"]})
+        assert done["done"]["review_problem"] == "unreadable_topology" and done["proposal"]["reviewed"] is False
+        assert len(transport.sends) == 1
+        assert refused(app, "authoring.draft", source=VALE, proposal=done["proposal"]["proposal"],
+                       accept=["brinewick"]).reason == "review_required"
+        # the request answers the kept proposal, sending nothing; reviewed again, it is drafted as any other
+        again = app.call("authoring.suggest", {**ASK, "expected": app.call("authoring.suggest_plan", dict(ASK))["plan"]["expected"]})
+        assert again["done"]["replay"] is True and again["proposal"]["proposal"] == done["proposal"]["proposal"]
+        monkeypatch.setattr(proposals, "_reviewed", real)
+        reviewed = app.call("authoring.review", {"source": VALE, "proposal": done["proposal"]["proposal"]})["proposal"]
+        assert reviewed["reviewed"] is True and len(transport.sends) == 1
 
 
 # -- 082: a read-only audit ------------------------------------------------------------------------------------------

@@ -34,7 +34,7 @@ offer no control.
 |---|---|---|
 | `authoring.build` | `source`, `candidates[]`, `links[]`, `rationale`, `brief` (optional) | `{proposal}`, already reviewed |
 | `authoring.suggest_plan` | `source`, `request_id`, `brief`, `constraints[]`, `max_candidates` (1–16, default 8) | `{plan: {request, expected, replay, blocked, call, context}, note}`; nothing is sent |
-| `authoring.suggest` | the same, and `expected` (the plan's token) | `{done: {request, replay}, proposal}` |
+| `authoring.suggest` | the same, and `expected` (the plan's token) | `{done: {request, replay, review_problem}, proposal}` |
 | `authoring.review` | `source`, `proposal` | `{proposal}` |
 | `authoring.draft` | `source`, `proposal`, `accept[]`, `distinct[]`, `topology` (optional) | `{proposal}` with its `draft` |
 | `authoring.apply` | `source`, `proposal`, `draft` (the draft's digest) | `{done: {already_applied}, proposal}` with what was `applied` |
@@ -46,7 +46,13 @@ A proposal view has these fields:
   (an existing record, or another candidate, that shares its name);
 - `links[]`: each with its relation, its subject, its `object` (a candidate, or an existing record by its pinned
   ref) and its review `problem`;
+- `reviewed` (false when its review failed; such a proposal cannot be drafted until it is reviewed again);
 - `draft`, `applied` and `usage`.
+
+`authoring.source` also answers `maps[]`: each of the world's maps (059 topologies) at its head, as `{topology, ref,
+name}`. A draft whose links need a map, in a world with more than one, refuses `ambiguous_topology` until it names
+one as `topology`. The page then reads the source again, offers **Map its links go on** on the proposal (the focus
+goes there), and sends the chosen map with the next draft. A named map that already exists is revised.
 
 The page never sends a proposal's content back. It names a proposal only by the id the server gave it, so a client
 cannot present its own candidates as the model's.
@@ -79,19 +85,30 @@ the app's estimate (as Prep's scene preparation does: the prompt counted as its 
 prices). With it comes a review token over:
 - the request and the context it offers;
 - the model settings' etag and the estimate;
-- the calls already spent under that request.
+- the calls already spent under that request;
+- a random value the app draws once per library it serves, so a token is had only from this app's estimate (the
+  same request in another library, or after a restart, has another token).
 
 Nothing is sent. `suggest` builds everything again, refuses `changed` if anything moved (and `review_required` with
-no token), and only then runs 087's generator. That is one optional `planning` call under the settings' authoring
+no token), and only then runs 087's generator. A token approves one send: it is spent as the call is made, and a
+spent token refuses `changed` even when everything it covered is the same again. The app keeps the last 4096 spent
+tokens. That is one optional `planning` call under the settings' authoring
 policy, through 013's adapter, on an untrusted handle of its own (`app:world-author`), approved for its exact
 payload while that one call is made. It is one 048 trace, `world_authoring`.
 
 The same request asked again answers the proposal it already gave and sends nothing. Asked with another brief, it
 refuses `request_conflict`. A reply 087 refuses keeps nothing and keeps its reason (`unknown_record`, for one). The
-spent call is part of the next estimate, so the old token cannot approve a second send. The app remembers the last
-256 requests for replay, 32 proposals and 16 audit reports; past that the oldest is forgotten. A forgotten proposal
-or report refuses `unknown_proposal` or `unknown_audit`; a request whose proposal was forgotten refuses `forgotten`;
-a forgotten request is a new one, which needs its own estimate and approval.
+spent call is part of the next estimate, and its token is spent, so the old token cannot approve a second send. A
+reply 087 accepts is kept as a proposal, and its request answers it, before it is reviewed: a review that fails
+leaves the proposal kept but not reviewed, and `done.review_problem` names why, so a paid reply is never lost. The
+app remembers the last 256 requests for replay, each with the calls spent under it, 32 proposals and 16 audit
+reports; past that the oldest is forgotten, a request together with its spent calls. A forgotten proposal or report
+refuses `unknown_proposal` or `unknown_audit`; a request whose proposal was forgotten refuses `forgotten`; a
+forgotten request is a new one, which needs its own estimate and approval (its old token stays spent).
+
+When the answer to **Approve and suggest** is lost after the call was made, the page reads the source again and
+shows the proposals the app holds, merged by id, the new suggestion among them, and says that nothing more was sent.
+The estimate is spent either way. Drawing an answer that came back can never report the call as failed.
 
 **Review, decide, write.** Every proposal is reviewed when it is made, and again on **Review again**. 087's review
 shows each namesake of a record already in the world, and each link problem. The person ticks **Accept** on the
@@ -111,9 +128,14 @@ A draft writes nothing. It refuses as 087 does:
 **Approve and write** sends the draft's digest. `apply` writes exactly that draft through 043, as the owner's
 press:
 - a digest that is not the draft held now refuses `changed`;
-- a world that moved since the draft refuses `conflict` and writes nothing, and the page reviews again;
+- a world that moved since the draft refuses `conflict` and writes nothing, and the page reviews again; a write 043 refuses
+  (this conflict, or a change set it can never write, `not_applicable` among them) ends the draft's change set
+  (`reject`), so no approval is left on it;
 - retried after it was written, it answers `already_applied` and writes nothing again;
 - a proposal already written refuses `already_applied` to `review` and `draft`.
+
+The hand builder keeps the focus on the control a person is in when it redraws (every control has a
+`data-focus-key`). After **Remove**, the focus goes to the next row, else the one before, else to adding another.
 
 After a write the page links each created record and names the world's new map revision. **Discard** (`reject`)
 ends the proposal and writes nothing. A brainstorm, and any candidate not accepted, is never stored anywhere.

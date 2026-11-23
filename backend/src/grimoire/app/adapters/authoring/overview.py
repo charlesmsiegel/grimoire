@@ -19,6 +19,8 @@ from grimoire.authoring import (
     ROLES,
     AuthoringError,
 )
+from grimoire.authoringstore.library import TOPOLOGY
+from grimoire.core.identity import SourceRef
 from grimoire.textapi import ApiRefused
 
 from .audits import BOUNDS, audits_of
@@ -43,6 +45,22 @@ UNAVAILABLE = (
 )
 
 
+def _maps(view, source: str, heads: Mapping[str, str]) -> list[dict]:  # type: ignore[no-untyped-def]
+    """The world's maps (059 topologies) at their heads: a draft whose links must extend one of several names it."""
+    found = []
+    for key, revision in sorted(heads.items()):
+        kind, _, entity_id = key.partition("/")
+        if kind != TOPOLOGY:
+            continue
+        ref = SourceRef(source, kind, entity_id, revision)
+        try:
+            name = view.index.resolve(ref).envelope.name
+        except Exception:  # noqa: BLE001 - a map that cannot be read is still named, by its id
+            name = None
+        found.append({"topology": entity_id, "ref": str(ref), "name": name or None})
+    return found
+
+
 def source(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     """The source the page is about, and what the page can do with it."""
     asked = source_of(args)
@@ -53,7 +71,7 @@ def source(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     if stored is None:
         raise ApiRefused("missing_source", f"this library has no source {asked}")
     world = asked.startswith("world:")
-    records, truncated = [], False
+    records, truncated, maps = [], False, []
     if world:
         try:
             context = library(ctx).context(asked)
@@ -62,11 +80,12 @@ def source(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
         records = [{"ref": str(record.ref), "kind": record.kind, "name": record.name,
                     "place": KINDS.get(record.kind, False)} for record in context.records]
         truncated = context.truncated
+        maps = _maps(view, asked, stored.manifest.heads)
     _config, _etag, blocked = model_state(ctx)
     title = stored.manifest.title
     return {
         "source": asked, "title": title if title and title.strip() else None, "world": world, "etag": stored.etag,
-        "records": records, "records_truncated": truncated,
+        "records": records, "records_truncated": truncated, "maps": maps,
         "suggest": {"available": world and blocked is None, "blocked": blocked},
         "proposals": proposals_of(ctx, asked) if world else [],
         "audits": audits_of(ctx, asked) if world else [],

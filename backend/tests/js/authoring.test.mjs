@@ -2,7 +2,8 @@
 // suggestion's constraints, an audit's budget, the words a removal preview is said in), and the page with canned
 // answers: a draft refused stale_review reviews the proposal again by itself; a write refused conflict does too and
 // writes nothing; a brainstorm offers no Accept; an estimate answered after the ask changed is never offered for
-// approval; an audit report answered after a newer run is dropped.
+// approval; an audit report answered after a newer run is dropped; a lost approval answer shows the suggestion that
+// was made; a world with several maps asks which map a draft extends; the hand builder keeps and moves the focus.
 // Run by test_app_shell_js.py.
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -217,4 +218,112 @@ test("a page that names no source, or a source that is not a world, offers no au
     assert.ok(section(card, title).textContent.includes("is not available yet"));
   }
   assert.ok(section(card, "Source upgrades").textContent.includes("Previewing an update is not available yet."));
+});
+
+const PLAN = (request) => ({ source: WORLD, plan: { request, expected: "t", replay: false, blocked: null,
+  call: { stage: "planning", calls: 1, prompt_tokens: 5, route: "p@x/m", cost_state: "unpriced", local: false }, context: { records: 1, truncated: false, basis: "b" } } });
+
+test("an approval whose answer is lost shows the suggestion the app made, and sends nothing more", async () => {
+  const calls = [];
+  let made = null;
+  const root = await mounted((op, args) => {
+    calls.push(op);
+    if (op === "authoring.source") return { ...SOURCE, proposals: made ? [made] : [] };
+    if (op === "authoring.upgrades") return UPGRADES;
+    if (op === "authoring.suggest_plan") return PLAN(args.request_id);
+    if (op === "authoring.suggest") {
+      // the call was made and kept, then the answer never came back
+      made = { ...PROPOSAL, proposal: "model-1", kind: "model", origin: "model:p@x/m",
+        request: { request: args.request_id, brief: args.brief, constraints: [], max_candidates: 16 } };
+      throw Object.assign(new Error("the connection closed"), { reason: "network" });
+    }
+    throw new Error("unexpected " + op);
+  });
+  const world = section(root, "World suggestions");
+  set(group(world, "Ask the model"), "What to suggest", "Towns");
+  button(group(world, "Ask the model"), "Estimate the call").click();
+  await settle();
+  button(group(world, "Approve this call"), "Approve and suggest").click();
+  await settle();
+  assert.equal(calls.filter((op) => op === "authoring.suggest").length, 1);
+  assert.equal(calls.at(-1), "authoring.source", "the page reads what the app holds now");
+  const shown = world.querySelector('article[data-proposal="model-1"]');
+  assert.ok(shown, "the suggestion that was made is shown");
+  assert.ok(shown.textContent.includes("the suggestion was made") && shown.textContent.includes("Nothing more was sent"), shown.textContent);
+  assert.equal(group(world, "Approve this call"), undefined, "the spent estimate is not offered again");
+});
+
+// the focused element is that one (an element's own diff is the whole tree, so only the key is said)
+function same(actual, expected, message = "") {
+  const key = (node) => (node && node.getAttribute ? node.getAttribute("data-focus-key") || node.tagName : String(node));
+  assert.ok(actual === expected && expected, message + " (focus is on " + key(actual) + ", not " + key(expected) + ")");
+}
+
+test("a world with several maps asks which one a proposal's links go on, and sends it", async () => {
+  const calls = [];
+  const linked = { ...PROPOSAL, candidates: [candidate("c1", "Brinewick")],
+    links: [{ link: "l1", relation: "within", subject: "c1", object: { record: COAST, name: "Saltmarch Coast" }, problem: null }] };
+  const maps = [{ topology: "coast-map", ref: "world:vale/topology/coast-map@r1", name: "Coast map" },
+    { topology: "sea-map", ref: "world:vale/topology/sea-map@r1", name: "Sea map" }];
+  const root = await mounted((op, args) => {
+    calls.push([op, args]);
+    if (op === "authoring.source") return { ...SOURCE, maps, proposals: [linked] };
+    if (op === "authoring.upgrades") return UPGRADES;
+    if (op === "authoring.draft") {
+      if (!args.topology) throw Object.assign(new Error("several maps"), { reason: "ambiguous_topology" });
+      return { proposal: { ...linked, draft: { ...DRAFT, topology: "world:vale/topology/coast-map@r2" } } };
+    }
+    throw new Error("unexpected " + op);
+  });
+  document.body.append(root);  // focus is had only in the page
+  const world = section(root, "World suggestions");
+  let shown = world.querySelector('article[data-proposal="hand-1"]');
+  tickBox(shown, "Accept Brinewick");
+  button(shown, "Draft the change").click();
+  await settle();
+  assert.deepEqual(calls.filter(([op]) => op === "authoring.draft").at(-1)[1], { source: WORLD, proposal: "hand-1", accept: ["c1"], distinct: [] });
+  shown = world.querySelector('article[data-proposal="hand-1"]');
+  assert.ok(shown.textContent.includes("more than one map"), shown.textContent);
+  const pick = shown.querySelector('[data-focus-key="authoring:map:hand-1"]');
+  same(document.activeElement, pick, "the focus goes to the choice of map");
+  pick.value = "coast-map";
+  pick.dispatchEvent({ type: "change" });
+  button(shown, "Draft the change").click();
+  await settle();
+  assert.deepEqual(calls.at(-1), ["authoring.draft", { source: WORLD, proposal: "hand-1", accept: ["c1"], distinct: [], topology: "coast-map" }]);
+  assert.ok(group(world, "The change set of hand-1").textContent.includes("one new revision of the world's map"));
+  root.remove();
+});
+
+test("the hand builder keeps the focus where it was, and moves it to a neighbour after a Remove", async () => {
+  const root = await mounted((op) => {
+    if (op === "authoring.source") return SOURCE;
+    if (op === "authoring.upgrades") return UPGRADES;
+    throw new Error("unexpected " + op);
+  });
+  document.body.append(root);  // focus is had only in the page
+  const builder = () => group(section(root, "World suggestions"), "Build a proposal by hand");
+  const keyed = (key) => builder().querySelector('[data-focus-key="authoring:' + key + '"]');
+  button(builder(), "Add a place or group").click();
+  same(document.activeElement, keyed("name:c1"));
+  button(builder(), "Add a place or group").click();
+  button(builder(), "Add a place or group").click();
+  same(document.activeElement, keyed("name:c3"));
+  const kind = keyed("kind:c2");
+  kind.focus();
+  kind.value = "organization";
+  kind.dispatchEvent({ type: "change" });
+  same(document.activeElement, keyed("kind:c2"), "a redraw keeps the focus on the same control");
+  button(builder(), "Add a link").click();
+  same(document.activeElement, keyed("relation:l1"));
+  button(builder(), "Remove l1").click();
+  same(document.activeElement, keyed("add-link"), "with no link left, the focus goes to adding one");
+  button(builder(), "Remove c2").click();
+  same(document.activeElement, keyed("name:c3"), "the next row's name");
+  button(builder(), "Remove c3").click();
+  same(document.activeElement, keyed("name:c1"), "else the row before");
+  button(builder(), "Remove c1").click();
+  same(document.activeElement, keyed("add-candidate"), "else adding another");
+  for (const node of builder().querySelectorAll("input,select,textarea,button")) assert.ok(node.getAttribute("data-focus-key"), node.textContent);
+  root.remove();
 });

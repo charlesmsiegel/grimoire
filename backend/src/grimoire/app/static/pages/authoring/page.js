@@ -82,6 +82,22 @@ function focusOn(node) {
   if (node && node.focus) node.focus();
 }
 
+// A value inside a CSS attribute selector ([data-proposal="..."]): ids are the server's, but never trusted as CSS.
+function cssText(text) {
+  if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(String(text));
+  return String(text).replace(/["\\]/g, "\\$&");
+}
+
+function labelled(root, title) {
+  return root.querySelector('[aria-label="' + cssText(title) + '"]');
+}
+
+// Show what an answer already settled: a failure to draw it is logged, never reported as the answer failing (a
+// paid call that was made must never read as one that was not).
+function shown(work) {
+  try { work(); } catch (error) { console.error("grimoire: the authoring page could not show an answer", error); }
+}
+
 // -- world suggestions (087) -----------------------------------------------------------------------------------
 
 async function showSuggestions(slot, page) {
@@ -93,6 +109,8 @@ async function showSuggestions(slot, page) {
   const body = el("div", { class: "g-stack" });
   node.append(el("p", { class: "g-muted" }, page.info.note), body);
   let proposals = page.info.proposals.slice();
+  // what the server holds now, merged in by id: a proposal made while an answer was lost shows up
+  const merge = (held) => { for (const view of held.slice().reverse()) put(view); };
   // what the person ticked on each proposal, before it is drafted: { accept: Set, distinct: Set }
   const choices = new Map();
   const chosen = (id) => { if (!choices.has(id)) choices.set(id, { accept: new Set(), distinct: new Set() }); return choices.get(id); };
@@ -112,13 +130,12 @@ async function showSuggestions(slot, page) {
     const at = proposals.findIndex((item) => item.proposal === view.proposal);
     if (at >= 0) proposals[at] = view; else proposals.unshift(view);
   };
-  const article = (id) => node.querySelectorAll("article").find((item) => item.getAttribute("data-proposal") === id);
+  const article = (id) => node.querySelector('article[data-proposal="' + cssText(id) + '"]');
   const reviewAgain = async (id, why) => {
     const answer = await ctx.api("authoring.review", { source, proposal: id });
     put(answer.proposal);
     notes.set(id, why);
-    draw();
-    focusOn(article(id));
+    shown(() => { draw(); focusOn(article(id)); });
   };
 
   const build = () => {
@@ -136,8 +153,7 @@ async function showSuggestions(slot, page) {
       put(answer.proposal);
       notes.set(answer.proposal.proposal, "Reviewed against the world as it is now. Nothing is stored yet.");
       ctx.notify("Proposal reviewed. Nothing is stored yet.");
-      draw();
-      focusOn(article(answer.proposal.proposal));
+      shown(() => { draw(); focusOn(article(answer.proposal.proposal)); });
       return true;
     });
   };
@@ -166,34 +182,51 @@ async function showSuggestions(slot, page) {
       }
       stale = "";
       review = { request, ask, plan: answer.plan };
-      draw();
-      focusOn(node.querySelector('[aria-label="Approve this call"]'));
+      shown(() => { draw(); focusOn(labelled(node, "Approve this call")); });
       return true;
     });
   };
 
   const approve = () => ctx.act(async () => {
     const sent = review;
+    let answer;
     try {
-      const answer = await ctx.api("authoring.suggest", { source, request_id: sent.request, ...sent.ask, expected: sent.plan.expected });
-      if (brief.value === sent.ask.brief) brief.clear();
-      if (JSON.stringify(constraintsOf(constraints.value)) === JSON.stringify(sent.ask.constraints)) constraints.clear();
+      answer = await ctx.api("authoring.suggest", { source, request_id: sent.request, ...sent.ask, expected: sent.plan.expected });
+    } catch (error) {
+      if (error && error.reason === "left") throw error;
+      // the estimate is spent (sent, or refused because something moved): estimate again for a new approval. The
+      // answer may have been lost after the call was made: what the app holds now is shown, the suggestion with it.
       review = null;
-      attempt = null;
-      put(answer.proposal);
-      notes.set(answer.proposal.proposal, answer.done.replay ? "That request was already suggested: nothing was sent again." : "Suggested by the model and reviewed. Nothing is stored yet.");
+      stale = "";
+      try {
+        page.info = await page.reload();
+        merge(page.info.proposals);
+        const made = page.info.proposals.find((item) => item.kind === "model" && item.request.request === sent.request);
+        if (made) {
+          attempt = null;
+          notes.set(made.proposal, "The answer to your approval was lost, but the suggestion was made: here it is. Nothing more was sent.");
+        }
+      } catch (reload) {
+        console.error("grimoire: the authoring page could not read the source again", reload);
+      }
+      shown(draw);
+      throw error;
+    }
+    // the call was made (or replayed): from here on nothing reports it as failed
+    if (brief.value === sent.ask.brief) brief.clear();
+    if (JSON.stringify(constraintsOf(constraints.value)) === JSON.stringify(sent.ask.constraints)) constraints.clear();
+    review = null;
+    attempt = null;
+    put(answer.proposal);
+    const problem = answer.done.review_problem;
+    notes.set(answer.proposal.proposal, answer.done.replay ? "That request was already suggested: nothing was sent again."
+      : problem ? "Suggested by the model and kept, but it could not be reviewed (" + problem.replace(/_/g, " ") + "): review it again before you decide."
+        : "Suggested by the model and reviewed. Nothing is stored yet.");
+    shown(() => {
       ctx.notify(answer.done.replay ? "Already suggested; nothing was sent again." : "The suggestion is here. Nothing is stored yet.");
       draw();
       focusOn(article(answer.proposal.proposal));
-    } catch (error) {
-      if (error && error.reason === "left") throw error;
-      // the estimate is spent (sent, or refused because something moved): estimate again for a new approval
-      review = null;
-      stale = "";
-      page.info = await page.reload();
-      draw();
-      throw error;
-    }
+    });
     return true;
   });
 
@@ -201,15 +234,23 @@ async function showSuggestions(slot, page) {
     const marks = chosen(item.proposal);
     const accept = item.candidates.filter((candidate) => marks.accept.has(candidate.key)).map((candidate) => candidate.key);
     const distinct = item.candidates.filter((candidate) => marks.accept.has(candidate.key) && marks.distinct.has(candidate.key)).map((candidate) => candidate.key);
+    const args = { source, proposal: item.proposal, accept, distinct };
+    if (marks.map) args.topology = marks.map;
     try {
-      const answer = await ctx.api("authoring.draft", { source, proposal: item.proposal, accept, distinct });
+      const answer = await ctx.api("authoring.draft", args);
       put(answer.proposal);
       notes.set(item.proposal, "");
-      draw();
-      focusOn(node.querySelector('[aria-label="The change set of ' + item.proposal + '"]'));
+      shown(() => { draw(); focusOn(labelled(node, "The change set of " + item.proposal)); });
     } catch (error) {
       if (error && error.reason === "stale_review") {
         await reviewAgain(item.proposal, "The world changed since this proposal was reviewed, so it was reviewed again: check it and draft again.");
+        return true;
+      }
+      if (error && error.reason === "ambiguous_topology") {
+        // the world has several maps and the links must go on one: the person names it, then drafts again
+        page.info = await page.reload();
+        notes.set(item.proposal, "This world has more than one map: choose the map its links go on, then draft again.");
+        shown(() => { draw(); focusOn(article(item.proposal) && article(item.proposal).querySelector('[data-focus-key="authoring:map:' + cssText(item.proposal) + '"]')); });
         return true;
       }
       throw error;
@@ -224,10 +265,13 @@ async function showSuggestions(slot, page) {
       choices.delete(item.proposal);
       notes.set(item.proposal, "");
       ctx.notify(answer.done.already_applied ? "That change set was already written; nothing was written again." : "Written: " + plural(answer.proposal.applied.records.length, "record") + ".");
-      page.info = await page.reload();
-      await page.wrote();
-      draw();
-      focusOn(node.querySelector('[aria-label="Written from ' + item.proposal + '"]'));
+      try {
+        page.info = await page.reload();
+        await page.wrote();
+      } catch (reload) {
+        console.error("grimoire: the authoring page could not read the source again", reload);
+      }
+      shown(() => { draw(); focusOn(labelled(node, "Written from " + item.proposal)); });
     } catch (error) {
       if (error && ["conflict", "changed"].includes(error.reason)) {
         await reviewAgain(item.proposal, "Nothing was written: the world changed since the draft, so the proposal was reviewed again. Check it and draft again.");
@@ -243,56 +287,85 @@ async function showSuggestions(slot, page) {
     put(answer.proposal);
     choices.delete(item.proposal);
     ctx.notify("Discarded. Nothing of it was written.");
-    draw();
-    focusOn(article(item.proposal));
+    shown(() => { draw(); focusOn(article(item.proposal)); });
     return true;
   });
 
-  function draw() {
+  function draw(focusKey) {
+    const active = typeof document !== "undefined" ? document.activeElement : null;
+    const kept = focusKey || (active && active.getAttribute && body.contains(active) ? active.getAttribute("data-focus-key") : null);
     const parts = [builderGroup(), suggestGroup()];
     if (proposals.length) parts.push(el("h3", { class: "authoring-sub" }, "Proposals this session"), ...proposals.map(proposalView));
     else parts.push(ui.empty("No proposal yet. Build one by hand or ask the model for one."));
     parts.push(...missingList(ui, page.info, "087"));
     body.replaceChildren(...parts);
+    if (kept) focusOn(body.querySelector('[data-focus-key="' + cssText(kept) + '"]'));
   }
 
   // The hand builder: rows of places and groups, and links between them or to places already in the world.
   function builderGroup() {
     const records = page.info.records;
-    const rows = builder.candidates.map((item) => {
+    const keyed = (control, key) => { control.setAttribute("data-focus-key", "authoring:" + key); return control; };
+    const rows = builder.candidates.map((item, at) => {
       const set = (field) => (value) => { keep({ ...builder, candidates: builder.candidates.map((other) => other.key === item.key ? { ...other, [field]: value } : other) }); };
       const name = ui.field("Name", { value: item.name });
-      name.input.setAttribute("data-focus-key", "authoring:name:" + item.key);
+      keyed(name.input, "name:" + item.key);
       name.input.addEventListener("input", () => set("name")(name.value));
       const description = ui.field("Description (optional)", { value: item.description, multiline: true });
+      keyed(description.input, "description:" + item.key);
       description.input.addEventListener("input", () => set("description")(description.value));
       const kind = ui.choice("Kind", Object.entries(KIND_NAMES).map(([value, label]) => ({ value, label })), { value: item.kind, onchange: (value) => { set("kind")(value); draw(); } });
+      keyed(kind.select, "kind:" + item.key);
       const role = ui.choice("Role", Object.entries(ROLE_NAMES).map(([value, label]) => ({ value, label })), { value: item.role, onchange: (value) => { set("role")(value); } });
+      keyed(role.select, "role:" + item.key);
+      // after a Remove the focus goes to the next row's name, else the one before, else to adding another
+      const remove = () => {
+        const next = builder.candidates[at + 1] || builder.candidates[at - 1];
+        keep(removeCandidate(builder, item.key));
+        draw(next ? "authoring:name:" + next.key : "authoring:add-candidate");
+      };
       return el("fieldset", { class: "authoring-fields authoring-row" }, el("legend", {}, "Candidate " + item.key),
         name.node, kind.node, role.node, description.node,
-        ui.actions(ui.button("Remove " + item.key, () => { keep(removeCandidate(builder, item.key)); draw(); })));
+        ui.actions(keyed(ui.button("Remove " + item.key, remove), "remove:" + item.key)));
     });
-    const links = builder.links.map((link) => {
+    const links = builder.links.map((link, at) => {
       const set = (field) => (value) => { keep({ ...builder, links: builder.links.map((other) => other.id === link.id ? { ...other, [field]: value } : other) }); };
       const relation = ui.choice("Relation", Object.entries(RELATION_NAMES).map(([value, label]) => ({ value, label })), { value: link.relation, onchange: (value) => set("relation")(value) });
+      keyed(relation.select, "relation:" + link.id);
       const from = ui.choice("From", [{ value: "", label: "Choose…" }, ...builder.candidates.map((item) => ({ value: item.key, label: (item.name.trim() || item.key) + " (proposed)" }))],
         { value: link.subject, onchange: (value) => { set("subject")(value); draw(); } });
+      keyed(from.select, "from:" + link.id);
       const to = ui.choice("To", [{ value: "", label: "Choose…" }, ...endpointOptions(builder, records, link.subject)], { value: link.object, onchange: (value) => set("object")(value) });
+      keyed(to.select, "to:" + link.id);
+      const remove = () => {
+        const next = builder.links[at + 1] || builder.links[at - 1];
+        keep(removeLink(builder, link.id));
+        draw(next ? "authoring:relation:" + next.id : "authoring:add-link");
+      };
       return el("fieldset", { class: "authoring-fields authoring-row" }, el("legend", {}, "Link " + link.id), relation.node, from.node, to.node,
-        ui.actions(ui.button("Remove " + link.id, () => { keep(removeLink(builder, link.id)); draw(); })));
+        ui.actions(keyed(ui.button("Remove " + link.id, remove), "remove:" + link.id)));
     });
     const rationale = ui.field("Why (optional)", { value: builder.rationale, multiline: true });
+    keyed(rationale.input, "rationale");
     rationale.input.addEventListener("input", () => keep({ ...builder, rationale: rationale.value }));
     const errors = el("div", { class: "g-field-error authoring-build-errors", role: "alert", hidden: true });
     const full = builder.candidates.length >= page.info.limits.candidates;
+    const addCandidateButton = () => {
+      keep(addCandidate(builder));
+      draw("authoring:name:" + builder.candidates[builder.candidates.length - 1].key);
+    };
+    const addLinkButton = () => {
+      keep(addLink(builder));
+      draw("authoring:relation:" + builder.links[builder.links.length - 1].id);
+    };
     return group(ui, "Build a proposal by hand",
       el("p", { class: "g-muted" }, "Places and groups for this world, joined by roads and by one place lying within another. A link to a place already in the world names its exact revision."),
       ...rows, ...links,
       builder.candidates.length ? rationale.node : null, errors,
       ui.actions(
-        full ? null : ui.button("Add a place or group", () => { keep(addCandidate(builder)); draw(); focusOn(node.querySelector('[data-focus-key="authoring:name:' + builder.candidates[builder.candidates.length - 1].key + '"]')); }),
-        builder.candidates.length ? ui.button("Add a link", () => { keep(addLink(builder)); draw(); }) : null,
-        builder.candidates.length ? ui.button("Review this proposal", build, { kind: "primary" }) : null));
+        full ? null : keyed(ui.button("Add a place or group", addCandidateButton), "add-candidate"),
+        builder.candidates.length ? keyed(ui.button("Add a link", addLinkButton), "add-link") : null,
+        builder.candidates.length ? keyed(ui.button("Review this proposal", build, { kind: "primary" }), "build") : null));
   }
 
   function suggestGroup() {
@@ -343,6 +416,7 @@ async function showSuggestions(slot, page) {
         ui.pill(item.kind === "model" ? "Suggested by the model" : "Built by you"),
         item.state === "applied" ? ui.pill("Written", { kind: "good" }) : item.state === "rejected" ? ui.pill("Discarded") : ui.pill("Not stored")),
       note ? el("p", { class: "g-muted", role: "status" }, note) : null,
+      open && !item.reviewed ? el("p", {}, ui.pill("Not reviewed yet", { kind: "bad" }), " Review it again before you decide: until then it cannot be drafted.") : null,
       usage ? el("p", { class: "g-muted" }, usage) : null,
       item.rationale ? el("p", {}, el("span", { class: "g-muted" }, "Why: "), item.rationale) : null,
     ];
@@ -379,9 +453,18 @@ async function showSuggestions(slot, page) {
     if (item.draft && open) parts.push(changeSet(item));
     if (item.applied) parts.push(written(item));
     if (item.state === "rejected") parts.push(el("p", { class: "g-muted" }, "Discarded: nothing of it was written."));
+    const maps = page.info.maps || [];
+    if (open && !item.draft && item.reviewed && item.links.length && maps.length > 1) {
+      const pick = ui.choice("Map its links go on", [{ value: "", label: "Choose a map…" }, ...maps.map((entry) => ({ value: entry.topology, label: entry.name || entry.topology }))],
+        { value: marks.map || "", onchange: (value) => { marks.map = value || null; } });
+      pick.select.setAttribute("data-focus-key", "authoring:map:" + item.proposal);
+      parts.push(pick.node);
+    }
     if (open && !item.draft) {
-      parts.push(ui.actions(ui.button("Review again", () => ctx.act(async () => { await reviewAgain(item.proposal, "Reviewed again against the world as it is now."); return true; })),
-        ui.button("Discard", () => discard(item)), ui.button("Draft the change", () => draft(item), { kind: "primary" })));
+      const again = ui.button("Review again", () => ctx.act(async () => { await reviewAgain(item.proposal, "Reviewed again against the world as it is now."); return true; }));
+      parts.push(item.reviewed
+        ? ui.actions(again, ui.button("Discard", () => discard(item)), ui.button("Draft the change", () => draft(item), { kind: "primary" }))
+        : ui.actions(ui.button("Discard", () => discard(item)), again));
     }
     return el("article", { class: "g-stack authoring-proposal", tabindex: "-1", "data-proposal": item.proposal, "aria-label": "Proposal " + item.proposal }, ...parts);
   }
@@ -389,7 +472,7 @@ async function showSuggestions(slot, page) {
   function changeSet(item) {
     const draft = item.draft;
     const files = el("ul", { class: "authoring-lines" }, draft.files.map((file) => el("li", {},
-      el("details", { class: "authoring-more" }, el("summary", {}, (file.change === "manifest" ? "Updates the manifest" : file.change === "create" ? "Creates" : "Writes") + " " + file.path),
+      el("details", { class: "authoring-more" }, el("summary", {}, (file.change === "manifest" ? "Updates the manifest" : file.change === "create" ? "Creates" : file.change === "revise" ? "Revises" : "Writes") + " " + file.path),
         el("p", { class: "g-muted" }, file.summary || (file.size + " bytes")),
         file.text !== null ? bytes(ui, file.text, "The bytes of " + file.path) : el("p", { class: "g-muted" }, "Not text: " + file.size + " bytes, sha256 " + file.sha256)))));
     const parts = [

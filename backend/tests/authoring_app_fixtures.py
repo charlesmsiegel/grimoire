@@ -18,6 +18,8 @@ from grimoire.core.entity_codec import ENTITY_SCHEMA
 from grimoire.core.identity import SourceRef
 from grimoire.store import RecordEnvelope, SourceManifest
 from grimoire.testing.providers import Reply
+from grimoire.topology import Place, Topology
+from grimoire.topology.codec import encode_topology
 
 VALE = "world:vale"
 COAST = SourceRef(VALE, "location", "saltmarch-coast", "r1")
@@ -43,6 +45,25 @@ def seed_vale(device) -> None:
     txn.put(entity(GUILD, "Lamplighters Guild", spatial=False), None)
     txn.put(SourceManifest(VALE, OWNER, "The Vale", {"location/saltmarch-coast": "r1", "location/port-lantern": "r1",
                                                      "organization/lamplighters-guild": "r1"}), None)
+    txn.commit(device.table.owner)
+
+
+COAST_MAP = SourceRef(VALE, "topology", "coast-map", "r1")
+SEA_MAP = SourceRef(VALE, "topology", "sea-map", "r1")
+
+
+def seed_maps(device) -> None:
+    """Two maps of the Vale, so a draft whose links must extend one has to name which (087's
+    ``ambiguous_topology`` otherwise)."""
+    store = device.table.store
+    stored = store.read_source(VALE)
+    txn = store.transaction()
+    for ref, name, places in ((COAST_MAP, "Coast map", (Place(COAST), Place(LANTERN, parent=COAST))),
+                              (SEA_MAP, "Sea map", (Place(COAST),))):
+        txn.put(RecordEnvelope(ref, encode_topology(Topology(ref, places, (), "drawn by hand")), name=name,
+                               owner=OWNER), None)
+    heads = {**stored.manifest.heads, "topology/coast-map": "r1", "topology/sea-map": "r1"}
+    txn.put(SourceManifest(VALE, OWNER, stored.manifest.title, heads), stored.etag)
     txn.commit(device.table.owner)
 
 

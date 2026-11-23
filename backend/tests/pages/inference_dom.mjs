@@ -159,10 +159,19 @@ assert.deepEqual(["price_prompt", "price_reply", "price_cached"].map((name) => i
 assert.ok(region(root, "Model").textContent.includes("estimates from them, never a bill"));
 type(input(root, "price_prompt"), " 3.50 ");
 type(input(root, "price_reply"), "15");
+// ticked, world suggestions are saved as 1; settings that have them on show the box ticked
+const suggestions = root.querySelector('input[data-focus-key="providers:authoring"]');
+suggestions.checked = true;
+saved = { ...models, settings: { ...models.settings, authoring: 1 } };
 const usageAsks = calls.filter((c) => c[0] === "usage").length;
 root.querySelector("form").dispatchEvent({ type: "submit", preventDefault() {} }); await tick();
 const priced = calls.filter((c) => c[0] === "save_models").pop()[1].settings;
 assert.deepEqual([priced.price_prompt, priced.price_reply, "price_cached" in priced], ["3.50", "15", false]);
+assert.equal(priced.authoring, 1, "a ticked World suggestions box is saved as 1");
+const redrawn = root.querySelector('input[data-focus-key="providers:authoring"]');
+assert.ok(redrawn !== suggestions, "the Model card is drawn again from the saved settings");
+assert.equal(redrawn.checked, true, "settings with authoring 1 show World suggestions ticked");
+saved = models;
 assert.equal(calls.filter((c) => c[0] === "usage").length, usageAsks + 1, "the chosen chat's costs are read again after a save");
 
 // usage: tiles that never show a lower bound bare, and a per-turn list

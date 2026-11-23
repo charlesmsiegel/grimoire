@@ -14,6 +14,7 @@ past that the oldest entry is forgotten, and an op naming it is answered ``unkno
 
 from __future__ import annotations
 
+import secrets
 import weakref
 from collections import OrderedDict
 from collections.abc import Mapping
@@ -29,6 +30,8 @@ MAX_AUDITS = 16
 #: Suggestion requests (and the calls they spent) remembered for replay; past that the oldest is forgotten, and
 #: asking it again needs a new estimate and a new approval like any new request.
 MAX_REQUESTS = 256
+#: Review tokens remembered as used, so none approves a second send.
+MAX_CONSUMED = 4096
 _REASON = "abcdefghijklmnopqrstuvwxyz_0123456789"
 
 
@@ -99,19 +102,38 @@ def keys_of(args: Mapping[str, object], key: str) -> tuple[str, ...]:
 
 
 class Memory:
-    """The proposals and audit reports this app holds for its open library, in memory only."""
+    """The proposals and audit reports this app holds for its open library, in memory only, and what each suggestion
+    request was asked with, gave and spent.
+
+    A suggestion's review token is a digest salted with ``nonce`` (chosen when the library is opened, never sent),
+    so no client can work one out without asking for an estimate, and a token is accepted for one send only
+    (``consumed``): even if everything it covers comes back the same (an old request forgotten with what it spent),
+    the approval it carried is never taken again."""
 
     def __init__(self) -> None:
+        self.nonce = secrets.token_hex(16)
         self.proposals: OrderedDict[str, object] = OrderedDict()
         self.audits: OrderedDict[str, object] = OrderedDict()
-        #: a suggestion's request id -> what it was asked with and the proposal it gave (a retry sends nothing)
-        self.requests: OrderedDict[str, tuple[tuple, str]] = OrderedDict()
-        #: every suggestion call sent, refused replies included
-        self.spent: list[dict] = []
+        #: a suggestion's request id -> {"ask": what it was asked with, "proposal": the proposal it gave or None,
+        #: "spent": every call it sent, refused replies included}; a request is forgotten with what it spent
+        self.requests: OrderedDict[str, dict] = OrderedDict()
+        #: review tokens a send was attempted with: never accepted again
+        self.consumed: OrderedDict[str, None] = OrderedDict()
 
-    def spend(self, entry: dict) -> None:
-        self.spent.append(entry)
-        del self.spent[:-MAX_REQUESTS]
+    def request(self, request_id: str, ask: tuple) -> dict:
+        """The record of one request (made now if new), kept as the most recent."""
+        found = self.requests.get(request_id)
+        if found is None:
+            found = {"ask": ask, "proposal": None, "spent": []}
+        self.keep(self.requests, request_id, found, MAX_REQUESTS)
+        return found
+
+    def consume(self, token: str) -> bool:
+        """Take ``token`` for one send: False when it was taken before."""
+        if token in self.consumed:
+            return False
+        self.keep(self.consumed, token, None, MAX_CONSUMED)
+        return True
 
     def keep(self, table: OrderedDict, key: str, value: object, limit: int) -> None:
         table[key] = value
@@ -131,5 +153,5 @@ def memory(ctx: AdapterContext) -> Memory:
     return found
 
 
-__all__ = ["MAX_AUDITS", "MAX_PROPOSALS", "MAX_REQUESTS", "Memory", "keys_of", "memory", "reason_of", "refused", "segment",
+__all__ = ["MAX_AUDITS", "MAX_CONSUMED", "MAX_PROPOSALS", "MAX_REQUESTS", "Memory", "keys_of", "memory", "reason_of", "refused", "segment",
            "source_of", "text_of", "whole", "world_only"]
