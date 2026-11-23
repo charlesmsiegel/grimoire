@@ -8,7 +8,7 @@
 // page scans again and says why; a call that got no answer keeps it (a retry is safe). The origin is never written.
 // The table's view says whose this is and shows nothing. Transferring state or assets, a chronology mapping and
 // missing art are named as not built, never offered. The decisions, sources and label being made are a draft of
-// this tab (ctx.draft).
+// this tab (ctx.draft), and so is a copy sent with no answer yet: coming back offers to finish that same copy.
 
 import { decisionOptions, leftText, newOperationId, noteText, omittedText, readDecisions, reasonText, requestOf, roleText, whereText } from "./logic.js";
 
@@ -46,8 +46,12 @@ export async function mount(root, ctx) {
   if (state.target && saved.decisions && typeof saved.decisions === "object") state.decisions = saved.decisions;
   if (state.target && Array.isArray(saved.sources)) state.sources = new Set(saved.sources.filter((ref) => typeof ref === "string"));
   let scan = null, review = null, asked = 0;
+  // A copy sent and not yet answered (no answer came, or the page was left): its reviewed request, kept in the draft
+  // so that coming back finishes that very copy (a retry of its operation id) and never plans a second one.
+  let pending = state.target && saved.pending && typeof saved.pending === "object" && saved.pending.args
+    && typeof saved.pending.args === "object" && typeof saved.pending.review === "string" ? saved.pending : null;
   const keep = () => draft.set(JSON.stringify({ target: state.target, label: state.label, decisions: state.decisions,
-    sources: state.sources ? [...state.sources] : null }));
+    sources: state.sources ? [...state.sources] : null, ...(pending ? { pending } : {}) }));
 
   const scanSlot = el("div", {}), reviewSlot = el("div", {}), doneSlot = el("div", {});
   const status = el("div", { class: "g-field-error", role: "alert", tabindex: "-1", hidden: true });
@@ -57,7 +61,7 @@ export async function mount(root, ctx) {
   const options = [{ value: "", label: "Choose a campaign…" }, ...listing.targets.map((item) => ({ value: item.campaign,
     label: (item.title || item.campaign) + " · " + item.chats + " chat" + (item.chats === 1 ? "" : "s") + (item.world ? " · " + item.world : "") }))];
   const target = ui.choice("Copy into", options, { value: state.target, onchange: (value) => {
-    state.target = value; state.decisions = {}; state.sources = null; keep(); loadScan(); } });
+    state.target = value; state.decisions = {}; state.sources = null; pending = null; keep(); loadScan(); } });
   root.append(card(ui, "Copy into",
     listing.targets.length ? target.node : ui.empty("This library has no other campaign with a chat to copy into."),
     el("p", { class: "g-muted" }, "The copy is a new chat of that campaign. This chat's own campaign is not offered: within one campaign, fork the chat.")),
@@ -197,15 +201,21 @@ export async function mount(root, ctx) {
         ui.button("Change the decisions", () => { changed(); const first = scanSlot.querySelector("select"); if (first) first.focus(); }))));
   }
 
-  const commit = () => ctx.act(async () => {
-    const reviewed = review;
+  const commit = () => send({ args: review.args, review: review.plan.review });
+
+  // Sends one reviewed copy: the request is kept as pending until an answer says what became of it.
+  const send = (reviewed) => ctx.act(async () => {
+    pending = reviewed;
+    keep();
     let answer;
     try {
-      answer = await ctx.api("transfer.commit", { ...reviewed.args, review: reviewed.plan.review });
+      answer = await ctx.api("transfer.commit", { ...reviewed.args, review: reviewed.review });
     } catch (error) {
       // No answer came (the app is unreachable, or the page was left): the review stands, and copying it again is
       // safe, since a retry finds a copy already made. Any refusal drops the review: scan again, and say why.
       if (!error || TRANSPORT.has(error.reason) || ctx.signal.aborted) throw error;
+      pending = null;  // refused, so nothing was copied: the next copy is planned afresh
+      keep();
       const why = error.reason === "changed" ? "Something changed since the review, so nothing was copied. Review the copy again."
         : "Nothing was copied: " + reasonText(error) + ". Review the copy again.";
       ctx.notify(why, { bad: true });
@@ -219,6 +229,7 @@ export async function mount(root, ctx) {
     }
     // an answer came, so the copy is made: what was being decided is spent even if the page was left meanwhile (kept,
     // it would come back to be planned again as a second copy, under a new operation id)
+    pending = null;
     draft.clear();
     if (ctx.signal.aborted) return;
     review = null;
@@ -234,7 +245,18 @@ export async function mount(root, ctx) {
     if (focus) focus.focus();
   });
 
-  if (state.target) await loadScan();
+  // Coming back to a copy that was sent with no answer: finish that copy (a retry of the same operation, which a copy
+  // already made answers as already made) or forget it, before anything new is planned.
+  function drawPending() {
+    const forget = () => { pending = null; keep(); doneSlot.replaceChildren(); loadScan(); };
+    doneSlot.replaceChildren(card(ui, "A copy was on its way",
+      el("p", { class: "transfer-focus", role: "alert", tabindex: "-1" }, "A copy was sent from this page and no answer came back. It may already have been made."),
+      el("p", { class: "g-muted" }, "Finish the copy sends that same reviewed copy again: if it was made, nothing is copied twice. Forget it only if you know it was not made, or no longer want it."),
+      ui.actions(ui.button("Finish the copy", () => send(pending), { kind: "primary" }), ui.button("Forget it", forget))));
+  }
+
+  if (pending) drawPending();
+  else if (state.target) await loadScan();
 }
 
 function card(ui, title, ...children) {

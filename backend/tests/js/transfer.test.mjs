@@ -1,6 +1,6 @@
 // Sprint 116's transfer page (084) without the app: each actor's choices (a namesake is never one), saved decisions
-// read back, the plan request (each gap named), the words a plan is said in, and a copy answered after the page was
-// left still clearing its draft. Run by test_app_shell_js.py.
+// read back, the plan request (each gap named), the words a plan is said in, and a copy sent as the page was left
+// finished as that same copy on coming back. Run by test_app_shell_js.py.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -68,11 +68,9 @@ test("a plan is said in words: where a post was, why one is omitted, what stays,
   assert.equal(logic.reasonText({ reason: "new_reason" }), "(new_reason)");
 });
 
-test("a copy answered after the page was left still spends its draft, so it is not planned again as a second copy", async () => {
+test("a copy sent when the page was left is finished as that same copy on coming back, never planned again", async () => {
   const CHAT = "campaign:a#chat/t";
   const drafts = new Map([["transfer:" + CHAT, JSON.stringify({ target: "b", label: "", decisions: { [MARA]: "new" }, sources: [] })]]);
-  const leaving = new AbortController();
-  let release;
   const calls = [];
   const plan = { mapping: [], posts: [], label: "", sources: { carried: [], left_out: [] }, posts_total: 0, pages: 0, omitted: [],
     left: [], notes: [], files: [], review: "rv" };
@@ -82,26 +80,37 @@ test("a copy answered after the page was left still spends its draft, so it is n
       history_problems: [], notes: [] },
     "transfer.plan": { plan },
   };
-  const root = ui.el("div", {});
-  await page.mount(root, {
-    ui, path: [CHAT], query: new URLSearchParams("audience=director"), signal: leaving.signal,
-    href: () => "#", registered: () => false, setTitle() {}, setCrumb() {}, styles() {}, layout() {}, navigate() {}, notify() {},
-    draft: (key) => ({ key, get: () => drafts.get(key), set: (text) => drafts.set(key, text), clear: () => drafts.delete(key) }),
-    act: async (work) => { try { return await work(); } catch { return undefined; } },
-    api: async (op, args) => {
-      calls.push(op);
-      if (op === "transfer.commit") return new Promise((resolve) => { release = () => resolve({ done: { chat: "campaign:b#chat/u", already_applied: false } }); });
-      return answers[op];
-    },
-  });
+  const open = async (commit) => {
+    const leaving = new AbortController();
+    const root = ui.el("div", {});
+    await page.mount(root, {
+      ui, path: [CHAT], query: new URLSearchParams("audience=director"), signal: leaving.signal,
+      href: () => "#", registered: () => false, setTitle() {}, setCrumb() {}, styles() {}, layout() {}, navigate() {}, notify() {},
+      draft: (key) => ({ key, get: () => drafts.get(key), set: (text) => drafts.set(key, text), clear: () => drafts.delete(key) }),
+      act: async (work) => { try { return await work(); } catch { return undefined; } },
+      api: async (op, args) => { calls.push([op, args]); return op === "transfer.commit" ? commit(args, leaving) : answers[op]; },
+    });
+    await settle();
+    return root;
+  };
+  const press = (root, label) => root.querySelectorAll("button").find((node) => node.textContent === label).click();
+  // the page is left while the copy is on its way: the shell's call then rejects as "left", whatever the server did
+  const first = await open((_args, leaving) => { leaving.abort(); return Promise.reject(Object.assign(new Error("left"), { reason: "left" })); });
+  press(first, "Plan the copy");
   await settle();
-  root.querySelectorAll("button").find((node) => node.textContent === "Plan the copy").click();
+  press(first, "Copy as reviewed");
   await settle();
-  root.querySelectorAll("button").find((node) => node.textContent === "Copy as reviewed").click();
-  await settle(5);
-  leaving.abort();  // the page is left while the copy is on its way
-  release();
+  const sent = calls.find(([op]) => op === "transfer.commit")[1];
+  assert.ok(JSON.parse(drafts.get("transfer:" + CHAT)).pending, "the sent copy is kept to be finished");
+
+  calls.length = 0;
+  const again = await open(() => ({ done: { chat: "campaign:b#chat/u", already_applied: true } }));
+  assert.ok(again.textContent.includes("A copy was on its way"));
+  assert.equal(again.querySelectorAll("button").find((node) => node.textContent === "Plan the copy"), undefined, "nothing new is offered to plan");
+  press(again, "Finish the copy");
   await settle();
-  assert.deepEqual(calls, ["transfer.targets", "transfer.scan", "transfer.plan", "transfer.commit"]);
-  assert.equal(drafts.get("transfer:" + CHAT), undefined, "the decisions of a copy that was made are not kept");
+  const retried = calls.find(([op]) => op === "transfer.commit")[1];
+  assert.deepEqual(retried, sent, "the same operation and review, retried");
+  assert.ok(again.textContent.includes("This copy was already made."));
+  assert.equal(drafts.get("transfer:" + CHAT), undefined, "and the draft is spent");
 });

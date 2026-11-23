@@ -96,8 +96,10 @@ offers no plan, and **Scan again**), `unknown_source`, and 107's `InvalidBinding
    imported history; the whisper is not in it.
 
 The target, the decisions, the sources and the label being made are a draft of the tab (`ctx.draft`), cleared once
-the copy is made, even when the page was left before the answer came, so a copy that was made is never offered to
-be planned again as a second one.
+the copy is made. A copy sent with no answer back (the app did not answer, or the page was left meanwhile) stays in
+that draft as pending: coming back shows **A copy was on its way** in place of the scan, and **Finish the copy** sends
+that same reviewed copy again, under its own operation id, so a copy already made answers `already_applied` and is
+never made twice. **Forget it** drops it and scans again. A refused copy is not kept: nothing was copied.
 
 ## Not on a screen, and why
 
