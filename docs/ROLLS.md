@@ -4,7 +4,7 @@
 - `grimoire.rolls` (pure): the dice an action needs, the one result a set of faces gives, the recorded roll and its codecs;
 - `grimoire.rollstore` (adapter): `RollLibrary`, which draws dice once and records them in an authority ledger before anyone sees them.
 
-There is no application control yet (Sprint 116 owns it), and nothing here applies an effect, spends a resource or chooses a partial result's cost. All scenarios are synthetic.
+Its application control is the Rules page's recorded rolls (Sprint 116, [RULES_PAGE](RULES_PAGE.md)), and nothing here applies an effect, spends a resource or chooses a partial result's cost. All scenarios are synthetic.
 
 **First useful proof.** "Commit a recorded roll without narration re-rolling it": Mara, Ana's player character, slips past a guard. It is a 5e Dexterity (Stealth) check, DC 15, modifier +3. The die shows 4, so the total is 7 and the check fails. A narration take that says she slipped past is rejected (`contradicts_resolution`); a take that keeps the failure is accepted on the roll's authority (`resolution:c10`). Asking for the roll again, after a retry or after the library is reopened, reads the same failure back and draws no die, even when the next die would have been a 20 (`backend/tests/test_rollstore.py`).
 
@@ -69,5 +69,5 @@ Each campaign has one authority ledger, `authority/rolls/<campaign_id>` ([STORAG
 - **One roll per attempt, not per turn.** A retry under the same attempt reads the roll back, but a fresh attempt is a fresh roll: a director's new request id, or a player's new action contribution in the same turn. Nothing yet limits how many attempts one actor makes in a turn, since some systems allow several actions; deriving the attempt from the turn is milestone 3's scene runner, and until then it is the caller's discipline.
 - **No effects.** A roll records a result; it applies no damage, condition or resource change, and journals nothing beyond itself (milestone 3).
 - **No opposed rolls or chosen costs.** A WoD contest between two pools and a PbtA partial's recorded choice are milestone 2.
-- **Not in the scene runner yet.** 035's runner reviews narration against 029's outcomes; feeding it these resolutions is milestone 3, and the controls are 116's.
+- **Not in the scene runner yet.** 035's runner reviews narration against 029's outcomes; feeding it these resolutions is milestone 3; the Rules page (116) names this as not available.
 - **Tail forgery.** As for every authority ledger, a valid batch appended at the tail with local file access is not detected by the chain; replay still refuses impossible faces and a second roll of one attempt.

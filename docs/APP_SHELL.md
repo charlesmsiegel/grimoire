@@ -30,7 +30,8 @@ backend/src/grimoire/app/
                                ([PREP](PREP.md)); table, ensemble and companions 115, a shared turn at one
                                screen, a previewed NPC exchange and reviewed captures ([TABLE](TABLE.md));
                                voices 116, the review of a voice casting change ([LISTEN](LISTEN.md)); time/ 116, a
-                               campaign's downtime, offscreen plans and commitments ([TIME](TIME.md))
+                               campaign's downtime, offscreen plans and commitments ([TIME](TIME.md)); rules/ 116,
+                               mechanics module authoring and recorded rolls ([RULES_PAGE](RULES_PAGE.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -185,6 +186,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `ensemble` | 115 | `/<ChatRef>?audience=director` |
 | `companions` | 115 | `/<campaign id>?chat=<ChatRef>&audience=director` |
 | `time` | 116 | `/<campaign id>?chat=<ChatRef>&audience=director` (the director's; the table's view says only that) |
+| `rules` | 116 | `?module=<id>&revision=<sha256:...>` (authoring); `/<campaign id>?chat=<ChatRef>&audience=director` (recorded rolls) |
 | `art` | 114 | `?scope=<scope>&subject=<subject>&limit=<n>` |
 | `sync` | 114 | |
 | `voices` | 116 | `?chat=<ChatRef>` (that chat's speakers, to cast; see [LISTEN.md](LISTEN.md)) |

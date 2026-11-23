@@ -3,8 +3,9 @@
 Sprint 086's first slice lets an author write a small mechanics module (sheet types and named checks) as a
 JSON document they own, see every problem with it in plain words, and publish it as an immutable revision
 only once it has none. A sheet filled under a revision and a check graded under it pin that revision, so a
-later edit changes new checks and never one already recorded. It is headless: there is no editor page yet
-(the Wave 9 UI exit, 116, owns that), no campaign selection of a module and no durable roll journal (075).
+later edit changes new checks and never one already recorded. Its editor is the Rules page (the Wave 9 UI
+exit, 116, [RULES_PAGE](RULES_PAGE.md)); there is still no campaign selection of a module and no durable roll
+journal (075).
 
 - `grimoire.mechanics` is pure: the expression language, validation, sheets, recorded-dice grading and the
   templates. No files, clocks or randomness.
@@ -151,4 +152,5 @@ Nothing here reads a campaign, a world or a provider, and removing these files c
 
 Compatibility and migration previews against existing characters (milestone 2), interactive rule tests and
 authoring extension policies (3), source-grounded rule compilation (4), selecting a published revision for a
-campaign or chat, the editor page (116), and durable roll journals (075).
+campaign or chat, and durable roll journals (075). The editor page is 116's Rules page
+([RULES_PAGE](RULES_PAGE.md)).

@@ -626,7 +626,7 @@ async function showCoverage(slot, ctx, { campaign, chat, audience }) {
   const linked = (item) => {
     if (item.chat) {
       return chat ? ui.link(item.title, item.route, [chat], audience === "director" ? { audience: "director" } : undefined)
-        : el("span", {}, item.title + " (open a chat to follow its threads)");
+        : el("span", {}, item.title + " (in a chat: open this page from one)");
     }
     if (item.campaign) return ui.link(item.title, item.route, [campaign], { chat: chat || undefined, audience: audience === "director" ? "director" : undefined });
     return ui.link(item.title, item.route);

@@ -271,7 +271,9 @@ test("a campaign's downtime, offscreen plans and commitments, each change review
   const story = byText(features, "a", "Story threads");
   assert.ok(story.length && story[0].getAttribute("href").startsWith("#/story/" + encodeURIComponent(chat)), "story threads, for this chat");
   assert.ok(byText(features, "a", "Hypothetical reply").length && byText(features, "a", "Live context preview").length);
-  assert.ok(byText(features, "strong", "Recorded rolls is not available yet.").length);
+  const rolls = byText(features, "a", "Recorded rolls");
+  assert.ok(rolls.length && rolls[0].getAttribute("href").startsWith("#/rules/"), "recorded rolls, on this campaign's Rules page");
+  assert.ok(byText(features, "strong", "World authoring proposals is not available yet.").length);
   assert.ok(features.textContent.includes("Downtime") && features.textContent.includes("Quests and commitments"));
 
   // the table's view: only that these are the director's
