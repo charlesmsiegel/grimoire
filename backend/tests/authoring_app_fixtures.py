@@ -52,9 +52,10 @@ COAST_MAP = SourceRef(VALE, "topology", "coast-map", "r1")
 SEA_MAP = SourceRef(VALE, "topology", "sea-map", "r1")
 
 
-def seed_maps(device) -> None:
+def seed_maps(device, *, declared: bool = True) -> None:
     """Two maps of the Vale, so a draft whose links must extend one has to name which (087's
-    ``ambiguous_topology`` otherwise)."""
+    ``ambiguous_topology`` otherwise). ``declared=False`` leaves them out of the manifest's heads: each is a single
+    revision, so it is its own head all the same."""
     store = device.table.store
     stored = store.read_source(VALE)
     txn = store.transaction()
@@ -62,7 +63,7 @@ def seed_maps(device) -> None:
                               (SEA_MAP, "Sea map", (Place(COAST),))):
         txn.put(RecordEnvelope(ref, encode_topology(Topology(ref, places, (), "drawn by hand")), name=name,
                                owner=OWNER), None)
-    heads = {**stored.manifest.heads, "topology/coast-map": "r1", "topology/sea-map": "r1"}
+    heads = {**stored.manifest.heads, **({"topology/coast-map": "r1", "topology/sea-map": "r1"} if declared else {})}
     txn.put(SourceManifest(VALE, OWNER, stored.manifest.title, heads), stored.etag)
     txn.commit(device.table.owner)
 

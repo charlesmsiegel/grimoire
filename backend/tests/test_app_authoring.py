@@ -47,6 +47,7 @@ from grimoire.app.appapi import AppApi
 from grimoire.app.config import authoring_policy, config_json, parse_model_config
 from grimoire.app.pages import load_pages
 from grimoire.core.identity import SourceRef
+from grimoire.store import SourceManifest
 from grimoire.testing.fileops import snapshot as files_of
 from grimoire.testing.providers import ScriptedTransport
 from grimoire.textapi import ApiRefused
@@ -421,6 +422,46 @@ def test_a_world_with_several_maps_names_the_one_a_draft_extends(desk):
                                 device.table.store.load().index.resolve(COAST_MAP.at("r2")).envelope.payload)
         assert {place.ref.entity_id for place in graph.places} == {"saltmarch-coast", "port-lantern", "brinewick",
                                                                   "gullhaven"}
+
+
+def test_maps_that_are_their_own_heads_are_offered_to_choose_between(desk):
+    # a single revision is its own head (docs/IDENTITY.md): two maps the manifest does not declare are still two maps
+    folder, _chat = desk
+    with Device(folder) as device:
+        seed_vale(device)
+        seed_maps(device, declared=False)
+        app = AppApi(device.api)
+        shown = app.call("authoring.source", {"source": VALE})
+        assert [item["topology"] for item in shown["maps"]] == ["coast-map", "sea-map"]
+        assert shown["maps"][0] == {"topology": "coast-map", "ref": str(COAST_MAP), "name": "Coast map"}
+        proposal = app.call("authoring.build", {"source": VALE, **towns()})["proposal"]
+        args = {"source": VALE, "proposal": proposal["proposal"], "accept": ["brinewick", "gullhaven"]}
+        assert refused(app, "authoring.draft", **args).reason == "ambiguous_topology"
+        assert app.call("authoring.draft", {**args, "topology": "coast-map"})["proposal"]["draft"]["topology"] == str(
+            COAST_MAP.at("r2"))
+
+
+def test_an_endpoint_is_a_place_by_its_capability_not_its_kind(desk):
+    # AGENTS.md: capabilities compose. A spatial item is a place to link to; a guild with no spatial is not.
+    folder, _chat = desk
+    fortress = SourceRef(VALE, "item", "floating-fortress", "r1")
+    with Device(folder) as device:
+        seed_vale(device)
+        store = device.table.store
+        stored = store.read_source(VALE)
+        txn = store.transaction()
+        txn.put(entity(fortress, "Floating Fortress", spatial=True), None)
+        txn.put(SourceManifest(VALE, stored.manifest.owner, stored.manifest.title,
+                               {**stored.manifest.heads, "item/floating-fortress": "r1"}), stored.etag)
+        txn.commit(device.table.owner)
+        app = AppApi(device.api)
+        places = {item["ref"]: item["place"] for item in app.call("authoring.source", {"source": VALE})["records"]}
+        assert places == {str(COAST): True, str(LANTERN): True, str(GUILD): False, str(fortress): True}
+        body = {"candidates": [{"key": "dock", "kind": "location", "name": "Sky Dock", "role": "individual",
+                                "description": ""}],
+                "links": [{"id": "up", "relation": "road", "subject": "dock", "object": str(fortress)}],
+                "rationale": ""}
+        assert [item["problem"] for item in app.call("authoring.build", {"source": VALE, **body})["proposal"]["links"]] == [None]
 
 
 def test_an_estimate_approves_one_send_only_even_once_its_request_is_forgotten(desk, tmp_path, monkeypatch):

@@ -18,7 +18,9 @@ accepted, and every audit report.** The page says so.
 
 `authoring.source` (`source`) is the page's first read. It answers:
 - the source: its title, whether it is a world, and its manifest etag;
-- the existing records 087's `context` offers as link targets (worlds only), each with whether it is a place;
+- the existing records 087's `context` offers as link targets (worlds only), each with whether it is a place. That
+  is 087's own rule, read from the record's capabilities and not its kind: a `location`, or any entity with `spatial`
+  that is not a template, so a spatial `item` is offered as a road's far end and a guild is not;
 - whether a suggestion can be sent now, and why not;
 - the proposals and audits held for the source;
 - the bounds the forms are checked against;
@@ -50,7 +52,8 @@ A proposal view has these fields:
 - `draft`, `applied` and `usage`.
 
 `authoring.source` also answers `maps[]`: each of the world's maps (059 topologies) at its head, as `{topology, ref,
-name}`. A draft whose links need a map, in a world with more than one, refuses `ambiguous_topology` until it names
+name}`. The heads are the ones 087 drafts against, so a map with a single revision is listed though the manifest
+declares no head for it (a single revision is its own head). A draft whose links need a map, in a world with more than one, refuses `ambiguous_topology` until it names
 one as `topology`. The page then reads the source again, offers **Map its links go on** on the proposal (the focus
 goes there), and sends the chosen map with the next draft. A named map that already exists is revised.
 
@@ -64,7 +67,8 @@ cannot present its own candidates as the model's.
 
 Each row gets a stable key (`c1`, `c2` and so on). Links are a road between two places, or one place lying within
 another. A link's far end is another candidate or one of the world's places, named by the exact pinned ref the
-context offered. The builder survives leaving the page as the page's draft, until it is reviewed. `build` checks
+context offered. The builder survives leaving the page as the page's draft, until it is reviewed. An edit made while
+the review is on its way is kept: the builder is cleared only if it is still what was sent. `build` checks
 what it is sent exactly as 087 checks a model's reply (`parse_proposal`), with the library owner as its origin
 (whatever the page sends). It keeps 087's refusal reasons, among them:
 - `unknown_record`: a ref the context did not offer, or one at another revision;
