@@ -327,3 +327,37 @@ test("the hand builder keeps the focus where it was, and moves it to a neighbour
   for (const node of builder().querySelectorAll("input,select,textarea,button")) assert.ok(node.getAttribute("data-focus-key"), node.textContent);
   root.remove();
 });
+
+test("an edit made while a hand-built proposal is reviewed is kept, and an unchanged builder is cleared", async () => {
+  let release;
+  const sent = [];
+  const drafts = new Map();
+  const root = await mounted((op, args) => {
+    if (op === "authoring.source") return SOURCE;
+    if (op === "authoring.upgrades") return UPGRADES;
+    if (op === "authoring.build") {
+      sent.push(args);
+      return new Promise((resolve) => { release = () => resolve({ proposal: { ...PROPOSAL, proposal: "hand-" + sent.length } }); });
+    }
+    throw new Error("unexpected " + op);
+  }, { drafts });
+  const builder = () => group(section(root, "World suggestions"), "Build a proposal by hand");
+  button(builder(), "Add a place or group").click();
+  set(builder(), "Name", "Brinewick");
+  button(builder(), "Review this proposal").click();
+  await settle(5);
+  set(builder(), "Name", "Gullhaven");  // typed while the review is on its way
+  release();
+  await settle();
+  assert.equal(sent[0].candidates[0].name, "Brinewick");
+  assert.equal(control(builder(), "Name").value, "Gullhaven", "the newer edit is still in the form");
+  assert.ok(drafts.get("build:" + WORLD).includes("Gullhaven"), "and in its saved draft");
+
+  button(builder(), "Review this proposal").click();
+  await settle(5);
+  release();
+  await settle();
+  assert.equal(sent[1].candidates[0].name, "Gullhaven");
+  assert.equal(builder().querySelectorAll("label").find((node) => node.textContent === "Name"), undefined, "an unchanged builder is cleared");
+  assert.ok(!(drafts.get("build:" + WORLD) || "").includes("Gullhaven"));
+});

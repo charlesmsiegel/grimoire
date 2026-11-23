@@ -147,9 +147,11 @@ async function showSuggestions(slot, page) {
       return;
     }
     errors.hidden = true;
+    const sent = JSON.stringify(builder);
     ctx.act(async () => {
       const answer = await ctx.api("authoring.build", { source, ...made.body });
-      keep(restoreBuilder(""));
+      // clear the builder only if it is still what was sent: edits made while the call was on its way are kept
+      if (JSON.stringify(builder) === sent) keep(restoreBuilder(""));
       put(answer.proposal);
       notes.set(answer.proposal.proposal, "Reviewed against the world as it is now. Nothing is stored yet.");
       ctx.notify("Proposal reviewed. Nothing is stored yet.");

@@ -19,8 +19,7 @@ from grimoire.authoring import (
     ROLES,
     AuthoringError,
 )
-from grimoire.authoringstore.library import TOPOLOGY
-from grimoire.core.identity import SourceRef
+from grimoire.authoringstore.library import TOPOLOGY, _place_problem
 from grimoire.textapi import ApiRefused
 
 from .audits import BOUNDS, audits_of
@@ -45,20 +44,23 @@ UNAVAILABLE = (
 )
 
 
-def _maps(view, source: str, heads: Mapping[str, str]) -> list[dict]:  # type: ignore[no-untyped-def]
-    """The world's maps (059 topologies) at their heads: a draft whose links must extend one of several names it."""
+def _maps(heads: Mapping[tuple[str, str], object]) -> list[dict]:
+    """The world's maps (059 topologies) at their heads, as 087 resolves them (a single revision is its own head):
+    a draft whose links must extend one of several names it."""
     found = []
-    for key, revision in sorted(heads.items()):
-        kind, _, entity_id = key.partition("/")
+    for (kind, entity_id), definition in sorted(heads.items(), key=lambda item: item[0]):
         if kind != TOPOLOGY:
             continue
-        ref = SourceRef(source, kind, entity_id, revision)
-        try:
-            name = view.index.resolve(ref).envelope.name
-        except Exception:  # noqa: BLE001 - a map that cannot be read is still named, by its id
-            name = None
-        found.append({"topology": entity_id, "ref": str(ref), "name": name or None})
+        name = getattr(getattr(definition, "envelope", None), "name", None)
+        found.append({"topology": entity_id, "ref": str(definition.ref), "name": name or None})  # type: ignore[attr-defined]
     return found
+
+
+def _place(heads: Mapping[tuple[str, str], object], ref) -> bool:  # type: ignore[no-untyped-def]
+    """Whether an existing record can end a road or containment: 087's own rule (a ``location``, or any entity with
+    ``spatial`` that is not a template), read from its capabilities and never from its kind alone."""
+    head = heads.get((ref.kind, ref.entity_id))
+    return head is not None and _place_problem(head, ref) is None
 
 
 def source(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
@@ -73,14 +75,17 @@ def source(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     world = asked.startswith("world:")
     records, truncated, maps = [], False, []
     if world:
+        authoring = library(ctx)
         try:
-            context = library(ctx).context(asked)
+            context = authoring.context(asked)
+            # the heads 087 reviews and drafts against, so the page offers exactly the endpoints and maps it takes
+            _view, _basis, heads = authoring._world(asked)  # noqa: SLF001 - 087's own resolution, not a copy of it
         except AuthoringError as error:
             raise refused(error, "authoring_refused") from None
         records = [{"ref": str(record.ref), "kind": record.kind, "name": record.name,
-                    "place": KINDS.get(record.kind, False)} for record in context.records]
+                    "place": _place(heads, record.ref)} for record in context.records]
         truncated = context.truncated
-        maps = _maps(view, asked, stored.manifest.heads)
+        maps = _maps(heads)
     _config, _etag, blocked = model_state(ctx)
     title = stored.manifest.title
     return {
