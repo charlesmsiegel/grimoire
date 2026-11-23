@@ -687,6 +687,9 @@ export async function mount(root, ctx) {
     const links = [
       ctx.registered("ensemble") ? ui.buttonLink("Several NPCs answering", "ensemble", [chat], undefined, { size: "small" }) : null,
       campaign && ctx.registered("companions") ? ui.buttonLink("Companions", "companions", [campaign], { chat }, { size: "small" }) : null,
+      // 116: an NPC's attitude checked against its own evidence (078), and this chat copied into another campaign (084)
+      ctx.registered("attitudes") ? ui.buttonLink("Attitudes", "attitudes", [chat], undefined, { size: "small" }) : null,
+      ctx.registered("transfer") ? ui.buttonLink("Copy into another campaign", "transfer", [chat], undefined, { size: "small" }) : null,
     ].filter(Boolean);
     if (!links.length) return null;
     return el("section", { class: "chat-section" }, ui.eyebrow("The director's"),

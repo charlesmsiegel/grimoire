@@ -1,0 +1,14 @@
+/* Attitudes (078, Sprint 116): only attitudes- classes, no fixed widths (fits 360px). */
+.attitudes-views { flex-wrap: wrap; gap: 12px; margin: 0 0 20px; }
+.attitudes-card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 14px; min-width: 0; margin-bottom: 20px; }
+.attitudes-card > p, .attitudes-card .g-empty, .attitudes-card .g-actions, .attitudes-card .g-field { margin: 0; }
+.attitudes-sub { font: 600 15px/1.3 var(--g-sans); margin: 4px 0 0; }
+.attitudes-lines { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.attitudes-lines > li { padding: 8px 0; border-top: 1px solid var(--g-line); min-width: 0; overflow-wrap: anywhere; flex-wrap: wrap; gap: 8px; }
+.attitudes-lines > li:first-child { border-top: 0; padding-top: 0; }
+.attitudes-form { padding-top: 12px; border-top: 1px solid var(--g-line); }
+.attitudes-checks { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.attitudes-checks > legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.attitudes-check { align-items: center; gap: 8px; min-height: 44px; cursor: pointer; overflow-wrap: anywhere; }
+.attitudes-check > input { width: 22px; height: 22px; flex: 0 0 auto; }
+.attitudes-verdict:focus { outline: 2px solid var(--g-accent); outline-offset: 2px; }

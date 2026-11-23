@@ -1,0 +1,19 @@
+/* Copy into another campaign (084, Sprint 116): only transfer- classes, no fixed widths (fits 360px). */
+.transfer-views { flex-wrap: wrap; gap: 12px; margin: 0 0 20px; }
+.transfer-card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 14px; min-width: 0; margin-bottom: 20px; }
+.transfer-card > p, .transfer-card .g-empty, .transfer-card .g-actions, .transfer-card .g-field { margin: 0; }
+.transfer-sub { font: 600 15px/1.3 var(--g-sans); margin: 4px 0 0; }
+.transfer-lines { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.transfer-lines > li { padding: 8px 0; border-top: 1px solid var(--g-line); min-width: 0; overflow-wrap: anywhere; }
+.transfer-lines > li:first-child { border-top: 0; padding-top: 0; }
+.transfer-form { padding-top: 12px; border-top: 1px solid var(--g-line); }
+.transfer-actor { padding: 12px; border: 1px solid var(--g-line); border-radius: 10px; min-width: 0; }
+.transfer-actor > p { margin: 0; }
+.transfer-namesake { margin: 0; overflow-wrap: anywhere; }
+.transfer-checks { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.transfer-checks > legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.transfer-check { align-items: center; gap: 8px; min-height: 44px; cursor: pointer; overflow-wrap: anywhere; }
+.transfer-check > input { width: 22px; height: 22px; flex: 0 0 auto; }
+.transfer-said { font-family: var(--g-serif); }
+.transfer-files > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.transfer-focus:focus { outline: 2px solid var(--g-accent); outline-offset: 2px; }
