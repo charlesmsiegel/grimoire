@@ -50,6 +50,14 @@ function type(root, label, value) {
   node.dispatchEvent({ type: "input" });
 }
 
+function holdBack(prefix) {
+  const fetchNow = globalThis.fetch;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  globalThis.fetch = async (url, init) => { if (String(url).startsWith(prefix)) await held; return fetchNow(url, init); };
+  return () => { globalThis.fetch = fetchNow; release(); };
+}
+
 function tick(root, startsWith) {
   const label = root.querySelectorAll("label").find((node) => node.textContent.startsWith(startsWith));
   assert.ok(label, "a ground " + startsWith);
@@ -121,4 +129,16 @@ test("the director checks an NPC's attitude against its own evidence; nothing is
   const refusal = await until(() => { const node = section(main, "Verdict"); return node && node.textContent.includes("Refused") ? node : null; }, 15000, "the refusal");
   assert.ok(refusal.textContent.includes("(unrelated_grounds)"), refusal.textContent);
   assert.ok(section(main, "Held on this page").textContent.includes("Mara Vell: Resentment toward Anya Rook"), "the admitted one is still held");
+
+  // a Forget while an NPC's grounds load does not lose the form; the focus stays on the card it was in
+  const release = holdBack("/api/attitudes.grounds");
+  choose(whose, "Whose attitude", "Mara Vell");
+  const forget = byText(section(main, "Held on this page"), "button", "Forget")[0];
+  assert.ok(forget.getAttribute("aria-label").startsWith("Forget Mara Vell: Resentment toward Anya Rook (3)"), "each Forget names its attitude");
+  forget.click();
+  const heldNow = section(main, "Held on this page");
+  assert.ok(heldNow.textContent.includes("None yet."));
+  assert.ok(document.activeElement === heldNow.querySelector(".attitudes-held"), "focus stays on the held card");
+  release();
+  await until(() => { const node = section(main, "The attitude"); return node && group(node, "Mara Vell's attitude") ? node : null; }, 15000, "Mara's form after a Forget");
 });

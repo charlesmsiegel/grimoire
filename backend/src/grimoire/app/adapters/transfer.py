@@ -15,7 +15,8 @@ app's open library, acting as its owner with the app's trusted handle, and its o
   fingerprint is the one reviewed; 084's own commit then re-checks the origin under the store lock (a change there is
   a stale write, answered ``changed`` too). The new chat's id is derived from the operation id, the origin and the
   target, so a commit retried after a lost answer finds the chat it made and writes nothing again
-  (``already_applied``), whatever decisions it carries; a chat at that id that is not a copy of this origin is
+  (``already_applied``). A retry is checked against what the copy wrote (each actor's decision, the label, the
+  sources carried): one that differs, or a chat at that id that is not a copy of this origin, is
   ``operation_conflict``. The page makes a fresh operation id for every plan.
 - **Every 084 refusal keeps its reason** (``same_campaign``, ``different_individual``, ``history_incomplete``, ...).
 - **Not built (named, never offered):** transferring chosen state or attached assets, a chronology mapping, and
@@ -26,12 +27,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from grimoire.app.adapter import Adapter, AdapterContext
 from grimoire.campaignapi import parse
-from grimoire.chats import ChatCodecError, chat_from_payload
+from grimoire.chats import CAMPAIGN_CONTINUITY, NOT_WITNESSED, ChatCodecError, chat_from_payload
 from grimoire.core.identity import ChatRef, InstanceRef, ScopeRef, SourceRef, validate_segment
 from grimoire.play.history import history_pages
 from grimoire.scenestore import SceneLibrary
@@ -55,6 +57,10 @@ LABEL_MAX = 200
 #: At most this many copied posts are listed in a plan's answer; the rest are counted.
 POSTS_SHOWN = 200
 DECISIONS = (NEW, LEAVE)
+#: A review is the fingerprint ``plan`` answered: a SHA-256, in lower-case hex.
+REVIEW = re.compile(r"[0-9a-f]{64}")
+#: The chat roles 084 copies as sources (the rest are the cast's).
+SOURCE_ROLES = ("scenario", "lorebook")
 
 
 # -- request fields ----------------------------------------------------------------------------------------------
@@ -243,15 +249,35 @@ def _built(ctx: AdapterContext, args: Mapping[str, object]):  # type: ignore[no-
     return chat, target, chat_id, cast, plan
 
 
-def _bindings(plan) -> list[dict]:  # type: ignore[no-untyped-def]
+def _planned(plan):  # type: ignore[no-untyped-def]
+    """The new chat's record as 084 plans it, and its stored payload."""
     for envelope, _ in plan.change.puts:
         if isinstance(envelope, ScopeRecord) and envelope.address == plan.chat:
-            record = chat_from_payload(plan.chat, envelope.schema, envelope.payload)
-            return [{"role": binding.role, "ref": str(binding.ref), "revision": binding.resolved_revision,
-                     "actor": None if binding.actor is None else str(binding.actor),
-                     "detached": binding.detached_seq is not None}
-                    for binding in record.bindings]
-    return []  # pragma: no cover - 084 always plans the chat
+            return chat_from_payload(plan.chat, envelope.schema, envelope.payload), envelope.payload
+    raise ApiRefused("changed", "084 planned no chat for this copy; plan it again")  # pragma: no cover
+
+
+def _clockless(value: object) -> object:
+    """A stored payload without the times the clock gives it, so a plan built again fingerprints the same."""
+    if isinstance(value, Mapping):
+        return {str(key): _clockless(item) for key, item in value.items()
+                if not (str(key).endswith("_at") or key == "last_activity")}
+    if isinstance(value, (list, tuple)):
+        return [_clockless(item) for item in value]
+    return value
+
+
+def _carried(record) -> set[tuple[str, str, str]]:  # type: ignore[no-untyped-def]
+    """The scenario and lorebook bindings a chat carries (not detached), by entity."""
+    return {binding.ref.entity_key for binding in record.bindings
+            if binding.role in SOURCE_ROLES and binding.detached_seq is None}
+
+
+def _binding_view(record) -> list[dict]:  # type: ignore[no-untyped-def]
+    return [{"role": binding.role, "ref": str(binding.ref), "revision": binding.resolved_revision,
+             "actor": None if binding.actor is None else str(binding.actor),
+             "detached": binding.detached_seq is not None}
+            for binding in record.bindings]
 
 
 def _origin_texts(ctx: AdapterContext, origin: ChatRef) -> dict[str, str]:
@@ -278,11 +304,18 @@ def _plan_view(ctx: AdapterContext, origin: ChatRef, plan, cast) -> dict:  # typ
     view = ctx.store.load()
     said = _origin_texts(ctx, origin)
     origin_names: dict[InstanceRef, str] = {}
+    offered: tuple = ()
     try:
         scan = _service(ctx).scan(origin, ScopeRef(plan.chat.campaign_id))
         origin_names = {member.actor: member.name for member in scan.cast}
+        offered = scan.sources
     except TransferRefused:
         pass
+    record, payload = _planned(plan)
+    carried = _carried(record)
+
+    def source(item) -> dict:  # type: ignore[no-untyped-def]
+        return {"ref": str(item.ref), "role": item.role, "name": _definition_name(view, item.ref)}
     target_names = _names(view, plan.chat.campaign_id)
     for actor, mapped in plan.mapping.items():
         if mapped is not None and target_names.get(mapped) is None:
@@ -308,10 +341,15 @@ def _plan_view(ctx: AdapterContext, origin: ChatRef, plan, cast) -> dict:  # typ
                           for item in plan.omitted],
               "left": [{"kind": item.kind, "where": item.where, "detail": item.detail} for item in plan.left],
               "notes": [{"code": code, "detail": detail} for code, detail in plan.notes],
-              "bindings": _bindings(plan), "files": files, "provider_calls": plan.provider_calls}
+              "label": record.label,
+              "sources": {"carried": [source(item) for item in offered if item.ref.entity_key in carried],
+                          "left_out": [source(item) for item in offered if item.ref.entity_key not in carried]},
+              "bindings": _binding_view(record), "files": files, "provider_calls": plan.provider_calls}
     pages = [page_to_payload(page) for page in plan.pages]
-    answer["review"] = hashlib.sha256(json.dumps({**answer, "page_payloads": pages}, sort_keys=True,
-                                                 default=str).encode()).hexdigest()
+    # Everything shown, the pages' exact payloads and the new chat's own record (its label, bindings and roster,
+    # without the clock's times): a commit that would write anything else is refused ``changed``.
+    answer["review"] = hashlib.sha256(json.dumps({**answer, "page_payloads": pages, "record": _clockless(payload)},
+                                                 sort_keys=True, default=str).encode()).hexdigest()
     return answer
 
 
@@ -321,33 +359,100 @@ def _plan(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     return {"plan": _plan_view(ctx, origin, plan, cast), "saved": False, "not_available": dict(NOT_AVAILABLE)}
 
 
-def _existing(ctx: AdapterContext, chat: ChatRef, origin: ChatRef) -> dict | None:
-    """The copy this operation already made, or ``None``; ``operation_conflict`` when the chat its id names is not
-    a copy of ``origin``."""
+def _conflict(what: str) -> ApiRefused:
+    return ApiRefused("operation_conflict", f"this operation id already made a copy with {what}: plan the copy "
+                                            "again")
+
+
+def _written(ctx: AdapterContext, chat: ChatRef, record, pages, scan, origin: ChatRef,  # type: ignore[no-untyped-def]
+             target: ScopeRef, cast, sources, label) -> dict[str, str | None]:  # type: ignore[no-untyped-def]
+    """Each origin actor's target actor (or none) as the copy wrote it: its first page's cast table, or, for a copy
+    with no post (084 writes no page then), the new chat's roster, by role and definition."""
+    if pages:
+        payload = pages[0].record.payload
+        head = payload.get("origin") if isinstance(payload, Mapping) else None
+        if (not isinstance(head, Mapping) or head.get("from") != str(origin)
+                or not isinstance(head.get("cast"), Mapping)):
+            raise _conflict("another chat's history")
+        return {str(key): None if value is None else str(value) for key, value in head["cast"].items()}
+    try:  # a page-less chat is this copy only if this chat's copy would have no page either
+        plan = _service(ctx, _Ids(chat.chat_id)).plan(origin, target, cast=cast, sources=sources, label=label)
+    except TransferRefused as error:
+        raise _refused(error) from None
+    if plan.pages:
+        raise _conflict("no post, where this copy would have some")
+    written: dict[str, str | None] = {}
+    for member in scan.cast:
+        if member.definition is None:
+            continue
+        entry = next((item for item in record.roster if item.role == member.role and item.source is not None
+                      and item.source.entity_key == member.definition.entity_key), None)
+        written[str(member.actor)] = None if entry is None else str(entry.actor)
+    return written
+
+
+def _existing(ctx: AdapterContext, chat: ChatRef, origin: ChatRef, target: ScopeRef,
+              cast: Mapping[InstanceRef, InstanceRef | str], sources: list[SourceRef] | None,
+              label: str | None) -> dict | None:
+    """The copy this operation already made, checked against the retry's own decisions, or ``None``.
+
+    084 keeps no record of a copy's decisions apart from what it wrote, so a retry is checked against that: a reuse
+    must name the actor written, a left-out actor must have none and a new one must have one; the label and the
+    sources carried must be the same. Anything else is ``operation_conflict``."""
     try:
-        ctx.store.read(chat)
+        stored = ctx.store.read(chat)
     except RecordNotFound:
         return None
     except StoreError:
         raise ApiRefused("changed", "the chat this copy would make cannot be read; plan again") from None
+    try:
+        record = chat_from_payload(chat, stored.record.schema, stored.record.payload)
+    except (ChatCodecError, AttributeError):
+        raise _conflict("a chat that is not a copy") from None
     found = ctx.store.chat_transcript(chat)
-    first = next((stored for _, stored in sorted(found.records.items(), key=lambda item: item[0].seq)), None)
-    payload = None if first is None else first.record.payload
-    came = payload.get("origin") if isinstance(payload, Mapping) else None
-    if not isinstance(came, Mapping) or came.get("from") != str(origin):
-        raise ApiRefused("operation_conflict", "this operation id already made a copy of another chat")
-    return {"chat": str(chat), "already_applied": True, "pages": len(found.records)}
+    pages = [item for _, item in sorted(found.records.items(), key=lambda item: item[0].seq)]
+    try:
+        scan = _service(ctx).scan(origin, target)
+    except TransferRefused as error:
+        raise _refused(error) from None
+    written = _written(ctx, chat, record, pages, scan, origin, target, cast, sources, label)
+    if {str(member.actor) for member in scan.cast} != {str(actor) for actor in cast}:
+        raise _conflict("other actors decided")
+    # a reused actor keeps its campaign continuity on the new chat's roster; an actor made new saw none of it
+    prior = {str(entry.actor): entry.prior_history for entry in record.roster}
+    for actor, decision in cast.items():
+        if str(actor) not in written:
+            continue
+        got = written[str(actor)]
+        if type(decision) is str and decision == LEAVE:
+            same = got is None
+        elif type(decision) is str:
+            same = got is not None and prior.get(got) == NOT_WITNESSED
+        else:
+            same = got == str(decision) and prior.get(got) == CAMPAIGN_CONTINUITY
+        if not same:
+            raise _conflict(f"another decision for {actor}")
+    if record.label != label:
+        raise _conflict("another label")
+    wanted = ({item.ref.entity_key for item in scan.sources} if sources is None
+              else {ref.entity_key for ref in sources})
+    if _carried(record) != wanted:
+        raise _conflict("other sources carried")
+    return {"chat": str(chat), "already_applied": True, "pages": len(pages)}
 
 
 def _commit(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     """The copy reviewed with ``plan``, built again with the same operation and committed once, as reviewed."""
     _director(args)
     review = args.get("review")
-    if type(review) is not str or not review:
+    if review is None or review == "":
         raise ApiRefused("review_required", "plan the copy and review it before committing it")
+    if type(review) is not str or not REVIEW.fullmatch(review):
+        raise ApiRefused("invalid_field", "review is the fingerprint transfer.plan answered")
     origin = parse.chat_of(args)
     target = _target(args)
-    done = _existing(ctx, ChatRef(target.campaign_id, _chat_id(origin, target, _operation(args))), origin)
+    chat = ChatRef(target.campaign_id, _chat_id(origin, target, _operation(args)))
+    done = _existing(ctx, chat, origin, target, _cast(args, origin.campaign_id), _sources(args), _label(args))
     if done is not None:
         return {"done": done}
     origin, _, _, cast, plan = _built(ctx, args)

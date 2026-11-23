@@ -23,7 +23,7 @@ of the page says whose it is and shows nothing. The owner acts; nothing is writt
 |---|---|---|
 | `transfer.targets` | `chat`, `audience` | `{chat, origin, targets[{campaign, title, world, chats}], not_available}`: every campaign the library lists chats of, but the origin's own |
 | `transfer.scan` | `chat`, `target` (a campaign id), `audience` | `{cast[], sources[], history, history_problems[], notes[], provider_calls: 0, not_available}`; nothing is written |
-| `transfer.plan` | `chat`, `target`, `audience`, `operation_id`, `cast`, `sources` (optional), `label` (optional) | `{plan: {chat, origin, mapping[], pages, posts[], posts_total, omitted[], left[], notes[], bindings[], files[], provider_calls: 0, review}, saved: false}`; nothing is written |
+| `transfer.plan` | `chat`, `target`, `audience`, `operation_id`, `cast`, `sources` (optional), `label` (optional) | `{plan: {chat, origin, mapping[], pages, posts[], posts_total, omitted[], left[], notes[], label, sources: {carried[], left_out[]}, bindings[], files[], provider_calls: 0, review}, saved: false}`; nothing is written |
 | `transfer.commit` | the plan's args and its `review` | `{done: {chat, already_applied, pages, posts, files}}` |
 
 - **`cast`** in the scan is 084's `TransferScan.cast`: each origin actor's `role`, `name`, `active`, `definition`,
@@ -39,23 +39,34 @@ of the page says whose it is and shows nothing. The owner acts; nothing is writt
   target; the posts copied in order (speaker, text, where in the origin each came from; the first 200 listed, all
   counted); `omitted` with 084's reason (`private` for a whisper, telepathy or a withheld action; `unheard`, with
   who missed it) and the omitted words; `left` (accepted effects with their event ids and rulings, which stay in the
-  origin); `notes` (`revision_differs`, `new_beside_existing`, `world_differs`); the new chat's bindings; and the
-  files it would write, all under the target campaign.
+  origin); `notes` (`revision_differs`, `new_beside_existing`, `world_differs`); the new chat's label, the origin's
+  scenario and lorebook bindings it carries and leaves out, and its bindings; and the files it would write, all
+  under the target campaign.
 
 ## Reviewed, then made as reviewed
 
 - `transfer.plan` writes nothing and answers a `review` fingerprint of everything it shows (the mapping, the
-  pages' exact posts, what is omitted and left, the notes, the bindings and the files).
+  pages' exact posts, what is omitted and left, the notes, the label, the sources and bindings, and the files) and
+  of the new chat's own record as 084 plans it (label, bindings and roster, without the clock's times).
 - `transfer.commit` builds the plan again from the same arguments and refuses `changed` unless its fingerprint is
-  the one reviewed (the origin was played on, a binding moved, the target changed under a decision...). 084's own
-  commit then re-checks, under the store lock, that the origin chat, its pages and its turns are byte for byte what
-  was copied: a change there is a stale write, also answered `changed`. A commit without a review is
-  `review_required`. The page then scans again and asks the director to review the copy again.
+  the one reviewed (the origin was played on, a binding moved, the target changed under a decision, the label or
+  the sources differ from those reviewed...). 084's own commit then re-checks, under the store lock, that the origin
+  chat, its pages and its turns are byte for byte what was copied: a change there is a stale write, also answered
+  `changed`. A commit without a review is `review_required`; a review that is not a fingerprint `plan` could have
+  answered (64 lower-case hex digits) is `invalid_field`. Any other refusal keeps its own reason: a scene paused
+  after the review, for one, is 084's `history_incomplete`.
 - The new chat's id is derived from the operation id, the origin chat and the target campaign (`t-copy-<digest>`),
   so the same plan built again is the same chat, and a commit retried after a lost answer finds the copy it made and
-  writes nothing (`already_applied`). The operation id is the retry key: a commit that names it again answers the
-  copy already made, whatever decisions it carries, so the page makes a fresh operation id for every plan. A chat
-  at that id that is not a copy of this chat is `operation_conflict`.
+  writes nothing (`already_applied`). The page makes a fresh operation id for every plan.
+- **A retry is checked against what the copy wrote.** 084 keeps no record of a copy's decisions apart from the copy
+  itself, so a commit that finds a chat at its id checks the retry's own arguments against it: each actor's target
+  in the first page's cast table (or, for a copy with no post, for which 084 writes no page, in the new chat's
+  roster by role and definition, and only if this chat's copy would have no page either); that a reused actor kept
+  its campaign continuity on the roster and an actor made new saw none of it; the label; and the sources carried.
+  Any difference, or a chat at that id that is not a copy of this origin, is `operation_conflict`. **The limits:** a
+  retry's review is checked only for its shape, not against the review of the commit that made the copy (no record
+  of it is kept); for a copy with no post, an actor with no definition is not checked; and a retry is checked
+  against the origin as it is now, so one made after the origin was paused answers the pause's refusal.
 - **The origin is never written.** Every file a plan names is under the target campaign; the tests compare the
   origin campaign's files byte for byte before and after a plan, every refusal and the commit.
 
@@ -66,7 +77,7 @@ Every 084 refusal keeps its reason ([SCENE_TRANSFER](SCENE_TRANSFER.md#every-act
 `origin_unreadable`, `unreviewed_actor`, `unknown_actor`, `different_individual` (a namesake), `actor_mismatch`,
 `foreign_actor`, `merged_actors`, `cannot_create`, `second_persona`, `same_definition_twice`,
 `history_incomplete` (a damaged page, a fork, a sync conflict, or a player's pause: the page shows the problems and
-offers no plan), `unknown_source`, and 107's `InvalidBinding` reasons. The adapter's own are `director_only`,
+offers no plan, and **Scan again**), `unknown_source`, and 107's `InvalidBinding` reasons. The adapter's own are `director_only`,
 `invalid_field`, `review_required`, `changed` and `operation_conflict`.
 
 ## The page
@@ -75,13 +86,17 @@ offers no plan), `unknown_source`, and 107's `InvalidBinding` reasons. The adapt
 2. **What would be copied**: the history's size, its problems and notes; one labelled group per actor with its
    decision (nothing is pre-chosen) and its namesakes; the sources to carry and the label. Changing anything takes
    away a review of other decisions, and an answer to a plan asked before the change is never drawn.
-3. **Review the copy**: who becomes whom, the posts it would copy, what is not copied and why, what stays in this
-   campaign, what to know, and the files (in a closed `<details>`). Focus moves to the review. **Copy as reviewed**
-   commits it; **Change the decisions** goes back.
+3. **Review the copy**: who becomes whom, the new chat's label and the sources it carries and leaves out, the posts
+   it would copy, what is not copied and why, what stays in this campaign, what to know, and the files (in a closed
+   `<details>`). Focus moves to the review. **Copy as reviewed** commits it; **Change the decisions** goes back.
+   A commit the app refuses, for any reason, takes the review away: the page scans again, says why (focus moves to
+   it) and nothing was copied. A commit that got no answer (the app unreachable, the page left) keeps the review,
+   since copying it again is safe.
 4. **Copied**: a link to the new chat, which takes the focus. The new chat opens with the copied history as its
    imported history; the whisper is not in it.
 
-The target and the decisions being made are a draft of the tab (`ctx.draft`), cleared once the copy is made.
+The target, the decisions, the sources and the label being made are a draft of the tab (`ctx.draft`), cleared once
+the copy is made.
 
 ## Not on a screen, and why
 
@@ -99,10 +114,13 @@ A copy within one campaign is a fork (028), not this page's.
 `backend/tests/test_app_transfer.py` drives every op through the app's adapter contract over the synthetic card
 library: the proving scenario (the alternate Mara is a namesake and never offered; Mara is created new and the
 target's Anya reused; the whisper is omitted as private; the commit makes a new chat that opens with the copied
-history; the origin's files are unchanged byte for byte; a retried commit writes nothing), the table's view
-refused, a change after the review refused `changed` with nothing written, and 084's refusals with their reasons.
+history; the origin's files are unchanged byte for byte; a retried commit writes nothing; a retry with other
+decisions, label or sources is `operation_conflict`; another label than the one reviewed is `changed`), a copy with
+no post retried as applied, the table's view refused, a change after the review refused `changed` with nothing
+written, a pause after the review refused with 084's reason, and 084's refusals with their reasons.
 `js/transfer.e2e.mjs` runs the page end to end in fakedom against a real app server (from the chat's Details, the
-table's view, the scan, a missing decision, a late plan answer never drawn, the review, the commit and the new
+table's view, the scan, a missing decision, a late plan answer never drawn, the review with its label and sources,
+a commit that got no answer keeping the review, a refused commit dropping it and saying why, the commit and the new
 chat); `js/transfer.test.mjs` unit-tests its logic.
 
 ## Not proved here

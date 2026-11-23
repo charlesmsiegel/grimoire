@@ -37,10 +37,14 @@ the page never offers a player character as a holder, `attitudes.grounds` refuse
 ## The ledger: client-held, re-validated from scratch
 
 078 keeps an append-only ledger in memory and has no persistence. The page holds, **in its own memory while it is
-open**, the attitudes a check admitted (`held`); leaving the page drops them. Every `attitudes.check` builds a new,
-empty 078 ledger, admits the held attitudes again in order against the library as it is now, and then the new one;
-nothing the client sends is trusted as admitted. A held attitude that is no longer admitted (its grounds changed)
-refuses the check with 078's reason, and the page stops holding any. The answer is 078's **verdict** on the new
+open**, the attitudes a check admitted (`held`), each exactly as the check answered it (`verdict.attitude`, with
+the moment `at` it was admitted at, so it is admitted again at that moment); leaving the page drops them. Every
+`attitudes.check` builds a new, empty 078 ledger, admits the held attitudes again in order against the library as
+it is now, and then the new one; nothing the client sends is trusted as admitted, and what the hub shows a holder
+is read once per check. A held attitude that is no longer admitted (its grounds changed, or its holder left the
+cast) refuses the check `held_not_admitted`, with 078's reason and the attitude's id in its message and in its
+`detail` (`{attitude, reason}`); only then does the page stop holding any. Any other failure (no answer, a
+malformed request) keeps what it holds. The answer is 078's **verdict** on the new
 attitude (`admitted`, or its refusal `reason`), the holder's current attitudes in that ledger (`attitudes_of`), and
 `unchanged`: the evidence ledger's digest and contents are the same after the check as before.
 
@@ -54,7 +58,8 @@ attitude toward them here: forget the held one first), `nonmonotonic_revision`, 
 `different_chain`, and the shape refusals (`invalid_text`, `invalid_degree`, `self_attitude`,
 `ungrounded_attitude`, `duplicate_ground`, `budget_exceeded`, `unknown_dimension`, `invalid_id`).
 `npc_authority_required` cannot arise here: every check is the director's. The adapter's own refusals are
-`director_only`, `invalid_field`, `no_actor` and `ledger_unreadable` (the evidence ledger left records out).
+`director_only`, `invalid_field`, `no_actor`, `held_not_admitted` (above) and `ledger_unreadable` (the evidence
+ledger left records out).
 
 ## The page
 
@@ -63,7 +68,9 @@ attitude toward them here: forget the held one first), `nonmonotonic_revision`, 
    -3 to 3, the rest from 0 to 3), the NPC's own account, and what it rests on, picked from that NPC's own grounds.
 3. **Verdict**: admitted or refused, with 078's reason in plain words and kept as is; focus moves to it. An answer
    to a check asked before the form changed is never drawn.
-4. **Held on this page**: what has been admitted while the page is open, each with **Forget**.
+4. **Held on this page**: what has been admitted while the page is open, each with **Forget** (its accessible name
+   names the attitude). After a Forget, focus stays on this card. A Forget while an NPC's grounds load does not
+   lose the form: only choosing another holder makes that answer late.
 
 ## Not on a screen, and why
 
@@ -79,9 +86,11 @@ Named, never offered (`ui.unavailable`):
 chat (Mara Vell as the envoy, Anya Rook as the newcomer the owner plays, Tamsin Hale as the dockhand, and the harbor
 guild): Mara's resentment of Anya from the report she received is admitted; the same attitude for Tamsin is refused
 `unavailable_grounds` with Mara's report and `unrelated_grounds` with Tamsin's own rain; a player character is
-refused `pc_interiority`; the table's view `director_only`; held attitudes are admitted again on every check and a
-forged one is refused; the library is byte for byte unchanged. `js/attitudes.e2e.mjs` runs the page end to end in
-fakedom against a real app server; `js/attitudes.test.mjs` unit-tests its logic.
+refused `pc_interiority`; the table's view `director_only`; held attitudes are admitted again on every check, sent
+back with the moment they were admitted at, and a forged one, or one whose holder left, is refused
+`held_not_admitted` with 078's reason in its detail; the library is byte for byte unchanged.
+`js/attitudes.e2e.mjs` runs the page end to end in fakedom against a real app server (including a Forget while the
+grounds load, and the focus after it); `js/attitudes.test.mjs` unit-tests its logic.
 
 ## Not proved here
 

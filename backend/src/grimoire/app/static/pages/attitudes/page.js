@@ -35,8 +35,10 @@ export async function mount(root, ctx) {
   const setting = await ctx.api("attitudes.cast", { chat, audience });
   const holders = setting.cast.filter((item) => item.may_hold);
   const form = { id: "", holder: "", toward: "", dimension: "", degree: "", account: "", evidence: [], beliefs: [] };
-  let held = [];  // the attitudes this page holds as admitted: in memory only, admitted again on every check
-  let asked = 0;
+  // The attitudes this page holds as admitted, as the server answered each (with the moment it was admitted at):
+  // in memory only, admitted again on every check.
+  let held = [];
+  let asked = 0, groundsAsked = 0;
   const formSlot = el("div", {}), verdictSlot = el("div", {}), heldSlot = el("div", {});
   const status = el("div", { class: "g-field-error", role: "alert", hidden: true });
   const say = (text) => { status.textContent = text || ""; status.hidden = !text; };
@@ -55,18 +57,19 @@ export async function mount(root, ctx) {
   card(ui, "Not built yet", ...Object.entries(NOT_BUILT).map(([key, title]) => ui.unavailable(title, setting.not_available[key]))));
   drawHeld([]);
 
+  // Its own count: only a later holder makes an answer late (a check or a Forget meanwhile does not).
   async function loadGrounds() {
-    const turn = asked;
+    const turn = ++groundsAsked;
     formSlot.replaceChildren();
     if (!form.holder) return;
     let grounds;
     try {
       grounds = await ctx.api("attitudes.grounds", { chat, holder: form.holder, audience });
     } catch (error) {
-      if (turn === asked && !ctx.signal.aborted) formSlot.replaceChildren(card(ui, "The attitude", ui.errorBox(error)));
+      if (turn === groundsAsked && !ctx.signal.aborted) formSlot.replaceChildren(card(ui, "The attitude", ui.errorBox(error)));
       return;
     }
-    if (turn !== asked || ctx.signal.aborted) return;
+    if (turn !== groundsAsked || ctx.signal.aborted) return;
     drawForm(grounds);
   }
 
@@ -118,15 +121,17 @@ export async function mount(root, ctx) {
       answer = await ctx.api("attitudes.check", built.request);
     } catch (error) {
       if (turn !== asked || ctx.signal.aborted) return;
-      if (held.length && error && error.reason && error.reason !== "director_only" && error.reason !== "invalid_field") {
+      if (error && error.reason === "held_not_admitted") {
         held = [];  // the library changed under one held here: the page holds none of them any more
         drawHeld([]);
+        say(ui.errorText(error) + " This page holds none of them now.");
+        return;
       }
-      say(ui.errorText(error));
+      say(ui.errorText(error));  // anything else (no answer, a refusal of the request) keeps what is held
       return;
     }
     if (turn !== asked || ctx.signal.aborted) return;
-    if (answer.verdict.admitted) held = [...held, built.request.attitude];
+    if (answer.verdict.admitted) held = [...held, answer.verdict.attitude];
     drawHeld(answer.current);
     verdictSlot.replaceChildren(card(ui, "Verdict",
       el("p", { class: "attitudes-verdict", tabindex: "-1" }, ui.pill(answer.verdict.admitted ? "Admitted" : "Refused",
@@ -138,12 +143,23 @@ export async function mount(root, ctx) {
 
   function drawHeld(current) {
     const holderName = (setting.cast.find((item) => item.actor === form.holder) || {}).name;
+    const line = (item) => ((setting.cast.find((one) => one.actor === item.holder) || {}).name || item.holder) + ": "
+      + headText({ ...item, toward_name: nameOf(item.toward), degree: item.degree });
+    const forget = (item) => {
+      const button = ui.button("Forget", () => {
+        held = held.filter((one) => one.id !== item.id);
+        changed();
+        drawHeld([]);
+        const intro = heldSlot.querySelector(".attitudes-held");  // the button is gone: focus stays on its card
+        if (intro) intro.focus();
+      }, { size: "small" });
+      button.setAttribute("aria-label", "Forget " + line(item));
+      return button;
+    };
     heldSlot.replaceChildren(card(ui, "Held on this page",
-      el("p", { class: "g-muted" }, "The attitudes admitted while this page is open. Leaving the page drops them; each check admits them all again first."),
+      el("p", { class: "g-muted attitudes-held", tabindex: "-1" }, "The attitudes admitted while this page is open. Leaving the page drops them; each check admits them all again first."),
       held.length ? el("ul", { class: "attitudes-lines" }, held.map((item) => el("li", { class: "g-row" },
-        el("span", { class: "g-grow" }, (setting.cast.find((one) => one.actor === item.holder) || {}).name || item.holder, ": ",
-          headText({ ...item, toward_name: nameOf(item.toward), degree: item.degree })),
-        ui.button("Forget", () => { held = held.filter((one) => one.id !== item.id); changed(); drawHeld([]); }, { size: "small" }))))
+        el("span", { class: "g-grow" }, line(item)), forget(item))))
         : ui.empty("None yet."),
       current.length && holderName ? el("div", { class: "g-stack" }, el("h3", { class: "attitudes-sub" }, holderName + " now holds"),
         el("ul", { class: "attitudes-lines" }, current.map((item) => el("li", {}, headText(item))))) : null));

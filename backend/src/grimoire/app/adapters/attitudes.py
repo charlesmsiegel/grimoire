@@ -13,8 +13,10 @@ no brief or NPC reads an attitude yet. ``check`` is a check, not a write:
 - **A client-held ledger, re-validated from scratch.** The page keeps, in memory, the attitudes this check has
   admitted while the page is open (``held``). Every ``check`` admits them again in order into a new, empty 078
   ledger against the library as it is now, then the new attitude; nothing the client sends is trusted as admitted.
-  The answer is a verdict (``admitted``, or 078's refusal reason), the holder's current attitudes in that ledger
-  and the knowledge digest before and after, which is unchanged.
+  A held one no longer admitted is ``held_not_admitted`` (078's reason and its id in ``detail``): the page drops
+  what it holds only then. The answer is a verdict (``admitted``, or 078's refusal reason, with the admitted
+  attitude as the page holds it), the holder's current attitudes in that ledger and the knowledge digest before and
+  after, which is unchanged.
 """
 
 from __future__ import annotations
@@ -175,14 +177,29 @@ def _attitude(item: object, campaign: str, now: int) -> Attitude:
                     belief_ids=_ids(item.get("beliefs", []), "beliefs"), degree=degree, supersedes=supersedes)
 
 
-def _admit(ledger: AttitudeLedger, attitude: Attitude, ctx: AdapterContext, chat, cast: Cast,  # type: ignore[no-untyped-def]
+class HeldNotAdmitted(ApiRefused):
+    """An attitude the page held is no longer admitted (the library changed under it): the page drops what it holds.
+    Its own reason is 078's, kept in ``detail`` with the attitude's id."""
+
+    def __init__(self, attitude_id: str, reason: str) -> None:
+        super().__init__("held_not_admitted", f"{attitude_id}, held on this page, is no longer admitted ({reason})")
+        self.attitude_id, self.held_reason = attitude_id, reason
+
+    def __reduce__(self) -> tuple[object, ...]:
+        return (type(self), (self.attitude_id, self.held_reason))
+
+    def to_json(self) -> dict:
+        return {**super().to_json(), "detail": {"attitude": self.attitude_id, "reason": self.held_reason}}
+
+
+def _admit(ledger: AttitudeLedger, attitude: Attitude, shown_of, cast: Cast,  # type: ignore[no-untyped-def]
            groups: Mapping[InstanceRef, str | None], knowledge, now: int) -> AttitudeLedger:
     """078's admission, then the page's own rule: every ground is among what the hub shows for the holder."""
     roster = cast.roster(*(EntityInstance(ref, local_name=name) for ref, name in groups.items()
                            if cast.get(ref) is None))
     ledger = admit(ledger, attitude, knowledge=knowledge, roster=roster, definitions=cast.definitions(),
                    controls=cast.controls, authored_by=DIRECTOR, now=now, expected_revision=ledger.revision)
-    shown = _shown(ctx, chat, cast, attitude.holder)
+    shown = shown_of(attitude.holder)
     if not (set(attitude.evidence_ids) <= {item["evidence"] for item in shown["evidence"]}
             and set(attitude.belief_ids) <= {item["belief"] for item in shown["beliefs"]}):
         raise RelationshipError("unavailable_grounds")  # 078 admits only the holder's own; so does this page
@@ -212,17 +229,28 @@ def _check(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
     held = args.get("held", [])
     if type(held) is not list or len(held) > MAX_HELD:
         raise ApiRefused("invalid_field", f"held is a list of at most {MAX_HELD} attitudes this page admitted")
+    seen: dict[InstanceRef, dict] = {}
+
+    def shown_of(holder: InstanceRef) -> dict:  # what the hub shows a holder, read once per check
+        if holder not in seen:
+            seen[holder] = _shown(ctx, chat, cast, holder)
+        return seen[holder]
+
     ledger = AttitudeLedger(campaign)
     for item in held:
+        held_attitude = _attitude(item, campaign, now)
         try:
-            ledger = _admit(ledger, _attitude(item, campaign, now), ctx, chat, cast, groups, knowledge, now)
+            ledger = _admit(ledger, held_attitude, shown_of, cast, groups, knowledge, now)
         except RelationshipError as error:  # the library changed under a held one: keep 078's reason
-            raise ApiRefused(error.reason, "an attitude this page held is no longer admitted: "
-                                           + error.reason) from None
+            raise HeldNotAdmitted(held_attitude.attitude_id, error.reason) from None
+        except ApiRefused as error:
+            if error.reason != "no_actor":
+                raise
+            raise HeldNotAdmitted(held_attitude.attitude_id, error.reason) from None
     attitude = None
     try:  # 078's verdict on the new one, a shape refusal (``invalid_text``, ``self_attitude``...) included
         attitude = _attitude(args.get("attitude"), campaign, now)
-        ledger = _admit(ledger, attitude, ctx, chat, cast, groups, knowledge, now)
+        ledger = _admit(ledger, attitude, shown_of, cast, groups, knowledge, now)
         verdict = {"admitted": True, "reason": None, "attitude": _head(attitude, cast, groups)}
     except RelationshipError as error:
         verdict = {"admitted": False, "reason": error.reason, "attitude": None}

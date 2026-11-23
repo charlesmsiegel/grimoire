@@ -2,7 +2,8 @@
 // chat's Details link the director to it; the table's view shows nothing of it; the director picks the target, sees
 // the alternate Mara only as a namesake (never offered), decides Mara new and Anya reused, plans the copy (the
 // whisper is omitted as private, nothing is written), and copies it as reviewed; the new chat opens with the copied
-// history. An answer to a plan asked before a decision changed is never drawn. Run by test_app_transfer.py, which
+// history. An answer to a plan asked before a decision changed is never drawn; a commit that gets no answer keeps the
+// review, and one the app refuses drops it, scans again and says why. Run by test_app_transfer.py, which
 // serves the played card chat and passes GRIMOIRE_APP, GRIMOIRE_TOKEN, GRIMOIRE_CHAT and GRIMOIRE_TARGET, and
 // checks afterwards that the origin's files are unchanged.
 import assert from "node:assert/strict";
@@ -121,9 +122,35 @@ test("the director copies this chat into another campaign as reviewed", { skip: 
   assert.ok(text.includes("private (a whisper or a withheld action), never copied"));
   assert.ok(text.includes("Copied: 3 posts on 1 page"));
   assert.ok(byText(reviewed, "summary", "The 3 files it would write").length);
+  assert.ok(text.includes("No label") && text.includes("(lorebook)") && text.includes("Carries "), "the new chat's label and sources are reviewed");
   assert.equal(document.activeElement, reviewed.querySelector(".transfer-focus"), "focus moves to the review");
 
+  // a commit that gets no answer keeps the review: copying it again is safe
+  const fetchNow = globalThis.fetch;
+  const commitOp = (url) => String(url).startsWith("/api/transfer.commit");
+  globalThis.fetch = async (url, init) => { if (commitOp(url)) throw new TypeError("offline"); return fetchNow(url, init); };
   byText(reviewed, "button", "Copy as reviewed")[0].click();
+  await idle();
+  globalThis.fetch = fetchNow;
+  assert.ok(section(main, "Review the copy"), "no answer is no refusal: the review stands");
+
+  // a commit refused for any reason drops the review, scans again and says why
+  globalThis.fetch = async (url, init) => commitOp(url)
+    ? new Response(JSON.stringify({ error: "history_incomplete", message: "a player paused the scene" }),
+      { status: 409, headers: { "Content-Type": "application/json" } })
+    : fetchNow(url, init);
+  byText(section(main, "Review the copy"), "button", "Copy as reviewed")[0].click();
+  const rescanned = await until(() => { const node = section(main, "What would be copied");
+    return !section(main, "Review the copy") && node && node.textContent.includes("Nothing was copied") ? node : null; }, 15000, "the refusal");
+  globalThis.fetch = fetchNow;
+  const alert = rescanned.querySelectorAll("div").find((node) => node.getAttribute("role") === "alert" && !node.hidden);
+  assert.ok(alert.textContent.includes("(history_incomplete)"), alert.textContent);
+  assert.ok(document.activeElement === alert, "focus moves to why");
+  assert.ok(!section(main, "Copied"), "nothing was copied");
+
+  byText(rescanned, "button", "Plan the copy")[0].click();
+  const again = await until(() => section(main, "Review the copy"), 15000, "the review again");
+  byText(again, "button", "Copy as reviewed")[0].click();
   const copied = await until(() => section(main, "Copied"), 15000, "the copy");
   assert.ok(!section(main, "Review the copy"));
   const open = byText(copied, "a", "Open the copy")[0];

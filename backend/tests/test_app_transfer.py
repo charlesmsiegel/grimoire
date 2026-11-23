@@ -168,9 +168,18 @@ def test_the_director_copies_the_chat_as_reviewed_and_the_origin_is_never_writte
         assert mapped["Anya Rook"]["decision"] == "reuse" and mapped["Anya Rook"]["target"] == target_anya
         assert plan["chat"].startswith(f"campaign:{target}#chat/")
         assert all(path.startswith(f"campaigns/{target}/") for path in plan["files"]), "nothing of the origin"
+        assert plan["label"] == "Copied from the quay"
+        assert [item["role"] for item in plan["sources"]["carried"]] == ["lorebook"] and plan["sources"]["left_out"] == []
         assert library_bytes(played) == before, "a scan, a plan and every refusal write nothing"
         again = played("transfer.plan", **args)["plan"]
         assert again["review"] == plan["review"] and again["chat"] == plan["chat"], "the same plan, built again"
+        # the label and the sources are what was reviewed: another label is another copy
+        relabelled = played("transfer.plan", **{**args, "label": "Never reviewed"})["plan"]
+        assert relabelled["review"] != plan["review"]
+        assert refused(played, "transfer.commit", **{**args, "label": "Never reviewed"},
+                       review=plan["review"]).reason == "changed"
+        assert refused(played, "transfer.commit", **args, review="not-a-fingerprint").reason == "invalid_field"
+        assert library_bytes(played) == before
 
         done = played("transfer.commit", **args, review=plan["review"])["done"]
         assert done == {"chat": plan["chat"], "already_applied": False, "pages": 1, "posts": 3,
@@ -185,6 +194,13 @@ def test_the_director_copies_the_chat_as_reviewed_and_the_origin_is_never_writte
         after = library_bytes(played)
         assert played("transfer.commit", **args, review=plan["review"])["done"] == {
             "chat": plan["chat"], "already_applied": True, "pages": 1}
+        # a retry is checked against what the copy wrote: other decisions, label or sources are not this copy
+        for other in ({"cast": decisions(scan, **{"Mara Vell": "new", "Anya Rook": "leave"})},
+                      {"cast": decisions(scan, **{"Mara Vell": "leave", "Anya Rook": target_anya})},
+                      {"cast": decisions(scan, **{"Mara Vell": "new", "Anya Rook": "new"})},
+                      {"label": "Another label"}, {"label": None}, {"sources": []}):
+            assert refused(played, "transfer.commit", **{**args, **other},
+                           review=plan["review"]).reason == "operation_conflict", other
         assert library_bytes(played) == after
 
 
@@ -196,7 +212,7 @@ def test_a_change_after_the_review_refuses_the_commit_and_writes_nothing(tmp_pat
         plan = played("transfer.plan", **args)["plan"]
         # a review the page never saw is not this plan's
         assert refused(played, "transfer.commit", **args).reason == "review_required"
-        assert refused(played, "transfer.commit", **args, review="not-the-review").reason == "changed"
+        assert refused(played, "transfer.commit", **args, review="0" * 64).reason == "changed"
         # the origin is played on after the review: the copy reviewed is no longer what would be copied
         played("post", chat=str(played.chat), text='"Any news from the quay?"')
         before = library_bytes(played)
@@ -205,6 +221,35 @@ def test_a_change_after_the_review_refuses_the_commit_and_writes_nothing(tmp_pat
         fresh = played("transfer.plan", **args)["plan"]
         assert fresh["review"] != plan["review"] and fresh["posts"][-1]["text"] == "Any news from the quay?"
         assert played("transfer.commit", **args, review=fresh["review"])["done"]["already_applied"] is False
+
+
+def test_a_copy_of_a_chat_with_no_post_is_retried_as_applied(tmp_path):
+    """084 writes no page for a copy with nothing to copy: a retry is proved by the new chat's roster instead."""
+    folder, chat, storm = card_library(tmp_path)
+    with Table(folder, []) as table:
+        app = AppApi(TextApi(table.store, table.authority, owner=OWNER, runtime=table.harness.runtime, policy=POLICY))
+
+        def call(op, **args):
+            return app.call(op, args)
+
+        scan = call("transfer.scan", chat=str(chat), target=storm.campaign_id, **DIRECTOR)
+        assert scan["history"] == {"pages": 0, "page_posts": 0, "turns": 0}
+        anya = next(m for m in scan["cast"] if m["name"] == "Anya Rook")["candidates"][0]["actor"]
+        cast = decisions(scan, **{"Mara Vell": "new", "Anya Rook": anya})
+        args = {"chat": str(chat), "target": storm.campaign_id, "operation_id": "op-empty", "cast": cast, **DIRECTOR}
+        plan = call("transfer.plan", **args)["plan"]
+        assert (plan["pages"], plan["posts_total"]) == (0, 0)
+        assert call("transfer.commit", **args, review=plan["review"])["done"]["already_applied"] is False
+        root = table.store.root
+        after = {path: path.read_bytes() for path in sorted(root.rglob("*.json")) if "authority" not in path.parts}
+        assert call("transfer.commit", **args, review=plan["review"])["done"] == {
+            "chat": plan["chat"], "already_applied": True, "pages": 0}
+        for other in (decisions(scan, **{"Mara Vell": "leave", "Anya Rook": anya}),
+                      decisions(scan, **{"Mara Vell": "new", "Anya Rook": "leave"})):
+            with pytest.raises(ApiRefused) as caught:
+                call("transfer.commit", **{**args, "cast": other}, review=plan["review"])
+            assert caught.value.reason == "operation_conflict"
+        assert after == {path: path.read_bytes() for path in sorted(root.rglob("*.json")) if "authority" not in path.parts}
 
 
 def test_084s_refusals_keep_their_reason(tmp_path):
@@ -228,11 +273,15 @@ def test_084s_refusals_keep_their_reason(tmp_path):
                        ).reason == "invalid_field"
         assert refused(played, "transfer.plan", **request(played, cast, operation="no spaces")).reason == "invalid_field"
         assert refused(played, "transfer.plan", **request(played, cast, label="x" * 201)).reason == "invalid_field"
-        # a player's safety stop stands: a paused scene's history is not copied until it is resumed
+        # a player's safety stop stands: a paused scene's history is not copied until it is resumed, even a copy
+        # reviewed before the pause (084's own reason, not ``changed``)
+        reviewed = played("transfer.plan", **request(played, cast, operation="op-paused"))["plan"]
         played("pause", chat=chat)
         paused = scanned(played)
         assert [item["kind"] for item in paused["history_problems"]] == ["paused"]
         assert refused(played, "transfer.plan", **request(played, cast)).reason == "history_incomplete"
+        assert refused(played, "transfer.commit", **request(played, cast, operation="op-paused"),
+                       review=reviewed["review"]).reason == "history_incomplete"
         played("resume", chat=chat)
         before = library_bytes(played)
         # carrying no source: the lorebook stays out of the copy, as an opt-out

@@ -3,14 +3,18 @@
 // never offered; the sources; the history and what stands in its way), decides every actor (reuse a candidate, new
 // or leave: nothing is matched by name), chooses the sources to carry and a label, and plans it: transfer.plan
 // writes nothing and shows what would be copied, what is omitted and why, what stays in the origin and the files it
-// would write. "Copy as reviewed" commits that very plan (transfer.commit, with its operation id and review); a
-// change in between refuses it (`changed`) and the page scans again. The origin is never written. The table's view
-// says whose this is and shows nothing. Transferring state or assets, a chronology mapping and missing art are
-// named as not built, never offered. The decisions being made are a draft of this tab (ctx.draft).
+// would write, with the new chat's label and sources. "Copy as reviewed" commits that very plan (transfer.commit,
+// with its operation id and review); a change in between (`changed`), or any other refusal, drops the review and the
+// page scans again and says why; a call that got no answer keeps it (a retry is safe). The origin is never written.
+// The table's view says whose this is and shows nothing. Transferring state or assets, a chronology mapping and
+// missing art are named as not built, never offered. The decisions, sources and label being made are a draft of
+// this tab (ctx.draft).
 
 import { decisionOptions, leftText, newOperationId, noteText, omittedText, readDecisions, reasonText, requestOf, roleText, whereText } from "./logic.js";
 
 const AUDIENCES = [{ value: "table", label: "Table view" }, { value: "director", label: "Director view" }];
+// The shell's own reasons for a call that got no answer from the app (see shell/api.js).
+const TRANSPORT = new Set(["network", "left", "bad_response"]);
 const NOT_BUILT = { state: "Copying state and attached assets", chronology: "Mapping the copy onto the target's chronology", art: "Presenting missing art" };
 
 export async function mount(root, ctx) {
@@ -40,11 +44,13 @@ export async function mount(root, ctx) {
   const state = { target: listing.targets.some((item) => item.campaign === saved.target) ? saved.target : "",
     decisions: {}, sources: null, label: typeof saved.label === "string" ? saved.label : "" };
   if (state.target && saved.decisions && typeof saved.decisions === "object") state.decisions = saved.decisions;
+  if (state.target && Array.isArray(saved.sources)) state.sources = new Set(saved.sources.filter((ref) => typeof ref === "string"));
   let scan = null, review = null, asked = 0;
-  const keep = () => draft.set(JSON.stringify({ target: state.target, label: state.label, decisions: state.decisions }));
+  const keep = () => draft.set(JSON.stringify({ target: state.target, label: state.label, decisions: state.decisions,
+    sources: state.sources ? [...state.sources] : null }));
 
   const scanSlot = el("div", {}), reviewSlot = el("div", {}), doneSlot = el("div", {});
-  const status = el("div", { class: "g-field-error", role: "alert", hidden: true });
+  const status = el("div", { class: "g-field-error", role: "alert", tabindex: "-1", hidden: true });
   const say = (text) => { status.textContent = text || ""; status.hidden = !text; };
 
   // -- the target -------------------------------------------------------------------------------------------------
@@ -75,7 +81,7 @@ export async function mount(root, ctx) {
       answer = await ctx.api("transfer.scan", { chat, target: state.target, audience });
     } catch (error) {
       if (turn !== asked || ctx.signal.aborted) return;
-      scanSlot.replaceChildren(card(ui, "What would be copied", el("p", { role: "alert" }, "This copy is refused: " + reasonText(error)),
+      scanSlot.replaceChildren(card(ui, "What would be copied", el("p", { role: "alert", tabindex: "-1" }, "This copy is refused: " + reasonText(error)),
         el("p", { class: "g-muted" }, ui.errorText(error))));
       return;
     }
@@ -85,6 +91,7 @@ export async function mount(root, ctx) {
     const bound = new Set(scan.sources.map((item) => item.ref));
     state.sources = state.sources ? new Set([...state.sources].filter((ref) => bound.has(ref)))
       : new Set(scan.sources.filter((item) => !item.broken).map((item) => item.ref));
+    keep();
     drawScan();
   }
 
@@ -127,7 +134,8 @@ export async function mount(root, ctx) {
         ...scan.cast.map(decide)),
       el("div", { class: "g-stack transfer-form", role: "group", "aria-label": "Sources and label" }, sources, label.node),
       status,
-      blocked ? null : ui.actions(ui.button("Plan the copy", plan, { kind: "primary" }))));
+      blocked ? ui.actions(ui.button("Scan again", () => ctx.act(loadScan)))
+        : ui.actions(ui.button("Plan the copy", plan, { kind: "primary" }))));
   }
 
   const plan = () => ctx.act(async () => {
@@ -165,6 +173,12 @@ export async function mount(root, ctx) {
       el("p", { class: "transfer-focus", tabindex: "-1" }, ui.pill("Not copied yet", { kind: "accent" }),
         " Nothing is written until you copy it as reviewed. This chat is never changed."),
       el("h3", { class: "transfer-sub" }, "Who"), mapping,
+      el("h3", { class: "transfer-sub" }, "The new chat"),
+      el("ul", { class: "transfer-lines" },
+        el("li", {}, shown.label ? "Labelled “" + shown.label + "”" : "No label"),
+        ...shown.sources.carried.map((item) => el("li", {}, "Carries " + (item.name || item.ref) + " (" + item.role + ")")),
+        ...shown.sources.left_out.map((item) => el("li", {}, "Leaves out " + (item.name || item.ref) + " (" + item.role + ")")),
+        shown.sources.carried.length || shown.sources.left_out.length ? null : el("li", {}, "No scenario or lorebook")),
       el("h3", { class: "transfer-sub" }, "Copied: " + shown.posts_total + " post" + (shown.posts_total === 1 ? "" : "s") + " on " + shown.pages + " page" + (shown.pages === 1 ? "" : "s")),
       shown.posts.length ? posts : ui.empty("No post would be copied."),
       shown.posts_total > shown.posts.length ? el("p", { class: "g-muted" }, "And " + (shown.posts_total - shown.posts.length) + " more.") : null,
@@ -189,12 +203,19 @@ export async function mount(root, ctx) {
     try {
       answer = await ctx.api("transfer.commit", { ...reviewed.args, review: reviewed.plan.review });
     } catch (error) {
-      if (error && error.reason === "changed") {  // something changed after the review: scan and review again
-        ctx.notify("Something changed since the review, so nothing was copied. Review the copy again.", { bad: true });
-        await loadScan();
-        return;
-      }
-      throw error;
+      // No answer came (the app is unreachable, or the page was left): the review stands, and copying it again is
+      // safe, since a retry finds a copy already made. Any refusal drops the review: scan again, and say why.
+      if (!error || TRANSPORT.has(error.reason) || ctx.signal.aborted) throw error;
+      const why = error.reason === "changed" ? "Something changed since the review, so nothing was copied. Review the copy again."
+        : "Nothing was copied: " + reasonText(error) + ". Review the copy again.";
+      ctx.notify(why, { bad: true });
+      await loadScan();
+      if (ctx.signal.aborted) return;
+      say(why);
+      // focus moves to why: the scan's own message, or its refusal when the scan itself was refused
+      const told = scan && scanSlot.contains(status) ? status : scanSlot.querySelector("p[role]");
+      if (told) told.focus();
+      return;
     }
     if (ctx.signal.aborted) return;
     draft.clear();

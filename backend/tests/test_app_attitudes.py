@@ -178,10 +178,23 @@ def test_the_held_attitudes_are_admitted_again_from_scratch_on_every_check(tmp_p
         # the same chain again, unsuperseded, is 078's conflict, and is said as its verdict
         again = check(table, resentment(table, id="a3"), held)
         assert again["verdict"]["reason"] == "unsuperseded_conflict" and again["held"] == ["a1"]
-        # a held attitude the client says was admitted is checked again: the dockhand's is not, with 078's reason
+        # the page holds the server's own attitude, with the moment it was admitted at, and sends it back as is
+        kept = both["verdict"]["attitude"]
+        assert kept["at"] == both["now"] and kept["id"] == "a2"
+        assert check(table, resentment(table, id="a5", toward=table.refs["guild"], dimension="rivalry"),
+                     [*held, kept])["held"] == ["a1", "a2", "a5"]
+        # a held attitude the client says was admitted is checked again: the dockhand's is not. That is its own
+        # reason, so the page drops what it holds only then; 078's reason and the attitude are in its detail
         forged = resentment(table, id="a9", holder=table.refs["tamsin"])
+        error = refused(table, "attitudes.check", chat=str(table.chat), **DIRECTOR_VIEW, attitude=trust, held=[forged])
+        assert error.reason == "held_not_admitted" and "a9" in str(error) and "(unavailable_grounds)" in str(error)
+        assert error.to_json()["detail"] == {"attitude": "a9", "reason": "unavailable_grounds"}
+        gone = resentment(table, id="a8", holder=f"campaign:{table.chat.campaign_id}/character/nobody")
         assert refused(table, "attitudes.check", chat=str(table.chat), **DIRECTOR_VIEW, attitude=trust,
-                       held=[forged]).reason == "unavailable_grounds"
+                       held=[gone]).reason == "held_not_admitted"
+        # a malformed held one is the request's fault, not the library's: the page keeps what it holds
+        assert refused(table, "attitudes.check", chat=str(table.chat), **DIRECTOR_VIEW, attitude=trust,
+                       held=["x"]).reason == "invalid_field"
 
 
 @pytest.mark.skipif(NODE is None, reason="node is not installed")
