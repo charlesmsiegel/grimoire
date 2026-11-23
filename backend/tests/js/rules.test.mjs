@@ -211,6 +211,75 @@ test("unsaved text kept in the tab saves against the draft it was begun from, no
   second.remove();
 });
 
+// like the app's draft store: an empty text is not kept (setting it clears the key)
+class Store extends Map { set(key, value) { if (!value) { this.delete(key); return this; } return super.set(key, value); } }
+
+function draftApi(state, saves) {
+  return async (op, args) => {
+    if (op === "rules.authoring") return AUTHORING;
+    if (op === "rules.module") return { module: "duel", file: "f", draft: { ...state.current, bytes: state.current.text.length }, revisions: [] };
+    if (op === "rules.check") return { etag: null, problems: [] };
+    if (op === "rules.save_plan") {
+      saves.push(args.expected);
+      if (args.expected !== state.current.etag) throw Object.assign(new Error("changed"), { reason: "changed" });
+      return { plan: { module: "duel", file: "f", bytes: args.text.length, before: state.current.text.length, creates: false, unchanged: false },
+        check: { problems: [] } };
+    }
+    throw new Error("unexpected " + op);
+  };
+}
+const editorReady = (node) => node.querySelectorAll("label").some((item) => item.textContent === "Module JSON");
+
+test("an editor cleared and left unsaved comes back empty, not as the saved text", async () => {
+  const drafts = new Store();
+  const api = draftApi({ current: { text: TEXT, etag: "sha256:e1" } }, []);
+  const first = ui.el("div", {});
+  document.body.append(first);
+  await page.mount(first, context([], { module: "duel" }, api, drafts));
+  await settle(() => editorReady(first));
+  const editor = input(first, "Module JSON");
+  editor.value = "";
+  editor.dispatchEvent(new Event("input"));
+  first.remove();
+
+  const second = ui.el("div", {});
+  document.body.append(second);
+  await page.mount(second, context([], { module: "duel" }, api, drafts));
+  await settle(() => editorReady(second));
+  assert.equal(input(second, "Module JSON").value, "", "the empty unsaved edit is kept");
+  assert.ok(second.textContent.includes("has changes that are not saved"), second.textContent);
+  button(second, "Discard my changes").click();
+  assert.equal(input(second, "Module JSON").value, TEXT);
+  second.remove();
+
+  const third = ui.el("div", {});
+  document.body.append(third);
+  await page.mount(third, context([], { module: "duel" }, api, drafts));
+  await settle(() => editorReady(third));
+  assert.equal(input(third, "Module JSON").value, TEXT, "a discarded clear is forgotten");
+  third.remove();
+});
+
+test("an unchanged editor refused as changed shows the newer draft, and never saves the old text over it", async () => {
+  const state = { current: { text: TEXT, etag: "sha256:e1" } };
+  const saves = [];
+  const root = ui.el("div", {});
+  document.body.append(root);
+  await page.mount(root, context([], { module: "duel" }, draftApi(state, saves), new Store()));
+  await settle(() => editorReady(root));
+  state.current = { text: '{"id": "duel", "name": "theirs"}', etag: "sha256:e2" };  // saved from somewhere else meanwhile
+  button(root, "Save").click();
+  await settle(() => input(root, "Module JSON").value !== TEXT);
+  assert.deepEqual(saves, ["sha256:e1"]);
+  assert.equal(input(root, "Module JSON").value, state.current.text, "the editor shows the draft as it is now");
+  assert.ok(root.textContent.includes("it is shown as it is now"), root.textContent);
+  assert.ok(!groupOf(root, "Review this save"));
+  button(root, "Save").click();
+  await settle(() => saves.length === 2);
+  assert.deepEqual(saves, ["sha256:e1", "sha256:e2"], "a later save is reviewed against the newer draft and its text");
+  root.remove();
+});
+
 const TWO = { ...ROLLS, actors: [...ROLLS.actors, { actor: "campaign:c1/character/bea", name: "Bea Quill", role: "player" }] };
 
 test("a roll answered after another character is chosen is still shown, and the next review is a new request", async () => {
