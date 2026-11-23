@@ -1,0 +1,29 @@
+.time-views { flex-wrap: wrap; gap: 12px; margin: 0 0 12px; }
+.time-chat { max-width: 420px; margin: 0 0 20px; }
+.time-cards, .time-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 20px; align-items: start; }
+.time-cards > .time-board { grid-column: 1 / -1; }
+.time-card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 14px; min-width: 0; }
+.time-card > p, .time-card .g-empty, .time-card .g-actions, .time-card .g-field, .time-card .g-unavailable { margin: 0; }
+.time-sub { font: 600 15px/1.3 var(--g-sans); margin: 4px 0 0; }
+.time-label { font-weight: 600; margin: 0; }
+.time-now { margin: 0; font-size: 17px; }
+.time-now:focus, .time-review:focus { outline: 2px solid var(--g-focus); outline-offset: 2px; }
+.time-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.time-lines > li { padding: 8px 0; border-top: 1px solid var(--g-line); min-width: 0; }
+.time-lines > li:first-child { border-top: 0; padding-top: 0; }
+.time-item { gap: 6px; min-width: 0; }
+.time-item progress { width: 100%; height: 8px; }
+.time-step { gap: 4px; }
+.time-form { padding-top: 12px; border-top: 1px solid var(--g-line); }
+.time-span { gap: 12px; flex-wrap: wrap; }
+.time-span .g-field { flex: 1 1 90px; min-width: 0; }
+.time-text { font-family: var(--g-serif); overflow-wrap: anywhere; }
+.time-basis { font-size: 13px; overflow-wrap: anywhere; }
+.time-warn { margin: 0; color: var(--g-bad); }
+.time-history > summary { cursor: pointer; padding: 6px 0; min-height: 44px; display: flex; align-items: center; }
+.time-checks { border: 0; margin: 0; padding: 0; min-width: 0; }
+.time-checks > legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.time-check { align-items: flex-start; gap: 10px; min-height: 44px; cursor: pointer; }
+.time-check > input { width: 22px; height: 22px; flex: 0 0 auto; margin-top: 2px; }
+.time-backing { margin: 0; padding: 8px 12px; border-left: 3px solid var(--g-line); }
+.time-backing > blockquote { margin: 0 0 4px; }

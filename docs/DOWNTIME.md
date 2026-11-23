@@ -5,7 +5,7 @@ compressed narration: weeks of study, research, training, recovery, crafting or 
 campaign time as one explicit, reviewable decision instead of an unexplained jump. A pursuit spends
 an exact span of 055 calendar time and records the activity's progress in the same write, once per
 operation id. It makes no model call, runs no offscreen simulation and changes no older scene or
-transcript. There is no downtime UI yet; Wave 9's sequential UI exit owns those controls.
+transcript. The director begins, pursues and abandons activities on the Time page ([TIME](TIME.md), 116), each change reviewed before it is made.
 
 ## Begin, pursue, complete
 

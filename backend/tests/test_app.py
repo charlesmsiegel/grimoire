@@ -107,6 +107,12 @@ def test_the_page_is_served_with_a_policy_that_allows_only_itself(running):
             assert sink not in text
 
 
+def test_no_page_dispatches_a_plain_object_as_an_event():
+    # a browser's dispatchEvent takes only an Event and throws on a plain object; the test DOM accepts both
+    for path in sorted(STATIC.rglob("*.js")):
+        assert not re.search(r"dispatchEvent\(\s*\{", path.read_text(encoding="utf-8")), path
+
+
 def test_a_request_for_another_host_is_refused_before_anything_is_read(running):
     server, device, chat = running
     before = device("open", chat=chat)

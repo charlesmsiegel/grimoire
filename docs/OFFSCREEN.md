@@ -110,7 +110,7 @@ scope record refuses new operations instead of forgetting old ids. Native recove
 
 ## Not in this slice
 
-No UI (Wave 9's exit, 116), no model-backed or narrated developments, no scheduled events other than
+No UI beyond the Time page ([TIME](TIME.md), 116: the plans, their pending advances, applying one, and adopting a plan under a leader's decision made there), no model-backed or narrated developments, no scheduled events other than
 plan steps, no causal branching, conditions or hidden-consequence trees (spec milestone 3), no
 multi-process cost measurement (milestone 2), no plan withdrawal or editing (a mistaken plan needs a
 new 057 decision, since one decision authorizes one plan), no persistent
