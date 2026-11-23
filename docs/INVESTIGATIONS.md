@@ -4,7 +4,7 @@
 - `grimoire.investigations`: pure values, the job loop (`run_job`), evidence checking, review and a deterministic worker (`ConsistencyAuditor`);
 - `grimoire.investigationstore`: the store-backed read-only toolbox (`WorldToolbox`) and the service that scopes, runs and reviews a job (`InvestigationService`).
 
-There is no app route or UI (the Wave 9 UI exit, 116, owns that), no model worker, and no write path. The scenarios are synthetic. No store format changes and nothing is written to a source or campaign.
+The app's Authoring page runs an audit and its review (116, [AUTHORING_PAGE](AUTHORING_PAGE.md)). There is no model worker and no write path. The scenarios are synthetic. No store format changes and nothing is written to a source or campaign.
 
 ## What it means
 
@@ -105,7 +105,7 @@ A review checks the records a finding **cites**, not the ones it says are absent
 - No persistence, resumption or queue: one job runs synchronously in the caller.
 - No process boundary for outside workers (see Trust model).
 - A crash between granting and revoking leaves an `inspect` grant active in the durable authority. Only trusted code can mint a handle for it, and the grant reads one source; nothing cleans it up yet.
-- No UI or app route (116), no proposals or repairs (milestone 2).
+- No proposals or repairs (milestone 2). The app's Authoring page (116) keeps a report in its memory only.
 - The auditor skips a payload field whose JSON pointer is longer than a citation may carry (512 characters) and says how many in its finish note; the rest of the audit goes on.
 - Review does not notice a missing entity being created, so a `dangling_reference` finding can outlive its cause until the audit is rerun.
 - Two jobs given the same `job_id` share a principal, so the audit trail cannot tell their reads apart; each toolbox is still pinned to its own source.

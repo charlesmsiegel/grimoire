@@ -31,7 +31,9 @@ backend/src/grimoire/app/
                                screen, a previewed NPC exchange and reviewed captures ([TABLE](TABLE.md));
                                voices 116, the review of a voice casting change ([LISTEN](LISTEN.md)); time/ 116, a
                                campaign's downtime, offscreen plans and commitments ([TIME](TIME.md)); rules/ 116,
-                               mechanics module authoring and recorded rolls ([RULES_PAGE](RULES_PAGE.md))
+                               mechanics module authoring and recorded rolls ([RULES_PAGE](RULES_PAGE.md));
+                               authoring/ 116, a source's world proposals, read-only audit and upgrade
+                               previews ([AUTHORING_PAGE](AUTHORING_PAGE.md))
   pages.py                     the page manifest format and its checks
 ```
 
@@ -191,6 +193,7 @@ to them now; opening one whose page is not in the app yet shows it as not availa
 | `sync` | 114 | |
 | `voices` | 116 | `?chat=<ChatRef>` (that chat's speakers, to cast; see [LISTEN.md](LISTEN.md)) |
 | `story` | 081 | `/<ChatRef>?audience=director&q=<words>&actor=<InstanceRef>&thread=<proposition id>` (one chat's story threads; see [STORY.md](STORY.md)) |
+| `authoring` | 116 | `/<source id>` (a source's authoring tools; see [AUTHORING_PAGE.md](AUTHORING_PAGE.md)) |
 
 A sprint may register other routes of its own (prefix them with its area, such as `source-history`).
 

@@ -32,7 +32,7 @@ RUNTIME_PRINCIPAL = "app:runtime"
 EXTRACTOR_PRINCIPAL = "app:continuity-extractor"
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 KEYS = frozenset({"provider_id", "base_url", "model", "key_env", "max_tokens_field", "max_output_tokens",
-                  "director", "critique", "decision", "planning", "preparation", "agendas", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
+                  "director", "critique", "decision", "planning", "preparation", "authoring", "agendas", "fallbacks", "attempts", "price_prompt", "price_reply", "price_cached"})
 #: The optional prices, per million tokens, of the configured ``model`` (not of its fallbacks): what one prompt
 #: token, one reply token and one cached prompt token cost. Decimal text, never a JSON number, so no price is
 #: ever a float; no currency is recorded (the number is in whatever currency the provider bills).
@@ -54,6 +54,10 @@ MAX_PLANNING_CALLS = 16
 #: 064's scene preparation on the Prep page: off (0) or on (1). On, the director may approve one optional planning
 #: call per prepared scene; off, Prep offers none. Off by default: it is billed.
 MAX_PREPARATION_CALLS = 1
+#: 087's world suggestions on the Authoring page (116): off (0) or on (1). On, the library owner may approve one
+#: optional planning call per suggestion; off, Authoring sends none (a proposal can still be built by hand). Off by
+#: default: it is billed.
+MAX_AUTHORING_CALLS = 1
 
 
 class ConfigError(ValueError):
@@ -80,6 +84,8 @@ class ModelConfig:
     planning_calls: int = 0
     #: 064: whether Prep may send its one optional planning call per approved scene (0 or 1; off by default).
     preparation_calls: int = 0
+    #: 087 (116): whether Authoring may send its one optional planning call per approved suggestion (0 or 1; off).
+    authoring_calls: int = 0
 
     @property
     def models(self) -> tuple[str, ...]:
@@ -142,11 +148,13 @@ def parse_model_config(raw: object) -> ModelConfig:
     critique = raw.get("critique", 0)
     planning = raw.get("planning", 0)
     preparation = raw.get("preparation", 0)
+    authoring = raw.get("authoring", 0)
     for name, value, low, high in (("max_output_tokens", tokens, 1, MAX_OUTPUT_TOKENS), ("director", director, 0, 1_000),
                                    ("attempts", attempts, 1, MAX_ATTEMPTS), ("critique", critique, 0, 1),
                                    ("decision", decision, 0, MAX_DECISION_CALLS),
                                    ("planning", planning, 0, MAX_PLANNING_CALLS),
-                                   ("preparation", preparation, 0, MAX_PREPARATION_CALLS)):
+                                   ("preparation", preparation, 0, MAX_PREPARATION_CALLS),
+                                   ("authoring", authoring, 0, MAX_AUTHORING_CALLS)):
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
             # a director reply is at most one per turn whatever the cap (004); 044 took any count
             raise ConfigError(f"{name} must be a whole number from {low} to {high}")
@@ -172,7 +180,7 @@ def parse_model_config(raw: object) -> ModelConfig:
         raise ConfigError(str(error)) from None
     return ModelConfig(endpoint, raw["model"], key_env, tokens, director, tuple(fallbacks), attempts, *prices,
                        critique_calls=critique, decision_calls=decision, agendas=agendas, planning_calls=planning,
-                       preparation_calls=preparation)
+                       preparation_calls=preparation, authoring_calls=authoring)
 
 
 def config_json(config: ModelConfig) -> dict:
@@ -189,6 +197,8 @@ def config_json(config: ModelConfig) -> dict:
         raw["planning"] = config.planning_calls
     if config.preparation_calls:
         raw["preparation"] = config.preparation_calls
+    if config.authoring_calls:
+        raw["authoring"] = config.authoring_calls
     if config.agendas:
         raw["agendas"] = agendas_json(config.agendas)
     if config.key_env is not None:
@@ -217,6 +227,14 @@ def preparation_policy(config: ModelConfig) -> InferencePolicy:
     ``preparation`` setting is on, and none when it is off, so 064 refuses ``not_budgeted`` before anything is
     sent. Never part of a turn's policy: preparing a scene is not a turn."""
     caps = {"planning": 1} if config.preparation_calls else {}
+    return InferencePolicy(caps, max_attempts_per_call=config.attempts)  # type: ignore[arg-type]
+
+
+def authoring_policy(config: ModelConfig) -> InferencePolicy:
+    """The 004 policy Authoring's world suggestions (087, 116) run under: one optional ``planning`` call when the
+    ``authoring`` setting is on, and none when it is off, so 087 refuses ``not_budgeted`` before anything is sent.
+    Never part of a turn's policy: suggesting world records is not a turn."""
+    caps = {"planning": 1} if config.authoring_calls else {}
     return InferencePolicy(caps, max_attempts_per_call=config.attempts)  # type: ignore[arg-type]
 
 

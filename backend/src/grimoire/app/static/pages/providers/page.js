@@ -22,7 +22,7 @@ const STAGE_NAMES = {
   npc_generation: "NPC replies", director_generation: "Director replies", decision: "NPC decisions",
   labelling: "Action labelling", planning: "NPC planning", epistemic_inference: "Perception inference",
   recall: "Model recall", graph_lookup: "Model graph lookup", critique: "Critique",
-  scene_preparation: "Scene preparation",
+  scene_preparation: "Scene preparation", world_authoring: "World suggestions",
 };
 
 // What a preset fills in. A preset names where calls go and which variable holds the key; the model is the
@@ -230,6 +230,7 @@ export async function mount(root, ctx) {
       max_output_tokens: number(form.tokens), attempts: number(form.attempts),
       director: form.director.checked ? 1 : 0,
       preparation: form.preparation.checked ? 1 : 0,
+      authoring: form.authoring.checked ? 1 : 0,
       decision: number(form.decision),
       planning: number(form.planning),
       agendas: (state.models && state.models.settings && state.models.settings.agendas) || [],
@@ -297,10 +298,12 @@ export async function mount(root, ctx) {
         { inputmode: "decimal", spellcheck: "false" }),
       director: el("input", { type: "checkbox", "data-focus-key": "providers:director" }),
       preparation: el("input", { type: "checkbox", "data-focus-key": "providers:preparation" }),
+      authoring: el("input", { type: "checkbox", "data-focus-key": "providers:authoring" }),
       check: el("div", { class: "providers-check", "aria-live": "polite" }),
     };
     form.director.checked = settings.director > 0;
     form.preparation.checked = settings.preparation > 0;
+    form.authoring.checked = settings.authoring > 0;
     form.key.input.classList.add("g-mono");
     for (const name of ["provider", "name", "url", "key", "fallbacks", "tokens", "attempts", "decision", "planning", "pricePrompt", "priceReply", "priceCached"]) {
       form[name].input.setAttribute("data-focus-key", "providers:" + name);
@@ -329,6 +332,8 @@ export async function mount(root, ctx) {
         el("span", {}, "Allow a director reply when asked (an optional, billed call)")),
       el("label", { class: "providers-toggle" }, form.preparation,
         el("span", {}, "Allow scene preparation on Prep (one optional, billed call for each scene the director approves)")),
+      el("label", { class: "providers-toggle" }, form.authoring,
+        el("span", {}, "Allow world suggestions on Authoring (one optional, billed call for each suggestion you approve)")),
       readOnly ? el("p", { class: "g-muted" }, "Read only: the app was started without a settings file (serve --model FILE).") : null,
       form.check,
       el("div", { class: "providers-save" },

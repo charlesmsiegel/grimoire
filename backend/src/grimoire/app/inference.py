@@ -402,6 +402,7 @@ class InferenceApi:
         view.setdefault("critique", 0)
         view.setdefault("planning", 0)
         view.setdefault("preparation", 0)
+        view.setdefault("authoring", 0)
         for name in PRICE_KEYS:
             view.setdefault(name, None)
         view["key_set"] = None if config.key_env is None else bool(self.environ.get(config.key_env))
@@ -434,6 +435,11 @@ class InferenceApi:
                        "cap": 1 if preparation else None, "available": True,
                        "note": "one planning call on Prep, sent only when the director approves its estimate for "
                                "one prepared scene; the proposal is never saved"})
+        authoring = 0 if config is None else config.authoring_calls
+        stages.append({"stage": "world_authoring", "kind": "optional", "enabled": authoring > 0,
+                       "cap": 1 if authoring else None, "available": True,
+                       "note": "one planning call on Authoring, sent only when the library owner approves its "
+                               "estimate for one suggestion of world records; nothing is stored until accepted"})
         for stage, reason in _NOT_WIRED.items():
             stages.append({"stage": stage.value, "kind": "optional", "enabled": False, "cap": None,
                            "available": False, "note": reason})
@@ -460,7 +466,8 @@ class InferenceApi:
                 "director_calls_per_turn": min(config.director_calls, 1),
                 "critique_calls_per_take": config.critique_calls, "decision_calls_per_turn": config.decision_calls,
                 "planning_calls_per_take": config.planning_calls,
-                "preparation_calls_per_scene": config.preparation_calls},
+                "preparation_calls_per_scene": config.preparation_calls,
+                "authoring_calls_per_suggestion": config.authoring_calls},
             "prices": self._prices_view(config), "test_call": self._test_view(config),
             "unavailable": [{"feature": feature, "reason": reason} for feature, reason in UNAVAILABLE],
             "bounds": {"fallbacks": MAX_FALLBACKS, "attempts": MAX_ATTEMPTS, "max_output_tokens": MAX_OUTPUT_TOKENS,

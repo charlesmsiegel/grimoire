@@ -1,0 +1,14 @@
+{
+  "contract": 1,
+  "id": "authoring",
+  "route": "authoring",
+  "title": "Authoring",
+  "slot": "hidden",
+  "order": 32,
+  "owner": "116",
+  "entry": "page.js",
+  "requires": ["authoring.source", "authoring.build", "authoring.suggest_plan", "authoring.suggest", "authoring.review",
+               "authoring.draft", "authoring.apply", "authoring.reject", "authoring.audit", "authoring.audit_review",
+               "authoring.upgrades", "authoring.pin_plan", "authoring.pin"],
+  "unavailable": null
+}
