@@ -161,6 +161,9 @@ export function makeListen(ctx, chat, { player = browserPlayer(), pause = TEXT_P
     play();
   }, { kind: "primary" });
   const stopButton = ui.button("Stop", () => { stop("Stopped."); playButton.focus(); });
+  // Stopping is never locked: another chat action (ctx.act) disables the page's buttons while it runs, but sound
+  // that keeps playing must stay stoppable, so Stop ignores being disabled. It is shown only while playing.
+  Object.defineProperty(stopButton, "disabled", { configurable: true, get: () => false, set: () => {} });
   const audioId = ui.id("listen-audio");
   const audioBox = el("input", { type: "checkbox", id: audioId, checked: state.audio || undefined, disabled: !player || undefined,
     onchange: () => { state.audio = audioBox.checked; draw(); } });
@@ -264,8 +267,8 @@ export function makeListen(ctx, chat, { player = browserPlayer(), pause = TEXT_P
             sound = player(segment.audio);
             how = await sound.done;
             sound = null;
-          } else if (audio) {
-            await wait(pause);
+          } else {
+            await wait(pause);  // a cue not played is still given time to be read, with audio on or off
           }
           if (mine !== session || !alive()) return;
           state.heard.set(segment.cue, { status: how === "failed" ? "text_only" : segment.status,

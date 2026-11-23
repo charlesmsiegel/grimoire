@@ -266,3 +266,29 @@ test("the browser's player keeps one audio element, started from the Play press"
     delete globalThis.Audio;
   }
 });
+
+test("text cues are given time to be read with audio off, and Stop is never locked by another action", async () => {
+  install("http://localhost");
+  const scripted = app({ plans: [planOf([cue(0, "Mara"), cue(1, "Tamsin"), cue(2, "Narrator")])] });
+  const ctx = { ui, signal: new AbortController().signal, styles() {}, has: scripted.has, registered: () => false, api: scripted.api };
+  const player = fakePlayer();
+  const made = makeListen(ctx, CHAT, { player: player.play, pause: 60 });
+  document.body.append(made.node);
+  made.node.open = true;
+  made.update(scene());
+  const button = (name) => byText(made.node, "button", name).find((node) => node.textContent.startsWith(name));
+  button("Plan the scene").click();
+  await until(() => made.node.querySelectorAll("li.chat-listen-cue").length === 3, 2000, "the plan");
+  const box = made.node.querySelector('input[type="checkbox"]');
+  box.checked = false;
+  box.dispatchEvent({ type: "change" });
+  const started = Date.now();
+  button("Play").click();
+  await until(() => made.node.querySelector('li[aria-current="true"]'), 2000, "the first cue read");
+  // another chat action disables the page's buttons while it runs (shell ctx.act): Stop must stay usable
+  for (const node of made.node.querySelectorAll("button")) node.disabled = true;
+  assert.equal(button("Stop").disabled, false, "Stop ignores the page-wide lock");
+  await until(() => /Read to the end as text/.test(made.node.querySelector("p.chat-listen-status").textContent), 3000, "read to the end");
+  assert.ok(Date.now() - started >= 150, "each text cue is paused on, so it can be followed");
+  assert.equal(player.sounds.length, 0, "nothing was played with audio off");
+});
