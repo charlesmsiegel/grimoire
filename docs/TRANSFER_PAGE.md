@@ -96,7 +96,8 @@ offers no plan, and **Scan again**), `unknown_source`, and 107's `InvalidBinding
    imported history; the whisper is not in it.
 
 The target, the decisions, the sources and the label being made are a draft of the tab (`ctx.draft`), cleared once
-the copy is made.
+the copy is made, even when the page was left before the answer came, so a copy that was made is never offered to
+be planned again as a second one.
 
 ## Not on a screen, and why
 

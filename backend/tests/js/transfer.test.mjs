@@ -1,5 +1,6 @@
 // Sprint 116's transfer page (084) without the app: each actor's choices (a namesake is never one), saved decisions
-// read back, the plan request (each gap named), and the words a plan is said in. Run by test_app_shell_js.py.
+// read back, the plan request (each gap named), the words a plan is said in, and a copy answered after the page was
+// left still clearing its draft. Run by test_app_shell_js.py.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,6 +9,11 @@ import path from "node:path";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const STATIC = path.join(here, "..", "..", "src", "grimoire", "app", "static");
 const logic = await import(pathToFileURL(path.join(STATIC, "pages", "transfer", "logic.js")).href);
+const { install } = await import("./fakedom.mjs");
+install("http://127.0.0.1:1");
+const ui = await import(pathToFileURL(path.join(STATIC, "shell", "ui.js")).href);
+const page = await import(pathToFileURL(path.join(STATIC, "pages", "transfer", "page.js")).href);
+const settle = async (n = 30) => { for (let i = 0; i < n; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
 
 const MARA = "campaign:a/character/mara", ANYA = "campaign:a/character/anya", GOB = "campaign:a/creature/gob";
 const cast = [
@@ -60,4 +66,42 @@ test("a plan is said in words: where a post was, why one is omitted, what stays,
   assert.equal(logic.reasonText({ reason: "different_individual" }),
     "that actor only shares the name: it is another individual (different_individual)");
   assert.equal(logic.reasonText({ reason: "new_reason" }), "(new_reason)");
+});
+
+test("a copy answered after the page was left still spends its draft, so it is not planned again as a second copy", async () => {
+  const CHAT = "campaign:a#chat/t";
+  const drafts = new Map([["transfer:" + CHAT, JSON.stringify({ target: "b", label: "", decisions: { [MARA]: "new" }, sources: [] })]]);
+  const leaving = new AbortController();
+  let release;
+  const calls = [];
+  const plan = { mapping: [], posts: [], label: "", sources: { carried: [], left_out: [] }, posts_total: 0, pages: 0, omitted: [],
+    left: [], notes: [], files: [], review: "rv" };
+  const answers = {
+    "transfer.targets": { targets: [{ campaign: "b", title: "B", chats: 1, world: null }], not_available: { state: "x", chronology: "x", art: "x" } },
+    "transfer.scan": { cast: [{ ...cast[0], active: true, problem: null }], sources: [], history: { turns: 1, page_posts: 0, pages: 0 },
+      history_problems: [], notes: [] },
+    "transfer.plan": { plan },
+  };
+  const root = ui.el("div", {});
+  await page.mount(root, {
+    ui, path: [CHAT], query: new URLSearchParams("audience=director"), signal: leaving.signal,
+    href: () => "#", registered: () => false, setTitle() {}, setCrumb() {}, styles() {}, layout() {}, navigate() {}, notify() {},
+    draft: (key) => ({ key, get: () => drafts.get(key), set: (text) => drafts.set(key, text), clear: () => drafts.delete(key) }),
+    act: async (work) => { try { return await work(); } catch { return undefined; } },
+    api: async (op, args) => {
+      calls.push(op);
+      if (op === "transfer.commit") return new Promise((resolve) => { release = () => resolve({ done: { chat: "campaign:b#chat/u", already_applied: false } }); });
+      return answers[op];
+    },
+  });
+  await settle();
+  root.querySelectorAll("button").find((node) => node.textContent === "Plan the copy").click();
+  await settle();
+  root.querySelectorAll("button").find((node) => node.textContent === "Copy as reviewed").click();
+  await settle(5);
+  leaving.abort();  // the page is left while the copy is on its way
+  release();
+  await settle();
+  assert.deepEqual(calls, ["transfer.targets", "transfer.scan", "transfer.plan", "transfer.commit"]);
+  assert.equal(drafts.get("transfer:" + CHAT), undefined, "the decisions of a copy that was made are not kept");
 });

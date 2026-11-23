@@ -217,8 +217,10 @@ export async function mount(root, ctx) {
       if (told) told.focus();
       return;
     }
-    if (ctx.signal.aborted) return;
+    // an answer came, so the copy is made: what was being decided is spent even if the page was left meanwhile (kept,
+    // it would come back to be planned again as a second copy, under a new operation id)
     draft.clear();
+    if (ctx.signal.aborted) return;
     review = null;
     reviewSlot.replaceChildren();
     const done = answer.done;
