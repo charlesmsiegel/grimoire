@@ -7,13 +7,15 @@ status, the source's entities that would go, the problems that make the preview 
 079's ``dependency_report`` of the source's ``optional_dependencies`` (pinned, drifted, following, missing). Nothing
 is written; a preview is one read, not a lock or an authorization.
 
-**Pinning a dependency** is 079's ``pin_dependency``, reviewed first. ``pin_plan`` names the dependency's current
-version and the declaration list before and after, and the exact bytes of the source manifest the pin would write
-(staged in a store transaction that is never committed), against the manifest etag the page read. ``pin`` takes the
-same dependency, the version and the etag that were reviewed: a manifest that moved meanwhile refuses ``changed``
-(the page reads again), as does a dependency whose version moved since the review, and the pin is otherwise 079's own
-guarded compare-and-swap. Retried after it was made, the manifest already declares that version: ``already_applied``,
-nothing is written again. Re-pinning rewrites no reference anywhere.
+**Pinning a dependency** is the declaration 079's ``pin_dependency`` writes, reviewed first. ``pin_plan`` names the
+dependency's current version and the declaration list before and after, and the exact bytes of the source manifest
+the pin would write (staged in a store transaction that is never committed), against the manifest etag the page
+read. ``pin`` takes the same dependency, the version and the etag that were reviewed: a manifest that moved
+meanwhile refuses ``changed`` (the page reads again), as does a dependency whose version moved since the review. The
+pin writes exactly the reviewed declaration (the version the person saw, checked under the store's lock to be still
+the dependency's), with 079's guarded compare-and-swap of the manifest: it never re-reads a version to pin. Retried
+after it was made, the manifest already declares that version: ``already_applied``, nothing is written again. Re-
+pinning rewrites no reference anywhere.
 
 Not here: previewing an update needs a candidate library (an unpacked update opened read-only), and this app has no
 way to open one (package distribution is Sprint 103's); applying an update or a removal is not built in 079.
@@ -32,12 +34,11 @@ from grimoire.sourceupgrades import (
     SourceUpgradeError,
     declared_dependencies,
     dependency_report,
-    pin_dependency,
     preview_source_removal,
     source_version,
 )
 from grimoire.sourceupgrades.model import MAX_DEPENDENCIES
-from grimoire.store import RecordNotFound, StoreError
+from grimoire.store import RecordNotFound, StaleWrite, StoreError
 from grimoire.textapi import ApiRefused
 
 from .common import refused, source_of
@@ -119,6 +120,12 @@ def _dependency_of(args: Mapping[str, object], source: str) -> str:
 
 def _staged(ctx: AdapterContext, source: str, dependency: str, expected: object) -> dict:
     """What 079's pin of ``dependency`` would write now, against the manifest etag ``expected``. Writes nothing."""
+    return _stage(ctx, source, dependency, expected)[0]
+
+
+def _stage(ctx: AdapterContext, source: str, dependency: str, expected: object, reviewed: str | None = None):  # type: ignore[no-untyped-def]
+    """The pin's plan and its staged (uncommitted) transaction: 079's declaration of ``dependency`` at its current
+    version, or at ``reviewed`` (which must still be its current version), against the manifest etag ``expected``."""
     if type(expected) is not str:
         raise ApiRefused("review_required", "name the manifest etag the page read (expected)")
     store = ctx.store
@@ -129,6 +136,9 @@ def _staged(ctx: AdapterContext, source: str, dependency: str, expected: object)
     if stored.etag != expected:
         raise ApiRefused("changed", "the source's manifest changed since it was read; read it again")
     version = source_version(store.load(), dependency)
+    if reviewed is not None and version != reviewed:
+        raise ApiRefused("changed", "the dependency changed since the review, so its version is another; nothing was "
+                                    "written. Review the pin again")
     if version is None:
         raise ApiRefused("missing_dependency", f"{dependency} is not loaded in this library, so it has no version to "
                                                "pin")
@@ -151,8 +161,8 @@ def _staged(ctx: AdapterContext, source: str, dependency: str, expected: object)
     transaction = store.transaction()  # staged to show its exact bytes; never committed
     transaction.put(replace(stored.manifest, extra=extra), expected)
     files = file_views(transaction.preview(), store.read_exact)
-    return {"dependency": dependency, "version": version, "expected": expected, "before": before, "after": after,
-            "declared": at is not None, "files": files}
+    return ({"dependency": dependency, "version": version, "expected": expected, "before": before, "after": after,
+             "declared": at is not None, "files": files}, transaction)
 
 
 def pin_plan(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
@@ -181,13 +191,15 @@ def pin(ctx: AdapterContext, args: Mapping[str, object]) -> dict:
             return {"source": source, "done": {"already_applied": True, "version": version},
                     "dependencies": _dependencies(ctx, source)}
         raise ApiRefused("changed", "the source's manifest changed since the review; nothing was written")
-    if source_version(ctx.store.load(), dependency) != version:
-        raise ApiRefused("changed", "the dependency changed since the review, so its version is another; nothing was "
-                                    "written. Review the pin again")
-    try:
-        pin_dependency(ctx.store, ctx.handle, source, dependency, expected=expected)
-    except SourceUpgradeError as error:
-        raise refused(error, "upgrade_refused") from None
+    # The very declaration that was reviewed is written, never a version read again later: under the store's lock the
+    # dependency is checked to be still at the reviewed version and the reviewed bytes are committed with 079's own
+    # guarded compare-and-swap of the manifest, so a dependency that moves meanwhile cannot slip another pin in.
+    with ctx.store.lock:
+        _plan, transaction = _stage(ctx, source, dependency, expected, version)
+        try:
+            transaction.commit(ctx.handle)
+        except StaleWrite:
+            raise ApiRefused("changed", "the source's manifest changed since the review; nothing was written") from None
     return {"source": source, "done": {"already_applied": False, "version": version},
             "dependencies": _dependencies(ctx, source)}
 

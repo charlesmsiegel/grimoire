@@ -182,7 +182,9 @@ status. The preview also lists the source's own entities, the problems that make
 **Dependencies.** This is 079's `dependency_report`. Each declared dependency is pinned, drifted, following or
 missing, against its current version. Any other source can be pinned at its current version. **Review the pin**
 shows the declarations before and after, and the exact bytes of the manifest it would write. They are staged in a
-store transaction that is never committed. **Pin it** is 079's `pin_dependency`, guarded by that etag:
+store transaction that is never committed. **Pin it** writes exactly that reviewed declaration (the version you
+saw, never one read again later), with the guarded write of the manifest 079's `pin_dependency` makes, against that
+etag:
 - a manifest that moved since the review refuses `changed`, and the page reads it again;
 - a dependency whose version moved since refuses `changed`;
 - retried after it was made, it answers `already_applied` and writes nothing again.

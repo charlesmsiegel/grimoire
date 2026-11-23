@@ -637,6 +637,25 @@ def test_a_dependency_is_pinned_once_as_reviewed(desk):
         assert canonical(device) == written
 
 
+def test_a_pin_writes_the_reviewed_version_even_if_the_dependency_is_read_again_as_another(desk, monkeypatch):
+    # the version the person reviewed is the one written: never one read again after the check (as 079's
+    # pin_dependency would, if the dependency moved between the check and the write)
+    from grimoire.app.adapters.authoring import upgrades
+    from grimoire.sourceupgrades import dependencies
+    folder, _chat = desk
+    with Device(folder) as device:
+        seed_vale(device)
+        app = AppApi(device.api)
+        dependency = MARA_VELL.source
+        etag = app.call("authoring.upgrades", {"source": VALE})["dependencies"]["etag"]
+        plan = app.call("authoring.pin_plan", {"source": VALE, "dependency": dependency, "expected": etag})["plan"]
+        reviewed = plan["version"]
+        monkeypatch.setattr(upgrades, "source_version", lambda _view, _source: reviewed)
+        monkeypatch.setattr(dependencies, "source_version", lambda _view, _source: "sha256:" + "1" * 64)
+        app.call("authoring.pin", {"source": VALE, "dependency": dependency, "expected": etag, "version": reviewed})
+        assert canonical(device)[MANIFEST] == plan["files"][0]["text"].encode("utf-8")
+
+
 # -- the page end to end -----------------------------------------------------------------------------------------------
 @pytest.mark.skipif(NODE is None, reason="Node is not installed")
 def test_the_authoring_page_end_to_end(desk, tmp_path):
