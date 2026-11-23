@@ -35,14 +35,14 @@ FEATURES: tuple[dict, ...] = (
      "reason": None},
     {"slice": "078", "title": "Relationships and attitudes", "status": "unavailable", "route": None, "where": None,
      "reason": f"its place (a chat's Details) is built in {LATER}"},
-    {"slice": "079", "title": "Source upgrades", "status": "unavailable", "route": None, "where": None,
-     "reason": f"its screen (Authoring) is built in {LATER}"},
+    {"slice": "079", "title": "Source upgrades", "status": "screen", "route": "sources", "where":
+     "Characters and lore, in the rail under Library: a source's page, Authoring, its upgrade previews and optional dependencies", "reason": None},
     {"slice": "080", "title": "Speech to draft", "status": "screen", "route": "chats", "where":
      "in a chat: Dictate in the composer, a transcript that is only ever a draft", "reason": None},
     {"slice": "081", "title": "Story threads", "status": "screen", "route": "story", "chat": True, "where":
      "Story threads, for this chat: a thread of the story followed to how it ended", "reason": None},
-    {"slice": "082", "title": "Read-only world audits", "status": "unavailable", "route": None, "where": None,
-     "reason": f"its screen (Authoring) is built in {LATER}"},
+    {"slice": "082", "title": "Read-only world audits", "status": "screen", "route": "sources", "where":
+     "Characters and lore, in the rail under Library: a source's page, Authoring, its read-only consistency audit", "reason": None},
     {"slice": "083", "title": "Character voice performance", "status": "screen", "route": "chat", "chat": True, "where":
      "in this chat: Listen to the scene, its kept lines in their cast voices (voices are cast on Voices, in Settings)",
      "reason": None},
@@ -54,8 +54,8 @@ FEATURES: tuple[dict, ...] = (
     {"slice": "086", "title": "Mechanics module authoring", "status": "screen", "route": "rules", "where":
      "Rules, in the rail under Library: a rules module drafted, checked, saved and published as reviewed",
      "reason": None},
-    {"slice": "087", "title": "World authoring proposals", "status": "unavailable", "route": None, "where": None,
-     "reason": f"its screen (Authoring) is built in {LATER}"},
+    {"slice": "087", "title": "World authoring proposals", "status": "screen", "route": "sources", "where":
+     "Characters and lore, in the rail under Library: a source's page, Authoring, its world proposals, built by hand or suggested", "reason": None},
 )
 
 

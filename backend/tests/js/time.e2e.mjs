@@ -273,7 +273,8 @@ test("a campaign's downtime, offscreen plans and commitments, each change review
   assert.ok(byText(features, "a", "Hypothetical reply").length && byText(features, "a", "Live context preview").length);
   const rolls = byText(features, "a", "Recorded rolls");
   assert.ok(rolls.length && rolls[0].getAttribute("href").startsWith("#/rules/"), "recorded rolls, on this campaign's Rules page");
-  assert.ok(byText(features, "strong", "World authoring proposals is not available yet.").length);
+  assert.ok(byText(features, "a", "World authoring proposals").length, "world authoring, from the library");
+  assert.ok(byText(features, "strong", "Relationships and attitudes is not available yet.").length);
   assert.ok(features.textContent.includes("Downtime") && features.textContent.includes("Quests and commitments"));
 
   // the table's view: only that these are the director's
