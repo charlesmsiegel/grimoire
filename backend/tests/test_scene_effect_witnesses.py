@@ -21,6 +21,8 @@ from generation_fixtures import say
 from scene_fixtures import ANA, ANYA, BOB, LABEL_POLICY, MARA_VELL, Table, Tagged, attach_tamsin, card_library
 from store_helpers import OWNER
 
+from grimoire.campaignapi import CampaignApi
+from grimoire.campaignapi.pacing import read_pacing
 from grimoire.chats import Launch
 from grimoire.chatstore import ChatLibrary
 from grimoire.core import DIRECTOR, Event, Moment
@@ -379,6 +381,10 @@ def test_a_crash_before_the_knowledge_append_is_completed_on_open_exactly_once(c
     with restart(folder, restaged) as at:
         assert raw_effect(at, chat, turn).state == "accepted"  # 021 holds it; 020 does not yet
         assert stored(at, chat).knowledge.events == () and seen(at, chat, anya) == []
+        hub = CampaignApi(at.store, at.authority, owner=OWNER, stages=restaged)
+        before = read_pacing(at.store, chat.scope)
+        saved = hub.call("pacing", {"chat": str(chat), "mode": "every_action", "expected": before.etag})
+        assert saved["done"]["changed"] and stored(at, chat).knowledge.events == ()
         assert unbridged(at, chat) == []  # the first open writes it, with the stage it was played on
         assert seen(at, chat, anya) == [("witnessed", MET)] and seen(at, chat, tamsin) == []
         assert unbridged(at, chat) == [] and at.runner.recover_effects(chat, at.owner) == ()

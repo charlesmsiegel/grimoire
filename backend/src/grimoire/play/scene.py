@@ -235,6 +235,18 @@ def _stage_ok(scene: Scene) -> None:
                           f"this chat's stage cannot be used ({detail}); stage the scene again")
 
 
+def check_ready(scene: Scene) -> None:
+    """Check the read-only chat conditions shared by play and the obstacle offer."""
+    _readable(scene)
+    if scene.staged is None:
+        raise _refuse("party_unreadable", "who is present cannot be staged; nobody is on stage")
+    _stage_ok(scene)
+    if scene.paused:
+        raise _refuse("paused", "play is paused")
+    if scene.persona is not None and scene.persona in scene.cast and scene.controller(scene.persona) == DIRECTOR:
+        raise _refuse("persona_not_player", "the director controls this chat's persona; a player must take it back")
+
+
 def _staged(answers, *chains: tuple[str, ...]) -> None:
     """Who hears or sees a line decides what each actor later knows: never on a guess (041's rule)."""
     if any(answer.assumed for answer in answers) or any(chains):

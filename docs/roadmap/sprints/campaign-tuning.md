@@ -2,6 +2,10 @@
 
 **Outcome:** Make pacing, challenge, tone and narrative pressure genuine controls rather than decorative prompts.
 
+**First slice:** Choose how often the campaign hub offers an obstacle for a solo public action. Taking each
+offer in the side-by-side test changes how many obstacles the player attempts. The same recorded roll has the
+same result under the same inputs. See [the campaign hub](../../CAMPAIGN_HUB.md#obstacle-pacing-088).
+
 ## Scope
 - Support independent difficulty, drama-versus-simulation, pacing, tone, lethality, pressure, scarcity and spotlight controls.
 - Route each setting to at least one real consumer; never retroactively change established rules outcomes.

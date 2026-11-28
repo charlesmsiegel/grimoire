@@ -64,13 +64,18 @@ def open_obstacle(runner, campaign_id: str, obstacle_id: object) -> ObstacleStat
             _library(runner).adjudication.undecidable, campaign_id, pending.attempt.attempt_id) is None:
         raise _refuse("attempt_pending", f"attempt {pending.attempt.attempt_id} at this obstacle is undecided; "
                                          "the director decides it first")
+    check_label_ids(state)
+    return state
+
+
+def check_label_ids(state: ObstacleState) -> None:
+    """Refuse authored ids reserved for the labeller."""
     obstacle = state.obstacle
     clashing = sorted({each for each in (*(fact.fact_id for fact in state.facts),
                                          *(stake.stake_id for stake in obstacle.stakes))
                        if _LABELLING_IDS.fullmatch(each)} | ({NOVEL} if obstacle.approach(NOVEL) else set()))
     if clashing:
         raise _refuse("obstacle_ids_clash", "the obstacle uses ids labelling hands out: " + ", ".join(clashing)[:120])
-    return state
 
 
 def check_moment(state: ObstacleState, sequence: int) -> None:

@@ -4,7 +4,9 @@
 
 **Current reconciliation:** landed base [`0f7adcfb6d3e04401284f682773f07a6f5467bc5`](https://github.com/charlesmsiegel/grimoire/commit/0f7adcfb6d3e04401284f682773f07a6f5467bc5) supports **65/119 scheduled slices** after recognizing 047, 050 and 112. The additional 049/054 proofs in [PR #696](https://github.com/charlesmsiegel/grimoire/pull/696) bring this candidate’s rows to **67/119**; 056's shared-bestiary proof and 064's scenario preparation bring them to **69/119**; 053's consolidation and 063's delayed-rumor proofs bring them to **71/119**, and the 070, 067, 072, 061 and 058 proofs to **76/119**. Later proofs and 015's measured V0.2.1 baseline (2026-11-20) bring the rows to **80/119**, and the 073, 074, 077, 078, 079, 080, 081, 082, 083, 084, 085, 086 and 087 proofs to **93/119**, and 115's Wave 8 UI exit to **94/119**, and 069's live judge-panel proof to **95/119**, and 068's labelled sampled comparison to **96/119**; with Wave 2 **5/12 scoped waves** (1, 2, 3, 4, 5) are complete. This is a bounded follow-up audit of the entries below, not a new exhaustive audit or a claim that #696 was already merged.
 
-This refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecks affected slice criteria and wave gates; unchanged entries retain that original source/test audit, not a claim of a new exhaustive audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
+Wave 9's UI exit brings the count to **97/119** at the landed `v2` base [ee05a109c](https://github.com/charlesmsiegel/grimoire/commit/ee05a109c445d6c2d8e37cecf556ac87c2b50dac). The 088 proof below adds one, for **98/119**. The scoped wave count is still **5/12**.
+
+The 2026-11-20 refresh inspected every merged change since the original [92144e17 audit](https://github.com/charlesmsiegel/grimoire/pull/678). It rechecked affected slice criteria and wave gates. Unchanged entries retain that original source/test audit. The follow-up refresh includes #691, #681 and #693 through the pinned snapshot.
 
 | Merged change | Audit decision |
 |---|---|
@@ -43,7 +45,7 @@ The current reconciliation preserves the original proving obligations. Browser e
 | [7](#wave-7) | 7/7 | ☐ | 112 and 113 have real CLI/Chromium follow-up proofs. The full keyboard/screen-reader/touch acceptance gate remains unverified; scoped proofs do not close the global exit gate. |
 | [8](#wave-8) | 22/24 | ☐ | 049, 050, 051, 053, 054, 055, 056, 057, 058, 059, 060, 061, 062, 063, 064, 066, 067, 068, 069, 070, 072 and UI exit 115 are complete at their bounded first-proof boundaries; 115's real-browser, screen-reader and phone pass is unverified. 071 remains incomplete. |
 | [9](#wave-9) | 16/16 | ☐ | 073, 074, 075, 076, 077, 078, 079, 080, 081, 082, 083, 084, 085, 086 and 087 meet their bounded first slices (080 with a stand-in local recognizer), and UI exit 116 is complete at its bounded first-proof boundary; 116's real-browser, screen-reader and phone pass is unverified. |
-| [10](#wave-10) | 1/13 | ☐ | 095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete. |
+| [10](#wave-10) | 2/13 | ☐ | 088 offers campaign-paced obstacles in the hub. 095 meets the headless trade/craft proof. The remaining domain slices and UI exit 117 are open. |
 | [11](#wave-11) | 0/6 | ☐ | Scheduled domain slices and UI exit 118 are not complete. |
 | [12](#wave-12) | 0/3 | ☐ | Voice/immersion implementations and UI exit 119 are absent. |
 
@@ -800,14 +802,14 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 <a id="wave-10"></a>
 ## Wave 10
 
-095 meets the bounded headless trade/craft proof through counted holdings; the other domain slices and UI exit 117 remain incomplete.
+088 provides a campaign setting for when the hub offers obstacles. 095 meets the bounded headless trade/craft proof through counted holdings. The remaining domain slices and UI exit 117 are open.
 
 <a id="slice-088"></a>
 ### 088 — Campaign Tuning
 
-- [ ] Scheduled first-useful slice ([requirements](sprints/campaign-tuning.md)).
-- Evidence: [`backend/src/grimoire/decisions/model.py`](../../backend/src/grimoire/decisions/model.py); [`backend/src/grimoire/goals`](../../backend/src/grimoire/goals); [`backend/src/grimoire/app/static/pages/campaign/page.js`](../../backend/src/grimoire/app/static/pages/campaign/page.js).
-- Scope / gap: No player-visible pacing setting with a real decision/obstacle consumer or side-by-side pacing proof; decision policy and agenda primitives are not campaign tuning.
+- [x] Scheduled first-useful slice ([requirements](sprints/campaign-tuning.md)).
+- Evidence: [Obstacle pacing](../CAMPAIGN_HUB.md#obstacle-pacing-088) sets a campaign preference and offers 040 obstacles in the live hub. The [API proof](../../backend/tests/test_campaignapi_pacing.py) follows three actions through the fast and slow modes. Taking each offered obstacle produces three completed attempts versus one, and the same 075 roll yields the same result using the same 062 profile and die face. An existing roll survives a setting edit byte for byte. The [store tests](../../backend/tests/test_campaign_pacing_store.py) cover old scopes, repair, stale writes, and unresolved scope conflicts. The [page test](../../backend/tests/js/campaign.e2e.mjs) keeps the player's manual choice across a pacing save and exercises the existing labelling confirmation on an app server.
+- Scope / gap: Cadence applies to solo public actions and offers only unused obstacles open at sequence zero. The proof uses synthetic data and scripted labelling. Additional controls, adaptive pacing, and the rest of UI exit 117 remain open.
 
 <a id="slice-089"></a>
 ### 089 — Character Growth
@@ -891,7 +893,7 @@ All seven scheduled first-useful slices are checked, including real CLI/Chromium
 
 - [ ] Scheduled first-useful slice ([requirements](sprints/wave-10-ui-exit.md)).
 - Evidence: [`backend/src/grimoire/app/pages.py`](../../backend/src/grimoire/app/pages.py); [`backend/src/grimoire/app/static/pages/campaign/page.json`](../../backend/src/grimoire/app/static/pages/campaign/page.json); [`backend/src/grimoire/app/static/pages/art/page.json`](../../backend/src/grimoire/app/static/pages/art/page.json).
-- Scope / gap: No Wave 10 encounter/map/pacing/growth/image-generation/publication UI first proof; current registered pages implement earlier UI slices. 095 primitives are headless, not this UI exit.
+- Scope / gap: The hub exposes 088's obstacle pacing. The encounter, map, growth, image-generation and publication flows, and the combined Wave 10 acceptance, remain open. 095 is headless.
 
 <a id="wave-11"></a>
 ## Wave 11

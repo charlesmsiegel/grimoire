@@ -65,7 +65,7 @@ from grimoire.play.scene import (
     DEFAULT_BUDGET, NOW, WRITE_RETRIES, Scene, _assigned, _Context, _declined, _find_line, _first_text,
     _follows, _has_imported, _human_of, _latest, _macros, _mark, _no_clock, _no_id, _payload,
     _perceived, _readable, _refuse, _room, _scenario_text, _stage, _stage_ok, _Stale, _table_audience,
-    _table_known,
+    _table_known, check_ready,
 )
 from grimoire.play.stages import StageSource, stage_key, succession
 from grimoire.play.together import UNREAD_HINTS, Contribution, post_together, read_post, seat_player
@@ -246,6 +246,10 @@ class SceneRunner:
             raise _refuse("agenda_changed", "the recorded decision no longer has its authored agenda")
         return context, chosen[0][1], ledger, entry
 
+    def read_scene(self, chat: ChatRef) -> Scene:
+        """Read the chat, cast and active line without settling pending witness bridges."""
+        return self._context(chat).scene
+
     @traced("open")
     def open(self, chat: ChatRef) -> Scene:
         """The chat as it stands now. Nothing is written but 020 knowledge of accepted effects still pending (see
@@ -257,7 +261,7 @@ class SceneRunner:
         word (``effect_untagged``, ``<turn id>:<event id>``). It first writes every accepted effect's pending 020
         knowledge it can (``play/witness.py``), and counts this chat's that stays (``unbridged``,
         ``<count>:<reason>``, naming no effect)."""
-        scene = self._context(chat).scene
+        scene = self.read_scene(chat)
         found = effect_problems(self, scene)
         try:  # 016: a configuration that cannot be read holds every narration; said, never hidden
             in_force(self, chat)
@@ -1387,14 +1391,7 @@ class SceneRunner:
     # -- checks -----------------------------------------------------------------------------------
 
     def _ready(self, scene: Scene) -> None:
-        _readable(scene)
-        if scene.staged is None:
-            raise _refuse("party_unreadable", "who is present cannot be staged; nobody is on stage")
-        _stage_ok(scene)
-        if scene.paused:
-            raise _refuse("paused", "play is paused")
-        if scene.persona is not None and scene.persona in scene.cast and scene.controller(scene.persona) == DIRECTOR:
-            raise _refuse("persona_not_player", "the director controls this chat's persona; a player must take it back")
+        check_ready(scene)
 
     def _open(self, scene: Scene) -> StoredTurn:
         _readable(scene)

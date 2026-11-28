@@ -94,6 +94,8 @@ MAX_ROSTER = 256
 MAX_LABEL = 200
 MAX_PREMISE = 4000
 MAX_DEPTH = 64  # nesting of opaque JSON (extras, session zero)
+OBSTACLE_PACING_KEY = "grimoire.obstacle_pacing"
+_NATIVE_DEPTH = 100  # native JSON bound, including for a malformed pacing value awaiting repair
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _SAFE_TEXT = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -153,12 +155,13 @@ def _too_deep(value: object, limit: int) -> bool:
     return False
 
 
-def opaque_object(value: object, label: str, reserved: frozenset[str] = frozenset()) -> JsonObject:
+def opaque_object(value: object, label: str, reserved: frozenset[str] = frozenset(), *,
+                  max_depth: int = MAX_DEPTH) -> JsonObject:
     """A frozen JSON object of authored data this model keeps but does not interpret."""
     if not isinstance(value, Mapping):
         raise _fail(f"{label} must be a JSON object")
-    if _too_deep(value, MAX_DEPTH):
-        raise _fail(f"{label} is nested more than {MAX_DEPTH} levels deep")
+    if _too_deep(value, max_depth):
+        raise _fail(f"{label} is nested more than {max_depth} levels deep")
     clash = sorted(set(value) & reserved) if all(type(key) is str for key in value) else []
     if clash:
         raise _fail(f"{label} may not use reserved keys {clash}")
@@ -479,7 +482,18 @@ class PlayScope:
             raise _fail("world must be a WorldBinding or None")
         if self.session_zero is not None:
             object.__setattr__(self, "session_zero", opaque_object(self.session_zero, "session_zero"))
-        object.__setattr__(self, "extras", opaque_object(self.extras, "extras", SCOPE_FIELDS | IDENTITY_KEYS))
+        extras = self.extras
+        reserved = SCOPE_FIELDS | IDENTITY_KEYS
+        if isinstance(extras, Mapping) and OBSTACLE_PACING_KEY in extras:
+            # Keep this owned member opaque so even a bad value survives a scope edit until explicitly repaired.
+            before = opaque_object({key: item for key, item in extras.items() if key != OBSTACLE_PACING_KEY},
+                                   "extras", reserved)
+            pacing = opaque_object({OBSTACLE_PACING_KEY: extras[OBSTACLE_PACING_KEY]}, "obstacle pacing",
+                                   max_depth=_NATIVE_DEPTH)
+            extras = JsonObject((*before.pairs, *pacing.pairs))
+        else:
+            extras = opaque_object(extras, "extras", reserved)
+        object.__setattr__(self, "extras", extras)
 
     @property
     def is_campaign(self) -> bool:

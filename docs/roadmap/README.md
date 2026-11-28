@@ -48,6 +48,8 @@ Historical audit: [`b54b2bd8`](https://github.com/charlesmsiegel/grimoire/commit
 
 **☑** means the scheduled first-useful implementation and its required first-proof additions were found in code and executable tests. It does **not** mean all subsequent milestones or the moonshot are complete, nor does it certify live providers or physical devices. **☐** means a required implementation or proving scenario is missing or not established; it does not mean no work exists. Existing functionality can satisfy a slice even when delivered by an earlier sprint.
 
+Sprint 088 brings the current count to **98 of 119 scheduled slices**. [Implementation evidence](IMPLEMENTATION_AUDIT.md#slice-088).
+
 A wave is checked only when all its scheduled first slices and explicit exit requirements are satisfied. Waves 7–12 also require their UI convergence/exit, not just domain libraries. Each status links to the [code evidence, remaining gaps and verification limits](IMPLEMENTATION_AUDIT.md). This audit is the current completion summary; older narrative status paragraphs below retain their milestone-specific history and may describe narrower partial slices.
 
 ### Maintenance handoff
@@ -349,11 +351,11 @@ The wave is not **user-visible complete** until its implemented user-facing doma
 
 ### Wave 10 — Richer interaction, simulation and presentation
 
-- [ ] **Wave 10 complete for its scheduled first slices and exit gate** (1/13 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-10)
+- [ ] **Wave 10 complete for its scheduled first slices and exit gate** (2/13 slices checked). [Audit](IMPLEMENTATION_AUDIT.md#wave-10)
 
 | # | Complete | Sprint | Priority | Required earlier sprints | Primary owner | First useful proof |
 |---:|:---:|---|---|---|---|---|
-| 088 | [☐](IMPLEMENTATION_AUDIT.md#slice-088) | [Campaign Tuning](sprints/campaign-tuning.md) | **P1** | [Decision Policies](sprints/decision-policies.md), [Obstacles And Agency](sprints/obstacles-and-agency.md) | campaign / pacing policies | Demonstrate a player-visible pacing control and its effect |
+| 088 | [☑](IMPLEMENTATION_AUDIT.md#slice-088) | [Campaign Tuning](sprints/campaign-tuning.md) | **P1** | [Decision Policies](sprints/decision-policies.md), [Obstacles And Agency](sprints/obstacles-and-agency.md) | campaign / pacing policies | Demonstrate a player-visible pacing control and its effect |
 | 089 | [☐](IMPLEMENTATION_AUDIT.md#slice-089) | [Character Growth](sprints/character-growth.md) | **P1** | [Creature Individualization](sprints/creature-individualization.md), [Party And Presence](sprints/party-and-presence.md) | actors / advancement | Advance individual abilities without changing species template |
 | 090 | [☐](IMPLEMENTATION_AUDIT.md#slice-090) | [Combat Encounter Orchestration](sprints/combat-encounter-orchestration.md) | **P1** | [Mechanical Resolution](sprints/mechanical-resolution.md), [Durable Action Recovery](sprints/durable-action-recovery.md), [Scene Physical Continuity](sprints/scene-physical-continuity.md) | gameplay / combat session | Resolve two multi-actor rounds under one ruleset |
 | 091 | [☐](IMPLEMENTATION_AUDIT.md#slice-091) | [Conversation Turn Taking](sprints/conversation-turn-taking.md) | **P1** | [Speech To Draft](sprints/speech-to-draft.md), [Spoken Command And Intent](sprints/spoken-command-and-intent.md) | voice / interruption | Recognize interruption and draft acceptance safely |
