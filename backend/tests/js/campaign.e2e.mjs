@@ -23,6 +23,7 @@ register("data:text/javascript," + encodeURIComponent(`
 const base = process.env.GRIMOIRE_APP;
 const chat = process.env.GRIMOIRE_CHAT;
 const campaign = process.env.GRIMOIRE_CAMPAIGN;
+const pacing = process.env.GRIMOIRE_PACING === "1";
 
 const idle = () => until(() => !document.body.querySelectorAll("button").some((node) => node.disabled), 30000, "the action to finish");
 
@@ -38,7 +39,7 @@ function section(main, title) {
 
 const view = (main, label) => byText(main, "button", label).find((node) => node.classList.contains("g-segment"));
 
-test("a campaign's chat, its two views and an effect accepted with two keys", { skip: !base }, async () => {
+test("a campaign's chat, its two views and an effect accepted with two keys", { skip: !base || pacing }, async () => {
   const window = install(base);
   window.location.hash = "#token=" + encodeURIComponent(process.env.GRIMOIRE_TOKEN);
   await import("/static/shell/shell.js");
@@ -168,4 +169,69 @@ test("a campaign's chat, its two views and an effect accepted with two keys", { 
   assert.ok(knowledge.textContent.includes("None of it is world truth"));
   view(knowledge, "Mara Vell").click();
   await until(() => section(main, "Knowledge").querySelectorAll("h3").some((node) => node.textContent === "Mara Vell's perspective"), 15000, "Mara's perspective");
+});
+
+test("pacing is saved explicitly and leaves the manual obstacle choice selected", { skip: !base || !pacing }, async () => {
+  const window = install(base);
+  const requests = [];
+  const fetch = globalThis.fetch;
+  globalThis.fetch = (url, options) => {
+    if (String(url).startsWith("/api/campaign.") && options?.body) {
+      requests.push([String(url).split(".").at(-1), JSON.parse(options.body)]);
+    }
+    return fetch(url, options);
+  };
+  window.location.hash = "#token=" + encodeURIComponent(process.env.GRIMOIRE_TOKEN);
+  await import("/static/shell/shell.js");
+  const main = await until(() => document.body.querySelector("main"), 15000, "the frame");
+  await until(() => window.location.hash === "#/home", 15000, "Home");
+  const address = "#/campaign/" + encodeURIComponent(campaign) + "?chat=" + encodeURIComponent(chat);
+  window.location.hash = address;
+  const settings = () => section(main, "Obstacle pacing");
+  const action = () => section(main, "Open action");
+  await until(settings, 15000, "the obstacle pacing control");
+  assert.match(settings().textContent, /public actions.*this chat/i);
+  const picker = settings().querySelector("select");
+  assert.equal(settings().querySelector("label").getAttribute("for"), picker.getAttribute("id"));
+  assert.equal(picker.value, "manual");
+  const against = () => action().querySelector("select");
+  assert.equal(against().value, "");
+  against().value = "other";
+  against().dispatchEvent({ type: "change" });
+  picker.value = "every_action";
+  picker.dispatchEvent({ type: "change" });
+  assert.equal(requests.filter(([op]) => op === "pacing").length, 0);
+  const save = byText(settings(), "button", "Save pacing")[0];
+  save.focus();
+  save.click();
+  await until(() => byText(action(), "option", "Suggested").length, 15000, "the suggested choice after saving");
+  assert.equal(document.activeElement, byText(settings(), "button", "Save pacing")[0]);
+  assert.equal(against().value, "other");
+  assert.equal(byText(action(), "option", "Suggested")[0].getAttribute("value"), "hold");
+  const [[, saved]] = requests.filter(([op]) => op === "pacing");
+  assert.equal(saved.mode, "every_action");
+  assert.match(saved.expected, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(requests.filter(([op]) => op === "label").length, 0);
+  byText(action(), "button", "Label this action")[0].click();
+  await until(() => document.body.querySelector("dialog"), 15000, "the call review");
+  assert.equal(requests.filter(([op]) => op === "label").length, 0);
+  await answerDialog("Request labels");
+  await until(() => byText(action(), "p", "Against Get past the second hatch.").length, 15000, "the selected obstacle's label");
+  assert.deepEqual(requests.filter(([op]) => op === "label").map(([, args]) => args.obstacle), ["other"]);
+
+  window.location.hash = "#/home";
+  await until(() => !settings(), 15000, "the hub to close");
+  window.location.hash = address;
+  await until(settings, 15000, "the hub reopened");
+  assert.equal(settings().querySelector("select").value, "every_action");
+  assert.equal(byText(action(), "option", "Suggested").length, 0);
+
+  const { call } = await import("/static/shell/api.js");
+  const fresh = (await call("campaign.hub", { chat })).pacing;
+  await call("campaign.pacing", { chat, mode: "manual", expected: fresh.etag });
+  settings().querySelector("select").value = "every_third_action";
+  byText(settings(), "button", "Save pacing")[0].click();
+  await until(() => byText(document.body, "div", "The library changed meanwhile").length
+    || byText(document.body, "div", "the library changed meanwhile").length, 15000, "the stale setting refusal");
+  assert.equal((await call("campaign.hub", { chat })).pacing.mode, "manual");
 });

@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from scene_fixtures import LABEL_POLICY, Table
+from scene_fixtures import LABEL_POLICY, Table, card_library
 from store_helpers import OWNER
 from textapi_fixtures import Device, desktop_library, keep, say
 
@@ -253,18 +253,36 @@ def test_the_campaign_page_end_to_end(desk):
     folder, chat = desk
     with Device(folder, [say("Mara pockets it.")]) as device:
         kept_turn(device, chat)
-        app = AppServer(device.api)
-        thread = threading.Thread(target=app.serve_forever, daemon=True)
-        thread.start()
-        try:
-            host, port = app.address
-            env = {**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token,
-                   "GRIMOIRE_CHAT": str(chat), "GRIMOIRE_CAMPAIGN": chat.campaign_id}
-            result = subprocess.run([NODE, "--test", "--test-reporter=tap", str(Path(__file__).with_name("js") / "campaign.e2e.mjs")],
-                                    capture_output=True, text=True, timeout=180, check=False, env=env)
-        finally:
-            app.close()
-            thread.join(10)
+        run_campaign_page(device.api, chat, GRIMOIRE_PACING="")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node is not installed")
+def test_pacing_save_preserves_the_players_selected_obstacle(tmp_path):
+    from dataclasses import replace
+    from test_campaignapi import BRIBE, Hub, acting, hold
+    from test_campaignapi_pacing import app_for
+
+    folder, chat, _ = card_library(tmp_path)
+    with Hub(folder, BRIBE) as hub:
+        _, _, mara = acting(hub, chat)
+        hub.api.obstacles.record(replace(hold(mara), obstacle_id="other", goal="Get past the second hatch."))
+        run_campaign_page(app_for(hub).api, chat, GRIMOIRE_PACING="1")
+        assert len(hub.at.labels.prompts()) == 1
+
+
+def run_campaign_page(api, chat, **scenario):
+    app = AppServer(api)
+    thread = threading.Thread(target=app.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = app.address
+        env = {**os.environ, "GRIMOIRE_APP": f"http://{host}:{port}", "GRIMOIRE_TOKEN": app.token,
+               "GRIMOIRE_CHAT": str(chat), "GRIMOIRE_CAMPAIGN": chat.campaign_id, **scenario}
+        result = subprocess.run([NODE, "--test", "--test-reporter=tap", str(Path(__file__).with_name("js") / "campaign.e2e.mjs")],
+                                capture_output=True, text=True, timeout=180, check=False, env=env)
+    finally:
+        app.close()
+        thread.join(10)
     assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
     assert "# pass 1" in result.stdout
 

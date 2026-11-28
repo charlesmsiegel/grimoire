@@ -8,8 +8,10 @@ own and writes only through the services that own each record:
   app's own adjudication key, and 021's ``TurnEffectsLibrary`` on the owner's handle: labelling, confirming and
   deciding an action, proposing an effect, each key on it, withdrawing or declining it, and recovering an
   acceptance cut short;
-- nothing else: holdings, items, party, stage, knowledge, relations, accepted events, powers, bindings and
-  agendas are only read.
+- Sprint 088's setting save uses the owner's handle to edit the native campaign scope.
+
+Ordinary hub reads also let 035 settle pending witness bridges for effects already accepted. The pacing
+save does not use that recovery path.
 
 **Two keys, two calls.** A player's own key on an effect (``endorse_effect``) and the director's
 (``approve_effect``) are separate ops the person makes separately, even when one person holds both (021's
@@ -47,10 +49,11 @@ from grimoire.effectstore import TurnEffectsLibrary
 from grimoire.evidencestore import EvidenceLibrary
 from grimoire.goals import GoalError, check_agenda
 from grimoire.holdingstore import HoldingsLibrary
+from grimoire.obstacles import ObstacleState
 from grimoire.obstaclestore import ObstacleLibrary
 from grimoire.partystore import PartyLibrary
 from grimoire.play import SceneRunner
-from grimoire.play.scene import NOW
+from grimoire.play.scene import NOW, Scene
 from grimoire.possessionstore import PossessionLibrary
 from grimoire.scene import SceneRefused
 from grimoire.store import LibraryStore, StaleWrite, StoreError
@@ -58,6 +61,7 @@ from grimoire.textapi import ApiRefused
 from grimoire.textapi.api import ADJUDICATOR  # the app's own adjudication key (029/040), shared with the chat
 
 from . import parse
+from .pacing import Pacing, PacingError, read_pacing, save_pacing, suggested_obstacle
 from .views import (
     Names,
     abilities_view, actor_ref, agenda_view, claim_view, effect_view, event_view, framed_view, holdings_view,
@@ -149,7 +153,7 @@ class CampaignApi:
             "hub": self._hub_op, "knowledge": self._knowledge, "label": self._label, "confirm": self._confirm,
             "decide": self._decide, "propose_effect": self._propose, "endorse_effect": self._endorse,
             "approve_effect": self._approve, "withdraw_effect": self._withdraw, "decline_effect": self._decline,
-            "recover_effects": self._recover,
+            "recover_effects": self._recover, "pacing": self._save_pacing,
         }
 
     @property
@@ -171,7 +175,7 @@ class CampaignApi:
                 return handler(args)
             except ApiRefused:
                 raise
-            except SceneRefused as error:
+            except (SceneRefused, PacingError) as error:
                 raise _refused(error) from None
             except StaleWrite as error:
                 raise ApiRefused("changed", f"the library changed meanwhile; nothing was written ({error})") from None
@@ -219,7 +223,7 @@ class CampaignApi:
         shown = [a for a in scene.cast if director or a.instance_id in mine]
         shown += [a for a in members if a not in shown and (director or a.instance_id in mine)]
         holdings, items = self._holdings(shown, problems), self._items(campaign, shown, problems)
-        obstacles = self._obstacles(campaign, names, problems)
+        obstacles = self._obstacle_states(campaign, problems)
         turns = [turn_view(record, names, None if director else self.owner) for record in scene.records
                  if record.labels or record.effects or (record.open and record.post is not None)
                  or (director and record.intentions)]
@@ -231,7 +235,8 @@ class CampaignApi:
                "cast": cast, "persona": None if scene.persona is None else str(scene.persona),
                "paused": scene.paused, "stage": stage_view(stage, names), "party": party,
                "holdings": holdings, "items": items, "abilities": abilities, "sources": sources,
-               "obstacles": obstacles, "turns": turns,
+               "obstacles": [obstacle_view(state, names) for state in obstacles], "turns": turns,
+               "pacing": self._pacing_view(scene, obstacles),
                "open_action": self._open_action(chat, scene, names, problems), "problems": problems,
                "actions": self._actions(scene.paused), "unavailable": self._unavailable(stage)}
         if director:
@@ -406,12 +411,39 @@ class CampaignApi:
             problems.append({"code": "items_incomplete", "detail": "some item records cannot be read"})
         return {str(actor): items_view(items.held_by(actor), items.equipped_by(actor)) for actor in shown}
 
-    def _obstacles(self, campaign: str, names, problems: list) -> list:  # type: ignore[no-untyped-def]
+    def _obstacle_states(self, campaign: str, problems: list | None = None) -> tuple[ObstacleState, ...]:
         try:
-            return [obstacle_view(state, names) for state in self.obstacles.states(campaign)]
-        except (ValueError, StoreError) as error:
-            problems.append({"code": "obstacles_unreadable", "detail": getattr(error, "reason", type(error).__name__)})
-            return []
+            return self.obstacles.states(campaign)
+        except (ValueError, StoreError, OSError) as error:
+            if problems is not None:
+                problems.append({"code": "obstacles_unreadable", "detail": getattr(error, "reason", type(error).__name__)})
+            return ()
+
+    def _pacing_view(self, scene: Scene, obstacles: tuple[ObstacleState, ...], pace: Pacing | None = None) -> dict:
+        try:
+            if pace is None:
+                pace = read_pacing(self.store, scene.chat.scope)
+        except (PacingError, StoreError, OSError) as error:
+            message = str(error) if isinstance(error, PacingError) else "The campaign scope cannot be read."
+            return {"mode": None, "etag": None, "suggested_obstacle": None, "error": message}
+        message = "Save Manual to repair the campaign's pacing setting." if pace.mode is None else None
+        suggestion = suggested_obstacle(pace.mode, scene, self.owner, obstacles) if self.labelling else None
+        return {"mode": pace.mode, "etag": pace.etag, "suggested_obstacle": suggestion, "error": message}
+
+    def _save_pacing(self, args: Mapping[str, object]) -> dict:
+        chat = parse.chat_of(args)
+        self._audience(args)
+        mode = parse.field(args, "mode", str)
+        expected = parse.field(args, "expected", str)
+        with self.store.lock:
+            # A settings save must not settle the pending witness bridges that ordinary hub reads recover.
+            scene = self.runner.read_scene(chat)
+            obstacles = self._obstacle_states(chat.campaign_id)
+            pace = save_pacing(self.store, chat.scope, self.handle, mode=mode, expected=expected)
+            pending = scene.pending
+            action_etag = scene.turns.etags().get(pending.turn_id) if pending is not None else None
+            return {"done": {"changed": pace.etag != expected}, "pacing": self._pacing_view(scene, obstacles, pace),
+                    "action_etag": action_etag}
 
     def _open_action(self, chat: ChatRef, scene, names, problems: list) -> dict | None:  # type: ignore[no-untyped-def]
         pending = scene.pending

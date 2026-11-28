@@ -93,6 +93,12 @@ const writes = (calls) => calls.filter(([op]) => !READS.has(op));
 const section = (root, title) => root.querySelector('section[aria-label="' + title + '"]') || undefined;
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+test("a hub without pacing has no placeholder text", async () => {
+  const { root } = await mounted("table", hub("table"));
+  assert.equal(section(root, "Obstacle pacing"), undefined);
+  assert.ok(!root.textContent.includes("null"));
+});
+
 test("the director decides among every result the frame allows, citing what was shown", async () => {
   const { root, calls } = await mounted("director", hub("director"));
   const action = section(root, "Open action");

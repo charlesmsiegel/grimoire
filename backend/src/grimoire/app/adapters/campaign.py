@@ -5,7 +5,8 @@ Only Sprint 113 edits this module (or a ``campaign`` subpackage that replaces it
 
 Every op but ``chats`` is ``grimoire.campaignapi.CampaignApi``'s op of the same name (docs/CAMPAIGN_HUB.md),
 over the app's open library, acting as its owner with the app's own trusted handle (``ctx.handle``). The hub
-keeps no record: its writes go through 035's runner to 029, 040 and 021. 029 and 040 record their adjudication
+keeps no record: it saves pacing in the native campaign scope and sends play writes through 035's runner to 029,
+040 and 021. 029 and 040 record their adjudication
 under the app's own adjudication key (``app:adjudicator``, never the owner's), which the hub's 029/040 libraries
 take from the library's authority as 035 requires; that key never writes anything but adjudication and obstacles.
 
@@ -26,7 +27,7 @@ from grimoire.textapi import ApiRefused
 
 #: The hub's ops, served as ``campaign.<op>`` and passed on unchanged.
 HUB_OPS = ("hub", "knowledge", "label", "confirm", "decide", "propose_effect", "endorse_effect", "approve_effect",
-           "withdraw_effect", "decline_effect", "recover_effects")
+           "withdraw_effect", "decline_effect", "recover_effects", "pacing")
 #: The bindings of a chat that the list names as its cast.
 CAST_ROLES = ("character", "persona")
 

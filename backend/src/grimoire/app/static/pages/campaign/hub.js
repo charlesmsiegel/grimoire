@@ -17,6 +17,8 @@ const NOTES = { table: "What the table can see. World truth is the director's.",
 const KINDS = ["begin", "end"];         // 021 operation kinds
 const LINE_KINDS = ["add", "consume"];  // the holdings lines this page writes (move and adjust are not here yet)
 const TOP = new Set(["action", "recover"]), GRID = new Set(["cast", "holdings", "changes", "obstacles", "truth", "goals", "knowledge"]);
+const PACES = [{ value: "manual", label: "Manual" }, { value: "every_action", label: "Every action turn" },
+  { value: "every_third_action", label: "Every third action turn" }];
 
 export async function showHub(root, ctx, campaign, asked, audience) {
   const { ui } = ctx;
@@ -166,7 +168,35 @@ export async function showHub(root, ctx, campaign, asked, audience) {
     const notices = [];
     if (hub.paused) notices.push(ui.notice("Play is paused in this chat.", { kind: "bad" }));
     for (const problem of hub.problems) notices.push(ui.notice(problem.code + (problem.detail ? ": " + problem.detail : "")));
-    view.replaceChildren(...notices, ...top, el("div", { class: "campaign-cards" }, grid), ...rest);
+    const pacingSlot = hub.pacing && ctx.has("campaign.pacing") ? el("div", {}) : null;
+    view.replaceChildren(...notices, ...top, ...(pacingSlot ? [pacingSlot] : []), el("div", { class: "campaign-cards" }, grid), ...rest);
+    if (pacingSlot) {
+      const against = view.querySelector('select[data-focus-key="campaign:against"]');
+      const goals = new Map(hub.obstacles.map((item) => [item.obstacle, item.goal]));
+      const expectedAction = hub.open_action?.expected ?? null;
+      let pace = hub.pacing;
+      const present = (suggestion) => {
+        pacingSlot.replaceChildren(pacingCard(ctx, pace, save));
+        for (const option of against?.querySelectorAll("option") || []) {
+          const id = option.getAttribute("value");
+          if (goals.has(id)) option.textContent = (id === suggestion ? "Suggested: " : "") + goals.get(id);
+        }
+      };
+      const save = async (mode) => {
+        const restore = document.activeElement && pacingSlot.contains(document.activeElement);
+        await ctx.act(async () => {
+          const answer = await call("pacing", { mode, expected: pace.etag });
+          pace = answer.pacing;
+          // A pacing-only answer never replaces an action the player is already reviewing.
+          present(answer.action_etag === expectedAction ? pace.suggested_obstacle : null);
+          ctx.notify(answer.done.changed ? "Obstacle pacing saved." : "Obstacle pacing is already set.");
+        });
+        if (restore && document.activeElement === document.body) {
+          pacingSlot.querySelector('[data-focus-key="campaign:save-pace"]')?.focus();
+        }
+      };
+      present(pace.suggested_obstacle);
+    }
   }
 
   await open();
@@ -184,6 +214,20 @@ function card(ui, title, { kind = "", heading = true, wide = false } = {}, ...ch
 }
 
 function sub(ui, text) { return ui.el("h3", { class: "campaign-sub" }, text); }
+
+function pacingCard(ctx, pace, save) {
+  const { ui } = ctx;
+  const { el } = ui;
+  if (!pace.etag) return card(ui, "Obstacle pacing", {}, ui.notice(pace.error));
+  const choices = pace.mode === null ? [PACES[0]] : PACES;
+  const field = ui.choice("How often to suggest an obstacle", choices, { value: pace.mode || "manual" });
+  field.select.setAttribute("data-focus-key", "campaign:pace");
+  const button = ui.button("Save pacing", () => save(field.value));
+  button.setAttribute("data-focus-key", "campaign:save-pace");
+  return card(ui, "Obstacle pacing", {},
+    el("p", { class: "g-muted" }, "Suggestions count solo public actions in this chat and appear in Against when labelling is available."),
+    pace.error ? ui.notice(pace.error) : null, el("div", { class: "campaign-row" }, field.node, button));
+}
 
 // Lines under one another, each divided from the next.
 function lines(ui, items, { empty } = {}) {
@@ -230,6 +274,7 @@ function actionCard({ ctx, hub, nameOf, write, director, numberOf, chat }) {
     const choices = [{ value: "", label: "No obstacle" }, ...hub.obstacles.filter((item) => item.status !== "overcome")
       .map((item) => ({ value: item.obstacle, label: item.goal }))];
     const against = ui.choice("Against", choices);
+    against.select.setAttribute("data-focus-key", "campaign:against");
     const config = hub.labelling_config;
     const route = config ? config.provider + " / " + config.model +
       (config.fallbacks.length ? "; fallbacks: " + config.fallbacks.join(", ") : "") +

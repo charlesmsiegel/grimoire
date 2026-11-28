@@ -8,6 +8,7 @@ It keeps no record of its own. Every write goes through the service that owns th
 |---|---|---|
 | `hub` | The chat's campaign situation for an audience (read only) | none |
 | `knowledge` | One perspective: the table's, or one actor's (read only) | none |
+| `pacing` | Save how often the campaign hub offers an obstacle | Native campaign scope (088) |
 | `label` | Ask the labelling model to frame the open action, optionally against an obstacle | 035 runner, 029 |
 | `confirm` | The acting player confirms the latest labelling, unedited | 035 runner, 029, 040 |
 | `decide` | The director adjudicates (`basis: adjudicated`), or the acting player consents to a setback (`basis: consent` with the frame's `fingerprint`) | 035 runner, 029, 040 |
@@ -21,6 +22,10 @@ It keeps no record of its own. Every write goes through the service that owns th
 
 Every op takes `chat` (a `ChatRef` string) and an optional `audience`, checked before anything is written. Production `campaign.label`, `campaign.confirm` and `campaign.decide` also require `turn` and `expected` from the displayed `open_action`; missing review identity is refused as `review_required`, and a changed turn as `changed`. Both director adjudication and player consent additionally name the displayed frame `fingerprint`. Reload and review again after a stale refusal; no approval is transferred to the newer action. Write ops return `{"done": ..., "hub": ...}`, the hub as it stands after the write, so a screen never shows a stale situation beside a fresh result. A refusal is an `ApiRefused` with the owning service's own reason (`fingerprint_mismatch`, `already_accepted`, `unknown_effect`, `not_at_table`, `changed` for a stale write, ...) and writes nothing unless that service's refusal says so (035 records a labelling the model refused, so the table sees why). A hub that cannot be read after a committed write comes back as `hub: null` with its problem, never as a refusal of the write.
 
+Play writes return the updated hub as described above. A pacing save returns only the updated setting and the
+action revision its suggestion was read against. Ordinary hub reads can settle pending 020 witness records for
+already accepted effects through 035. A pacing save leaves that recovery to the ordinary hub or play path.
+
 ## The page
 
 - `#/campaign` lists every campaign with a chat in the library, in a table (campaign, last interaction, who it waits on, chats, cast) that a search narrows and a click on a column header sorts. The rail shows how many there are.
@@ -28,7 +33,8 @@ Every op takes `chat` (a `ChatRef` string) and an optional `audience`, checked b
 - `#/campaign/<campaign id>` is that campaign's hub for the chat played last, under the campaign's cover band (its own cover where the app reads covers, with **Add cover**, **Change cover** and **Remove**: [MEDIA_SYNC_UI](MEDIA_SYNC_UI.md#beyond-character-slots)), with the campaign's chats as chips. `?chat=<ChatRef>` names another of its chats. It opens in the table's view; `&audience=director` gives the director's.
 - The hub is laid out as cards: the open action, cast and stage, holdings and powers, changes waiting on approval, obstacles, knowledge, then turns and effects, sources and what is not available yet. The director's view adds world truth, NPC goals and proposing an effect.
 - Each view shows what the hub returns for that audience, and nothing more. The director's cards are shown only when the director's view was asked for and the hub answered as the director's.
-- Every write is one `campaign.*` call. The page then shows the hub that the write returned.
+- Every write is one `campaign.*` call. A pacing save refreshes the pacing controls and the suggested option in
+  place. Play writes redraw from the returned hub.
 - What waits on the table is decided in the inbox ([INBOX](INBOX.md)): where the app has it, the table's view
   shows a labelling to confirm and a change to endorse in full, with **Decide in Needs you** linking to that item,
   and the confirming and endorsing are done there, by the same `campaign.confirm` and `campaign.endorse_effect`
@@ -52,6 +58,29 @@ Who acts:
 - Knowledge shows one perspective at a time, labelled as its actor's: the table's when the hub opens, or one the view may read. A perspective the hub refuses is said in the card with its reason.
 
 Not on the page yet: moving or adjusting holdings, and waiving what an obstacle made due. The API takes both.
+
+## Obstacle pacing (088)
+
+In **Obstacle pacing**, choose **Manual**, **Every action turn**, or **Every third action turn**, then save.
+The setting belongs to the campaign, including a world-less campaign. Each chat counts its own solo public
+action posts on the active line, including passed actions. Private and combined posts, speech, imported posts,
+and branches set aside are outside the count.
+
+On an eligible, unlabelled action the existing **Against** selector can mark one obstacle **Suggested**. The
+hub chooses the first eligible obstacle by id. It considers open obstacles with no attempted link, no reserved
+labelling IDs and only facts established at sequence zero. Timed or previously attempted obstacles can still be
+chosen manually where 040 allows. Suggestions wait while the chat is paused, has an incomplete or conflicting
+active line, or has no configured labeller. The selector starts at **No obstacle**. The player can choose any
+available option and explicitly confirm the normal labelling request. A suggestion uses neither a model call
+nor a new history or knowledge entry. Dice, adjudication, and obstacle consequences use their existing rules.
+
+`campaign.hub` returns `pacing: {mode, etag, suggested_obstacle, error}`. The owner saves using
+`campaign.pacing` with the current `chat`, `mode` (`manual`, `every_action` or `every_third_action`) and scope
+`expected` etag. The reply is `{done: {changed}, pacing, action_etag}`. The app matches `action_etag` to the
+reviewed action before refreshing the suggestion. A stale scope edit requires reopening the hub. An unresolved
+scope sync conflict disables the setting until it is resolved. If the setting was hand-edited into an invalid
+value, saving **Manual** with the current etag clears it. Older scopes default to Manual. This is an optional
+scope field, `grimoire.obstacle_pacing`. Selecting Manual removes that field. No migration is needed.
 
 ## Who acts, and with which key
 
